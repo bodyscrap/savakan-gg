@@ -1,0 +1,5 @@
+mutation ResetSet($setId: ID!) {
+  resetSet(setId: $setId) {
+    id
+  }
+}

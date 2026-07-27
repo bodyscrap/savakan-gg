@@ -1,0 +1,109 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+scalar ID
+scalar GgID
+
+type Query {
+  tournament(slug: String!): Tournament
+  set(id: ID!): Set
+  event(slug: String!): Event
+  currentUser: User
+  tournaments(query: TournamentPaginationQuery): TournamentConnection
+}
+
+type Mutation {
+  reportBracketSet(setId: ID!, winnerId: ID!, gameData: [BracketSetGameDataInput]): [Set]
+  resetSet(setId: ID!): Set
+}
+
+input BracketSetGameDataInput {
+  winnerId: ID
+  gameNum: Int
+}
+
+type Tournament {
+  id: GgID!
+  name: String
+  slug: String
+  events: [Event]
+}
+
+type User {
+  id: GgID!
+}
+
+type TournamentConnection {
+  nodes: [Tournament]
+}
+
+input TournamentPaginationQuery {
+  perPage: Int
+  page: Int
+  filter: TournamentQueryFilter
+}
+
+input TournamentQueryFilter {
+  ownerId: ID
+}
+
+type Event {
+  id: GgID!
+  name: String
+  slug: String
+  tournament: Tournament
+  sets(page: Int, perPage: Int, sortType: SetSortType): SetConnection
+}
+
+type SetConnection {
+  nodes: [Set]
+}
+
+type Set {
+  id: GgID!
+  fullRoundText: String
+  round: Int
+  phaseGroup: PhaseGroup
+  state: Int
+  winnerId: GgID
+  slots: [SetSlot]
+}
+
+type PhaseGroup {
+  id: GgID!
+  displayIdentifier: String
+  phase: Phase
+}
+
+type Phase {
+  id: GgID!
+  name: String
+}
+
+type SetSlot {
+  entrant: Entrant
+  standing: Standing
+}
+
+type Entrant {
+  id: GgID!
+  name: String
+}
+
+type Standing {
+  stats: StandingStats
+}
+
+type StandingStats {
+  score: Score
+}
+
+type Score {
+  value: Float
+}
+
+enum SetSortType {
+  STANDARD
+}

@@ -1,0 +1,39 @@
+query TournamentSync($slug: String!, $perPage: Int!) {
+  tournament(slug: $slug) {
+    id
+    name
+    slug
+    events {
+      id
+      name
+      sets(page: 1, perPage: $perPage, sortType: STANDARD) {
+        nodes {
+          id
+          fullRoundText
+          round
+          phaseGroup {
+            displayIdentifier
+            phase {
+              name
+            }
+          }
+          state
+          winnerId
+          slots {
+            entrant {
+              id
+              name
+            }
+            standing {
+              stats {
+                score {
+                  value
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

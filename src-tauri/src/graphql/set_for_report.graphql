@@ -1,0 +1,10 @@
+query SetForReport($setId: ID!) {
+  set(id: $setId) {
+    id
+    slots {
+      entrant {
+        id
+      }
+    }
+  }
+}

@@ -1,0 +1,242 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentSnapshot {
+    pub tournament_id: String,
+    pub slug: String,
+    pub name: String,
+    pub events: Vec<EventSnapshot>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentWorkspace {
+    pub snapshot: TournamentSnapshot,
+    pub local_meta: TournamentLocalMeta,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentLocalMeta {
+    pub tournament_id: String,
+    pub slug: String,
+    pub events: Vec<EventLocalMeta>,
+    #[serde(default)]
+    pub pending_set_results: Vec<LocalSetResultMeta>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventLocalMeta {
+    pub event_id: String,
+    pub event_name: String,
+    #[serde(default)]
+    pub event_alias: Option<String>,
+    pub entrants: Vec<EventEntrantMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventEntrantMeta {
+    pub entrant_id: String,
+    pub entrant_name: String,
+    pub play_side: Option<PlaySide>,
+    pub character_names: Vec<String>,
+    pub auth_code: String,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PlaySide {
+    #[serde(rename = "1P")]
+    OneP,
+    #[serde(rename = "2P")]
+    TwoP,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalPlayerMetaInput {
+    pub slug: String,
+    pub event_id: String,
+    pub event_name: String,
+    pub entrant_id: String,
+    pub entrant_name: String,
+    pub play_side: Option<PlaySide>,
+    pub character_names: Vec<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSetResultInput {
+    pub slug: String,
+    pub event_id: String,
+    pub set_id: String,
+    pub winner_id: String,
+    pub score_csv: String,
+    pub force_overwrite: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSetResultMeta {
+    pub event_id: String,
+    pub event_name: String,
+    pub set_id: String,
+    pub winner_id: String,
+    pub score_csv: String,
+    pub force_overwrite: bool,
+    pub recorded_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchReportPlan {
+    pub snapshot: TournamentSnapshot,
+    pub local_meta: TournamentLocalMeta,
+    pub items: Vec<BatchReportPlanItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchReportPlanItem {
+    pub event_id: String,
+    pub event_name: String,
+    pub set_id: String,
+    pub full_round_text: String,
+    pub round: Option<i64>,
+    pub local_winner_id: String,
+    pub local_score_csv: String,
+    pub local_force_overwrite: bool,
+    pub local_state: i64,
+    pub local_snapshot_winner_id: Option<String>,
+    pub remote_state: Option<i64>,
+    pub remote_winner_id: Option<String>,
+    pub conflict_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BatchReportResolution {
+    Local,
+    Remote,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchReportDecisionInput {
+    pub set_id: String,
+    pub resolution: BatchReportResolution,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchReportInput {
+    pub slug: String,
+    pub event_id: String,
+    pub per_page: Option<u32>,
+    pub decisions: Vec<BatchReportDecisionInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventSnapshot {
+    pub event_id: String,
+    pub name: String,
+    pub sets: Vec<SetSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSnapshot {
+    pub set_id: String,
+    pub full_round_text: String,
+    pub round: Option<i64>,
+    pub phase_name: Option<String>,
+    pub phase_group_name: Option<String>,
+    pub state: i64,
+    pub winner_id: Option<String>,
+    pub slots: Vec<SetSlotSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSlotSnapshot {
+    pub entrant_id: Option<String>,
+    pub entrant_name: String,
+    pub score: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportSetResultInput {
+    pub slug: String,
+    pub set_id: String,
+    pub winner_id: String,
+    pub score_csv: String,
+    pub force_overwrite: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateEventSnapshotInput {
+    pub slug: String,
+    pub event_id: String,
+    pub event_slug: Option<String>,
+    pub event_alias: Option<String>,
+    pub per_page: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateEventSnapshotBySlugInput {
+    pub tournament_slug: String,
+    pub event_slug: String,
+    pub event_alias: Option<String>,
+    pub per_page: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentEventPreviewItem {
+    pub event_id: String,
+    pub event_name: String,
+    pub event_slug: Option<String>,
+    pub set_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentPreview {
+    pub tournament_id: String,
+    pub slug: String,
+    pub name: String,
+    pub updated_at: DateTime<Utc>,
+    pub events: Vec<TournamentEventPreviewItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSnapshotEventListItem {
+    pub tournament_id: String,
+    pub slug: String,
+    pub tournament_name: String,
+    pub updated_at: DateTime<Utc>,
+    pub event_id: String,
+    pub event_name: String,
+    #[serde(default)]
+    pub event_alias: Option<String>,
+    pub set_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedTournamentListItem {
+    pub tournament_id: String,
+    pub name: String,
+    pub slug: String,
+}

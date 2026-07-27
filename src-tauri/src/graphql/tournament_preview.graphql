@@ -1,0 +1,12 @@
+query TournamentPreviewQuery($slug: String!) {
+  tournament(slug: $slug) {
+    id
+    name
+    slug
+    events {
+      id
+      name
+      slug
+    }
+  }
+}

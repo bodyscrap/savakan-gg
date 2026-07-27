@@ -1,0 +1,28 @@
+query SetSnapshotDetail($setId: ID!) {
+  set(id: $setId) {
+    id
+    fullRoundText
+    round
+    phaseGroup {
+      displayIdentifier
+      phase {
+        name
+      }
+    }
+    state
+    winnerId
+    slots {
+      entrant {
+        id
+        name
+      }
+      standing {
+        stats {
+          score {
+            value
+          }
+        }
+      }
+    }
+  }
+}

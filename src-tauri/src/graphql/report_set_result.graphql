@@ -1,0 +1,7 @@
+mutation ReportSetResult($setId: ID!, $winnerId: ID!, $gameData: [BracketSetGameDataInput]) {
+  reportBracketSet(setId: $setId, winnerId: $winnerId, gameData: $gameData) {
+    id
+    state
+    winnerId
+  }
+}

@@ -1,0 +1,23 @@
+query EventSync($slug: String!, $page: Int!, $perPage: Int!) {
+  event(slug: $slug) {
+    id
+    name
+    tournament {
+      id
+      name
+      slug
+    }
+    sets(page: $page, perPage: $perPage, sortType: STANDARD) {
+      nodes {
+        id
+        round
+        phaseGroup {
+          displayIdentifier
+          phase {
+            name
+          }
+        }
+      }
+    }
+  }
+}
