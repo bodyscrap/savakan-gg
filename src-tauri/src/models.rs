@@ -25,6 +25,8 @@ pub struct TournamentLocalMeta {
     pub slug: String,
     pub events: Vec<EventLocalMeta>,
     #[serde(default)]
+    pub set_play_sides: Vec<SetPlaySideMeta>,
+    #[serde(default)]
     pub pending_set_results: Vec<LocalSetResultMeta>,
     pub updated_at: DateTime<Utc>,
 }
@@ -73,13 +75,38 @@ pub struct LocalPlayerMetaInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LocalSetPlaySideInput {
+    pub slug: String,
+    pub event_id: String,
+    pub set_id: String,
+    pub entrant_id: String,
+    pub play_side: Option<PlaySide>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPlaySideMeta {
+    pub set_id: String,
+    pub entrant_id: String,
+    pub play_side: PlaySide,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LocalSetResultInput {
     pub slug: String,
     pub event_id: String,
     pub set_id: String,
     pub winner_id: String,
-    pub score_csv: String,
-    pub force_overwrite: Option<bool>,
+    pub confirmed: bool,
+    pub slot_scores: Vec<LocalSetScoreInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSetScoreInput {
+    pub entrant_id: String,
+    pub score: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,56 +117,54 @@ pub struct LocalSetResultMeta {
     pub set_id: String,
     pub winner_id: String,
     pub score_csv: String,
-    pub force_overwrite: bool,
+    #[serde(default = "default_confirmed")]
+    pub confirmed: bool,
+    #[serde(default)]
+    pub slot_scores: Vec<LocalSetScoreMeta>,
     pub recorded_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BatchReportPlan {
-    pub snapshot: TournamentSnapshot,
-    pub local_meta: TournamentLocalMeta,
-    pub items: Vec<BatchReportPlanItem>,
+fn default_confirmed() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BatchReportPlanItem {
-    pub event_id: String,
-    pub event_name: String,
-    pub set_id: String,
-    pub full_round_text: String,
-    pub round: Option<i64>,
-    pub local_winner_id: String,
-    pub local_score_csv: String,
-    pub local_force_overwrite: bool,
-    pub local_state: i64,
-    pub local_snapshot_winner_id: Option<String>,
-    pub remote_state: Option<i64>,
-    pub remote_winner_id: Option<String>,
-    pub conflict_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum BatchReportResolution {
-    Local,
-    Remote,
+pub struct LocalSetScoreMeta {
+    pub entrant_id: String,
+    pub score: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BatchReportDecisionInput {
-    pub set_id: String,
-    pub resolution: BatchReportResolution,
+pub struct BracketBatchReportResult {
+    pub workspace: TournamentWorkspace,
+    pub processed_count: usize,
+    pub reported_count: usize,
+    pub skipped_count: usize,
+    pub completed: bool,
+    pub conflict: Option<BracketBatchConflict>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BatchReportInput {
+pub struct BracketBatchReportInput {
     pub slug: String,
     pub event_id: String,
     pub per_page: Option<u32>,
-    pub decisions: Vec<BatchReportDecisionInput>,
+    pub force_overwrite_current_conflict: Option<bool>,
+    pub force_overwrite_remaining_conflicts: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BracketBatchConflict {
+    pub set_id: String,
+    pub full_round_text: String,
+    pub local_winner_id: String,
+    pub remote_winner_id: Option<String>,
+    pub remote_state: i64,
+    pub entrant_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

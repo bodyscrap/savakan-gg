@@ -532,6 +532,10 @@ pub async fn fetch_tournament_snapshot(
     query_tournament_snapshot(token, slug, per_page).await
 }
 
+pub async fn fetch_set_snapshot(token: &str, set_id: &str) -> Result<SetSnapshot, String> {
+    fetch_set_snapshot_detail(token, set_id).await
+}
+
 pub async fn sync_tournament(
     token: &str,
     slug: &str,

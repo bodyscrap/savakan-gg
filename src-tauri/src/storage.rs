@@ -7,9 +7,9 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::models::{
-    EventEntrantMeta, EventLocalMeta, EventSnapshot, LocalPlayerMetaInput, LocalSetResultInput,
-    LocalSetResultMeta, LocalSnapshotEventListItem, TournamentLocalMeta, TournamentSnapshot,
-    TournamentWorkspace,
+    EventEntrantMeta, EventLocalMeta, EventSnapshot, LocalPlayerMetaInput, LocalSetPlaySideInput,
+    LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta, LocalSnapshotEventListItem,
+    SetPlaySideMeta, TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
 };
 
 const STORAGE_DIR_NAME: &str = "savakan-gg";
@@ -72,6 +72,7 @@ fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
             event_alias: None,
             entrants: Vec::new(),
         }],
+        set_play_sides: Vec::new(),
         pending_set_results: Vec::new(),
         updated_at: Utc::now(),
     }
@@ -113,6 +114,100 @@ fn normalize_character_names(character_names: &[String]) -> Vec<String> {
     normalized
 }
 
+fn derive_score_csv_from_slot_scores(
+    slot_scores: &[crate::models::LocalSetScoreInput],
+    winner_id: &str,
+) -> Result<String, String> {
+    if slot_scores.len() < 2 {
+        return Err("プレイヤー別スコアが不足しています。".to_owned());
+    }
+
+    let winner_score = slot_scores
+        .iter()
+        .find(|slot| slot.entrant_id == winner_id)
+        .ok_or_else(|| "winnerIdに対応するスコアが見つかりません。".to_owned())?
+        .score;
+
+    if winner_score < 0 {
+        return Err("winnerのスコアにDQ(-1)は指定できません。".to_owned());
+    }
+
+    let loser_score = slot_scores
+        .iter()
+        .find(|slot| slot.entrant_id != winner_id)
+        .ok_or_else(|| "敗者側スコアが見つかりません。".to_owned())?
+        .score;
+
+    if loser_score < 0 {
+        return Ok(format!("{winner_score}-DQ"));
+    }
+
+    if winner_score == 0 && loser_score == 0 {
+        return Err("scoreCsvは 0-0 以外を指定してください。".to_owned());
+    }
+
+    Ok(format!("{winner_score}-{loser_score}"))
+}
+
+fn normalize_score_csv(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace(' ', "")
+}
+
+fn integer_score(value: Option<f64>) -> Option<i64> {
+    let score = value?;
+    let rounded = score.round();
+    if (score - rounded).abs() > 0.000_001 {
+        return None;
+    }
+    Some(rounded as i64)
+}
+
+fn derive_score_csv_from_snapshot_set(
+    set: &crate::models::SetSnapshot,
+    winner_id: &str,
+) -> Option<String> {
+    let winner_slot = set
+        .slots
+        .iter()
+        .find(|slot| slot.entrant_id.as_deref() == Some(winner_id))?;
+    let loser_slot = set
+        .slots
+        .iter()
+        .find(|slot| slot.entrant_id.as_deref().is_some() && slot.entrant_id.as_deref() != Some(winner_id))?;
+
+    let winner_score = integer_score(winner_slot.score)?;
+    let loser_score = integer_score(loser_slot.score)?;
+
+    if loser_score < 0 {
+        return Some(format!("{winner_score}-DQ"));
+    }
+
+    Some(format!("{winner_score}-{loser_score}"))
+}
+
+fn is_pending_result_matched_with_set(
+    pending: &LocalSetResultMeta,
+    set: &crate::models::SetSnapshot,
+) -> bool {
+    if set.winner_id.as_deref() != Some(pending.winner_id.as_str()) {
+        return false;
+    }
+
+    let remote_score_csv = derive_score_csv_from_snapshot_set(set, &pending.winner_id);
+    let Some(remote_score_csv) = remote_score_csv else {
+        return false;
+    };
+
+    normalize_score_csv(&remote_score_csv) == normalize_score_csv(&pending.score_csv)
+}
+
+fn opposite_side(side: crate::models::PlaySide) -> crate::models::PlaySide {
+    match side {
+        crate::models::PlaySide::OneP => crate::models::PlaySide::TwoP,
+        crate::models::PlaySide::TwoP => crate::models::PlaySide::OneP,
+    }
+}
+
 fn merge_snapshot_into_meta(
     snapshot: &TournamentSnapshot,
     event_id: &str,
@@ -151,12 +246,16 @@ fn merge_snapshot_into_meta(
     event_meta.event_name = event.name.clone();
 
     let mut seen_entrant_ids = HashSet::new();
+    let mut valid_set_slot_keys = HashSet::new();
 
     for set in &event.sets {
+        let set_id = set.set_id.clone();
         for slot in &set.slots {
             let Some(entrant_id) = &slot.entrant_id else {
                 continue;
             };
+
+            valid_set_slot_keys.insert(format!("{}:{}", set_id, entrant_id));
 
             if !seen_entrant_ids.insert(entrant_id.clone()) {
                 continue;
@@ -181,6 +280,10 @@ fn merge_snapshot_into_meta(
             });
         }
     }
+
+    meta
+        .set_play_sides
+        .retain(|item| valid_set_slot_keys.contains(&format!("{}:{}", item.set_id, item.entrant_id)));
 
     meta.updated_at = Utc::now();
     meta
@@ -420,6 +523,307 @@ fn find_set_in_snapshot<'a>(
     None
 }
 
+fn is_losers_set(set: &crate::models::SetSnapshot) -> bool {
+    if let Some(round) = set.round {
+        if round < 0 {
+            return true;
+        }
+    }
+
+    let lowered = set.full_round_text.to_lowercase();
+    lowered.contains("losers") || lowered.contains("loser") || lowered.contains("敗者")
+}
+
+fn normalize_group_key(value: Option<&String>) -> String {
+    value
+        .map(|item| item.trim().to_lowercase())
+        .unwrap_or_default()
+}
+
+fn empty_slot_count(set: &crate::models::SetSnapshot) -> usize {
+    set.slots
+        .iter()
+        .filter(|slot| {
+            slot.entrant_id.is_none() || slot.entrant_name.trim().eq_ignore_ascii_case("tbd")
+        })
+        .count()
+}
+
+fn first_empty_slot_index(set: &crate::models::SetSnapshot) -> Option<usize> {
+    set.slots
+        .iter()
+        .position(|slot| slot.entrant_id.is_none() || slot.entrant_name.trim().eq_ignore_ascii_case("tbd"))
+}
+
+fn place_entrant_to_set(
+    set: &mut crate::models::SetSnapshot,
+    entrant_id: &str,
+    entrant_name: &str,
+) -> bool {
+    let Some(slot_index) = first_empty_slot_index(set) else {
+        return false;
+    };
+
+    if set
+        .slots
+        .iter()
+        .any(|slot| slot.entrant_id.as_deref() == Some(entrant_id))
+    {
+        return false;
+    }
+
+    if let Some(slot) = set.slots.get_mut(slot_index) {
+        slot.entrant_id = Some(entrant_id.to_owned());
+        slot.entrant_name = entrant_name.to_owned();
+        slot.score = None;
+    }
+
+    if set.state == 3 {
+        set.state = 1;
+        set.winner_id = None;
+        for slot in &mut set.slots {
+            slot.score = None;
+        }
+    }
+
+    if empty_slot_count(set) == 0 && set.state == 1 {
+        set.state = 2;
+    }
+
+    true
+}
+
+fn advance_winner_within_lane(
+    event: &mut EventSnapshot,
+    source_set_id: &str,
+    source_round: Option<i64>,
+    source_is_losers: bool,
+    source_phase_name: Option<&String>,
+    source_phase_group_name: Option<&String>,
+    winner_id: &str,
+    winner_name: &str,
+) -> bool {
+    let src_phase = normalize_group_key(source_phase_name);
+    let src_group = normalize_group_key(source_phase_group_name);
+
+    // Winners/Losersともに、phase/pool構造が完全一致しないケースに備えて段階的に緩和する。
+    let mut candidates = event
+        .sets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, target)| {
+            if target.set_id == source_set_id {
+                return None;
+            }
+
+            if is_losers_set(target) != source_is_losers {
+                return None;
+            }
+
+            let target_phase = normalize_group_key(target.phase_name.as_ref());
+            let target_group = normalize_group_key(target.phase_group_name.as_ref());
+
+            let phase_matches = target_phase == src_phase;
+            let group_matches = target_group == src_group;
+
+            let strictness_rank = if phase_matches && group_matches {
+                0_i64
+            } else if phase_matches {
+                1_i64
+            } else {
+                2_i64
+            };
+
+            if target
+                .slots
+                .iter()
+                .any(|slot| slot.entrant_id.as_deref() == Some(winner_id))
+            {
+                return None;
+            }
+
+            let empty_count = empty_slot_count(target);
+            if empty_count == 0 {
+                return None;
+            }
+
+            let round_gap = match (source_round, target.round) {
+                (Some(src), Some(dst)) => {
+                    let src_depth = src.abs();
+                    let dst_depth = dst.abs();
+                    if dst_depth > src_depth {
+                        dst_depth - src_depth
+                    } else {
+                        return None;
+                    }
+                }
+                _ => i64::MAX / 2,
+            };
+
+            Some((index, strictness_rank, round_gap, empty_count))
+        })
+        .collect::<Vec<(usize, i64, i64, usize)>>();
+
+    candidates.sort_by(|left, right| {
+        left.1
+            .cmp(&right.1)
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.3.cmp(&right.3))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    for (index, _, _, _) in candidates {
+        if let Some(target) = event.sets.get_mut(index) {
+            if place_entrant_to_set(target, winner_id, winner_name) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn drop_loser_to_losers_lane(
+    event: &mut EventSnapshot,
+    source_set_id: &str,
+    source_round: Option<i64>,
+    source_phase_name: Option<&String>,
+    source_phase_group_name: Option<&String>,
+    loser_id: &str,
+    loser_name: &str,
+) -> bool {
+    let src_phase = normalize_group_key(source_phase_name);
+    let src_group = normalize_group_key(source_phase_group_name);
+
+    // start.gg側のpool分割とLosers配置が一致しない場合があるため、段階的に緩和して候補を探す。
+    let mut candidates = event
+        .sets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, target)| {
+            if target.set_id == source_set_id {
+                return None;
+            }
+
+            if !is_losers_set(target) {
+                return None;
+            }
+
+            let target_phase = normalize_group_key(target.phase_name.as_ref());
+            let target_group = normalize_group_key(target.phase_group_name.as_ref());
+
+            let phase_matches = target_phase == src_phase;
+            let group_matches = target_group == src_group;
+
+            let strictness_rank = if phase_matches && group_matches {
+                0_i64
+            } else if phase_matches {
+                1_i64
+            } else {
+                2_i64
+            };
+
+            if target
+                .slots
+                .iter()
+                .any(|slot| slot.entrant_id.as_deref() == Some(loser_id))
+            {
+                return None;
+            }
+
+            let empty_count = empty_slot_count(target);
+            if empty_count == 0 {
+                return None;
+            }
+
+            let round_distance = match (source_round, target.round) {
+                (Some(src), Some(dst)) => (dst + src).abs(),
+                _ => i64::MAX / 2,
+            };
+
+            Some((index, strictness_rank, round_distance, empty_count))
+        })
+        .collect::<Vec<(usize, i64, i64, usize)>>();
+
+    candidates.sort_by(|left, right| {
+        left.1
+            .cmp(&right.1)
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.3.cmp(&right.3))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    for (index, _, _, _) in candidates {
+        if let Some(target) = event.sets.get_mut(index) {
+            if place_entrant_to_set(target, loser_id, loser_name) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn apply_local_progression(
+    snapshot: &mut TournamentSnapshot,
+    event_id: &str,
+    source_set_id: &str,
+    winner_id: &str,
+) {
+    let Some(event) = snapshot.events.iter_mut().find(|event| event.event_id == event_id) else {
+        return;
+    };
+
+    let Some(source_set) = event
+        .sets
+        .iter()
+        .find(|set| set.set_id == source_set_id)
+        .cloned()
+    else {
+        return;
+    };
+
+    let winner_name = source_set
+        .slots
+        .iter()
+        .find(|slot| slot.entrant_id.as_deref() == Some(winner_id))
+        .map(|slot| slot.entrant_name.clone())
+        .unwrap_or_else(|| "TBD".to_owned());
+
+    let loser_slot = source_set
+        .slots
+        .iter()
+        .find(|slot| slot.entrant_id.as_deref().is_some() && slot.entrant_id.as_deref() != Some(winner_id));
+
+    let source_is_losers = is_losers_set(&source_set);
+    let _ = advance_winner_within_lane(
+        event,
+        source_set_id,
+        source_set.round,
+        source_is_losers,
+        source_set.phase_name.as_ref(),
+        source_set.phase_group_name.as_ref(),
+        winner_id,
+        &winner_name,
+    );
+
+    if !source_is_losers {
+        if let Some(loser) = loser_slot {
+            if let Some(loser_id) = loser.entrant_id.as_ref() {
+                let _ = drop_loser_to_losers_lane(
+                    event,
+                    source_set_id,
+                    source_set.round,
+                    source_set.phase_name.as_ref(),
+                    source_set.phase_group_name.as_ref(),
+                    loser_id,
+                    &loser.entrant_name,
+                );
+            }
+        }
+    }
+}
+
 pub fn set_event_alias(
     app: &AppHandle,
     slug: &str,
@@ -518,6 +922,39 @@ pub fn sync_local_meta_from_snapshot(
     Ok(merged_meta)
 }
 
+pub fn prune_pending_set_results_by_snapshot_match(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentLocalMeta, String> {
+    let snapshot = load_snapshot(app, slug)?;
+    let mut local_meta = load_local_meta(app, slug, event_id)?;
+
+    let event_sets = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .map(|event| &event.sets)
+        .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
+
+    local_meta.pending_set_results.retain(|pending| {
+        if pending.event_id != event_id {
+            return true;
+        }
+
+        let matched_set = event_sets.iter().find(|set| set.set_id == pending.set_id);
+        let Some(set) = matched_set else {
+            return true;
+        };
+
+        !is_pending_result_matched_with_set(pending, set)
+    });
+
+    local_meta.updated_at = Utc::now();
+    save_local_meta(app, &local_meta)?;
+    Ok(local_meta)
+}
+
 pub fn load_workspace(app: &AppHandle, slug: &str, event_id: &str) -> Result<TournamentWorkspace, String> {
     let snapshot = load_snapshot(app, slug)?;
     let local_meta = merge_snapshot_into_meta(&snapshot, event_id, load_local_meta(app, slug, event_id)?);
@@ -547,27 +984,59 @@ pub fn upsert_local_set_result(
         })
         .unwrap_or_else(|| "Unnamed event".to_owned());
 
-    let (event_id, set_snapshot) = find_set_in_snapshot_mut(&mut snapshot, &input.set_id)
-        .ok_or_else(|| "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned())?;
+    let winner_id_for_progress = input.winner_id.clone();
+    let (applied_event_id, should_advance) = {
+        let (event_id, set_snapshot) = find_set_in_snapshot_mut(&mut snapshot, &input.set_id)
+            .ok_or_else(|| "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned())?;
 
-    set_snapshot.winner_id = Some(input.winner_id.clone());
+        set_snapshot.winner_id = Some(input.winner_id.clone());
+        set_snapshot.state = if input.confirmed { 3 } else { 2 };
+
+        for slot in &mut set_snapshot.slots {
+            if let Some(entrant_id) = slot.entrant_id.as_ref() {
+                if let Some(found) = input
+                    .slot_scores
+                    .iter()
+                    .find(|score| score.entrant_id == *entrant_id)
+                {
+                    slot.score = Some(found.score as f64);
+                }
+            }
+        }
+
+        (event_id.clone(), input.confirmed)
+    };
+
+    let score_csv = derive_score_csv_from_slot_scores(&input.slot_scores, &input.winner_id)?;
 
     local_meta
         .pending_set_results
         .retain(|item| item.set_id != input.set_id);
     local_meta.pending_set_results.push(LocalSetResultMeta {
-        event_id: event_id.clone(),
+        event_id: applied_event_id.clone(),
         event_name: event_name.clone(),
         set_id: input.set_id.clone(),
         winner_id: input.winner_id,
-        score_csv: input.score_csv,
-        force_overwrite: input.force_overwrite.unwrap_or(false),
+        score_csv,
+        confirmed: input.confirmed,
+        slot_scores: input
+            .slot_scores
+            .into_iter()
+            .map(|slot| LocalSetScoreMeta {
+                entrant_id: slot.entrant_id,
+                score: slot.score,
+            })
+            .collect(),
         recorded_at: Utc::now(),
     });
 
     local_meta.slug = input.slug;
     local_meta.tournament_id = snapshot.tournament_id.clone();
     local_meta.updated_at = Utc::now();
+
+    if should_advance {
+        apply_local_progression(&mut snapshot, &applied_event_id, &input.set_id, &winner_id_for_progress);
+    }
 
     save_snapshot(app, &snapshot)?;
     save_local_meta(app, &local_meta)?;
@@ -674,4 +1143,62 @@ pub fn upsert_local_player_meta(
     local_meta.updated_at = Utc::now();
     save_local_meta(app, &local_meta)?;
     Ok(local_meta)
+}
+
+pub fn upsert_local_set_play_side(
+    app: &AppHandle,
+    input: LocalSetPlaySideInput,
+) -> Result<TournamentWorkspace, String> {
+    let snapshot = load_snapshot(app, &input.slug)?;
+    let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
+
+    let set_snapshot = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == input.event_id)
+        .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
+        .ok_or_else(|| "サイド保存対象のsetが見つかりません。".to_owned())?;
+
+    let entrant_ids = set_snapshot
+        .slots
+        .iter()
+        .filter_map(|slot| slot.entrant_id.clone())
+        .collect::<Vec<String>>();
+
+    if !entrant_ids.iter().any(|id| id == &input.entrant_id) {
+        return Err("サイド保存対象のentrantがsetに含まれていません。".to_owned());
+    }
+
+    local_meta
+        .set_play_sides
+        .retain(|item| item.set_id != input.set_id);
+
+    if let Some(play_side) = input.play_side {
+        let opponent_id = entrant_ids
+            .iter()
+            .find(|id| id.as_str() != input.entrant_id)
+            .cloned()
+            .ok_or_else(|| "対戦カードが確定していないsetはサイド設定できません。".to_owned())?;
+
+        local_meta.set_play_sides.push(SetPlaySideMeta {
+            set_id: input.set_id.clone(),
+            entrant_id: input.entrant_id,
+            play_side: play_side.clone(),
+        });
+        local_meta.set_play_sides.push(SetPlaySideMeta {
+            set_id: input.set_id,
+            entrant_id: opponent_id,
+            play_side: opposite_side(play_side),
+        });
+    }
+
+    local_meta.slug = input.slug;
+    local_meta.tournament_id = snapshot.tournament_id.clone();
+    local_meta.updated_at = Utc::now();
+    save_local_meta(app, &local_meta)?;
+
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
 }

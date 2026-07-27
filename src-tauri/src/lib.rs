@@ -4,35 +4,31 @@ mod startgg_scalars;
 mod storage;
 
 use models::{
-    BatchReportInput, BatchReportPlan, BatchReportPlanItem, BatchReportResolution,
+    BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult,
     CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, LocalPlayerMetaInput,
-    LocalSetResultInput, LocalSnapshotEventListItem, OwnedTournamentListItem,
+    LocalSetPlaySideInput, LocalSetResultInput, LocalSnapshotEventListItem, OwnedTournamentListItem,
     ReportSetResultInput, TournamentPreview, TournamentSnapshot, TournamentWorkspace,
 };
 
-fn find_set_snapshot<'a>(
-    snapshot: &'a TournamentSnapshot,
-    set_id: &str,
-) -> Option<(&'a str, &'a models::SetSnapshot)> {
-    for event in &snapshot.events {
-        if let Some(set) = event.sets.iter().find(|set| set.set_id == set_id) {
-            return Some((event.event_id.as_str(), set));
-        }
-    }
+async fn refresh_workspace_after_remote_report(
+    app: &tauri::AppHandle,
+    token: &str,
+    slug: &str,
+    event_id: &str,
+    per_page: u32,
+) -> Result<TournamentWorkspace, String> {
+    let snapshot = startgg::fetch_tournament_snapshot(token, slug, per_page).await?;
+    storage::save_snapshot(app, &snapshot)?;
+    let local_meta = storage::sync_local_meta_from_snapshot(app, &snapshot, event_id)?;
 
-    None
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
 }
 
-fn sort_report_plan_items(items: &mut [BatchReportPlanItem]) {
-    items.sort_by(|left, right| {
-        let left_round = left.round.unwrap_or(i64::MIN);
-        let right_round = right.round.unwrap_or(i64::MIN);
-
-        right_round
-            .cmp(&left_round)
-            .then_with(|| left.event_name.cmp(&right.event_name))
-            .then_with(|| left.full_round_text.cmp(&right.full_round_text))
-    });
+fn round_depth(round: Option<i64>) -> i64 {
+    round.map(|value| value.abs()).unwrap_or(i64::MAX / 4)
 }
 
 #[tauri::command]
@@ -165,7 +161,8 @@ async fn refresh_local_event_snapshot_from_remote(
         .find(|item| item.event_id == event_id)
         .and_then(|item| item.event_alias);
 
-    let local_meta = storage::save_event_snapshot(&app, &snapshot, &event_id, existing_alias)?;
+    storage::save_event_snapshot(&app, &snapshot, &event_id, existing_alias)?;
+    let local_meta = storage::prune_pending_set_results_by_snapshot_match(&app, &slug, &event_id)?;
     let snapshot = storage::load_snapshot(&app, &slug)?;
 
     Ok(TournamentWorkspace { snapshot, local_meta })
@@ -209,6 +206,14 @@ fn save_local_player_meta(
 }
 
 #[tauri::command]
+fn save_local_set_play_side(
+    app: tauri::AppHandle,
+    input: LocalSetPlaySideInput,
+) -> Result<TournamentWorkspace, String> {
+    storage::upsert_local_set_play_side(&app, input)
+}
+
+#[tauri::command]
 fn save_local_set_result(
     app: tauri::AppHandle,
     input: LocalSetResultInput,
@@ -217,160 +222,166 @@ fn save_local_set_result(
 }
 
 #[tauri::command]
-async fn build_batch_report_plan(
+async fn report_confirmed_sets_from_bracket(
     app: tauri::AppHandle,
-    slug: String,
-    event_id: String,
-    per_page: Option<u32>,
-) -> Result<BatchReportPlan, String> {
+    input: BracketBatchReportInput,
+) -> Result<BracketBatchReportResult, String> {
     let token = storage::load_token(&app)?;
-    let workspace = storage::load_workspace(&app, &slug, &event_id)?;
-    let remote_snapshot = startgg::fetch_tournament_snapshot(&token, &slug, per_page.unwrap_or(200)).await?;
-
-    let remote_event = remote_snapshot
-        .events
-        .iter()
-        .find(|event| event.event_id == event_id)
-        .ok_or_else(|| format!("指定イベントがリモートsnapshotに見つかりません: {event_id}"))?;
-
+    let workspace = storage::load_workspace(&app, &input.slug, &input.event_id)?;
     let local_event = workspace
         .snapshot
         .events
         .iter()
-        .find(|event| event.event_id == event_id)
-        .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
-
-    let local_event_snapshot = TournamentSnapshot {
-        tournament_id: workspace.snapshot.tournament_id.clone(),
-        slug: workspace.snapshot.slug.clone(),
-        name: workspace.snapshot.name.clone(),
-        events: vec![local_event.clone()],
-        updated_at: workspace.snapshot.updated_at.clone(),
-    };
-
-    let remote_event_snapshot = TournamentSnapshot {
-        tournament_id: remote_snapshot.tournament_id.clone(),
-        slug: remote_snapshot.slug.clone(),
-        name: remote_snapshot.name.clone(),
-        events: vec![remote_event.clone()],
-        updated_at: remote_snapshot.updated_at.clone(),
-    };
-
-    let mut items = Vec::new();
-    for pending in &workspace.local_meta.pending_set_results {
-        let (_, local_set) = find_set_snapshot(&local_event_snapshot, &pending.set_id)
-        .ok_or_else(|| format!("ローカルsnapshotにsetが見つかりません: {}", pending.set_id))?;
-
-        let (_, remote_set) = find_set_snapshot(&remote_event_snapshot, &pending.set_id)
-        .ok_or_else(|| format!("リモートsnapshotにsetが見つかりません: {}", pending.set_id))?;
-
-        let conflict_reason = if remote_set.winner_id.as_ref() == Some(&pending.winner_id) {
-            None
-        } else if remote_set.winner_id.is_none() {
-            None
-        } else {
-            Some("remote_result_differs".to_owned())
-        };
-
-        items.push(BatchReportPlanItem {
-            event_id: pending.event_id.clone(),
-            event_name: pending.event_name.clone(),
-            set_id: pending.set_id.clone(),
-            full_round_text: local_set.full_round_text.clone(),
-            round: local_set.round,
-            local_winner_id: pending.winner_id.clone(),
-            local_score_csv: pending.score_csv.clone(),
-            local_force_overwrite: pending.force_overwrite,
-            local_state: local_set.state,
-            local_snapshot_winner_id: local_set.winner_id.clone(),
-            remote_state: Some(remote_set.state),
-            remote_winner_id: remote_set.winner_id.clone(),
-            conflict_reason,
-        });
-    }
-
-    sort_report_plan_items(&mut items);
-
-    Ok(BatchReportPlan {
-        snapshot: workspace.snapshot,
-        local_meta: workspace.local_meta,
-        items,
-    })
-}
-
-#[tauri::command]
-async fn apply_batch_report_plan(
-    app: tauri::AppHandle,
-    input: BatchReportInput,
-) -> Result<TournamentWorkspace, String> {
-    let token = storage::load_token(&app)?;
-    let remote_snapshot = startgg::fetch_tournament_snapshot(&token, &input.slug, input.per_page.unwrap_or(200)).await?;
-    let remote_event = remote_snapshot
-        .events
-        .iter()
         .find(|event| event.event_id == input.event_id)
-        .ok_or_else(|| format!("指定イベントがリモートsnapshotに見つかりません: {}", input.event_id))?;
+        .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {}", input.event_id))?;
 
-    let remote_event_snapshot = TournamentSnapshot {
-        tournament_id: remote_snapshot.tournament_id.clone(),
-        slug: remote_snapshot.slug.clone(),
-        name: remote_snapshot.name.clone(),
-        events: vec![remote_event.clone()],
-        updated_at: remote_snapshot.updated_at.clone(),
-    };
+    let mut pending = workspace
+        .local_meta
+        .pending_set_results
+        .iter()
+        .filter(|item| item.confirmed && item.event_id == input.event_id)
+        .cloned()
+        .collect::<Vec<_>>();
 
-    let mut decisions = input.decisions;
-    decisions.sort_by(|left, right| {
-        let left_round = find_set_snapshot(
-            &remote_event_snapshot,
-            &left.set_id,
-        )
-            .map(|(_, set)| set.round.unwrap_or(i64::MIN))
-            .unwrap_or(i64::MIN);
-        let right_round = find_set_snapshot(
-            &remote_event_snapshot,
-            &right.set_id,
-        )
-            .map(|(_, set)| set.round.unwrap_or(i64::MIN))
-            .unwrap_or(i64::MIN);
-        right_round.cmp(&left_round)
+    pending.sort_by(|left, right| {
+        let left_round = local_event
+            .sets
+            .iter()
+            .find(|set| set.set_id == left.set_id)
+            .map(|set| set.round)
+            .unwrap_or(None);
+        let right_round = local_event
+            .sets
+            .iter()
+            .find(|set| set.set_id == right.set_id)
+            .map(|set| set.round)
+            .unwrap_or(None);
+
+        round_depth(left_round)
+            .cmp(&round_depth(right_round))
+            .then_with(|| left.set_id.cmp(&right.set_id))
     });
 
+    let per_page = input.per_page.unwrap_or(200);
+    let mut force_overwrite_current_conflict = input.force_overwrite_current_conflict.unwrap_or(false);
+    let force_overwrite_remaining_conflicts = input.force_overwrite_remaining_conflicts.unwrap_or(false);
+    let mut reported_count = 0_usize;
+    let mut skipped_count = 0_usize;
     let mut processed_set_ids = Vec::new();
+    let mut conflict = None;
 
-    for decision in decisions {
-        let pending = storage::load_local_meta(&app, &input.slug, &input.event_id)?
-            .pending_set_results
-            .iter()
-            .find(|item| item.set_id == decision.set_id)
-            .cloned()
-            .ok_or_else(|| format!("未処理のローカル結果が見つかりません: {}", decision.set_id))?;
-
-        match decision.resolution {
-            BatchReportResolution::Local => {
-                startgg::report_set_result(
-                    &token,
-                    &pending.set_id,
-                    &pending.winner_id,
-                    &pending.score_csv,
-                    pending.force_overwrite,
-                )
-                .await?;
+    for item in pending {
+        let local_set = match local_event.sets.iter().find(|set| set.set_id == item.set_id) {
+            Some(set) => set,
+            None => {
+                skipped_count += 1;
+                processed_set_ids.push(item.set_id.clone());
+                continue;
             }
-            BatchReportResolution::Remote => {}
+        };
+
+        if local_set.slots.len() < 2 {
+            skipped_count += 1;
+            processed_set_ids.push(item.set_id.clone());
+            continue;
         }
 
-        processed_set_ids.push(pending.set_id);
+        let remote_set = match startgg::fetch_set_snapshot(&token, &item.set_id).await {
+            Ok(set) => set,
+            Err(err) => {
+                if err.contains("指定setが見つかりません") {
+                    skipped_count += 1;
+                    processed_set_ids.push(item.set_id.clone());
+                    continue;
+                }
+                return Err(err);
+            }
+        };
+
+        let is_already_synced = remote_set.winner_id.as_ref() == Some(&item.winner_id);
+        if is_already_synced {
+            skipped_count += 1;
+            processed_set_ids.push(item.set_id.clone());
+            continue;
+        }
+
+        let requires_force_overwrite = remote_set.state != 1 && remote_set.state != 2;
+        let should_force_overwrite = if requires_force_overwrite {
+            if force_overwrite_current_conflict {
+                force_overwrite_current_conflict = false;
+                true
+            } else if force_overwrite_remaining_conflicts {
+                true
+            } else {
+                conflict = Some(BracketBatchConflict {
+                    set_id: item.set_id.clone(),
+                    full_round_text: local_set.full_round_text.clone(),
+                    local_winner_id: item.winner_id.clone(),
+                    remote_winner_id: remote_set.winner_id.clone(),
+                    remote_state: remote_set.state,
+                    entrant_names: local_set
+                        .slots
+                        .iter()
+                        .map(|slot| slot.entrant_name.clone())
+                        .collect(),
+                });
+                break;
+            }
+        } else {
+            false
+        };
+
+        let can_report_by_state = remote_set.state == 1 || remote_set.state == 2 || should_force_overwrite;
+        if !can_report_by_state {
+            skipped_count += 1;
+            processed_set_ids.push(item.set_id.clone());
+            continue;
+        }
+
+        let entrant_ids = remote_set
+            .slots
+            .iter()
+            .filter_map(|slot| slot.entrant_id.as_ref().cloned())
+            .collect::<Vec<String>>();
+
+        let is_matchup_ready = entrant_ids.len() >= 2 && entrant_ids.iter().any(|entrant_id| entrant_id == &item.winner_id);
+        if !is_matchup_ready {
+            skipped_count += 1;
+            continue;
+        }
+
+        startgg::report_set_result(
+            &token,
+            &item.set_id,
+            &item.winner_id,
+            &item.score_csv,
+            should_force_overwrite,
+        )
+        .await?;
+
+        reported_count += 1;
+        processed_set_ids.push(item.set_id.clone());
     }
 
-    storage::remove_pending_set_results(&app, &input.slug, &input.event_id, &processed_set_ids)?;
-    let snapshot = startgg::fetch_tournament_snapshot(&token, &input.slug, input.per_page.unwrap_or(200)).await?;
-    storage::save_snapshot(&app, &snapshot)?;
-    let local_meta = storage::sync_local_meta_from_snapshot(&app, &snapshot, &input.event_id)?;
+    if !processed_set_ids.is_empty() {
+        storage::remove_pending_set_results(&app, &input.slug, &input.event_id, &processed_set_ids)?;
+    }
 
-    Ok(TournamentWorkspace {
-        snapshot,
-        local_meta,
+    let workspace = if reported_count > 0 {
+        refresh_workspace_after_remote_report(&app, &token, &input.slug, &input.event_id, per_page).await?
+    } else if !processed_set_ids.is_empty() {
+        storage::load_workspace(&app, &input.slug, &input.event_id)?
+    } else {
+        workspace
+    };
+
+    Ok(BracketBatchReportResult {
+        workspace,
+        processed_count: reported_count + skipped_count,
+        reported_count,
+        skipped_count,
+        completed: conflict.is_none(),
+        conflict,
     })
 }
 
@@ -447,9 +458,9 @@ pub fn run() {
             refresh_local_event_snapshot_from_remote,
             list_owned_tournaments,
             save_local_player_meta,
+            save_local_set_play_side,
             save_local_set_result,
-            build_batch_report_plan,
-            apply_batch_report_plan,
+            report_confirmed_sets_from_bracket,
             sync_tournament,
             report_set_result
         ])

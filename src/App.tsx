@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -107,20 +107,40 @@ type EventLocalMeta = {
   entrants: EventEntrantMeta[];
 };
 
+type SetPlaySideMeta = {
+  setId: string;
+  entrantId: string;
+  playSide: PlaySide;
+};
+
 type LocalSetResultMeta = {
   eventId: string;
   eventName: string;
   setId: string;
   winnerId: string;
   scoreCsv: string;
-  forceOverwrite: boolean;
+  confirmed?: boolean;
+  slotScores?: Array<{ entrantId: string; score: number }>;
   recordedAt: string;
+};
+
+type SetScoreDraft = Record<string, string>;
+
+type SetResultDraftState = {
+  winnerId: string;
+  scoreDrafts: SetScoreDraft;
+};
+
+type SavePlayerMetaOptions = {
+  silent?: boolean;
+  manageBusy?: boolean;
 };
 
 type TournamentLocalMeta = {
   tournamentId: string;
   slug: string;
   events: EventLocalMeta[];
+  setPlaySides?: SetPlaySideMeta[];
   pendingSetResults: LocalSetResultMeta[];
   updatedAt: string;
 };
@@ -162,28 +182,43 @@ type LocalSnapshotEventListItem = {
   setCount: number;
 };
 
-type BatchReportResolution = "local" | "remote";
-
-type BatchReportPlanItem = {
-  eventId: string;
-  eventName: string;
-  setId: string;
-  fullRoundText: string;
-  round: number | null;
-  localWinnerId: string;
-  localScoreCsv: string;
-  localForceOverwrite: boolean;
-  localState: number;
-  localSnapshotWinnerId: string | null;
-  remoteState: number | null;
-  remoteWinnerId: string | null;
-  conflictReason: string | null;
+type BracketBatchReportResult = {
+  workspace: TournamentWorkspace;
+  processedCount: number;
+  reportedCount: number;
+  skippedCount: number;
+  completed: boolean;
+  conflict: BracketBatchConflict | null;
 };
 
-type BatchReportPlan = {
-  snapshot: TournamentSnapshot;
-  localMeta: TournamentLocalMeta;
-  items: BatchReportPlanItem[];
+type BracketBatchConflict = {
+  setId: string;
+  fullRoundText: string;
+  localWinnerId: string;
+  remoteWinnerId: string | null;
+  remoteState: number;
+  entrantNames: string[];
+};
+
+type BatchReportProgress = {
+  totalCount: number;
+  reportedCount: number;
+  skippedCount: number;
+};
+
+type BatchConflictDialogState = {
+  conflict: BracketBatchConflict;
+  progress: BatchReportProgress;
+};
+
+type MatchSideRandomNotice = {
+  setId: string;
+  upperEntrantName: string;
+  lowerEntrantName: string;
+  upperSide: PlaySide;
+  lowerSide: PlaySide;
+  changed: boolean;
+  triggeredAt: number;
 };
 
 type PlayerMetaDraft = {
@@ -244,6 +279,10 @@ function isMatchupReady(set: SetSnapshot): boolean {
   return set.slots.every((slot) => slot.entrantId !== null && slot.entrantName !== "TBD");
 }
 
+function isStandbySet(set: SetSnapshot): boolean {
+  return set.state === 1;
+}
+
 function isLosersBracketSet(set: SetSnapshot): boolean {
   if (set.round !== null && set.round < 0) {
     return true;
@@ -268,6 +307,72 @@ function toIntegerScore(value: number | null): number | null {
 
 function isDqScoreValue(value: number | null): boolean {
   return value !== null && value < 0;
+}
+
+function parseDraftScoreValue(rawValue: string): number | null {
+  const trimmed = rawValue.trim();
+  if (trimmed === "") {
+    return null;
+  }
+
+  if (trimmed === "-") {
+    return -1;
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed)) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function formatDraftScoreValue(value: number): string {
+  return value < 0 ? "-" : String(Math.trunc(value));
+}
+
+function parseScoreCsvText(rawScoreCsv: string): { winnerWins: number; loserWins: number } | null {
+  const trimmed = rawScoreCsv.trim();
+  if (trimmed === "") {
+    return null;
+  }
+
+  const parts = trimmed.split("-").map((value) => value.trim());
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  const winnerWins = Number(parts[0]);
+  const loserWins = Number(parts[1]);
+  if (!Number.isFinite(winnerWins) || !Number.isFinite(loserWins)) {
+    return null;
+  }
+
+  return {
+    winnerWins,
+    loserWins,
+  };
+}
+
+function isDqScoreCsvText(rawScoreCsv: string): boolean {
+  const normalized = rawScoreCsv.trim().toLowerCase().replace(/\s+/g, "");
+  return normalized === "dq" || /^\d+-dq$/.test(normalized);
+}
+
+function isConfirmedSetResult(result: LocalSetResultMeta): boolean {
+  return result.confirmed !== false;
+}
+
+function oppositePlaySide(side: PlaySide): PlaySide {
+  return side === "1P" ? "2P" : "1P";
+}
+
+function deterministicUpperIsOneP(seed: string): boolean {
+  let acc = 0;
+  for (let i = 0; i < seed.length; i += 1) {
+    acc = (acc + seed.charCodeAt(i)) % 9973;
+  }
+  return acc % 2 === 0;
 }
 
 function toSlugInput(raw: string): string {
@@ -309,6 +414,128 @@ function toEventApiSlug(tournamentInput: string, eventInput: string): string {
   return `${tournamentSlug}/event/${eventPart}`;
 }
 
+function buildScoreDraftsFromSet(set: SetSnapshot): SetScoreDraft {
+  const drafts: SetScoreDraft = {};
+
+  for (const slot of set.slots) {
+    if (!slot.entrantId || slot.score === null) {
+      continue;
+    }
+
+    drafts[slot.entrantId] = formatDraftScoreValue(slot.score);
+  }
+
+  return drafts;
+}
+
+function buildScoreDraftsFromResult(set: SetSnapshot, result: LocalSetResultMeta): SetScoreDraft {
+  const slotScores = result.slotScores ?? [];
+
+  if (slotScores.length > 0) {
+    const drafts: SetScoreDraft = {};
+    for (const slot of slotScores) {
+      drafts[slot.entrantId] = slot.score < 0 ? "-" : formatDraftScoreValue(slot.score);
+    }
+    return drafts;
+  }
+
+  if (isDqScoreCsvText(result.scoreCsv)) {
+    const drafts: SetScoreDraft = {};
+    for (const slot of set.slots) {
+      if (!slot.entrantId) {
+        continue;
+      }
+      drafts[slot.entrantId] = slot.entrantId === result.winnerId ? "0" : "-1";
+    }
+    return drafts;
+  }
+
+  const parsed = parseScoreCsvText(result.scoreCsv);
+  if (!parsed) {
+    return buildScoreDraftsFromSet(set);
+  }
+
+  const drafts: SetScoreDraft = {};
+  for (const slot of set.slots) {
+    if (!slot.entrantId) {
+      continue;
+    }
+
+    drafts[slot.entrantId] = slot.entrantId === result.winnerId
+      ? String(parsed.winnerWins)
+      : String(parsed.loserWins);
+  }
+
+  return drafts;
+}
+
+function buildDraftStateFromPending(set: SetSnapshot, result: LocalSetResultMeta): SetResultDraftState {
+  return {
+    winnerId: result.winnerId,
+    scoreDrafts: buildScoreDraftsFromResult(set, result),
+  };
+}
+
+function resolveWinnerIdFromDrafts(set: SetSnapshot, drafts: SetScoreDraft): string {
+  const scored = set.slots
+    .map((slot) => {
+      if (!slot.entrantId) {
+        return null;
+      }
+
+      const score = parseDraftScoreValue(drafts[slot.entrantId] ?? "");
+      if (score === null) {
+        return null;
+      }
+
+      return { entrantId: slot.entrantId, score };
+    })
+    .filter((slot): slot is { entrantId: string; score: number } => slot !== null);
+
+  if (scored.length < 2) {
+    return "";
+  }
+
+  const dqSlot = scored.find((slot) => slot.score < 0);
+  const nonDqSlot = scored.find((slot) => slot.score >= 0);
+  if (dqSlot && nonDqSlot && scored.length === 2) {
+    return nonDqSlot.entrantId;
+  }
+
+  const sorted = [...scored].sort((left, right) => right.score - left.score);
+  if (sorted[0].score === sorted[1].score) {
+    return "";
+  }
+
+  return sorted[0].entrantId;
+}
+
+function buildSlotScoresForSave(set: SetSnapshot, drafts: SetScoreDraft): Array<{ entrantId: string; score: number }> {
+  const slotScores: Array<{ entrantId: string; score: number }> = [];
+
+  for (const slot of set.slots) {
+    if (!slot.entrantId) {
+      continue;
+    }
+
+    const parsed = parseDraftScoreValue(drafts[slot.entrantId] ?? "");
+    if (parsed === null) {
+      throw new Error(`スコアが未入力です: ${slot.entrantName}`);
+    }
+
+    slotScores.push({
+      entrantId: slot.entrantId,
+      score: parsed,
+    });
+  }
+
+  if (slotScores.length < 2) {
+    throw new Error("結果入力には少なくとも2人のプレイヤーが必要です。");
+  }
+
+  return slotScores;
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("home");
   const [token, setToken] = useState("");
@@ -328,12 +555,12 @@ function App() {
   const [selectedPhasePoolKey, setSelectedPhasePoolKey] = useState("");
   const [activeMatchSetId, setActiveMatchSetId] = useState("");
   const [setId, setSetId] = useState("");
-  const [winnerId, setWinnerId] = useState("");
-  const [scoreCsv, setScoreCsv] = useState("2-0");
-  const [forceOverwrite, setForceOverwrite] = useState(false);
+  const [scoreDrafts, setScoreDrafts] = useState<SetScoreDraft>({});
+  const [activeMatchSideDrafts, setActiveMatchSideDrafts] = useState<Record<string, PlaySide | "">>({});
+  const [setResultDrafts, setSetResultDrafts] = useState<Record<string, SetResultDraftState>>({});
+  const [batchConflictDialog, setBatchConflictDialog] = useState<BatchConflictDialogState | null>(null);
+  const [batchForceOverwriteRemaining, setBatchForceOverwriteRemaining] = useState(false);
   const [metaDrafts, setMetaDrafts] = useState<Record<string, PlayerMetaDraft>>({});
-  const [batchPlan, setBatchPlan] = useState<BatchReportPlan | null>(null);
-  const [batchDecisions, setBatchDecisions] = useState<Record<string, BatchReportResolution | "">>({});
   const [localSnapshotEvents, setLocalSnapshotEvents] = useState<LocalSnapshotEventListItem[]>([]);
   const [loadingLocalSnapshotEvents, setLoadingLocalSnapshotEvents] = useState(false);
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
@@ -344,11 +571,14 @@ function App() {
   const [itemListText, setItemListText] = useState("");
   const [eventMgmtSettings, setEventMgmtSettings] = useState<Record<string, EventManagementSetting>>({});
   const [sideDecisionMethod, setSideDecisionMethod] = useState<EventManagementSetting["sideDecisionMethod"]>("upper_1p");
+  const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
   const [categorySlotListIds, setCategorySlotListIds] = useState<string[]>(["", "", ""]);
   const [selectedTournamentEntrantId, setSelectedTournamentEntrantId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const autoAssigningSidesRef = useRef(false);
+  const standbyReadinessRef = useRef<Record<string, boolean>>({});
 
   useEffect(() => {
     let alive = true;
@@ -451,7 +681,18 @@ function App() {
 
   const snapshot = workspace?.snapshot ?? null;
   const localMeta = workspace?.localMeta ?? null;
+  const setPlaySides = localMeta?.setPlaySides ?? [];
   const pendingSetResults = localMeta?.pendingSetResults ?? [];
+  const confirmedSetResults = pendingSetResults.filter((result) => isConfirmedSetResult(result));
+  const draftSetResults = pendingSetResults.filter((result) => !isConfirmedSetResult(result));
+
+  const setPlaySideMap = useMemo(() => {
+    const map = new Map<string, PlaySide>();
+    for (const item of setPlaySides) {
+      map.set(`${item.setId}:${item.entrantId}`, item.playSide);
+    }
+    return map;
+  }, [setPlaySides]);
 
   const allSets = useMemo(() => {
     if (!snapshot) {
@@ -635,6 +876,116 @@ function App() {
     setSelectedTournamentEntrantId(selectedEventEntrants[0].entrantId);
   }, [selectedEventEntrants, selectedTournamentEntrantId]);
 
+  useEffect(() => {
+    if (!matchSideRandomNotice) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setMatchSideRandomNotice((current) => {
+        if (!current || current.triggeredAt !== matchSideRandomNotice.triggeredAt) {
+          return current;
+        }
+        return null;
+      });
+    }, 6000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [matchSideRandomNotice]);
+
+  useEffect(() => {
+    if (!selectedEvent) {
+      standbyReadinessRef.current = {};
+      return;
+    }
+
+    if (autoAssigningSidesRef.current) {
+      return;
+    }
+
+    const prevReadiness = standbyReadinessRef.current;
+    const nextReadiness: Record<string, boolean> = {};
+    const updates: Array<{ setSnapshot: SetSnapshot; entrantId: string; side: PlaySide }> = [];
+
+    for (const set of selectedEvent.sets) {
+      const isReadyStandby = isStandbySet(set) && isMatchupReady(set);
+      nextReadiness[set.setId] = isReadyStandby;
+
+      const wasReadyStandby = prevReadiness[set.setId] ?? false;
+      if (!isReadyStandby || wasReadyStandby) {
+        continue;
+      }
+
+      const slots = set.slots.filter((slot) => slot.entrantId !== null);
+      if (slots.length < 2) {
+        continue;
+      }
+
+      const upperId = slots[0].entrantId;
+      const lowerId = slots[1].entrantId;
+      if (!upperId || !lowerId) {
+        continue;
+      }
+
+      const upperCurrent = getSetSlotSide(set.setId, upperId);
+      const lowerCurrent = getSetSlotSide(set.setId, lowerId);
+      let upperSide = upperCurrent;
+      let lowerSide = lowerCurrent;
+
+      if (upperSide !== "" && lowerSide !== "") {
+        continue;
+      }
+
+      if (upperSide !== "" && lowerSide === "") {
+        lowerSide = oppositePlaySide(upperSide);
+      } else if (lowerSide !== "" && upperSide === "") {
+        upperSide = oppositePlaySide(lowerSide);
+      } else {
+        const method = getConfiguredSideDecisionMethod();
+        if (method === "upper_2p") {
+          upperSide = "2P";
+          lowerSide = "1P";
+        } else if (method === "random") {
+          const upperIsOneP = deterministicUpperIsOneP(set.setId);
+          upperSide = upperIsOneP ? "1P" : "2P";
+          lowerSide = upperIsOneP ? "2P" : "1P";
+        } else {
+          upperSide = "1P";
+          lowerSide = "2P";
+        }
+      }
+
+      if (upperCurrent !== upperSide) {
+        updates.push({ setSnapshot: set, entrantId: upperId, side: upperSide });
+      }
+      if (lowerCurrent !== lowerSide) {
+        updates.push({ setSnapshot: set, entrantId: lowerId, side: lowerSide });
+      }
+    }
+
+    standbyReadinessRef.current = nextReadiness;
+
+    if (updates.length === 0) {
+      return;
+    }
+
+    autoAssigningSidesRef.current = true;
+    void (async () => {
+      try {
+        for (const update of updates) {
+          await saveSetPlaySide(selectedEvent, update.setSnapshot, update.entrantId, update.side, {
+            silent: true,
+            manageBusy: false,
+          });
+        }
+      } finally {
+        autoAssigningSidesRef.current = false;
+      }
+    })();
+  }, [selectedEvent, setPlaySideMap, sideDecisionMethod, eventMgmtSettings, selectedEventSettingKey]);
+
   function getMetaDraftKey(eventId: string, entrantId: string): string {
     return `${eventId}:${entrantId}`;
   }
@@ -675,6 +1026,19 @@ function App() {
         },
       };
     });
+  }
+
+  function getConfiguredSideDecisionMethod(): EventManagementSetting["sideDecisionMethod"] {
+    if (selectedEventSettingKey === "") {
+      return "upper_1p";
+    }
+
+    const configured = eventMgmtSettings[selectedEventSettingKey]?.sideDecisionMethod;
+    if (configured === "upper_2p" || configured === "random") {
+      return configured;
+    }
+
+    return "upper_1p";
   }
 
   function parseCharacterNames(rawValue: string): string[] {
@@ -842,80 +1206,8 @@ function App() {
     setMessage("大会管理設定を保存しました。");
   }
 
-  function parseScoreCsv(rawScoreCsv: string): { winnerWins: number; loserWins: number } | null {
-    const trimmed = rawScoreCsv.trim();
-    if (trimmed === "") {
-      return null;
-    }
-
-    const parts = trimmed.split("-").map((value) => value.trim());
-    if (parts.length !== 2) {
-      return null;
-    }
-
-    const winnerWins = Number(parts[0]);
-    const loserWins = Number(parts[1]);
-    if (!Number.isFinite(winnerWins) || !Number.isFinite(loserWins)) {
-      return null;
-    }
-
-    return {
-      winnerWins,
-      loserWins,
-    };
-  }
-
-  function isDqScoreCsv(rawScoreCsv: string): boolean {
-    const normalized = rawScoreCsv.trim().toLowerCase().replace(/\s+/g, "");
-    return normalized === "dq" || /^\d+-dq$/.test(normalized);
-  }
-
   function formatScoreValue(value: number): string {
     return Number.isInteger(value) ? String(value) : value.toFixed(1);
-  }
-
-  function deriveScoreCsvFromSet(set: SetSnapshot): string | null {
-    if (set.winnerId) {
-      const winnerSlot = set.slots.find((slot) => slot.entrantId === set.winnerId);
-      const loserSlot = set.slots.find((slot) => slot.entrantId !== null && slot.entrantId !== set.winnerId);
-      const winnerScore = winnerSlot ? toIntegerScore(winnerSlot.score) : null;
-      const loserScore = loserSlot ? toIntegerScore(loserSlot.score) : null;
-      const loserIsDq = loserSlot ? isDqScoreValue(loserSlot.score) : false;
-
-      if (winnerScore !== null && (loserScore === null || loserIsDq)) {
-        return `${winnerScore}-DQ`;
-      }
-    }
-
-    const scored = set.slots
-      .map((slot) => ({
-        entrantId: slot.entrantId,
-        score: toIntegerScore(slot.score),
-      }))
-      .filter((slot) => slot.entrantId !== null && slot.score !== null) as Array<{
-      entrantId: string;
-      score: number;
-    }>;
-
-    if (scored.length < 2) {
-      return null;
-    }
-
-    const winnerId = set.winnerId;
-    if (winnerId) {
-      const winner = scored.find((slot) => slot.entrantId === winnerId);
-      const loser = scored.find((slot) => slot.entrantId !== winnerId);
-      if (winner && loser) {
-        return `${winner.score}-${loser.score}`;
-      }
-    }
-
-    const [high, low] = [...scored].sort((a, b) => b.score - a.score);
-    if (high && low) {
-      return `${high.score}-${low.score}`;
-    }
-
-    return null;
   }
 
   const phasePoolGroups = useMemo(() => {
@@ -1278,8 +1570,7 @@ function App() {
       setSlug(toSlugInput(item.slug));
       setSelectedEventId(item.eventId);
       setWorkspace(result);
-      setBatchPlan(null);
-      setBatchDecisions({});
+      closeMatchDialog();
       setMessage(`イベントを読み込みました: ${item.tournamentName} / ${item.eventName}`);
     } catch (err) {
       setError(String(err));
@@ -1313,8 +1604,7 @@ function App() {
       if (snapshot?.slug === item.slug && selectedEvent?.eventId === item.eventId) {
         setWorkspace(null);
         setSelectedEventId("");
-        setBatchPlan(null);
-        setBatchDecisions({});
+        closeMatchDialog();
       }
 
       await refreshLocalSnapshotEvents();
@@ -1326,7 +1616,7 @@ function App() {
     }
   }
 
-  async function refreshSnapshotFromRemote() {
+  async function updateSnapshot() {
     const normalizedSlug = toApiSlug(slug);
     const eventId = selectedEvent?.eventId ?? selectedEventId;
     if (normalizedSlug === "" || eventId === "") {
@@ -1345,11 +1635,9 @@ function App() {
         perPage: Number(perPage),
       });
       setWorkspace(result);
-      setBatchPlan(null);
-      setBatchDecisions({});
-      setActiveMatchSetId("");
+      closeMatchDialog();
       await refreshLocalSnapshotEvents();
-      setMessage("リモート情報でローカルスナップショットを更新しました。");
+      setMessage("スナップショットを更新しました。反映済みの変更は自動で変更リストから除外されます。");
     } catch (err) {
       setError(String(err));
     } finally {
@@ -1357,17 +1645,21 @@ function App() {
     }
   }
 
-  function getSlotSideLabel(eventId: string, entrantId: string | null): string {
-    if (!entrantId || !localMeta) {
+  function getSetSlotSide(setId: string, entrantId: string | null): PlaySide | "" {
+    if (!entrantId) {
+      return "";
+    }
+
+    return setPlaySideMap.get(`${setId}:${entrantId}`) ?? "";
+  }
+
+  function getSetSlotSideLabel(setId: string, entrantId: string | null): string {
+    if (!entrantId) {
       return "-";
     }
 
-    const side = localMeta.events
-      .find((event) => event.eventId === eventId)
-      ?.entrants.find((entrant) => entrant.entrantId === entrantId)
-      ?.playSide;
-
-    return side ?? "-";
+    const side = getSetSlotSide(setId, entrantId);
+    return side === "" ? "-" : side;
   }
 
   function getSetScoresForDisplay(set: SetSnapshot): { scores: Record<string, string>; isDq: boolean; winnerId: string | null } {
@@ -1405,7 +1697,22 @@ function App() {
       };
     }
 
-    if (isDqScoreCsv(result.scoreCsv)) {
+    const slotScores = result.slotScores ?? [];
+
+    if (slotScores.length > 0) {
+      const scores: Record<string, string> = {};
+      for (const slot of slotScores) {
+        scores[slot.entrantId] = slot.score < 0 ? "DQ" : String(slot.score);
+      }
+
+      return {
+        scores,
+        isDq: slotScores.some((slot) => slot.score < 0),
+        winnerId: result.winnerId,
+      };
+    }
+
+    if (isDqScoreCsvText(result.scoreCsv)) {
       const scores: Record<string, string> = {};
       for (const slot of set.slots) {
         if (!slot.entrantId) {
@@ -1421,7 +1728,7 @@ function App() {
       };
     }
 
-    const parsed = parseScoreCsv(result.scoreCsv);
+    const parsed = parseScoreCsvText(result.scoreCsv);
     if (!parsed) {
       return {
         scores: {},
@@ -1454,27 +1761,57 @@ function App() {
     setActiveMatchSetId(set.setId);
     setSetId(set.setId);
 
-    const pending = pendingResultBySetId.get(set.setId);
-    if (pending) {
-      setWinnerId(pending.winnerId);
-      setScoreCsv(pending.scoreCsv);
-      setForceOverwrite(pending.forceOverwrite);
+    const sideDrafts: Record<string, PlaySide | ""> = {};
+    for (const slot of set.slots) {
+      if (!slot.entrantId) {
+        continue;
+      }
+      sideDrafts[slot.entrantId] = getSetSlotSide(set.setId, slot.entrantId);
+    }
+    setActiveMatchSideDrafts(sideDrafts);
+
+    const cached = setResultDrafts[set.setId];
+    if (cached) {
+      setScoreDrafts(cached.scoreDrafts);
       return;
     }
 
-    setWinnerId(set.winnerId ?? "");
-    setScoreCsv(deriveScoreCsvFromSet(set) ?? "2-0");
-    setForceOverwrite(false);
+    const pending = pendingResultBySetId.get(set.setId);
+    if (pending) {
+      const draftState = buildDraftStateFromPending(set, pending);
+      setScoreDrafts(draftState.scoreDrafts);
+      setSetResultDrafts((current) => ({
+        ...current,
+        [set.setId]: draftState,
+      }));
+      return;
+    }
+
+    setScoreDrafts(buildScoreDraftsFromSet(set));
+    setSetResultDrafts((current) => ({
+      ...current,
+      [set.setId]: {
+        winnerId: "",
+        scoreDrafts: buildScoreDraftsFromSet(set),
+      },
+    }));
   }
 
-  async function saveLocalResultForMatch() {
+  function closeMatchDialog() {
+    setActiveMatchSetId("");
+    setSetId("");
+    setActiveMatchSideDrafts({});
+    setMatchSideRandomNotice(null);
+  }
+
+  async function saveLocalResultForMatch(confirmed: boolean) {
     if (!selectedEvent) {
       setError("イベントが選択されていません。");
       return;
     }
 
-    if (setId.trim() === "" || winnerId.trim() === "") {
-      setError("winner を選択してください。");
+    if (!activeMatch) {
+      setError("試合が選択されていません。");
       return;
     }
 
@@ -1485,54 +1822,135 @@ function App() {
     try {
       const normalizedSlug = toApiSlug(slug);
       await invoke("save_last_slug", { slug: normalizedSlug });
+
+      await saveMatchSidesIfNeeded(selectedEvent, activeMatch, activeMatchSideDrafts);
+
+      const slotScores = buildSlotScoresForSave(activeMatch, scoreDrafts);
+      let resolvedWinnerId = resolveWinnerIdFromDrafts(activeMatch, scoreDrafts);
+
+      if (resolvedWinnerId === "") {
+        setError("スコアから勝者を特定できませんでした。入力を確認してください。");
+        return;
+      }
 
       const result = await invoke<TournamentWorkspace>("save_local_set_result", {
         input: {
           slug: normalizedSlug,
           eventId: selectedEvent.eventId,
           setId,
-          winnerId,
-          scoreCsv,
-          forceOverwrite,
+          winnerId: resolvedWinnerId,
+          confirmed,
+          slotScores,
         },
       });
       setWorkspace(result);
-      setBatchPlan(null);
-      setBatchDecisions({});
-      setMessage("結果をローカルに記録しました。必要なタイミングで一括反映できます。");
-      setActiveMatchSetId("");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function buildBatchReportPlan() {
-    setBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const normalizedSlug = toApiSlug(slug);
-      await invoke("save_last_slug", { slug: normalizedSlug });
-
-      const result = await invoke<BatchReportPlan>("build_batch_report_plan", {
-        slug: normalizedSlug,
-        eventId: selectedEvent?.eventId ?? selectedEventId,
-        perPage: Number(perPage),
-      });
-
-      setBatchPlan(result);
-      setBatchDecisions(
-        Object.fromEntries(
-          result.items.map((item) => [item.setId, item.conflictReason ? "" : "local"]),
-        ) as Record<string, BatchReportResolution | "">,
-      );
+      setSetResultDrafts((current) => ({
+        ...current,
+        [setId]: {
+          winnerId: resolvedWinnerId,
+          scoreDrafts,
+        },
+      }));
       setMessage(
-        result.items.length === 0
-          ? "一括反映の対象はありません。"
-          : `一括反映の候補を ${result.items.length} 件読み込みました。`,
+        confirmed
+          ? "結果を確定しました。確定済みの試合だけが一括報告の対象になります。"
+          : "入力を保存しました。確定すると一括報告の対象になります。",
+      );
+      if (confirmed) {
+        closeMatchDialog();
+      }
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function cancelBracketBatchConflict() {
+    setBatchConflictDialog(null);
+    setBatchForceOverwriteRemaining(false);
+    setMessage("一括報告を中断しました。未送信のsetはそのまま残しています。");
+  }
+
+  async function runBracketBatchReport(
+    progress: BatchReportProgress,
+    forceOverwriteCurrentConflict: boolean,
+    forceOverwriteRemainingConflicts: boolean,
+  ) {
+    if (!selectedEvent) {
+      throw new Error("先にイベントを選択してください。");
+    }
+
+    const normalizedSlug = toApiSlug(slug);
+    const result = await invoke<BracketBatchReportResult>("report_confirmed_sets_from_bracket", {
+      input: {
+        slug: normalizedSlug,
+        eventId: selectedEvent.eventId,
+        perPage: Number(perPage),
+        forceOverwriteCurrentConflict,
+        forceOverwriteRemainingConflicts,
+      },
+    });
+
+    setWorkspace(result.workspace);
+    closeMatchDialog();
+
+    const nextProgress: BatchReportProgress = {
+      totalCount: progress.totalCount,
+      reportedCount: progress.reportedCount + result.reportedCount,
+      skippedCount: progress.skippedCount + result.skippedCount,
+    };
+
+    if (result.completed) {
+      setBatchConflictDialog(null);
+      setBatchForceOverwriteRemaining(false);
+      setMessage(
+        `一括報告を実行しました。対象 ${nextProgress.totalCount} 件 / 送信 ${nextProgress.reportedCount} 件 / スキップ ${nextProgress.skippedCount} 件`,
+      );
+      return;
+    }
+
+    if (result.conflict) {
+      setBatchConflictDialog({
+        conflict: result.conflict,
+        progress: nextProgress,
+      });
+      setMessage(
+        `一括報告を一時停止しました。${result.conflict.fullRoundText} で start.gg 側との競合を確認してください。`,
+      );
+      return;
+    }
+
+    throw new Error("一括報告の状態が不正です。競合情報を取得できませんでした。");
+  }
+
+  async function reportConfirmedSetsFromBracket() {
+    if (!selectedEvent) {
+      setError("先にイベントを選択してください。");
+      return;
+    }
+
+    const normalizedSlug = toApiSlug(slug);
+    if (normalizedSlug === "") {
+      setError("大会IDを入力してください。");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setMessage("");
+    setBatchConflictDialog(null);
+    setBatchForceOverwriteRemaining(false);
+
+    try {
+      await runBracketBatchReport(
+        {
+          totalCount: confirmedSetResults.length,
+          reportedCount: 0,
+          skippedCount: 0,
+        },
+        false,
+        false,
       );
     } catch (err) {
       setError(String(err));
@@ -1541,17 +1959,8 @@ function App() {
     }
   }
 
-  async function applyBatchReportPlan() {
-    if (!batchPlan) {
-      setError("一括反映の差分を先に確認してください。");
-      return;
-    }
-
-    const unresolved = batchPlan.items.filter(
-      (item) => item.conflictReason !== null && batchDecisions[item.setId] !== "local" && batchDecisions[item.setId] !== "remote",
-    );
-    if (unresolved.length > 0) {
-      setError("コンフリクト項目の選択が完了していません。");
+  async function continueBracketBatchWithForceOverwrite() {
+    if (!batchConflictDialog) {
       return;
     }
 
@@ -1560,32 +1969,11 @@ function App() {
     setMessage("");
 
     try {
-      const normalizedSlug = toApiSlug(slug);
-      const decisions = batchPlan.items.map((item) => {
-        const resolution = batchDecisions[item.setId];
-        if (resolution !== "local" && resolution !== "remote") {
-          throw new Error(`set ${item.setId} の解決方針が未選択です。`);
-        }
-
-        return {
-          setId: item.setId,
-          resolution,
-        };
-      });
-
-      const result = await invoke<TournamentWorkspace>("apply_batch_report_plan", {
-        input: {
-          slug: normalizedSlug,
-          eventId: selectedEvent?.eventId ?? selectedEventId,
-          perPage: Number(perPage),
-          decisions,
-        },
-      });
-
-      setWorkspace(result);
-      setBatchPlan(null);
-      setBatchDecisions({});
-      setMessage("一括反映を完了しました。");
+      await runBracketBatchReport(
+        batchConflictDialog.progress,
+        true,
+        batchForceOverwriteRemaining,
+      );
     } catch (err) {
       setError(String(err));
     } finally {
@@ -1593,13 +1981,24 @@ function App() {
     }
   }
 
-  async function savePlayerMeta(eventSnapshot: EventSnapshot, entrantId: string, entrantName: string) {
+  async function savePlayerMeta(
+    eventSnapshot: EventSnapshot,
+    entrantId: string,
+    entrantName: string,
+    options?: SavePlayerMetaOptions,
+  ) {
+    const silent = options?.silent ?? false;
+    const manageBusy = options?.manageBusy ?? true;
     const normalizedSlug = toApiSlug(slug);
     const draft = getMetaDraft(eventSnapshot.eventId, entrantId);
 
-    setBusy(true);
+    if (manageBusy) {
+      setBusy(true);
+    }
     setError("");
-    setMessage("");
+    if (!silent) {
+      setMessage("");
+    }
 
     try {
       const result = await invoke<TournamentWorkspace>("save_local_player_meta", {
@@ -1609,18 +2008,152 @@ function App() {
           eventName: eventSnapshot.name,
           entrantId,
           entrantName,
-          playSide: draft.playSide === "" ? null : draft.playSide,
+          playSide: null,
           characterNames: parseCharacterNames(draft.characterNames),
           notes: toNullableText(draft.notes),
         },
       });
 
       setWorkspace(result);
-      setMessage("ローカルメタを保存しました。");
+      if (!silent) {
+        setMessage("ローカルメタを保存しました。");
+      }
     } catch (err) {
       setError(String(err));
+      throw err;
     } finally {
-      setBusy(false);
+      if (manageBusy) {
+        setBusy(false);
+      }
+    }
+  }
+
+  async function saveSetPlaySide(
+    eventSnapshot: EventSnapshot,
+    setSnapshot: SetSnapshot,
+    entrantId: string,
+    playSide: PlaySide | "",
+    options?: { silent?: boolean; manageBusy?: boolean },
+  ) {
+    const silent = options?.silent ?? true;
+    const manageBusy = options?.manageBusy ?? true;
+
+    if (manageBusy) {
+      setBusy(true);
+    }
+    setError("");
+    if (!silent) {
+      setMessage("");
+    }
+
+    try {
+      const normalizedSlug = toApiSlug(slug);
+      const result = await invoke<TournamentWorkspace>("save_local_set_play_side", {
+        input: {
+          slug: normalizedSlug,
+          eventId: eventSnapshot.eventId,
+          setId: setSnapshot.setId,
+          entrantId,
+          playSide: playSide === "" ? null : playSide,
+        },
+      });
+
+      setWorkspace(result);
+      if (!silent) {
+        setMessage("setサイドを保存しました。");
+      }
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      if (manageBusy) {
+        setBusy(false);
+      }
+    }
+  }
+
+  async function togglePlaySide(
+    entrantId: string,
+    targetSide: PlaySide,
+  ) {
+    const currentSide = activeMatchSideDrafts[entrantId] ?? "";
+    const nextSide: PlaySide | "" = currentSide === targetSide ? "" : targetSide;
+
+    setActiveMatchSideDrafts((current) => ({
+      ...current,
+      [entrantId]: nextSide,
+    }));
+  }
+
+  async function randomizeMatchSides(setSnapshot: SetSnapshot) {
+    if (!isMatchupReady(setSnapshot)) {
+      return;
+    }
+
+    const slots = setSnapshot.slots.filter((slot) => slot.entrantId !== null);
+    if (slots.length < 2) {
+      return;
+    }
+
+    const upper = slots[0];
+    const lower = slots[1];
+    const upperId = upper.entrantId;
+    const lowerId = lower.entrantId;
+    if (!upperId || !lowerId) {
+      return;
+    }
+
+    const upperIsOneP = Math.random() < 0.5;
+    const upperSide: PlaySide = upperIsOneP ? "1P" : "2P";
+    const lowerSide: PlaySide = upperIsOneP ? "2P" : "1P";
+
+    const upperCurrent = activeMatchSideDrafts[upperId] ?? "";
+    const lowerCurrent = activeMatchSideDrafts[lowerId] ?? "";
+    const changed = upperCurrent !== upperSide || lowerCurrent !== lowerSide;
+
+    setActiveMatchSideDrafts((current) => ({
+      ...current,
+      [upperId]: upperSide,
+      [lowerId]: lowerSide,
+    }));
+
+    setMatchSideRandomNotice({
+      setId: setSnapshot.setId,
+      upperEntrantName: upper.entrantName,
+      lowerEntrantName: lower.entrantName,
+      upperSide,
+      lowerSide,
+      changed,
+      triggeredAt: Date.now(),
+    });
+  }
+
+  async function saveMatchSidesIfNeeded(
+    eventSnapshot: EventSnapshot,
+    set: SetSnapshot,
+    sideDrafts: Record<string, PlaySide | "">,
+  ) {
+    const slots = set.slots.filter((slot) => slot.entrantId !== null);
+    for (const slot of slots) {
+      const entrantId = slot.entrantId;
+      if (!entrantId) {
+        continue;
+      }
+
+      const side = sideDrafts[entrantId] ?? getSetSlotSide(set.setId, entrantId);
+      if (side === "") {
+        continue;
+      }
+
+      const current = getSetSlotSide(set.setId, entrantId);
+      if (current === side) {
+        continue;
+      }
+
+      await saveSetPlaySide(eventSnapshot, set, entrantId, side, {
+        silent: true,
+        manageBusy: false,
+      });
     }
   }
 
@@ -2219,90 +2752,24 @@ function App() {
             <h2>ブラケット管理</h2>
             <p className="meta">試合カードをクリックすると詳細ダイアログを開き、結果入力と 1P/2P 設定ができます。</p>
             <div className="panel-toolbar compact">
-              <p className="meta">保留中のローカル結果: {pendingSetResults.length}</p>
+              <p className="meta">
+                下書き: {draftSetResults.length} / 確定済み: {confirmedSetResults.length}
+              </p>
               <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button type="button" className="ghost" disabled={busy || toApiSlug(slug) === ""} onClick={refreshSnapshotFromRemote}>
-                  リモート情報で更新
+                <button type="button" className="ghost" disabled={busy || toApiSlug(slug) === ""} onClick={updateSnapshot}>
+                  スナップショットを更新
                 </button>
-                <button type="button" disabled={busy || toApiSlug(slug) === ""} onClick={buildBatchReportPlan}>
-                  start.ggとの差分を確認
+                <button
+                  type="button"
+                  disabled={busy || toApiSlug(slug) === "" || confirmedSetResults.length === 0}
+                  onClick={reportConfirmedSetsFromBracket}
+                >
+                  結果を一括報告
                 </button>
               </div>
             </div>
+            <p className="meta">カード枠が黄色の試合は、現在のスナップショットからローカル変更があります。</p>
           </section>
-
-          {batchPlan && (
-            <section className="panel">
-              <h2>一括反映の確認</h2>
-              <p className="meta">
-                保留中のローカル結果: {pendingSetResults.length} / 差分候補: {batchPlan.items.length}
-              </p>
-
-              {batchPlan.items.length === 0 ? (
-                <p className="meta">start.gg に送る保留結果はありません。</p>
-              ) : (
-                <div className="batch-plan-list">
-                  {batchPlan.items.map((item) => {
-                    const decision = batchDecisions[item.setId] ?? "";
-                    const needsConfirmation = item.conflictReason !== null;
-
-                    return (
-                      <article className="batch-plan-item" key={item.setId}>
-                        <h3>
-                          {item.eventName} / {item.fullRoundText}
-                        </h3>
-                        <p className="meta">setId: {item.setId} / round: {item.round ?? "-"}</p>
-                        <p className="meta">
-                          local winner: {item.localWinnerId} / remote winner: {item.remoteWinnerId ?? "-"}
-                        </p>
-                        <p className="meta">
-                          local state: {item.localState} / remote state: {item.remoteState ?? "-"}
-                        </p>
-                        {item.conflictReason && <p className="meta error-text">コンフリクト: {item.conflictReason}</p>}
-                        {needsConfirmation && (
-                          <div className="batch-decision-row">
-                            <label>
-                              <input
-                                type="radio"
-                                name={`decision-${item.setId}`}
-                                checked={decision === "local"}
-                                onChange={() =>
-                                  setBatchDecisions((current) => ({
-                                    ...current,
-                                    [item.setId]: "local",
-                                  }))
-                                }
-                              />
-                              ローカルを優先して送信
-                            </label>
-                            <label>
-                              <input
-                                type="radio"
-                                name={`decision-${item.setId}`}
-                                checked={decision === "remote"}
-                                onChange={() =>
-                                  setBatchDecisions((current) => ({
-                                    ...current,
-                                    [item.setId]: "remote",
-                                  }))
-                                }
-                              />
-                              リモートを優先して破棄
-                            </label>
-                          </div>
-                        )}
-                        {!needsConfirmation && <p className="meta">コンフリクトなし。ローカルを送信対象にします。</p>}
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-
-              <button type="button" disabled={busy || batchPlan.items.length === 0} onClick={applyBatchReportPlan}>
-                一括反映を実行
-              </button>
-            </section>
-          )}
 
           {snapshot && (
             <section className="panel">
@@ -2385,8 +2852,15 @@ function App() {
 
                                 <div className="column-sets">
                                   {column.sets.map((set) => (
+                                    (() => {
+                                      const pendingResult = pendingResultBySetId.get(set.setId);
+                                      const changeClass = pendingResult
+                                        ? (isConfirmedSetResult(pendingResult) ? "set-card-changed-confirmed" : "set-card-changed-draft")
+                                        : "";
+
+                                      return (
                                     <article
-                                      className="set-card simple-match-card"
+                                      className={`set-card simple-match-card ${changeClass}`}
                                       key={set.setId}
                                       role="button"
                                       tabIndex={0}
@@ -2404,7 +2878,7 @@ function App() {
                                         const scoreMap = setDisplay.scores;
                                         const winnerId = setDisplay.winnerId ?? set.winnerId;
                                         const isWinner = entrantId && winnerId ? entrantId === winnerId : false;
-                                        const sideLabel = selectedEvent ? getSlotSideLabel(selectedEvent.eventId, entrantId) : "-";
+                                        const sideLabel = getSetSlotSideLabel(set.setId, entrantId);
                                         const gameWins = slot.score !== null
                                           ? (isDqScoreValue(slot.score) ? "DQ" : formatScoreValue(slot.score))
                                           : entrantId
@@ -2425,6 +2899,8 @@ function App() {
                                         );
                                       })}
                                     </article>
+                                      );
+                                    })()
                                   ))}
                                 </div>
                               </section>
@@ -2440,7 +2916,7 @@ function App() {
           )}
 
           {activeMatch && selectedEvent && (
-            <div className="dialog-backdrop" onClick={() => setActiveMatchSetId("")}> 
+            <div className="dialog-backdrop" onClick={closeMatchDialog}> 
               <section
                 className="dialog-panel"
                 role="dialog"
@@ -2450,9 +2926,17 @@ function App() {
               >
                 <div className="dialog-head">
                   <h3>{activeMatch.fullRoundText}</h3>
-                  <button type="button" className="ghost" onClick={() => setActiveMatchSetId("")}>閉じる</button>
+                  <button type="button" className="ghost" onClick={closeMatchDialog}>閉じる</button>
                 </div>
                 <p className="meta">setId: {activeMatch.setId} / state: {activeMatch.state}</p>
+                {!isMatchupReady(activeMatch) && <p className="meta">対戦カード確定後にプレイヤーサイドを変更できます。</p>}
+                {matchSideRandomNotice && matchSideRandomNotice.setId === activeMatch.setId && (
+                  <p className={`meta side-random-notice ${matchSideRandomNotice.changed ? "changed" : "unchanged"}`}>
+                    ランダム実行済み ({new Date(matchSideRandomNotice.triggeredAt).toLocaleTimeString("ja-JP", { hour12: false })})
+                    : 上段 {matchSideRandomNotice.upperEntrantName} = {matchSideRandomNotice.upperSide} / 下段 {matchSideRandomNotice.lowerEntrantName} = {matchSideRandomNotice.lowerSide}
+                    {!matchSideRandomNotice.changed ? " (結果は変更なし)" : ""}
+                  </p>
+                )}
 
                 <div className="dialog-players">
                   {activeMatch.slots.map((slot, idx) => {
@@ -2460,56 +2944,95 @@ function App() {
                     const entrantMeta = entrantId
                       ? selectedEventMeta?.entrants.find((entrant) => entrant.entrantId === entrantId)
                       : null;
-                    const draft = entrantId ? getMetaDraft(selectedEvent.eventId, entrantId) : null;
+                    const currentSide = entrantId
+                      ? (activeMatchSideDrafts[entrantId] ?? getSetSlotSide(activeMatch.setId, entrantId))
+                      : "";
+                    const scoreValue = entrantId ? scoreDrafts[entrantId] ?? "" : "";
+                    const otherEntrantId = activeMatch.slots.find(
+                      (item) => item.entrantId !== null && item.entrantId !== entrantId,
+                    )?.entrantId ?? null;
 
                     return (
-                      <article className="dialog-player-card" key={`${activeMatch.setId}-dialog-${idx}`}>
+                      <article
+                        className={`dialog-player-card ${currentSide === "1P" ? "side-card-1p" : currentSide === "2P" ? "side-card-2p" : ""}`}
+                        key={`${activeMatch.setId}-dialog-${idx}`}
+                      >
                         <p className="dialog-player-name">{slot.entrantName}</p>
                         <p className="meta">entrantId: {entrantId ?? "-"}</p>
-                        {entrantId && draft && (
+                        {entrantId && (
                           <>
                             <div className="side-toggle-row">
                               <button
                                 type="button"
-                                className={`ghost tiny ${draft.playSide === "1P" ? "active-side" : ""}`}
-                                onClick={() => setMetaDraft(selectedEvent.eventId, entrantId, { playSide: "1P" })}
+                                className={`ghost tiny side-choice side-choice-1p ${
+                                  currentSide === "1P" ? "side-choice-enabled" : "side-choice-disabled"
+                                }`}
+                                disabled={busy || !isMatchupReady(activeMatch)}
+                                onClick={() => {
+                                  void togglePlaySide(entrantId, "1P");
+                                }}
                               >
                                 1P
                               </button>
                               <button
                                 type="button"
-                                className={`ghost tiny ${draft.playSide === "2P" ? "active-side" : ""}`}
-                                onClick={() => setMetaDraft(selectedEvent.eventId, entrantId, { playSide: "2P" })}
+                                className={`ghost tiny side-choice side-choice-2p ${
+                                  currentSide === "2P" ? "side-choice-enabled" : "side-choice-disabled"
+                                }`}
+                                disabled={busy || !isMatchupReady(activeMatch)}
+                                onClick={() => {
+                                  void togglePlaySide(entrantId, "2P");
+                                }}
                               >
                                 2P
                               </button>
-                              <button
-                                type="button"
-                                className="ghost tiny"
-                                onClick={() => setMetaDraft(selectedEvent.eventId, entrantId, { playSide: "" })}
-                              >
-                                解除
-                              </button>
+                              {idx === 0 && otherEntrantId && (
+                                <button
+                                  type="button"
+                                  className="ghost tiny side-choice side-choice-random"
+                                  disabled={busy || !isMatchupReady(activeMatch)}
+                                  onClick={() => {
+                                    void randomizeMatchSides(activeMatch);
+                                  }}
+                                >
+                                  ランダム
+                                </button>
+                              )}
                             </div>
-                            <div className="entrant-meta-actions">
+                            <label>
+                              取得ゲーム数
+                              <input
+                                className="set-score-input"
+                                type="text"
+                                inputMode="numeric"
+                                value={scoreValue}
+                                onChange={(e) => {
+                                  if (!entrantId) {
+                                    return;
+                                  }
+                                  const nextValue = e.currentTarget.value;
+                                  setScoreDrafts((current) => ({
+                                    ...current,
+                                    [entrantId]: nextValue,
+                                  }));
+                                }}
+                              />
+                            </label>
+                            {entrantId && otherEntrantId && (
                               <button
                                 type="button"
                                 className="ghost tiny"
                                 onClick={() => {
-                                  setWinnerId(entrantId);
+                                  setScoreDrafts((current) => ({
+                                    ...current,
+                                    [entrantId]: "-",
+                                    [otherEntrantId]: "0",
+                                  }));
                                 }}
                               >
-                                勝者に設定
+                                DQ
                               </button>
-                              <button
-                                type="button"
-                                className="ghost tiny"
-                                disabled={busy || toApiSlug(slug) === ""}
-                                onClick={() => savePlayerMeta(selectedEvent, entrantId, slot.entrantName)}
-                              >
-                                サイド保存
-                              </button>
-                            </div>
+                            )}
                             <p className="meta">authCode: {entrantMeta?.authCode ?? "-"}</p>
                           </>
                         )}
@@ -2518,41 +3041,82 @@ function App() {
                   })}
                 </div>
 
-                <div className="dialog-result-form">
-                  <label>
-                    winner
-                    <select value={winnerId} onChange={(e) => setWinnerId(e.currentTarget.value)}>
-                      <option value="">選択してください</option>
-                      {activeMatch.slots
-                        .filter((slot) => slot.entrantId)
-                        .map((slot) => (
-                          <option key={slot.entrantId ?? "unknown"} value={slot.entrantId ?? ""}>
-                            {slot.entrantName}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  <label>
-                    scoreCsv
-                    <input value={scoreCsv} onChange={(e) => setScoreCsv(e.currentTarget.value)} placeholder="例: 3-1" />
-                  </label>
-                  <label className="checkbox-row">
-                    <input
-                      type="checkbox"
-                      checked={forceOverwrite}
-                      onChange={(e) => setForceOverwrite(e.currentTarget.checked)}
-                    />
-                    必要なら start.gg 側で reset 前提を保持
-                  </label>
-                </div>
-
                 <div className="dialog-actions">
                   <button
                     type="button"
-                    disabled={busy || winnerId.trim() === "" || !isMatchupReady(activeMatch)}
-                    onClick={saveLocalResultForMatch}
+                    disabled={busy || !isMatchupReady(activeMatch)}
+                    onClick={() => {
+                      void saveLocalResultForMatch(false);
+                    }}
                   >
-                    ローカルに記録
+                    更新
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || !isMatchupReady(activeMatch)}
+                    onClick={() => {
+                      void saveLocalResultForMatch(true);
+                    }}
+                  >
+                    確定
+                  </button>
+                </div>
+              </section>
+            </div>
+          )}
+          {batchConflictDialog && (
+            <div
+              className="dialog-backdrop"
+              onClick={() => {
+                if (!busy) {
+                  cancelBracketBatchConflict();
+                }
+              }}
+            >
+              <section
+                className="dialog-panel conflict-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-label="一括報告の競合確認"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="dialog-head">
+                  <div>
+                    <h3>一括報告の競合</h3>
+                    <p className="meta">このsetは start.gg 側の状態が進んでいるため、そのままでは更新できません。</p>
+                  </div>
+                  <button type="button" className="ghost" disabled={busy} onClick={cancelBracketBatchConflict}>中止</button>
+                </div>
+
+                <div className="dialog-body">
+                  <div className="dialog-summary-box">
+                    <p className="dialog-summary-title">対象set</p>
+                    <p className="dialog-summary-value">{batchConflictDialog.conflict.fullRoundText}</p>
+                    <p className="meta">{batchConflictDialog.conflict.entrantNames.filter((name) => name.trim() !== "").join(" vs ") || batchConflictDialog.conflict.setId}</p>
+                    <p className="meta">remote state: {batchConflictDialog.conflict.remoteState} / remote winner: {batchConflictDialog.conflict.remoteWinnerId ?? "-"}</p>
+                  </div>
+
+                  <div className="dialog-summary-box">
+                    <p className="dialog-summary-title">ここまでの進捗</p>
+                    <p className="dialog-summary-value">
+                      対象 {batchConflictDialog.progress.totalCount} 件 / 送信 {batchConflictDialog.progress.reportedCount} 件 / スキップ {batchConflictDialog.progress.skippedCount} 件
+                    </p>
+                  </div>
+
+                  <label className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={batchForceOverwriteRemaining}
+                      onChange={(event) => setBatchForceOverwriteRemaining(event.currentTarget.checked)}
+                    />
+                    この一括報告の残りでも、競合したsetは自動で reset して強制上書きする
+                  </label>
+                </div>
+
+                <div className="dialog-actions dialog-actions-split">
+                  <button type="button" className="ghost" disabled={busy} onClick={cancelBracketBatchConflict}>この時点で止める</button>
+                  <button type="button" disabled={busy} onClick={() => void continueBracketBatchWithForceOverwrite()}>
+                    このsetを reset して続行
                   </button>
                 </div>
               </section>
