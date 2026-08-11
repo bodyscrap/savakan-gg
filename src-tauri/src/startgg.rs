@@ -1,14 +1,17 @@
 use chrono::Utc;
 use std::collections::BTreeMap;
 use graphql_client::{GraphQLQuery, Response};
+use reqwest::StatusCode;
 use reqwest::Client;
+use serde::Serialize;
 
 use crate::models::{
-    EventSnapshot, OwnedTournamentListItem, SetSlotSnapshot, SetSnapshot, TournamentPreview,
-    TournamentEventPreviewItem, TournamentSnapshot,
+    EventSnapshot, SetSlotSnapshot, SetSnapshot, TournamentEventPreviewItem, TournamentPreview,
+    TournamentSnapshot,
 };
 
 const START_GG_GQL_ENDPOINT: &str = "https://api.start.gg/gql/alpha";
+const START_GG_RETRY_ATTEMPTS: usize = 3;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -73,24 +76,6 @@ pub struct EventSync;
 )]
 pub struct TournamentPreviewQuery;
 
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "src/graphql/schema.graphql",
-    query_path = "src/graphql/current_user.graphql",
-    response_derives = "Debug, Clone",
-    custom_scalars_module = "crate::startgg_scalars"
-)]
-pub struct CurrentUser;
-
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "src/graphql/schema.graphql",
-    query_path = "src/graphql/tournaments_by_owner.graphql",
-    response_derives = "Debug, Clone",
-    custom_scalars_module = "crate::startgg_scalars"
-)]
-pub struct TournamentsByOwner;
-
 fn join_graphql_errors(errors: &[graphql_client::Error]) -> String {
     errors
         .iter()
@@ -116,20 +101,63 @@ fn summarize_response_body(raw: &str) -> String {
     }
 }
 
+fn is_retryable_status(status: StatusCode) -> bool {
+    matches!(status, StatusCode::TOO_MANY_REQUESTS | StatusCode::INTERNAL_SERVER_ERROR | StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT)
+        || status.as_u16() == 520
+}
+
+async fn post_graphql_with_retry<T: Serialize + ?Sized>(
+    client: &Client,
+    token: &str,
+    body: &T,
+    operation_name: &str,
+) -> Result<reqwest::Response, String> {
+    for attempt in 0..START_GG_RETRY_ATTEMPTS {
+        match client
+            .post(START_GG_GQL_ENDPOINT)
+            .bearer_auth(token)
+            .json(body)
+            .send()
+            .await
+        {
+            Ok(response) => {
+                if is_retryable_status(response.status()) && attempt + 1 < START_GG_RETRY_ATTEMPTS {
+                    continue;
+                }
+                return Ok(response);
+            }
+            Err(err) => {
+                let retryable_error = err.is_timeout() || err.is_connect() || err.is_request();
+                if retryable_error && attempt + 1 < START_GG_RETRY_ATTEMPTS {
+                    continue;
+                }
+
+                return Err(format!("{operation_name}リクエストに失敗しました: {err}"));
+            }
+        }
+    }
+
+    Err(format!(
+        "{operation_name}リクエストがリトライ上限に達しました。"
+    ))
+}
+
 async fn fetch_set_snapshot_detail(token: &str, set_id: &str) -> Result<SetSnapshot, String> {
+    let client = Client::new();
+    fetch_set_snapshot_detail_with_client(&client, token, set_id).await
+}
+
+async fn fetch_set_snapshot_detail_with_client(
+    client: &Client,
+    token: &str,
+    set_id: &str,
+) -> Result<SetSnapshot, String> {
     let variables = set_snapshot_detail::Variables {
         set_id: set_id.to_owned(),
     };
     let body = SetSnapshotDetail::build_query(variables);
 
-    let client = Client::new();
-    let response = client
-        .post(START_GG_GQL_ENDPOINT)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("set詳細取得リクエストに失敗しました: {e}"))?;
+    let response = post_graphql_with_retry(client, token, &body, "set詳細取得").await?;
 
     let status = response.status();
     let raw_body = response
@@ -170,6 +198,8 @@ async fn fetch_set_snapshot_detail(token: &str, set_id: &str) -> Result<SetSnaps
                 .as_ref()
                 .and_then(|e| e.name.clone())
                 .unwrap_or_else(|| "TBD".to_owned());
+            let seed_id = slot.seed.as_ref().map(|seed| seed.id.to_string());
+            let seed_num = slot.seed.and_then(|seed| seed.seed_num.map(i64::from));
             let score = slot
                 .standing
                 .and_then(|standing| standing.stats)
@@ -179,6 +209,8 @@ async fn fetch_set_snapshot_detail(token: &str, set_id: &str) -> Result<SetSnaps
             SetSlotSnapshot {
                 entrant_id,
                 entrant_name,
+                seed_id,
+                seed_num,
                 score,
             }
         })
@@ -210,13 +242,7 @@ async fn reset_set_if_needed(token: &str, set_id: &str) -> Result<(), String> {
     let body = ResetSet::build_query(variables);
 
     let client = Client::new();
-    let response = client
-        .post(START_GG_GQL_ENDPOINT)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("強制上書き用resetSetリクエストに失敗しました: {e}"))?;
+    let response = post_graphql_with_retry(&client, token, &body, "強制上書き用resetSet").await?;
 
     let status = response.status();
     let content_type = response
@@ -299,13 +325,7 @@ async fn fetch_set_entrant_ids(token: &str, set_id: &str) -> Result<Vec<String>,
     let body = SetForReport::build_query(variables);
 
     let client = Client::new();
-    let response = client
-        .post(START_GG_GQL_ENDPOINT)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("set情報取得リクエストに失敗しました: {e}"))?;
+    let response = post_graphql_with_retry(&client, token, &body, "set情報取得").await?;
 
     let status = response.status();
     let content_type = response
@@ -400,13 +420,7 @@ async fn query_tournament_snapshot(
     let body = TournamentSync::build_query(variables);
 
     let client = Client::new();
-    let response = client
-        .post(START_GG_GQL_ENDPOINT)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("start.ggへのリクエストに失敗しました: {e}"))?;
+    let response = post_graphql_with_retry(&client, token, &body, "start.gg tournament取得").await?;
 
     let status = response.status();
     let content_type = response
@@ -471,6 +485,8 @@ async fn query_tournament_snapshot(
                                 .as_ref()
                                 .and_then(|e| e.name.clone())
                                 .unwrap_or_else(|| "TBD".to_owned());
+                            let seed_id = slot.seed.as_ref().map(|seed| seed.id.to_string());
+                            let seed_num = slot.seed.and_then(|seed| seed.seed_num.map(i64::from));
                             let score = slot
                                 .standing
                                 .and_then(|s| s.stats)
@@ -480,6 +496,8 @@ async fn query_tournament_snapshot(
                             SetSlotSnapshot {
                                 entrant_id,
                                 entrant_name,
+                                seed_id,
+                                seed_num,
                                 score,
                             }
                         })
@@ -577,13 +595,7 @@ pub async fn fetch_event_snapshot_by_slug(
             };
             let body = EventSync::build_query(variables);
 
-            let response = client
-                .post(START_GG_GQL_ENDPOINT)
-                .bearer_auth(token)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| format!("event取得リクエストに失敗しました: {e}"))?;
+            let response = post_graphql_with_retry(&client, token, &body, "event取得").await?;
 
             let status = response.status();
             let raw_body = response
@@ -667,13 +679,13 @@ pub async fn fetch_event_snapshot_by_slug(
 
     for set_ids in round_set_ids.values() {
         for set_id in set_ids {
-            let set = fetch_set_snapshot_detail(token, set_id).await?;
+            let set = fetch_set_snapshot_detail_with_client(&client, token, set_id).await?;
             all_sets.push(set);
         }
     }
 
     for set_id in &no_round_set_ids {
-        let set = fetch_set_snapshot_detail(token, set_id).await?;
+        let set = fetch_set_snapshot_detail_with_client(&client, token, set_id).await?;
         all_sets.push(set);
     }
 
@@ -697,13 +709,7 @@ pub async fn fetch_tournament_preview(token: &str, slug: &str) -> Result<Tournam
     let body = TournamentPreviewQuery::build_query(variables);
 
     let client = Client::new();
-    let response = client
-        .post(START_GG_GQL_ENDPOINT)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("tournamentプレビュー取得リクエストに失敗しました: {e}"))?;
+    let response = post_graphql_with_retry(&client, token, &body, "tournamentプレビュー取得").await?;
 
     let status = response.status();
     let raw_body = response
@@ -794,13 +800,7 @@ pub async fn report_set_result(
     let body = ReportSetResult::build_query(variables);
 
     let client = Client::new();
-    let response = client
-        .post(START_GG_GQL_ENDPOINT)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("試合結果報告リクエストに失敗しました: {e}"))?;
+    let response = post_graphql_with_retry(&client, token, &body, "試合結果報告").await?;
 
     let status = response.status();
     let content_type = response
@@ -851,107 +851,3 @@ pub async fn report_set_result(
     Ok(())
 }
 
-async fn query_current_user_id(token: &str) -> Result<String, String> {
-    let body = CurrentUser::build_query(current_user::Variables {});
-    let client = Client::new();
-    let response = client
-        .post(START_GG_GQL_ENDPOINT)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("ユーザー情報取得リクエストに失敗しました: {e}"))?;
-
-    let status = response.status();
-    let raw_body = response
-        .text()
-        .await
-        .map_err(|e| format!("ユーザー情報レスポンス本文の読込に失敗しました: {e}"))?;
-
-    if !status.is_success() {
-        return Err(format!(
-            "start.ggがエラーを返しました: HTTP {status} / body={} ",
-            summarize_response_body(&raw_body)
-        ));
-    }
-
-    let payload: Response<current_user::ResponseData> = serde_json::from_str(&raw_body)
-        .map_err(|e| format!("ユーザー情報レスポンスのJSONパースに失敗しました: {e}"))?;
-
-    if let Some(errors) = payload.errors {
-        return Err(format!("GraphQLエラー: {}", join_graphql_errors(&errors)));
-    }
-
-    let data = payload
-        .data
-        .ok_or_else(|| "ユーザー情報レスポンスにdataがありません。".to_owned())?;
-    let current_user = data
-        .current_user
-        .ok_or_else(|| "currentUserが取得できませんでした。user.identityスコープを確認してください。".to_owned())?;
-
-    Ok(current_user.id.to_string())
-}
-
-pub async fn fetch_owned_tournaments(
-    token: &str,
-    per_page: u32,
-) -> Result<Vec<OwnedTournamentListItem>, String> {
-    let owner_id = query_current_user_id(token).await?;
-    let variables = tournaments_by_owner::Variables {
-        per_page: per_page as i64,
-        page: 1,
-        owner_id,
-    };
-    let body = TournamentsByOwner::build_query(variables);
-
-    let client = Client::new();
-    let response = client
-        .post(START_GG_GQL_ENDPOINT)
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("大会一覧取得リクエストに失敗しました: {e}"))?;
-
-    let status = response.status();
-    let raw_body = response
-        .text()
-        .await
-        .map_err(|e| format!("大会一覧レスポンス本文の読込に失敗しました: {e}"))?;
-
-    if !status.is_success() {
-        return Err(format!(
-            "start.ggがエラーを返しました: HTTP {status} / body={} ",
-            summarize_response_body(&raw_body)
-        ));
-    }
-
-    let payload: Response<tournaments_by_owner::ResponseData> = serde_json::from_str(&raw_body)
-        .map_err(|e| format!("大会一覧レスポンスのJSONパースに失敗しました: {e}"))?;
-
-    if let Some(errors) = payload.errors {
-        return Err(format!("GraphQLエラー: {}", join_graphql_errors(&errors)));
-    }
-
-    let data = payload
-        .data
-        .ok_or_else(|| "大会一覧レスポンスにdataがありません。".to_owned())?;
-
-    let items = data
-        .tournaments
-        .and_then(|conn| conn.nodes)
-        .unwrap_or_default()
-        .into_iter()
-        .flatten()
-        .map(|tournament| OwnedTournamentListItem {
-            tournament_id: tournament.id.to_string(),
-            name: tournament
-                .name
-                .unwrap_or_else(|| "Unnamed tournament".to_owned()),
-            slug: tournament.slug.unwrap_or_default(),
-        })
-        .filter(|item| !item.slug.trim().is_empty())
-        .collect::<Vec<_>>();
-
-    Ok(items)
-}

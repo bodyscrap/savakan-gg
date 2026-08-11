@@ -5,6 +5,8 @@ import "./App.css";
 type SetSlot = {
   entrantId: string | null;
   entrantName: string;
+  seedId: string | null;
+  seedNum: number | null;
   score: number | null;
 };
 
@@ -165,12 +167,6 @@ type TournamentPreview = {
   events: TournamentEventPreviewItem[];
 };
 
-type OwnedTournamentListItem = {
-  tournamentId: string;
-  name: string;
-  slug: string;
-};
-
 type LocalSnapshotEventListItem = {
   tournamentId: string;
   slug: string;
@@ -209,6 +205,11 @@ type BatchReportProgress = {
 type BatchConflictDialogState = {
   conflict: BracketBatchConflict;
   progress: BatchReportProgress;
+};
+
+type EventSeedStatus = {
+  totalEntrants: number;
+  missingSeedEntrants: number;
 };
 
 type MatchSideRandomNotice = {
@@ -542,8 +543,6 @@ function App() {
   const [slug, setSlug] = useState("");
   const [perPage, setPerPage] = useState("50");
   const [createPreview, setCreatePreview] = useState<TournamentPreview | null>(null);
-  const [ownedTournaments, setOwnedTournaments] = useState<OwnedTournamentListItem[]>([]);
-  const [loadingOwnedTournaments, setLoadingOwnedTournaments] = useState(false);
   const [createPreviewLoadFailed, setCreatePreviewLoadFailed] = useState(false);
   const [createSelectedEventId, setCreateSelectedEventId] = useState("");
   const [createEventSlugInput, setCreateEventSlugInput] = useState("");
@@ -657,14 +656,6 @@ function App() {
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeTab !== "create" || token.trim() === "") {
-      return;
-    }
-
-    void loadOwnedTournaments();
-  }, [activeTab, token]);
-
-  useEffect(() => {
     if (!createPreview) {
       return;
     }
@@ -773,31 +764,134 @@ function App() {
       .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name, "ja"))
       .slice(0, 5);
   }, [selectedEventMeta]);
+  const eventSeedStatusByKey = useMemo(() => {
+    const map = new Map<string, EventSeedStatus>();
+
+    if (!snapshot) {
+      return map;
+    }
+
+    for (const event of snapshot.events) {
+      const byEntrantId = new Map<string, number | null>();
+
+      for (const set of event.sets) {
+        for (const slot of set.slots) {
+          if (!slot.entrantId) {
+            continue;
+          }
+
+          const current = byEntrantId.get(slot.entrantId);
+          const normalizedSeedNum = typeof slot.seedNum === "number" ? slot.seedNum : null;
+
+          if (current === undefined) {
+            byEntrantId.set(slot.entrantId, normalizedSeedNum);
+            continue;
+          }
+
+          if (current === null && normalizedSeedNum !== null) {
+            byEntrantId.set(slot.entrantId, normalizedSeedNum);
+          }
+        }
+      }
+
+      const totalEntrants = byEntrantId.size;
+      const missingSeedEntrants = [...byEntrantId.values()].filter((seedNum) => seedNum === null).length;
+
+      map.set(`${snapshot.slug}:${event.eventId}`, {
+        totalEntrants,
+        missingSeedEntrants,
+      });
+    }
+
+    return map;
+  }, [snapshot]);
 
   const selectedEventEntrants = useMemo(() => {
     if (!selectedEvent) {
-      return [] as Array<{ entrantId: string; entrantName: string }>;
+      return [] as Array<{ entrantId: string; entrantName: string; seedId: string | null; seedNum: number | null }>;
     }
 
-    const seen = new Set<string>();
-    const entrants: Array<{ entrantId: string; entrantName: string }> = [];
+    const seenOrder: string[] = [];
+    const byEntrant = new Map<string, { entrantId: string; entrantName: string; seedId: string | null; seedNum: number | null; firstSeenSetId: string }>();
 
     for (const set of selectedEvent.sets) {
       for (const slot of set.slots) {
-        if (!slot.entrantId || seen.has(slot.entrantId)) {
+        if (!slot.entrantId) {
           continue;
         }
 
-        seen.add(slot.entrantId);
-        entrants.push({
-          entrantId: slot.entrantId,
-          entrantName: slot.entrantName,
-        });
+        const current = byEntrant.get(slot.entrantId);
+        const normalizedSeedNum = typeof slot.seedNum === "number" ? slot.seedNum : null;
+        const normalizedSeedId = typeof slot.seedId === "string" && slot.seedId.trim() !== "" ? slot.seedId : null;
+
+        if (!current) {
+          seenOrder.push(slot.entrantId);
+          byEntrant.set(slot.entrantId, {
+            entrantId: slot.entrantId,
+            entrantName: slot.entrantName,
+            seedId: normalizedSeedId,
+            seedNum: normalizedSeedNum,
+            firstSeenSetId: set.setId,
+          });
+          continue;
+        }
+
+        // Keep the first observed name/order, but fill missing seed data if later slots have it.
+        if (current.seedNum === null && normalizedSeedNum !== null) {
+          current.seedNum = normalizedSeedNum;
+        }
+        if (current.seedId === null && normalizedSeedId !== null) {
+          current.seedId = normalizedSeedId;
+        }
       }
     }
 
-    return entrants;
+    const entrants = seenOrder
+      .map((entrantId) => byEntrant.get(entrantId))
+      .filter((item): item is { entrantId: string; entrantName: string; seedId: string | null; seedNum: number | null; firstSeenSetId: string } => item !== undefined);
+
+    if (selectedEvent) {
+      console.groupCollapsed(`[seed-debug] event=${selectedEvent.eventId} entrants=${entrants.length}`);
+      console.table(
+        entrants.map((item, index) => ({
+          order: index + 1,
+          entrantId: item.entrantId,
+          entrantName: item.entrantName,
+          seedId: item.seedId,
+          seedNum: item.seedNum,
+          firstSeenSetId: item.firstSeenSetId,
+        })),
+      );
+      console.groupEnd();
+    }
+
+    return entrants.sort((left, right) => {
+      const leftSeed = typeof left.seedNum === "number" ? left.seedNum : null;
+      const rightSeed = typeof right.seedNum === "number" ? right.seedNum : null;
+
+      if (leftSeed !== null && rightSeed !== null) {
+        return leftSeed - rightSeed
+          || (left.seedId ?? "").localeCompare(right.seedId ?? "", "ja")
+          || left.entrantName.localeCompare(right.entrantName, "ja");
+      }
+      if (leftSeed !== null) {
+        return -1;
+      }
+      if (rightSeed !== null) {
+        return 1;
+      }
+
+      // seed 未設定同士は推測で並び替えず、取得順を維持する。
+      return 0;
+    });
   }, [selectedEvent]);
+  const selectedEventSeedStatus = useMemo(() => {
+    if (!snapshot || !selectedEvent) {
+      return null;
+    }
+
+    return eventSeedStatusByKey.get(`${snapshot.slug}:${selectedEvent.eventId}`) ?? null;
+  }, [eventSeedStatusByKey, selectedEvent, snapshot]);
 
   const selectedTournamentEntrant = useMemo(() => {
     if (selectedTournamentEntrantId === "") {
@@ -1438,34 +1532,6 @@ function App() {
       setError(String(err));
     } finally {
       setCreateBusy(false);
-    }
-  }
-
-  async function loadOwnedTournaments() {
-    if (token.trim() === "") {
-      setError("APIキーを入力してください。");
-      return;
-    }
-
-    setLoadingOwnedTournaments(true);
-    setError("");
-    setMessage("");
-
-    try {
-      await invoke("save_startgg_token", { token });
-      const items = await invoke<OwnedTournamentListItem[]>("list_owned_tournaments", {
-        perPage: 50,
-      });
-      setOwnedTournaments(items);
-      setMessage(
-        items.length === 0
-          ? "作成した大会が見つかりませんでした。"
-          : `作成した大会を ${items.length} 件取得しました。`,
-      );
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setLoadingOwnedTournaments(false);
     }
   }
 
@@ -2235,6 +2301,7 @@ function App() {
                   const isSelected =
                     snapshot?.slug === item.slug &&
                     selectedEvent?.eventId === item.eventId;
+                  const seedStatus = eventSeedStatusByKey.get(`${item.slug}:${item.eventId}`) ?? null;
                   const itemKey = `${item.slug}:${item.eventId}`;
                   const isDeleting = deletingSnapshotKey === itemKey;
                   const aliasName = item.eventAlias && item.eventAlias.trim() !== ""
@@ -2250,6 +2317,13 @@ function App() {
                       onClick={() => {
                         if (!isDeleting && !busy) {
                           void selectLocalSnapshotEvent(item);
+                                              {seedStatus && seedStatus.totalEntrants > 0 && (
+                                                <p className={`meta ${seedStatus.missingSeedEntrants > 0 ? "error-text" : ""}`}>
+                                                  {seedStatus.missingSeedEntrants > 0
+                                                    ? `⚠ seed未設定: ${seedStatus.missingSeedEntrants}/${seedStatus.totalEntrants}`
+                                                    : `seed設定済み: ${seedStatus.totalEntrants}/${seedStatus.totalEntrants}`}
+                                                </p>
+                                              )}
                         }
                       }}
                       onKeyDown={(e) => {
@@ -2306,44 +2380,8 @@ function App() {
             <section className="panel">
               <h2>2. tournamentの選択</h2>
               <div className="panel-toolbar compact">
-                <p className="meta">自分が作成した大会から選択するか、直接大会IDを入力できます。</p>
+                <p className="meta">大会IDを直接入力してイベント一覧を取得します。</p>
               </div>
-
-              {loadingOwnedTournaments && <p className="meta">自分が作成した大会一覧を取得中...</p>}
-
-              {ownedTournaments.length > 0 && (
-                <div className="event-list owned-tournament-list">
-                  {ownedTournaments.map((item) => {
-                    const normalizedSlug = toSlugInput(item.slug);
-                    const selected = normalizedSlug === toSlugInput(slug);
-
-                    return (
-                      <article
-                        key={item.tournamentId}
-                        className={`event-list-item ${selected ? "selected" : ""}`}
-                      >
-                        <div className="event-list-head">
-                          <h3>{item.name}</h3>
-                          <span className="meta">id: {item.tournamentId}</span>
-                        </div>
-                        <p className="meta">大会ID: {normalizedSlug}</p>
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => {
-                            setSlug(normalizedSlug);
-                            setCreatePreview(null);
-                            setCreateSelectedEventId("");
-                            setCreateEventAlias("");
-                          }}
-                        >
-                          この大会を選択
-                        </button>
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
 
               <form className="form" onSubmit={loadCreatePreview}>
                 <input
@@ -2448,6 +2486,19 @@ function App() {
             </p>
             {selectedEvent ? (
               <>
+                <div className="panel-toolbar compact">
+                  <p className={`meta ${selectedEventSeedStatus && selectedEventSeedStatus.missingSeedEntrants > 0 ? "error-text" : ""}`}>
+                    {selectedEventSeedStatus
+                      ? (selectedEventSeedStatus.missingSeedEntrants > 0
+                        ? `⚠ seed未設定のプレイヤーがあります (${selectedEventSeedStatus.missingSeedEntrants}/${selectedEventSeedStatus.totalEntrants})`
+                        : `seed設定済み (${selectedEventSeedStatus.totalEntrants}/${selectedEventSeedStatus.totalEntrants})`)
+                      : "seed状態: 不明"}
+                  </p>
+                  <button type="button" className="ghost" disabled={busy || toApiSlug(slug) === ""} onClick={updateSnapshot}>
+                    スナップショットを更新
+                  </button>
+                </div>
+
                 <div className="stats-grid">
                   <article className="stat-card">
                     <p className="meta">イベント</p>
@@ -2551,7 +2602,7 @@ function App() {
                 ) : (
                   <div className="tournament-manager-grid" style={{ marginTop: "0.8rem" }}>
                     <section className="panel" style={{ padding: "0.75rem" }}>
-                      <h3>プレイヤー一覧</h3>
+                      <h3>プレイヤー一覧 (seed順)</h3>
                       <div className="event-list">
                         {selectedEventEntrants.map((entrant) => {
                           const isSelected = selectedTournamentEntrant?.entrantId === entrant.entrantId;
@@ -2571,6 +2622,7 @@ function App() {
                             >
                               <h4>{entrant.entrantName}</h4>
                               <p className="meta">entrantId: {entrant.entrantId}</p>
+                              {entrant.seedNum === null && <p className="meta error-text">⚠ seed未設定</p>}
                             </article>
                           );
                         })}

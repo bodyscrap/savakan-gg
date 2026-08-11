@@ -193,6 +193,8 @@ pub struct SetSnapshot {
 pub struct SetSlotSnapshot {
     pub entrant_id: Option<String>,
     pub entrant_name: String,
+    pub seed_id: Option<String>,
+    pub seed_num: Option<i64>,
     pub score: Option<f64>,
 }
 
@@ -258,10 +260,3 @@ pub struct LocalSnapshotEventListItem {
     pub set_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OwnedTournamentListItem {
-    pub tournament_id: String,
-    pub name: String,
-    pub slug: String,
-}

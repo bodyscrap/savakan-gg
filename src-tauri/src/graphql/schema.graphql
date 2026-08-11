@@ -84,7 +84,13 @@ type Phase {
 
 type SetSlot {
   entrant: Entrant
+  seed: Seed
   standing: Standing
+}
+
+type Seed {
+  id: GgID!
+  seedNum: Int
 }
 
 type Entrant {

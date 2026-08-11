@@ -20,6 +20,10 @@ query TournamentSync($slug: String!, $perPage: Int!) {
           state
           winnerId
           slots {
+            seed {
+              id
+              seedNum
+            }
             entrant {
               id
               name

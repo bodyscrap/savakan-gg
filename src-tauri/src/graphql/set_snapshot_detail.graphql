@@ -12,6 +12,10 @@ query SetSnapshotDetail($setId: ID!) {
     state
     winnerId
     slots {
+      seed {
+        id
+        seedNum
+      }
       entrant {
         id
         name

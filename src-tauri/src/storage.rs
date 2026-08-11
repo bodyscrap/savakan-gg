@@ -7,9 +7,10 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::models::{
-    EventEntrantMeta, EventLocalMeta, EventSnapshot, LocalPlayerMetaInput, LocalSetPlaySideInput,
-    LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta, LocalSnapshotEventListItem,
-    SetPlaySideMeta, TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
+    EventEntrantMeta, EventLocalMeta, EventSnapshot, LocalPlayerMetaInput,
+    LocalSetPlaySideInput, LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta,
+    LocalSnapshotEventListItem, SetPlaySideMeta, TournamentLocalMeta, TournamentSnapshot,
+    TournamentWorkspace,
 };
 
 const STORAGE_DIR_NAME: &str = "savakan-gg";

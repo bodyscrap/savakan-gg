@@ -6,7 +6,7 @@ mod storage;
 use models::{
     BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult,
     CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, LocalPlayerMetaInput,
-    LocalSetPlaySideInput, LocalSetResultInput, LocalSnapshotEventListItem, OwnedTournamentListItem,
+    LocalSetPlaySideInput, LocalSetResultInput, LocalSnapshotEventListItem,
     ReportSetResultInput, TournamentPreview, TournamentSnapshot, TournamentWorkspace,
 };
 
@@ -180,15 +180,6 @@ fn delete_local_snapshot_event(
     event_id: String,
 ) -> Result<(), String> {
     storage::delete_local_snapshot_event(&app, &slug, &event_id)
-}
-
-#[tauri::command]
-async fn list_owned_tournaments(
-    app: tauri::AppHandle,
-    per_page: Option<u32>,
-) -> Result<Vec<OwnedTournamentListItem>, String> {
-    let token = storage::load_token(&app)?;
-    startgg::fetch_owned_tournaments(&token, per_page.unwrap_or(50)).await
 }
 
 #[tauri::command]
@@ -456,7 +447,6 @@ pub fn run() {
             create_event_snapshot,
             create_event_snapshot_by_slug,
             refresh_local_event_snapshot_from_remote,
-            list_owned_tournaments,
             save_local_player_meta,
             save_local_set_play_side,
             save_local_set_result,
