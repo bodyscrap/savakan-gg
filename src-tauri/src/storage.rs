@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::models::{
-    EventEntrantMeta, EventLocalMeta, EventSnapshot, LocalPlayerMetaInput,
+    EventEntrantMeta, EventLocalMeta, EventSnapshot, ItemListConfig, LocalPlayerMetaInput,
     LocalSetPlaySideInput, LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta,
     LocalSnapshotEventListItem, SetPlaySideMeta, TournamentLocalMeta, TournamentSnapshot,
     TournamentWorkspace,
@@ -16,6 +16,7 @@ use crate::models::{
 const STORAGE_DIR_NAME: &str = "savakan-gg";
 const TOKEN_FILE: &str = "startgg-token.txt";
 const SLUG_FILE: &str = "last-slug.txt";
+const ITEM_LISTS_FILE: &str = "item-lists.json";
 const TEMP_TOKEN_FILE: &str = "token.txt";
 
 fn sanitize_slug(slug: &str) -> String {
@@ -61,6 +62,10 @@ fn meta_path(app: &AppHandle, slug: &str, event_id: &str) -> Result<PathBuf, Str
 
 fn slug_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(storage_dir(app)?.join(SLUG_FILE))
+}
+
+fn item_lists_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(storage_dir(app)?.join(ITEM_LISTS_FILE))
 }
 
 fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
@@ -328,6 +333,26 @@ pub fn load_saved_token(app: &AppHandle) -> Result<Option<String>, String> {
     } else {
         Ok(Some(trimmed))
     }
+}
+
+pub fn save_item_lists(app: &AppHandle, item_lists: &[ItemListConfig]) -> Result<(), String> {
+    let path = item_lists_path(app)?;
+    let json = serde_json::to_string_pretty(item_lists)
+        .map_err(|e| format!("アイテムリストのJSON変換に失敗しました: {e}"))?;
+    fs::write(path, json).map_err(|e| format!("アイテムリスト保存に失敗しました: {e}"))
+}
+
+pub fn load_item_lists(app: &AppHandle) -> Result<Option<Vec<ItemListConfig>>, String> {
+    let path = item_lists_path(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("保存済みアイテムリスト読込に失敗しました: {e}"))?;
+    let item_lists = serde_json::from_str::<Vec<ItemListConfig>>(&raw)
+        .map_err(|e| format!("保存済みアイテムリストのパースに失敗しました: {e}"))?;
+    Ok(Some(item_lists))
 }
 
 pub fn load_token(app: &AppHandle) -> Result<String, String> {

@@ -564,6 +564,7 @@ function App() {
   const [loadingLocalSnapshotEvents, setLoadingLocalSnapshotEvents] = useState(false);
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
   const [itemLists, setItemLists] = useState<ItemListConfig[]>([]);
+  const [itemListsReady, setItemListsReady] = useState(false);
   const [editingItemListId, setEditingItemListId] = useState<string | null>(null);
   const [itemListName, setItemListName] = useState("");
   const [itemCategoryName, setItemCategoryName] = useState("");
@@ -593,9 +594,35 @@ function App() {
         if (alive && savedSlug && savedSlug.trim() !== "") {
           setSlug(toSlugInput(savedSlug));
         }
+
+        const savedItemLists = await invoke<ItemListConfig[] | null>("load_item_lists");
+        if (!alive) {
+          return;
+        }
+
+        if (savedItemLists !== null) {
+          setItemLists(savedItemLists);
+          return;
+        }
+
+        try {
+          const raw = window.localStorage.getItem(ITEM_LIST_STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw) as ItemListConfig[];
+            if (Array.isArray(parsed)) {
+              setItemLists(parsed);
+            }
+          }
+        } catch {
+          // ignore
+        }
       } catch (err) {
         if (alive) {
           setError(String(err));
+        }
+      } finally {
+        if (alive) {
+          setItemListsReady(true);
         }
       }
     })();
@@ -606,18 +633,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(ITEM_LIST_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as ItemListConfig[];
-        if (Array.isArray(parsed)) {
-          setItemLists(parsed);
-        }
-      }
-    } catch {
-      // ignore
-    }
-
     try {
       const raw = window.localStorage.getItem(EVENT_MGMT_STORAGE_KEY);
       if (raw) {
@@ -632,11 +647,19 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!itemListsReady) {
+      return;
+    }
+
     try {
       window.localStorage.setItem(ITEM_LIST_STORAGE_KEY, JSON.stringify(itemLists));
     } catch {
       // ignore
     }
+
+    void invoke("save_item_lists", { itemLists }).catch((err) => {
+      setError(String(err));
+    });
   }, [itemLists]);
 
   useEffect(() => {

@@ -4,7 +4,7 @@ mod startgg_scalars;
 mod storage;
 
 use models::{
-    BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult,
+    BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult, ItemListConfig,
     CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, LocalPlayerMetaInput,
     LocalSetPlaySideInput, LocalSetResultInput, LocalSnapshotEventListItem,
     ReportSetResultInput, TournamentPreview, TournamentSnapshot, TournamentWorkspace,
@@ -49,6 +49,16 @@ fn save_last_slug(app: tauri::AppHandle, slug: String) -> Result<(), String> {
 #[tauri::command]
 fn load_last_slug(app: tauri::AppHandle) -> Result<Option<String>, String> {
     storage::load_slug(&app)
+}
+
+#[tauri::command]
+fn load_item_lists(app: tauri::AppHandle) -> Result<Option<Vec<ItemListConfig>>, String> {
+    storage::load_item_lists(&app)
+}
+
+#[tauri::command]
+fn save_item_lists(app: tauri::AppHandle, item_lists: Vec<ItemListConfig>) -> Result<(), String> {
+    storage::save_item_lists(&app, &item_lists)
 }
 
 #[tauri::command]
@@ -439,6 +449,8 @@ pub fn run() {
             load_saved_startgg_token,
             save_last_slug,
             load_last_slug,
+            load_item_lists,
+            save_item_lists,
             load_local_tournament,
             load_local_tournament_workspace,
             preview_tournament,

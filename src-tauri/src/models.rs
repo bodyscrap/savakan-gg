@@ -20,6 +20,15 @@ pub struct TournamentWorkspace {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ItemListConfig {
+    pub id: String,
+    pub name: String,
+    pub category_name: String,
+    pub items: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TournamentLocalMeta {
     pub tournament_id: String,
     pub slug: String,
