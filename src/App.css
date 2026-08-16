@@ -431,6 +431,40 @@ button:disabled {
   gap: 0.75rem;
 }
 
+.users-grid-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.82fr) minmax(420px, 1.18fr);
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.users-player-list,
+.users-card-preview {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 0.75rem;
+}
+
+.user-card-entry {
+  cursor: pointer;
+}
+
+.user-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.player-card-preview-image {
+  margin-top: 0.5rem;
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
 .player-list-scroll.enabled {
   max-height: 34rem;
   overflow-y: auto;
@@ -1009,6 +1043,10 @@ li {
   }
 
   .tournament-manager-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .users-grid-panel {
     grid-template-columns: 1fr;
   }
 

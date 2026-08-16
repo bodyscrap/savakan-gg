@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import QRCode from "qrcode";
 import "./App.css";
 
 type SetSlot = {
@@ -230,6 +231,17 @@ type PlayerMetaDraft = {
 
 type AppTab = "home" | "create" | "tournament" | "bracket" | "item-list" | "users";
 
+type UserCardPlayer = {
+  tournamentId: string;
+  tournamentName: string;
+  eventId: string;
+  eventName: string;
+  eventAlias: string | null;
+  entrantId: string;
+  entrantName: string;
+  playerId: string;
+};
+
 type ItemListConfig = {
   id: string;
   name: string;
@@ -258,6 +270,7 @@ type EventManagementSetting = {
 };
 
 const MAX_CATEGORY_SLOTS = 3;
+const USER_CARD_PAGE_SIZE = 10;
 
 function normalizeSlugForSettingKey(rawSlug: string): string {
   const trimmed = rawSlug.trim();
@@ -443,7 +456,7 @@ const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: bo
   { id: "tournament", label: "大会管理", icon: "⚙", implemented: true },
   { id: "bracket", label: "ブラケット", icon: "🏆", implemented: true },
   { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
-  { id: "users", label: "ユーザーリスト", icon: "👥", implemented: false },
+  { id: "users", label: "プレイヤーリスト", icon: "👥", implemented: true },
 ];
 
 function parseLinesToUniqueList(value: string): string[] {
@@ -617,6 +630,214 @@ function toEventApiSlug(tournamentInput: string, eventInput: string): string {
   return `${tournamentSlug}/event/${eventPart}`;
 }
 
+function bytesToBase32(bytes: Uint8Array): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let buffer = 0;
+  let bitsLeft = 0;
+  let output = "";
+
+  for (const byte of bytes) {
+    buffer = (buffer << 8) | byte;
+    bitsLeft += 8;
+
+    while (bitsLeft >= 5) {
+      const index = (buffer >>> (bitsLeft - 5)) & 31;
+      output += alphabet[index];
+      bitsLeft -= 5;
+    }
+  }
+
+  if (bitsLeft > 0) {
+    const index = (buffer << (5 - bitsLeft)) & 31;
+    output += alphabet[index];
+  }
+
+  return output;
+}
+
+async function deriveEncryptedPlayerId(tournamentId: string, eventId: string, entrantId: string): Promise<string> {
+  const source = `${tournamentId}:${eventId}:${entrantId}`;
+  const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
+  const token = bytesToBase32(new Uint8Array(digest).slice(0, 12));
+  return `PG-${token}`;
+}
+
+function sanitizeFileSegment(value: string): string {
+  const normalized = value.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-");
+  return normalized === "" ? "untitled" : normalized;
+}
+
+function triggerBlobDownload(blob: Blob, fileName: string): void {
+  const href = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = href;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(href);
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("画像の生成に失敗しました。"));
+        return;
+      }
+      resolve(blob);
+    }, "image/png");
+  });
+}
+
+function drawRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const r = Math.max(0, Math.min(radius, Math.min(width, height) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+async function renderPlayerCardCanvas(
+  player: UserCardPlayer,
+  options?: { width?: number; height?: number },
+): Promise<HTMLCanvasElement> {
+  const width = Math.max(700, Math.trunc(options?.width ?? 1200));
+  const height = Math.max(420, Math.trunc(options?.height ?? 680));
+  const pad = Math.round(width * 0.04);
+  const qrSize = Math.round(Math.min(width * 0.44, height * 0.66));
+  const infoX = pad + 30;
+  const infoMaxWidth = Math.max(220, width - qrSize - pad * 2 - 96);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Canvasを初期化できませんでした。ブラウザ設定を確認してください。");
+  }
+
+  const bg = ctx.createLinearGradient(0, 0, width, height);
+  bg.addColorStop(0, "#f8fafc");
+  bg.addColorStop(1, "#dbeafe");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = "#93c5fd";
+  ctx.globalAlpha = 0.18;
+  ctx.beginPath();
+  ctx.ellipse(width * 0.83, height * 0.18, width * 0.21, height * 0.24, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  drawRoundedRect(ctx, pad, pad, width - pad * 2, height - pad * 2, 24);
+  ctx.fillStyle = "#ffffff";
+  ctx.strokeStyle = "#cbd5e1";
+  ctx.lineWidth = 2;
+  ctx.fill();
+  ctx.stroke();
+
+  const titleY = pad + 44;
+  ctx.fillStyle = "#1e3a8a";
+  ctx.font = "700 32px 'Noto Sans JP', sans-serif";
+  ctx.fillText("PLAYER CARD", infoX, titleY);
+
+  ctx.fillStyle = "#475569";
+  ctx.font = "500 19px 'Noto Sans JP', sans-serif";
+  ctx.fillText("savakan-gg tournament manager", infoX, titleY + 32);
+
+  const aliasLabel = player.eventAlias && player.eventAlias.trim() !== ""
+    ? player.eventAlias.trim()
+    : "未設定";
+
+  let cursorY = titleY + 110;
+
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "700 46px 'Noto Sans JP', sans-serif";
+  ctx.fillText(player.entrantName, infoX, cursorY, infoMaxWidth);
+
+  cursorY += 48;
+  drawRoundedRect(ctx, infoX - 2, cursorY - 24, infoMaxWidth, 50, 12);
+  ctx.fillStyle = "#dbeafe";
+  ctx.fill();
+  ctx.strokeStyle = "#93c5fd";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = "#1d4ed8";
+  ctx.font = "700 24px 'Noto Sans JP', sans-serif";
+  ctx.fillText(`大会通称: ${aliasLabel}`, infoX + 12, cursorY + 10, infoMaxWidth - 18);
+
+  cursorY += 56;
+  ctx.fillStyle = "#334155";
+  ctx.font = "600 21px 'Noto Sans JP', sans-serif";
+  ctx.fillText(`正式名称: ${player.tournamentName} / ${player.eventName}`, infoX, cursorY, infoMaxWidth);
+
+  cursorY += 52;
+  drawRoundedRect(ctx, infoX - 2, cursorY - 34, infoMaxWidth, 84, 12);
+  ctx.fillStyle = "#eff6ff";
+  ctx.fill();
+  ctx.strokeStyle = "#bfdbfe";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = "#1d4ed8";
+  ctx.font = "600 21px 'Noto Sans JP', sans-serif";
+  ctx.fillText("PLAYER ID", infoX + 16, cursorY - 4);
+
+  ctx.fillStyle = "#0f172a";
+  ctx.font = "700 29px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  ctx.fillText(player.playerId, infoX + 16, cursorY + 32, infoMaxWidth - 26);
+
+  const qrCanvas = document.createElement("canvas");
+  const qrPayload = JSON.stringify({
+    playerId: player.playerId,
+    tournamentId: player.tournamentId,
+    eventId: player.eventId,
+    entrantId: player.entrantId,
+  });
+  await QRCode.toCanvas(qrCanvas, qrPayload, {
+    errorCorrectionLevel: "M",
+    margin: 1,
+    width: qrSize,
+    color: {
+      dark: "#0f172a",
+      light: "#ffffff",
+    },
+  });
+
+  const qrX = width - pad - qrSize - 20;
+  const qrY = Math.round((height - qrSize) / 2) - 8;
+  drawRoundedRect(ctx, qrX - 16, qrY - 16, qrSize + 32, qrSize + 32, 14);
+  ctx.fillStyle = "#ffffff";
+  ctx.strokeStyle = "#cbd5e1";
+  ctx.lineWidth = 1.5;
+  ctx.fill();
+  ctx.stroke();
+  ctx.drawImage(qrCanvas, qrX, qrY, qrSize, qrSize);
+
+  ctx.fillStyle = "#475569";
+  ctx.font = "500 18px 'Noto Sans JP', sans-serif";
+  ctx.fillText("2D code", qrX + qrSize / 2 - 34, qrY + qrSize + 36);
+
+  ctx.fillStyle = "#64748b";
+  ctx.font = "500 18px 'Noto Sans JP', sans-serif";
+  ctx.fillText("Use this ID for remote DQ request identity verification.", infoX, height - pad - 24, infoMaxWidth);
+
+  return canvas;
+}
+
 function buildScoreDraftsFromSet(set: SetSnapshot): SetScoreDraft {
   const drafts: SetScoreDraft = {};
 
@@ -782,6 +1003,10 @@ function App() {
   const [totalItemMinCount, setTotalItemMinCount] = useState(0);
   const [totalItemMaxCount, setTotalItemMaxCount] = useState(3);
   const [selectedTournamentEntrantId, setSelectedTournamentEntrantId] = useState("");
+  const [userCardPlayers, setUserCardPlayers] = useState<UserCardPlayer[]>([]);
+  const [selectedUserCardPlayerId, setSelectedUserCardPlayerId] = useState("");
+  const [selectedUserCardPreviewUrl, setSelectedUserCardPreviewUrl] = useState("");
+  const [userCardBusy, setUserCardBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -1393,6 +1618,197 @@ function App() {
 
     return selectedEventEntrants.find((entrant) => entrant.entrantId === selectedTournamentEntrantId) ?? selectedEventEntrants[0] ?? null;
   }, [selectedEventEntrants, selectedTournamentEntrantId]);
+
+  const selectedUserCardPlayer = useMemo(() => {
+    if (selectedUserCardPlayerId === "") {
+      return userCardPlayers[0] ?? null;
+    }
+
+    return userCardPlayers.find((player) => player.playerId === selectedUserCardPlayerId) ?? userCardPlayers[0] ?? null;
+  }, [selectedUserCardPlayerId, userCardPlayers]);
+
+  useEffect(() => {
+    let alive = true;
+
+    if (!snapshot || !selectedEvent) {
+      setUserCardPlayers([]);
+      setSelectedUserCardPlayerId("");
+      return () => {
+        alive = false;
+      };
+    }
+
+    (async () => {
+      try {
+        const rows = await Promise.all(
+          selectedEventEntrants.map(async (entrant) => ({
+            tournamentId: snapshot.tournamentId,
+            tournamentName: snapshot.name,
+            eventId: selectedEvent.eventId,
+            eventName: selectedEvent.name,
+            eventAlias: selectedEventMeta?.eventAlias?.trim() ? selectedEventMeta.eventAlias.trim() : null,
+            entrantId: entrant.entrantId,
+            entrantName: entrant.entrantName,
+            playerId: await deriveEncryptedPlayerId(snapshot.tournamentId, selectedEvent.eventId, entrant.entrantId),
+          })),
+        );
+
+        if (!alive) {
+          return;
+        }
+
+        setUserCardPlayers(rows);
+        setSelectedUserCardPlayerId((current) => {
+          if (current !== "" && rows.some((row) => row.playerId === current)) {
+            return current;
+          }
+          return rows[0]?.playerId ?? "";
+        });
+      } catch (err) {
+        if (alive) {
+          setError(String(err));
+        }
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [selectedEvent, selectedEventEntrants, selectedEventMeta, snapshot]);
+
+  useEffect(() => {
+    let alive = true;
+
+    if (!selectedUserCardPlayer) {
+      setSelectedUserCardPreviewUrl((current) => {
+        if (current) {
+          URL.revokeObjectURL(current);
+        }
+        return "";
+      });
+      return () => {
+        alive = false;
+      };
+    }
+
+    (async () => {
+      try {
+        const canvas = await renderPlayerCardCanvas(selectedUserCardPlayer);
+        const blob = await canvasToBlob(canvas);
+        if (!alive) {
+          return;
+        }
+
+        const previewUrl = URL.createObjectURL(blob);
+        setSelectedUserCardPreviewUrl((current) => {
+          if (current) {
+            URL.revokeObjectURL(current);
+          }
+          return previewUrl;
+        });
+      } catch (err) {
+        if (alive) {
+          setError(String(err));
+        }
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [selectedUserCardPlayer]);
+
+  async function saveSelectedUserCardImage() {
+    if (!selectedUserCardPlayer) {
+      setError("保存するプレイヤーカードがありません。");
+      return;
+    }
+
+    setUserCardBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const canvas = await renderPlayerCardCanvas(selectedUserCardPlayer);
+      const blob = await canvasToBlob(canvas);
+      const fileName = `${sanitizeFileSegment(selectedUserCardPlayer.eventName)}-${sanitizeFileSegment(selectedUserCardPlayer.entrantName)}-${selectedUserCardPlayer.playerId}.png`;
+      triggerBlobDownload(blob, fileName);
+      setMessage(`プレイヤーカードを保存しました: ${selectedUserCardPlayer.entrantName}`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setUserCardBusy(false);
+    }
+  }
+
+  async function exportAllPlayerCardsAsA4Pages() {
+    if (userCardPlayers.length === 0) {
+      setError("出力対象のプレイヤーがいません。");
+      return;
+    }
+
+    setUserCardBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const pageWidth = 2480;
+      const pageHeight = 3508;
+      const marginX = 110;
+      const marginY = 120;
+      const colGap = 44;
+      const rowGap = 34;
+      const cols = 2;
+      const rows = 5;
+      const cardWidth = Math.floor((pageWidth - marginX * 2 - colGap) / cols);
+      const cardHeight = Math.floor((pageHeight - marginY * 2 - rowGap * (rows - 1)) / rows);
+      const totalPages = Math.ceil(userCardPlayers.length / USER_CARD_PAGE_SIZE);
+
+      for (let page = 0; page < totalPages; page += 1) {
+        const pagePlayers = userCardPlayers.slice(page * USER_CARD_PAGE_SIZE, (page + 1) * USER_CARD_PAGE_SIZE);
+        const canvas = document.createElement("canvas");
+        canvas.width = pageWidth;
+        canvas.height = pageHeight;
+        const ctx = canvas.getContext("2d");
+
+        if (!ctx) {
+          throw new Error("A4画像の生成に失敗しました。");
+        }
+
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, pageWidth, pageHeight);
+        ctx.fillStyle = "#0f172a";
+        ctx.font = "700 40px 'Noto Sans JP', sans-serif";
+        ctx.fillText("savakan-gg PLAYER CARDS", marginX, 70);
+        ctx.font = "500 24px 'Noto Sans JP', sans-serif";
+        ctx.fillText(`Page ${page + 1}/${totalPages}`, pageWidth - 260, 70);
+
+        for (let index = 0; index < pagePlayers.length; index += 1) {
+          const player = pagePlayers[index];
+          const row = Math.floor(index / cols);
+          const col = index % cols;
+          const x = marginX + col * (cardWidth + colGap);
+          const y = marginY + row * (cardHeight + rowGap);
+          const cardCanvas = await renderPlayerCardCanvas(player, {
+            width: cardWidth,
+            height: cardHeight,
+          });
+
+          ctx.drawImage(cardCanvas, x, y, cardWidth, cardHeight);
+        }
+
+        const blob = await canvasToBlob(canvas);
+        const fileName = `${sanitizeFileSegment(selectedEvent?.name ?? "event")}-player-cards-a4-${String(page + 1).padStart(2, "0")}.png`;
+        triggerBlobDownload(blob, fileName);
+      }
+
+      setMessage(`A4画像を出力しました。全 ${totalPages} ページ / 1ページ最大 ${USER_CARD_PAGE_SIZE} 人です。`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setUserCardBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!selectedEvent) {
@@ -3881,6 +4297,93 @@ function App() {
               </div>
             )}
           </section>
+        </>
+      )}
+
+        {activeTab === "users" && (
+        <>
+          <section className="panel">
+            <h2>プレイヤーリスト</h2>
+            {!snapshot || !selectedEvent ? (
+              <p className="meta">ホームの大会一覧からイベントを選択してください。</p>
+            ) : (
+              <>
+                <p className="meta">暗号化プレイヤーIDは tournamentId + eventId + entrantId を元に生成します。</p>
+                <p className="meta">管理者IDは発行しません。このアプリは管理者のみが操作し、プレイヤーIDを本人確認に利用します。</p>
+                <p className="meta">対象イベント: {selectedEvent.name} / プレイヤー数: {userCardPlayers.length}</p>
+
+                <div className="form" style={{ marginTop: "0.65rem" }}>
+                  <button
+                    type="button"
+                    disabled={userCardBusy || !selectedUserCardPlayer}
+                    onClick={() => void saveSelectedUserCardImage()}
+                  >
+                    選択カードを保存
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={userCardBusy || userCardPlayers.length === 0}
+                    onClick={() => void exportAllPlayerCardsAsA4Pages()}
+                  >
+                    全カードをA4画像で出力
+                  </button>
+                </div>
+              </>
+            )}
+          </section>
+
+          {snapshot && selectedEvent && (
+            <section className="panel users-grid-panel">
+              <section className="users-player-list">
+                <h3>プレイヤー一覧</h3>
+                {userCardPlayers.length === 0 ? (
+                  <p className="meta">プレイヤーが存在しません。</p>
+                ) : (
+                  <div className="event-list player-list-scroll enabled">
+                    {userCardPlayers.map((player) => {
+                      const selected = selectedUserCardPlayer?.playerId === player.playerId;
+                      return (
+                        <article
+                          key={`${player.eventId}-${player.entrantId}`}
+                          className={`event-list-item user-card-entry ${selected ? "selected" : ""}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedUserCardPlayerId(player.playerId)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setSelectedUserCardPlayerId(player.playerId);
+                            }
+                          }}
+                        >
+                          <h4>{player.entrantName}</h4>
+                          <p className="meta">entrantId: {player.entrantId}</p>
+                          <p className="meta user-id">playerId: {player.playerId}</p>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <section className="users-card-preview">
+                <h3>プレイヤーカードプレビュー</h3>
+                {!selectedUserCardPlayer || selectedUserCardPreviewUrl === "" ? (
+                  <p className="meta">プレイヤーを選択してください。</p>
+                ) : (
+                  <>
+                    <p className="meta">{selectedUserCardPlayer.entrantName} / {selectedUserCardPlayer.playerId}</p>
+                    <img
+                      className="player-card-preview-image"
+                      src={selectedUserCardPreviewUrl}
+                      alt={`${selectedUserCardPlayer.entrantName} player card`}
+                    />
+                  </>
+                )}
+              </section>
+            </section>
+          )}
         </>
       )}
 
