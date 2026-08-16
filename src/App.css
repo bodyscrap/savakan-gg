@@ -332,6 +332,79 @@ button:disabled {
   min-width: 250px;
 }
 
+.tournament-settings {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.setting-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 0.55rem 0.65rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.setting-row-title {
+  margin: 0;
+  font-size: 0.86rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.setting-row-fields {
+  display: grid;
+  grid-template-columns: auto minmax(170px, max-content) auto auto auto auto auto auto;
+  gap: 0.35rem 0.35rem;
+  align-items: center;
+  justify-content: start;
+}
+
+.setting-row-fields.single {
+  grid-template-columns: minmax(220px, 340px);
+}
+
+.setting-row-fields.total {
+  grid-template-columns: auto auto auto auto;
+}
+
+.setting-row-fields label {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.setting-row-fields input[type="number"] {
+  width: 7ch;
+  min-width: 7ch;
+  padding: 0.48rem 0.42rem;
+  justify-self: start;
+  text-align: left;
+}
+
+.setting-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--ink);
+}
+
+.setting-checkbox input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+}
+
+.setting-row.save {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.setting-row.save button {
+  width: fit-content;
+}
+
 .entrant-list {
   margin-top: 0.75rem;
   display: grid;
@@ -351,6 +424,103 @@ button:disabled {
   grid-template-columns: minmax(260px, 0.9fr) minmax(360px, 1.1fr);
   gap: 0.75rem;
   align-items: start;
+}
+
+.tournament-manager-left-stack {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.player-list-scroll.enabled {
+  max-height: 34rem;
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+
+.usage-board {
+  margin-top: 0.85rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.usage-category-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.usage-category {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 0.55rem;
+}
+
+.usage-category-title {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+.usage-item-list {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.usage-item-row {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(140px, 2.2fr);
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.usage-item-name {
+  font-size: 0.83rem;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usage-bar-track {
+  position: relative;
+  height: 1.15rem;
+  border-radius: 999px;
+  border: 1px solid #dbe3f0;
+  background: #eef2ff;
+  overflow: visible;
+}
+
+.usage-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 999px;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding-right: 0.35rem;
+}
+
+.usage-rate-text {
+  font-size: 0.74rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.usage-rate-text.in-bar {
+  position: relative;
+}
+
+.usage-rate-text.out-bar {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .event-list {
@@ -828,7 +998,26 @@ li {
     width: 100%;
   }
 
+  .setting-row-fields,
+  .setting-row-fields.total,
+  .setting-row-fields.single {
+    grid-template-columns: 1fr;
+  }
+
+  .setting-row.save button {
+    width: 100%;
+  }
+
   .tournament-manager-grid {
     grid-template-columns: 1fr;
+  }
+
+  .player-list-scroll.enabled {
+    max-height: 26rem;
+  }
+
+  .usage-item-row {
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
   }
 }

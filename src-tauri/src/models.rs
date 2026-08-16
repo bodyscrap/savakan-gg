@@ -18,13 +18,30 @@ pub struct TournamentWorkspace {
     pub local_meta: TournamentLocalMeta,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemListConfig {
     pub id: String,
     pub name: String,
     pub category_name: String,
     pub items: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EventManagementMeta {
+    pub side_decision_method: String,
+    pub item_list_snapshots: Vec<ItemListConfig>,
+    #[serde(default)]
+    pub category_min_counts: Vec<u32>,
+    #[serde(default)]
+    pub category_max_counts: Vec<u32>,
+    #[serde(default)]
+    pub category_allow_duplicates: Vec<bool>,
+    #[serde(default)]
+    pub total_min_count: u32,
+    #[serde(default)]
+    pub total_max_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,7 +64,18 @@ pub struct EventLocalMeta {
     pub event_name: String,
     #[serde(default)]
     pub event_alias: Option<String>,
+    #[serde(default)]
+    pub event_management: Option<EventManagementMeta>,
     pub entrants: Vec<EventEntrantMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveEventManagementMetaInput {
+    pub slug: String,
+    pub event_id: String,
+    pub event_name: String,
+    pub setting: EventManagementMeta,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

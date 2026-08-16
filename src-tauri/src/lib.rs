@@ -7,7 +7,8 @@ use models::{
     BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult, ItemListConfig,
     CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, LocalPlayerMetaInput,
     LocalSetPlaySideInput, LocalSetResultInput, LocalSnapshotEventListItem,
-    ReportSetResultInput, TournamentPreview, TournamentSnapshot, TournamentWorkspace,
+    ReportSetResultInput, SaveEventManagementMetaInput, TournamentPreview, TournamentSnapshot,
+    TournamentWorkspace,
 };
 
 async fn refresh_workspace_after_remote_report(
@@ -31,6 +32,37 @@ fn round_depth(round: Option<i64>) -> i64 {
     round.map(|value| value.abs()).unwrap_or(i64::MAX / 4)
 }
 
+fn resolve_event_alias(
+    input_alias: Option<String>,
+    snapshot: &TournamentSnapshot,
+    event_id: &str,
+) -> Option<String> {
+    if let Some(alias) = input_alias {
+        let trimmed = alias.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+
+    let tournament_name = snapshot.name.trim();
+    let event_name = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .map(|event| event.name.trim().to_owned())
+        .unwrap_or_default();
+
+    if tournament_name.is_empty() && event_name.is_empty() {
+        None
+    } else if tournament_name.is_empty() {
+        Some(event_name)
+    } else if event_name.is_empty() {
+        Some(tournament_name.to_owned())
+    } else {
+        Some(format!("{tournament_name} / {event_name}"))
+    }
+}
+
 #[tauri::command]
 fn save_startgg_token(app: tauri::AppHandle, token: String) -> Result<(), String> {
     storage::save_token(&app, &token)
@@ -52,6 +84,22 @@ fn load_last_slug(app: tauri::AppHandle) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn save_last_snapshot_selection(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+) -> Result<(), String> {
+    storage::save_last_snapshot_selection(&app, &slug, &event_id)
+}
+
+#[tauri::command]
+fn load_last_snapshot_selection(
+    app: tauri::AppHandle,
+) -> Result<Option<storage::LastSnapshotSelection>, String> {
+    storage::load_last_snapshot_selection(&app)
+}
+
+#[tauri::command]
 fn load_item_lists(app: tauri::AppHandle) -> Result<Option<Vec<ItemListConfig>>, String> {
     storage::load_item_lists(&app)
 }
@@ -59,6 +107,33 @@ fn load_item_lists(app: tauri::AppHandle) -> Result<Option<Vec<ItemListConfig>>,
 #[tauri::command]
 fn save_item_lists(app: tauri::AppHandle, item_lists: Vec<ItemListConfig>) -> Result<(), String> {
     storage::save_item_lists(&app, &item_lists)
+}
+
+#[tauri::command]
+fn load_event_mgmt_settings(app: tauri::AppHandle) -> Result<Option<serde_json::Value>, String> {
+    storage::load_event_mgmt_settings(&app)
+}
+
+#[tauri::command]
+fn save_event_mgmt_settings(
+    app: tauri::AppHandle,
+    settings: serde_json::Value,
+) -> Result<(), String> {
+    storage::save_event_mgmt_settings(&app, &settings)
+}
+
+#[tauri::command]
+fn save_event_management_meta(
+    app: tauri::AppHandle,
+    input: SaveEventManagementMetaInput,
+) -> Result<TournamentWorkspace, String> {
+    let local_meta = storage::save_event_management_meta(&app, input.clone())?;
+    let snapshot = storage::load_snapshot(&app, &input.slug)?;
+
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
 }
 
 #[tauri::command]
@@ -101,7 +176,7 @@ async fn create_event_snapshot(
     )
     .await?;
     snapshot.slug = input.slug.clone();
-    let event_alias = input.event_alias.clone();
+    let event_alias = resolve_event_alias(input.event_alias.clone(), &snapshot, &input.event_id);
 
     let local_meta = storage::save_event_snapshot(&app, &snapshot, &input.event_id, event_alias)?;
     let snapshot = storage::load_snapshot(&app, &snapshot.slug)?;
@@ -132,7 +207,9 @@ async fn create_event_snapshot_by_slug(
         .map(|event| event.event_id.clone())
         .ok_or_else(|| "eventスナップショットにイベントが含まれていません。".to_owned())?;
 
-    let local_meta = storage::save_event_snapshot(&app, &snapshot, &event_id, input.event_alias.clone())?;
+    let event_alias = resolve_event_alias(input.event_alias.clone(), &snapshot, &event_id);
+
+    let local_meta = storage::save_event_snapshot(&app, &snapshot, &event_id, event_alias)?;
     let snapshot = storage::load_snapshot(&app, &snapshot.slug)?;
 
     Ok(TournamentWorkspace { snapshot, local_meta })
@@ -449,8 +526,13 @@ pub fn run() {
             load_saved_startgg_token,
             save_last_slug,
             load_last_slug,
+            save_last_snapshot_selection,
+            load_last_snapshot_selection,
             load_item_lists,
             save_item_lists,
+            load_event_mgmt_settings,
+            save_event_mgmt_settings,
+            save_event_management_meta,
             load_local_tournament,
             load_local_tournament_workspace,
             preview_tournament,

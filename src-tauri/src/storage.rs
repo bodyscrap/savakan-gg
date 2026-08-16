@@ -3,21 +3,32 @@ use std::fs;
 use std::path::PathBuf;
 
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::models::{
-    EventEntrantMeta, EventLocalMeta, EventSnapshot, ItemListConfig, LocalPlayerMetaInput,
-    LocalSetPlaySideInput, LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta,
-    LocalSnapshotEventListItem, SetPlaySideMeta, TournamentLocalMeta, TournamentSnapshot,
-    TournamentWorkspace,
+    EventEntrantMeta, EventLocalMeta, EventManagementMeta, EventSnapshot, ItemListConfig,
+    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetResultMeta,
+    LocalSetScoreMeta, LocalSnapshotEventListItem, SaveEventManagementMetaInput, SetPlaySideMeta,
+    TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
 };
 
 const STORAGE_DIR_NAME: &str = "savakan-gg";
 const TOKEN_FILE: &str = "startgg-token.txt";
 const SLUG_FILE: &str = "last-slug.txt";
 const ITEM_LISTS_FILE: &str = "item-lists.json";
+const EVENT_MGMT_FILE: &str = "event-mgmt-settings.json";
+const LAST_SNAPSHOT_SELECTION_FILE: &str = "last-snapshot-selection.json";
 const TEMP_TOKEN_FILE: &str = "token.txt";
+const EVENT_SETTING_CATEGORY_SLOT_COUNT: usize = 3;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastSnapshotSelection {
+    pub slug: String,
+    pub event_id: String,
+}
 
 fn sanitize_slug(slug: &str) -> String {
     slug.chars()
@@ -68,6 +79,14 @@ fn item_lists_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(storage_dir(app)?.join(ITEM_LISTS_FILE))
 }
 
+fn event_mgmt_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(storage_dir(app)?.join(EVENT_MGMT_FILE))
+}
+
+fn last_snapshot_selection_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(storage_dir(app)?.join(LAST_SNAPSHOT_SELECTION_FILE))
+}
+
 fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
     TournamentLocalMeta {
         tournament_id: String::new(),
@@ -76,6 +95,7 @@ fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
             event_id: event_id.to_owned(),
             event_name: String::new(),
             event_alias: None,
+            event_management: None,
             entrants: Vec::new(),
         }],
         set_play_sides: Vec::new(),
@@ -118,6 +138,109 @@ fn normalize_character_names(character_names: &[String]) -> Vec<String> {
     }
 
     normalized
+}
+
+fn normalize_item_list_snapshot(item_list: &ItemListConfig) -> ItemListConfig {
+    ItemListConfig {
+        id: item_list.id.trim().to_owned(),
+        name: item_list.name.trim().to_owned(),
+        category_name: item_list.category_name.trim().to_owned(),
+        items: normalize_character_names(&item_list.items),
+    }
+}
+
+fn normalize_count_array(source: &[u32], fallback: u32) -> Vec<u32> {
+    let mut normalized = source
+        .iter()
+        .copied()
+        .take(EVENT_SETTING_CATEGORY_SLOT_COUNT)
+        .collect::<Vec<u32>>();
+
+    while normalized.len() < EVENT_SETTING_CATEGORY_SLOT_COUNT {
+        normalized.push(fallback);
+    }
+
+    normalized
+}
+
+fn normalize_allow_duplicates_array(source: &[bool]) -> Vec<bool> {
+    let mut normalized = source
+        .iter()
+        .copied()
+        .take(EVENT_SETTING_CATEGORY_SLOT_COUNT)
+        .collect::<Vec<bool>>();
+
+    while normalized.len() < EVENT_SETTING_CATEGORY_SLOT_COUNT {
+        normalized.push(false);
+    }
+
+    normalized
+}
+
+fn normalize_event_management_meta(setting: EventManagementMeta) -> EventManagementMeta {
+    let side_decision_method = match setting.side_decision_method.as_str() {
+        "upper_2p" | "random" => setting.side_decision_method,
+        _ => "upper_1p".to_owned(),
+    };
+
+    let mut item_list_snapshots = setting
+        .item_list_snapshots
+        .iter()
+        .take(EVENT_SETTING_CATEGORY_SLOT_COUNT)
+        .map(normalize_item_list_snapshot)
+        .collect::<Vec<ItemListConfig>>();
+
+    while item_list_snapshots.len() < EVENT_SETTING_CATEGORY_SLOT_COUNT {
+        item_list_snapshots.push(ItemListConfig {
+            id: String::new(),
+            name: String::new(),
+            category_name: String::new(),
+            items: Vec::new(),
+        });
+    }
+
+    let mut category_min_counts = normalize_count_array(&setting.category_min_counts, 0);
+    let mut category_max_counts = normalize_count_array(&setting.category_max_counts, 1);
+    let mut category_allow_duplicates = normalize_allow_duplicates_array(&setting.category_allow_duplicates);
+
+    for index in 0..EVENT_SETTING_CATEGORY_SLOT_COUNT {
+        if item_list_snapshots[index].id.is_empty() {
+            category_min_counts[index] = 0;
+            category_max_counts[index] = 0;
+            category_allow_duplicates[index] = false;
+        } else if category_max_counts[index] < category_min_counts[index] {
+            category_max_counts[index] = category_min_counts[index];
+        }
+    }
+
+    let total_min_count = setting.total_min_count;
+    let total_max_count = setting.total_max_count.max(total_min_count);
+
+    EventManagementMeta {
+        side_decision_method,
+        item_list_snapshots,
+        category_min_counts,
+        category_max_counts,
+        category_allow_duplicates,
+        total_min_count,
+        total_max_count,
+    }
+}
+
+fn has_item_selection_setting_changed(
+    existing: Option<&EventManagementMeta>,
+    next: &EventManagementMeta,
+) -> bool {
+    let Some(current) = existing else {
+        return true;
+    };
+
+    current.item_list_snapshots != next.item_list_snapshots
+        || current.category_min_counts != next.category_min_counts
+        || current.category_max_counts != next.category_max_counts
+        || current.category_allow_duplicates != next.category_allow_duplicates
+        || current.total_min_count != next.total_min_count
+        || current.total_max_count != next.total_max_count
 }
 
 fn derive_score_csv_from_slot_scores(
@@ -240,6 +363,7 @@ fn merge_snapshot_into_meta(
             event_id: event.event_id.clone(),
             event_name: event.name.clone(),
             event_alias: None,
+            event_management: None,
             entrants: Vec::new(),
         });
         meta.events.len().saturating_sub(1)
@@ -335,6 +459,42 @@ pub fn load_saved_token(app: &AppHandle) -> Result<Option<String>, String> {
     }
 }
 
+pub fn save_last_snapshot_selection(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<(), String> {
+    let path = last_snapshot_selection_path(app)?;
+    let payload = LastSnapshotSelection {
+        slug: slug.trim().to_owned(),
+        event_id: event_id.trim().to_owned(),
+    };
+
+    let json = serde_json::to_string_pretty(&payload)
+        .map_err(|e| format!("最後の選択スナップショットJSON変換に失敗しました: {e}"))?;
+    fs::write(path, json).map_err(|e| format!("最後の選択スナップショット保存に失敗しました: {e}"))
+}
+
+pub fn load_last_snapshot_selection(
+    app: &AppHandle,
+) -> Result<Option<LastSnapshotSelection>, String> {
+    let path = last_snapshot_selection_path(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("最後の選択スナップショット読込に失敗しました: {e}"))?;
+    let payload = serde_json::from_str::<LastSnapshotSelection>(&raw)
+        .map_err(|e| format!("最後の選択スナップショットのパースに失敗しました: {e}"))?;
+
+    if payload.slug.trim().is_empty() || payload.event_id.trim().is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(payload))
+}
+
 pub fn save_item_lists(app: &AppHandle, item_lists: &[ItemListConfig]) -> Result<(), String> {
     let path = item_lists_path(app)?;
     let json = serde_json::to_string_pretty(item_lists)
@@ -353,6 +513,29 @@ pub fn load_item_lists(app: &AppHandle) -> Result<Option<Vec<ItemListConfig>>, S
     let item_lists = serde_json::from_str::<Vec<ItemListConfig>>(&raw)
         .map_err(|e| format!("保存済みアイテムリストのパースに失敗しました: {e}"))?;
     Ok(Some(item_lists))
+}
+
+pub fn save_event_mgmt_settings(
+    app: &AppHandle,
+    settings: &serde_json::Value,
+) -> Result<(), String> {
+    let path = event_mgmt_path(app)?;
+    let json = serde_json::to_string_pretty(settings)
+        .map_err(|e| format!("大会設定のJSON変換に失敗しました: {e}"))?;
+    fs::write(path, json).map_err(|e| format!("大会設定保存に失敗しました: {e}"))
+}
+
+pub fn load_event_mgmt_settings(app: &AppHandle) -> Result<Option<serde_json::Value>, String> {
+    let path = event_mgmt_path(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("保存済み大会設定読込に失敗しました: {e}"))?;
+    let settings = serde_json::from_str::<serde_json::Value>(&raw)
+        .map_err(|e| format!("保存済み大会設定のパースに失敗しました: {e}"))?;
+    Ok(Some(settings))
 }
 
 pub fn load_token(app: &AppHandle) -> Result<String, String> {
@@ -868,6 +1051,7 @@ pub fn set_event_alias(
             event_id: event_id.to_owned(),
             event_name: String::new(),
             event_alias: None,
+            event_management: None,
             entrants: Vec::new(),
         });
         local_meta.events.len().saturating_sub(1)
@@ -878,7 +1062,7 @@ pub fn set_event_alias(
     }
 
     local_meta.updated_at = Utc::now();
-    save_local_meta(app, &local_meta)?;
+    save_local_meta(app, event_id, &local_meta)?;
     Ok(local_meta)
 }
 
@@ -895,33 +1079,63 @@ pub fn save_event_snapshot(
         .cloned()
         .ok_or_else(|| format!("指定イベントが見つかりません: {event_id}"))?;
 
-    let event_only_snapshot = TournamentSnapshot {
+    // 同一slugの既存スナップショットを保持しつつ、対象eventのみ差し替える。
+    let mut merged_snapshot = load_snapshot(app, &snapshot.slug).unwrap_or_else(|_| TournamentSnapshot {
         tournament_id: snapshot.tournament_id.clone(),
         slug: snapshot.slug.clone(),
         name: snapshot.name.clone(),
-        events: vec![event_snapshot],
+        events: Vec::new(),
         updated_at: snapshot.updated_at,
-    };
+    });
 
-    save_snapshot(app, &event_only_snapshot)?;
-    let mut local_meta = sync_local_meta_from_snapshot(app, &event_only_snapshot, event_id)?;
+    merged_snapshot.tournament_id = snapshot.tournament_id.clone();
+    merged_snapshot.slug = snapshot.slug.clone();
+    merged_snapshot.name = snapshot.name.clone();
+    merged_snapshot.updated_at = snapshot.updated_at;
+
+    if let Some(existing) = merged_snapshot
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == event_id)
+    {
+        *existing = event_snapshot;
+    } else {
+        merged_snapshot.events.push(event_snapshot);
+    }
+
+    save_snapshot(app, &merged_snapshot)?;
+    let mut local_meta = sync_local_meta_from_snapshot(app, &merged_snapshot, event_id)?;
     if let Some(event_meta) = local_meta.events.iter_mut().find(|event| event.event_id == event_id) {
         event_meta.event_alias = event_alias;
     }
     local_meta.updated_at = Utc::now();
-    save_local_meta(app, &local_meta)?;
+    save_local_meta(app, event_id, &local_meta)?;
 
     Ok(local_meta)
 }
 
-pub fn save_local_meta(app: &AppHandle, meta: &TournamentLocalMeta) -> Result<(), String> {
-    let event_id = meta
-        .events
-        .first()
-        .map(|event| event.event_id.as_str())
-        .unwrap_or("");
-    let path = meta_path(app, &meta.slug, event_id)?;
-    let json = serde_json::to_string_pretty(meta)
+pub fn save_local_meta(
+    app: &AppHandle,
+    event_id: &str,
+    meta: &TournamentLocalMeta,
+) -> Result<(), String> {
+    let mut normalized = meta.clone();
+    normalized.events.retain(|event| event.event_id == event_id);
+    if normalized.events.is_empty() {
+        normalized.events.push(EventLocalMeta {
+            event_id: event_id.to_owned(),
+            event_name: String::new(),
+            event_alias: None,
+            event_management: None,
+            entrants: Vec::new(),
+        });
+    }
+    normalized
+        .pending_set_results
+        .retain(|pending| pending.event_id == event_id);
+
+    let path = meta_path(app, &normalized.slug, event_id)?;
+    let json = serde_json::to_string_pretty(&normalized)
         .map_err(|e| format!("ローカルメタのJSON変換に失敗しました: {e}"))?;
     fs::write(path, json).map_err(|e| format!("ローカルメタ保存に失敗しました: {e}"))
 }
@@ -934,7 +1148,23 @@ pub fn load_local_meta(app: &AppHandle, slug: &str, event_id: &str) -> Result<To
 
     let raw = fs::read_to_string(path)
         .map_err(|e| format!("ローカルメタ読込に失敗しました: {e}"))?;
-    serde_json::from_str(&raw).map_err(|e| format!("ローカルメタのパースに失敗しました: {e}"))
+    let mut parsed: TournamentLocalMeta =
+        serde_json::from_str(&raw).map_err(|e| format!("ローカルメタのパースに失敗しました: {e}"))?;
+    parsed.slug = slug.to_owned();
+    parsed.events.retain(|event| event.event_id == event_id);
+    if parsed.events.is_empty() {
+        parsed.events.push(EventLocalMeta {
+            event_id: event_id.to_owned(),
+            event_name: String::new(),
+            event_alias: None,
+            event_management: None,
+            entrants: Vec::new(),
+        });
+    }
+    parsed
+        .pending_set_results
+        .retain(|pending| pending.event_id == event_id);
+    Ok(parsed)
 }
 
 pub fn sync_local_meta_from_snapshot(
@@ -944,7 +1174,7 @@ pub fn sync_local_meta_from_snapshot(
 ) -> Result<TournamentLocalMeta, String> {
     let current_meta = load_local_meta(app, &snapshot.slug, event_id)?;
     let merged_meta = merge_snapshot_into_meta(snapshot, event_id, current_meta);
-    save_local_meta(app, &merged_meta)?;
+    save_local_meta(app, event_id, &merged_meta)?;
     Ok(merged_meta)
 }
 
@@ -977,7 +1207,7 @@ pub fn prune_pending_set_results_by_snapshot_match(
     });
 
     local_meta.updated_at = Utc::now();
-    save_local_meta(app, &local_meta)?;
+    save_local_meta(app, event_id, &local_meta)?;
     Ok(local_meta)
 }
 
@@ -1065,7 +1295,7 @@ pub fn upsert_local_set_result(
     }
 
     save_snapshot(app, &snapshot)?;
-    save_local_meta(app, &local_meta)?;
+    save_local_meta(app, &applied_event_id, &local_meta)?;
 
     Ok(TournamentWorkspace {
         snapshot,
@@ -1085,7 +1315,7 @@ pub fn remove_pending_set_results(
         .pending_set_results
         .retain(|item| !remove_ids.contains(&item.set_id));
     local_meta.updated_at = Utc::now();
-    save_local_meta(app, &local_meta)?;
+    save_local_meta(app, event_id, &local_meta)?;
     Ok(local_meta)
 }
 
@@ -1128,6 +1358,7 @@ pub fn upsert_local_player_meta(
             event_id: input.event_id.clone(),
             event_name: input.event_name.clone(),
             event_alias: None,
+            event_management: None,
             entrants: Vec::new(),
         });
         local_meta.events.len().saturating_sub(1)
@@ -1167,7 +1398,7 @@ pub fn upsert_local_player_meta(
 
     local_meta.slug = input.slug;
     local_meta.updated_at = Utc::now();
-    save_local_meta(app, &local_meta)?;
+    save_local_meta(app, &input.event_id, &local_meta)?;
     Ok(local_meta)
 }
 
@@ -1221,10 +1452,57 @@ pub fn upsert_local_set_play_side(
     local_meta.slug = input.slug;
     local_meta.tournament_id = snapshot.tournament_id.clone();
     local_meta.updated_at = Utc::now();
-    save_local_meta(app, &local_meta)?;
+    save_local_meta(app, &input.event_id, &local_meta)?;
 
     Ok(TournamentWorkspace {
         snapshot,
         local_meta,
     })
+}
+
+pub fn save_event_management_meta(
+    app: &AppHandle,
+    input: SaveEventManagementMetaInput,
+) -> Result<TournamentLocalMeta, String> {
+    let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
+
+    let event_index = if let Some(index) = local_meta
+        .events
+        .iter()
+        .position(|event| event.event_id == input.event_id)
+    {
+        index
+    } else {
+        local_meta.events.push(EventLocalMeta {
+            event_id: input.event_id.clone(),
+            event_name: input.event_name.clone(),
+            event_alias: None,
+            event_management: None,
+            entrants: Vec::new(),
+        });
+        local_meta.events.len().saturating_sub(1)
+    };
+
+    let event_meta = local_meta
+        .events
+        .get_mut(event_index)
+        .ok_or_else(|| "イベントメタの更新先を特定できませんでした。".to_owned())?;
+    event_meta.event_name = input.event_name.clone();
+
+    let next_setting = normalize_event_management_meta(input.setting);
+    let should_clear_player_item_selections =
+        has_item_selection_setting_changed(event_meta.event_management.as_ref(), &next_setting);
+
+    event_meta.event_management = Some(next_setting);
+
+    if should_clear_player_item_selections {
+        for entrant in &mut event_meta.entrants {
+            entrant.character_names.clear();
+        }
+    }
+
+    local_meta.slug = input.slug;
+    local_meta.updated_at = Utc::now();
+    save_local_meta(app, &input.event_id, &local_meta)?;
+    Ok(local_meta)
 }

@@ -106,6 +106,7 @@ type EventLocalMeta = {
   eventId: string;
   eventName: string;
   eventAlias: string | null;
+  eventManagement?: EventManagementMeta | null;
   entrants: EventEntrantMeta[];
 };
 
@@ -224,8 +225,7 @@ type MatchSideRandomNotice = {
 
 type PlayerMetaDraft = {
   playSide: PlaySide | "";
-  characterNames: string;
-  notes: string;
+  categorySelections: string[][];
 };
 
 type AppTab = "home" | "create" | "tournament" | "bracket" | "item-list" | "users";
@@ -237,10 +237,202 @@ type ItemListConfig = {
   items: string[];
 };
 
+type EventManagementMeta = {
+  sideDecisionMethod: "upper_1p" | "upper_2p" | "random";
+  itemListSnapshots: ItemListConfig[];
+  categoryMinCounts?: number[];
+  categoryMaxCounts?: number[];
+  categoryAllowDuplicates?: boolean[];
+  totalMinCount?: number;
+  totalMaxCount?: number;
+};
+
 type EventManagementSetting = {
   sideDecisionMethod: "upper_1p" | "upper_2p" | "random";
   itemListIds: string[];
+  categoryMinCounts?: number[];
+  categoryMaxCounts?: number[];
+  categoryAllowDuplicates?: boolean[];
+  totalMinCount?: number;
+  totalMaxCount?: number;
 };
+
+const MAX_CATEGORY_SLOTS = 3;
+
+function normalizeSlugForSettingKey(rawSlug: string): string {
+  const trimmed = rawSlug.trim();
+  const withoutPrefix = trimmed.startsWith("tournament/")
+    ? trimmed.slice("tournament/".length)
+    : trimmed;
+  return withoutPrefix.replace(/^\/+|\/+$/g, "");
+}
+
+function normalizeEventSettingStorageKey(rawKey: string): string {
+  const [slugPart, ...rest] = rawKey.split("::");
+  if (!slugPart) {
+    return rawKey.trim();
+  }
+
+  const eventId = rest.join("::").trim();
+  if (eventId === "") {
+    return normalizeSlugForSettingKey(slugPart);
+  }
+
+  return `${normalizeSlugForSettingKey(slugPart)}::${eventId}`;
+}
+
+function clampNonNegativeInteger(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  const rounded = Math.trunc(value);
+  if (rounded < 0) {
+    return 0;
+  }
+
+  return rounded;
+}
+
+function normalizeSelectionCountArrays(
+  value: unknown,
+  fallbackValue: number,
+): number[] {
+  const source = Array.isArray(value) ? value : [];
+  const normalized = source
+    .slice(0, MAX_CATEGORY_SLOTS)
+    .map((item) => clampNonNegativeInteger(Number(item), fallbackValue));
+
+  while (normalized.length < MAX_CATEGORY_SLOTS) {
+    normalized.push(fallbackValue);
+  }
+
+  return normalized;
+}
+
+function normalizeAllowDuplicatesArray(value: unknown): boolean[] {
+  const source = Array.isArray(value) ? value : [];
+  const normalized = source
+    .slice(0, MAX_CATEGORY_SLOTS)
+    .map((item) => Boolean(item));
+
+  while (normalized.length < MAX_CATEGORY_SLOTS) {
+    normalized.push(false);
+  }
+
+  return normalized;
+}
+
+function normalizeEventManagementSetting(rawValue: unknown): EventManagementSetting {
+  const source = rawValue && typeof rawValue === "object"
+    ? (rawValue as Partial<EventManagementSetting>)
+    : {};
+
+  const sideDecisionMethod = source.sideDecisionMethod === "upper_2p" || source.sideDecisionMethod === "random"
+    ? source.sideDecisionMethod
+    : "upper_1p";
+
+  const ids = Array.isArray(source.itemListIds)
+    ? source.itemListIds.filter((id): id is string => typeof id === "string").slice(0, MAX_CATEGORY_SLOTS)
+    : [];
+  while (ids.length < MAX_CATEGORY_SLOTS) {
+    ids.push("");
+  }
+
+  const categoryMinCounts = normalizeSelectionCountArrays(source.categoryMinCounts, 0);
+  const categoryMaxCounts = normalizeSelectionCountArrays(source.categoryMaxCounts, 1)
+    .map((maxCount, index) => Math.max(maxCount, categoryMinCounts[index]));
+  const categoryAllowDuplicates = normalizeAllowDuplicatesArray(source.categoryAllowDuplicates);
+
+  const enabledSlotCount = ids.filter((id) => id.trim() !== "").length;
+  const totalMinCount = clampNonNegativeInteger(Number(source.totalMinCount ?? 0), 0);
+  const totalMaxCount = Math.max(
+    clampNonNegativeInteger(Number(source.totalMaxCount ?? enabledSlotCount), enabledSlotCount),
+    totalMinCount,
+  );
+
+  return {
+    sideDecisionMethod,
+    itemListIds: ids,
+    categoryMinCounts,
+    categoryMaxCounts,
+    categoryAllowDuplicates,
+    totalMinCount,
+    totalMaxCount,
+  };
+}
+
+function normalizeItemListConfig(rawValue: unknown): ItemListConfig {
+  const source = rawValue && typeof rawValue === "object"
+    ? (rawValue as Partial<ItemListConfig>)
+    : {};
+
+  const id = typeof source.id === "string" ? source.id.trim() : "";
+  const name = typeof source.name === "string" ? source.name.trim() : "";
+  const categoryName = typeof source.categoryName === "string" ? source.categoryName.trim() : "";
+  const items = Array.isArray(source.items)
+    ? source.items
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter((item) => item !== "")
+    : [];
+
+  return {
+    id,
+    name,
+    categoryName,
+    items: [...new Set(items)],
+  };
+}
+
+function arraysShallowEqual<T>(left: T[], right: T[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isSameEventManagementSetting(
+  leftRaw: EventManagementSetting | undefined,
+  rightRaw: EventManagementSetting,
+): boolean {
+  if (!leftRaw) {
+    return false;
+  }
+
+  const left = normalizeEventManagementSetting(leftRaw);
+  const right = normalizeEventManagementSetting(rightRaw);
+
+  return left.sideDecisionMethod === right.sideDecisionMethod
+    && arraysShallowEqual(left.itemListIds, right.itemListIds)
+    && arraysShallowEqual(
+      normalizeSelectionCountArrays(left.categoryMinCounts, 0),
+      normalizeSelectionCountArrays(right.categoryMinCounts, 0),
+    )
+    && arraysShallowEqual(
+      normalizeSelectionCountArrays(left.categoryMaxCounts, 1),
+      normalizeSelectionCountArrays(right.categoryMaxCounts, 1),
+    )
+    && arraysShallowEqual(
+      normalizeAllowDuplicatesArray(left.categoryAllowDuplicates),
+      normalizeAllowDuplicatesArray(right.categoryAllowDuplicates),
+    )
+    && clampNonNegativeInteger(Number(left.totalMinCount ?? 0), 0)
+      === clampNonNegativeInteger(Number(right.totalMinCount ?? 0), 0)
+    && clampNonNegativeInteger(Number(left.totalMaxCount ?? 0), 0)
+      === clampNonNegativeInteger(Number(right.totalMaxCount ?? 0), 0);
+}
+
+function emptyCategorySelections(): string[][] {
+  return Array.from({ length: MAX_CATEGORY_SLOTS }, () => [] as string[]);
+}
 
 const ITEM_LIST_STORAGE_KEY = "savakan-gg.item-lists.v1";
 const EVENT_MGMT_STORAGE_KEY = "savakan-gg.event-mgmt.v1";
@@ -269,7 +461,17 @@ function parseLinesToUniqueList(value: string): string[] {
 }
 
 function eventSettingKey(slug: string, eventId: string): string {
-  return `${slug}::${eventId}`;
+  return `${normalizeSlugForSettingKey(slug)}::${eventId}`;
+}
+
+function sameSnapshotEventKey(
+  leftSlug: string,
+  leftEventId: string,
+  rightSlug: string,
+  rightEventId: string,
+): boolean {
+  return toSlugInput(leftSlug) === toSlugInput(rightSlug)
+    && leftEventId.trim() === rightEventId.trim();
 }
 
 function isMatchupReady(set: SetSnapshot): boolean {
@@ -570,15 +772,31 @@ function App() {
   const [itemCategoryName, setItemCategoryName] = useState("");
   const [itemListText, setItemListText] = useState("");
   const [eventMgmtSettings, setEventMgmtSettings] = useState<Record<string, EventManagementSetting>>({});
+  const [eventMgmtSettingsReady, setEventMgmtSettingsReady] = useState(false);
   const [sideDecisionMethod, setSideDecisionMethod] = useState<EventManagementSetting["sideDecisionMethod"]>("upper_1p");
   const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
   const [categorySlotListIds, setCategorySlotListIds] = useState<string[]>(["", "", ""]);
+  const [categorySlotMinCounts, setCategorySlotMinCounts] = useState<number[]>([0, 0, 0]);
+  const [categorySlotMaxCounts, setCategorySlotMaxCounts] = useState<number[]>([1, 1, 1]);
+  const [categorySlotAllowDuplicates, setCategorySlotAllowDuplicates] = useState<boolean[]>([false, false, false]);
+  const [totalItemMinCount, setTotalItemMinCount] = useState(0);
+  const [totalItemMaxCount, setTotalItemMaxCount] = useState(3);
   const [selectedTournamentEntrantId, setSelectedTournamentEntrantId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const autoAssigningSidesRef = useRef(false);
   const standbyReadinessRef = useRef<Record<string, boolean>>({});
+  const startupSavedSlugRef = useRef("");
+  const startupSavedEventIdRef = useRef("");
+  const startupRestoreReadyRef = useRef(false);
+  const localSnapshotEventsLoadedOnceRef = useRef(false);
+  const startupAutoRestoreDoneRef = useRef(false);
+  const startupDirectRestoreTriedRef = useRef(false);
+  const startupListRestoreRetryCountRef = useRef(0);
+  const lastPersistedSnapshotSelectionRef = useRef("");
+  const eventSettingHydratedKeyRef = useRef("");
+  const suppressEventSettingAutosaveRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -590,9 +808,31 @@ function App() {
           setToken(savedToken);
         }
 
+        const savedSelection = await invoke<{ slug: string; eventId: string } | null>(
+          "load_last_snapshot_selection",
+        );
+        if (
+          alive
+          && savedSelection
+          && savedSelection.slug.trim() !== ""
+          && savedSelection.eventId.trim() !== ""
+        ) {
+          const normalizedSavedSlug = toSlugInput(savedSelection.slug);
+          startupSavedSlugRef.current = normalizedSavedSlug;
+          startupSavedEventIdRef.current = savedSelection.eventId.trim();
+          setSlug(normalizedSavedSlug);
+        }
+
         const savedSlug = await invoke<string | null>("load_last_slug");
-        if (alive && savedSlug && savedSlug.trim() !== "") {
-          setSlug(toSlugInput(savedSlug));
+        if (
+          alive
+          && startupSavedSlugRef.current === ""
+          && savedSlug
+          && savedSlug.trim() !== ""
+        ) {
+          const normalizedSavedSlug = toSlugInput(savedSlug);
+          startupSavedSlugRef.current = normalizedSavedSlug;
+          setSlug(normalizedSavedSlug);
         }
 
         const savedItemLists = await invoke<ItemListConfig[] | null>("load_item_lists");
@@ -622,6 +862,7 @@ function App() {
         }
       } finally {
         if (alive) {
+          startupRestoreReadyRef.current = true;
           setItemListsReady(true);
         }
       }
@@ -633,17 +874,48 @@ function App() {
   }, []);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(EVENT_MGMT_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Record<string, EventManagementSetting>;
-        if (parsed && typeof parsed === "object") {
-          setEventMgmtSettings(parsed);
+    let alive = true;
+
+    (async () => {
+      try {
+        const fromRust = await invoke<Record<string, unknown> | null>("load_event_mgmt_settings");
+        if (!alive) {
+          return;
+        }
+
+        if (fromRust && typeof fromRust === "object") {
+          const normalized: Record<string, EventManagementSetting> = {};
+          for (const [key, value] of Object.entries(fromRust)) {
+            normalized[normalizeEventSettingStorageKey(key)] = normalizeEventManagementSetting(value);
+          }
+          setEventMgmtSettings(normalized);
+          return;
+        }
+
+        const raw = window.localStorage.getItem(EVENT_MGMT_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          if (parsed && typeof parsed === "object") {
+            const normalized: Record<string, EventManagementSetting> = {};
+            for (const [key, value] of Object.entries(parsed)) {
+              normalized[normalizeEventSettingStorageKey(key)] = normalizeEventManagementSetting(value);
+            }
+            setEventMgmtSettings(normalized);
+          }
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (alive) {
+          setEventMgmtSettingsReady(true);
         }
       }
-    } catch {
-      // ignore
-    }
+
+    })();
+
+    return () => {
+      alive = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -663,11 +935,19 @@ function App() {
   }, [itemLists]);
 
   useEffect(() => {
+    if (!eventMgmtSettingsReady) {
+      return;
+    }
+
     try {
       window.localStorage.setItem(EVENT_MGMT_STORAGE_KEY, JSON.stringify(eventMgmtSettings));
     } catch {
       // ignore
     }
+
+    void invoke("save_event_mgmt_settings", { settings: eventMgmtSettings }).catch((err) => {
+      setError(String(err));
+    });
   }, [eventMgmtSettings]);
 
   useEffect(() => {
@@ -677,6 +957,86 @@ function App() {
 
     void refreshLocalSnapshotEvents();
   }, [activeTab]);
+
+  useEffect(() => {
+    if (startupAutoRestoreDoneRef.current) {
+      return;
+    }
+
+    if (!startupRestoreReadyRef.current) {
+      return;
+    }
+
+    if (!localSnapshotEventsLoadedOnceRef.current) {
+      return;
+    }
+
+    if (workspace) {
+      startupAutoRestoreDoneRef.current = true;
+      return;
+    }
+
+    const savedSlug = startupSavedSlugRef.current;
+    const savedEventId = startupSavedEventIdRef.current;
+
+    if (savedSlug !== "" && savedEventId !== "" && !startupDirectRestoreTriedRef.current) {
+      startupDirectRestoreTriedRef.current = true;
+
+      void (async () => {
+        try {
+          const result = await invoke<TournamentWorkspace>("load_local_tournament_workspace", {
+            slug: savedSlug,
+            eventId: savedEventId,
+          });
+
+          setSlug(toSlugInput(savedSlug));
+          setSelectedEventId(savedEventId);
+          setWorkspace(result);
+          startupAutoRestoreDoneRef.current = true;
+        } catch {
+          // Fallback to list-based restore below when list loading completes.
+        }
+      })();
+      return;
+    }
+
+    if (loadingLocalSnapshotEvents) {
+      return;
+    }
+
+    if (savedSlug === "") {
+      startupAutoRestoreDoneRef.current = true;
+      return;
+    }
+
+    if (localSnapshotEvents.length === 0) {
+      if (startupListRestoreRetryCountRef.current < 1) {
+        startupListRestoreRetryCountRef.current += 1;
+        void refreshLocalSnapshotEvents();
+        return;
+      }
+
+      startupAutoRestoreDoneRef.current = true;
+      return;
+    }
+
+    let matched = null as LocalSnapshotEventListItem | null;
+    if (savedEventId !== "") {
+      matched = localSnapshotEvents.find(
+        (item) => sameSnapshotEventKey(item.slug, item.eventId, savedSlug, savedEventId),
+      ) ?? null;
+    }
+
+    if (!matched) {
+      matched = localSnapshotEvents.find((item) => toSlugInput(item.slug) === savedSlug) ?? null;
+    }
+
+    startupAutoRestoreDoneRef.current = true;
+
+    if (matched) {
+      void selectLocalSnapshotEvent(matched);
+    }
+  }, [loadingLocalSnapshotEvents, localSnapshotEvents, workspace]);
 
   useEffect(() => {
     if (!createPreview) {
@@ -738,6 +1098,50 @@ function App() {
     return localMeta.events.find((event) => event.eventId === selectedEvent.eventId) ?? null;
   }, [localMeta, selectedEvent]);
 
+  const selectedEventItemListSnapshots = useMemo(() => {
+    if (!selectedEventMeta?.eventManagement?.itemListSnapshots) {
+      return [] as ItemListConfig[];
+    }
+
+    return selectedEventMeta.eventManagement.itemListSnapshots
+      .slice(0, MAX_CATEGORY_SLOTS)
+      .map((item) => normalizeItemListConfig(item));
+  }, [selectedEventMeta]);
+
+  function resolveItemListForSelectedEvent(listId: string): ItemListConfig | null {
+    const normalizedId = listId.trim();
+    if (normalizedId === "") {
+      return null;
+    }
+
+    const snapshotItem = selectedEventItemListSnapshots.find((item) => item.id === normalizedId);
+    if (snapshotItem) {
+      return snapshotItem;
+    }
+
+    return itemLists.find((item) => item.id === normalizedId) ?? null;
+  }
+
+  useEffect(() => {
+    if (!snapshot || !selectedEvent) {
+      return;
+    }
+
+    const selectionKey = `${toSlugInput(snapshot.slug)}::${selectedEvent.eventId.trim()}`;
+    if (selectionKey === "::" || selectionKey === lastPersistedSnapshotSelectionRef.current) {
+      return;
+    }
+
+    lastPersistedSnapshotSelectionRef.current = selectionKey;
+    void invoke("save_last_snapshot_selection", {
+      slug: snapshot.slug,
+      eventId: selectedEvent.eventId,
+    }).catch((err) => {
+      lastPersistedSnapshotSelectionRef.current = "";
+      setError(String(err));
+    });
+  }, [selectedEvent, snapshot]);
+
   const selectedEventSettingKey = useMemo(() => {
     if (!snapshot || !selectedEvent) {
       return "";
@@ -745,13 +1149,50 @@ function App() {
     return eventSettingKey(snapshot.slug, selectedEvent.eventId);
   }, [snapshot, selectedEvent]);
 
-  const selectedCategoryLists = useMemo(() => {
-    const ids = categorySlotListIds.filter((id) => id.trim() !== "");
-    return ids
-      .map((id) => itemLists.find((item) => item.id === id) ?? null)
-      .filter((item): item is ItemListConfig => item !== null)
-      .slice(0, 3);
-  }, [categorySlotListIds, itemLists]);
+  const configuredCategorySlots = useMemo(() => {
+    const slots: Array<{
+      slotIndex: number;
+      list: ItemListConfig;
+      minCount: number;
+      maxCount: number;
+      allowDuplicates: boolean;
+    }> = [];
+
+    for (let slotIndex = 0; slotIndex < MAX_CATEGORY_SLOTS; slotIndex += 1) {
+      const listId = categorySlotListIds[slotIndex] ?? "";
+      if (listId.trim() === "") {
+        continue;
+      }
+
+      const list = resolveItemListForSelectedEvent(listId);
+      if (!list) {
+        continue;
+      }
+
+      const minCount = clampNonNegativeInteger(categorySlotMinCounts[slotIndex] ?? 0, 0);
+      const maxCount = Math.max(
+        clampNonNegativeInteger(categorySlotMaxCounts[slotIndex] ?? 1, 1),
+        minCount,
+      );
+
+      slots.push({
+        slotIndex,
+        list,
+        minCount,
+        maxCount,
+        allowDuplicates: Boolean(categorySlotAllowDuplicates[slotIndex]),
+      });
+    }
+
+    return slots;
+  }, [
+    categorySlotAllowDuplicates,
+    categorySlotListIds,
+    categorySlotMaxCounts,
+    categorySlotMinCounts,
+    itemLists,
+    selectedEventItemListSnapshots,
+  ]);
 
   const selectedSummaryName = useMemo(() => {
     const alias = selectedEventMeta?.eventAlias?.trim();
@@ -766,27 +1207,56 @@ function App() {
     return snapshot?.name ?? "未選択";
   }, [selectedEventMeta, selectedEvent, snapshot]);
 
-  const selectedEventCharacterUsage = useMemo(() => {
+  const selectedCategoryUsageList = useMemo(() => {
     if (!selectedEventMeta) {
-      return [] as Array<{ name: string; count: number }>;
+      return [] as Array<{
+        slotIndex: number;
+        categoryName: string;
+        listName: string;
+        entries: Array<{ itemName: string; count: number; rate: number }>;
+      }>;
     }
 
-    const usage = new Map<string, number>();
-    for (const entrant of selectedEventMeta.entrants) {
-      const uniqueCharacters = new Set(
-        entrant.characterNames.map((characterName) => characterName.trim()).filter((characterName) => characterName !== ""),
-      );
+    const denominator = Math.max(selectedEventMeta.entrants.length, 1);
 
-      for (const characterName of uniqueCharacters) {
-        usage.set(characterName, (usage.get(characterName) ?? 0) + 1);
+    return configuredCategorySlots.map((slot) => {
+      const itemCounts = new Map<string, number>();
+      const items = slot.list.items
+        .map((itemName) => itemName.trim())
+        .filter((itemName) => itemName !== "");
+
+      for (const itemName of items) {
+        itemCounts.set(itemName, 0);
       }
-    }
 
-    return [...usage.entries()]
-      .map(([name, count]) => ({ name, count }))
-      .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name, "ja"))
-      .slice(0, 5);
-  }, [selectedEventMeta]);
+      for (const entrant of selectedEventMeta.entrants) {
+        const chosen = entrant.characterNames
+          .map((itemName) => itemName.trim())
+          .filter((itemName) => itemCounts.has(itemName));
+
+        const uniqueChosen = new Set(chosen);
+        for (const itemName of uniqueChosen) {
+          itemCounts.set(itemName, (itemCounts.get(itemName) ?? 0) + 1);
+        }
+      }
+
+      const entries = [...itemCounts.entries()]
+        .map(([itemName, count]) => ({
+          itemName,
+          count,
+          rate: (count / denominator) * 100,
+        }))
+        .filter((entry) => entry.count > 0)
+        .sort((left, right) => right.rate - left.rate || left.itemName.localeCompare(right.itemName, "ja"));
+
+      return {
+        slotIndex: slot.slotIndex,
+        categoryName: slot.list.categoryName,
+        listName: slot.list.name,
+        entries,
+      };
+    });
+  }, [configuredCategorySlots, selectedEventMeta]);
   const eventSeedStatusByKey = useMemo(() => {
     const map = new Map<string, EventSeedStatus>();
 
@@ -935,37 +1405,96 @@ function App() {
 
       for (const entrant of selectedEventEntrants) {
         const key = `${selectedEvent.eventId}:${entrant.entrantId}`;
-        if (next[key]) {
-          continue;
-        }
 
         const existingMeta = selectedEventMeta?.entrants.find(
           (item) => item.entrantId === entrant.entrantId,
         );
 
+        const categorySelections = emptyCategorySelections();
+        const remaining = [...(existingMeta?.characterNames ?? [])]
+          .map((value) => value.trim())
+          .filter((value) => value !== "");
+
+        for (let slotIndex = 0; slotIndex < MAX_CATEGORY_SLOTS; slotIndex += 1) {
+          const listId = categorySlotListIds[slotIndex] ?? "";
+          if (listId.trim() === "") {
+            continue;
+          }
+
+          const itemList = resolveItemListForSelectedEvent(listId);
+          if (!itemList) {
+            continue;
+          }
+
+          const allowDuplicates = Boolean(categorySlotAllowDuplicates[slotIndex]);
+          const selections: string[] = [];
+
+          for (let index = 0; index < remaining.length; index += 1) {
+            const itemName = remaining[index];
+            if (!itemList.items.includes(itemName)) {
+              continue;
+            }
+            if (!allowDuplicates && selections.includes(itemName)) {
+              continue;
+            }
+
+            selections.push(itemName);
+            remaining.splice(index, 1);
+            index -= 1;
+          }
+
+          categorySelections[slotIndex] = selections;
+        }
+
         next[key] = {
           playSide: existingMeta?.playSide ?? "",
-          characterNames: existingMeta?.characterNames.join(", ") ?? "",
-          notes: existingMeta?.notes ?? "",
+          categorySelections,
         };
       }
 
       return next;
     });
-  }, [selectedEvent, selectedEventEntrants, selectedEventMeta]);
+  }, [
+    categorySlotAllowDuplicates,
+    categorySlotListIds,
+    itemLists,
+    selectedEvent,
+    selectedEventEntrants,
+    selectedEventItemListSnapshots,
+    selectedEventMeta,
+  ]);
 
   useEffect(() => {
     if (selectedEventSettingKey === "") {
       return;
     }
 
-    const setting = eventMgmtSettings[selectedEventSettingKey];
-    if (!setting) {
+    const eventMetaSetting = selectedEventMeta?.eventManagement;
+    const rawSetting = eventMetaSetting
+      ? normalizeEventManagementSetting({
+        sideDecisionMethod: eventMetaSetting.sideDecisionMethod,
+        itemListIds: (eventMetaSetting.itemListSnapshots ?? []).map((item) => normalizeItemListConfig(item).id),
+        categoryMinCounts: eventMetaSetting.categoryMinCounts,
+        categoryMaxCounts: eventMetaSetting.categoryMaxCounts,
+        categoryAllowDuplicates: eventMetaSetting.categoryAllowDuplicates,
+        totalMinCount: eventMetaSetting.totalMinCount,
+        totalMaxCount: eventMetaSetting.totalMaxCount,
+      })
+      : eventMgmtSettings[selectedEventSettingKey];
+    if (!rawSetting) {
+      suppressEventSettingAutosaveRef.current = true;
+      eventSettingHydratedKeyRef.current = selectedEventSettingKey;
       setSideDecisionMethod("upper_1p");
       setCategorySlotListIds(["", "", ""]);
+      setCategorySlotMinCounts([0, 0, 0]);
+      setCategorySlotMaxCounts([1, 1, 1]);
+      setCategorySlotAllowDuplicates([false, false, false]);
+      setTotalItemMinCount(0);
+      setTotalItemMaxCount(3);
       return;
     }
 
+    const setting = normalizeEventManagementSetting(rawSetting);
     const nextSideMethod = setting.sideDecisionMethod === "upper_2p" || setting.sideDecisionMethod === "random"
       ? setting.sideDecisionMethod
       : "upper_1p";
@@ -974,9 +1503,82 @@ function App() {
       nextIds.push("");
     }
 
+    suppressEventSettingAutosaveRef.current = true;
+    eventSettingHydratedKeyRef.current = selectedEventSettingKey;
     setSideDecisionMethod(nextSideMethod);
     setCategorySlotListIds(nextIds);
-  }, [eventMgmtSettings, selectedEventSettingKey]);
+    setCategorySlotMinCounts(normalizeSelectionCountArrays(setting.categoryMinCounts, 0));
+    setCategorySlotMaxCounts(normalizeSelectionCountArrays(setting.categoryMaxCounts, 1));
+    setCategorySlotAllowDuplicates(normalizeAllowDuplicatesArray(setting.categoryAllowDuplicates));
+    setTotalItemMinCount(clampNonNegativeInteger(Number(setting.totalMinCount ?? 0), 0));
+    setTotalItemMaxCount(clampNonNegativeInteger(Number(setting.totalMaxCount ?? 3), 3));
+  }, [eventMgmtSettings, selectedEventMeta, selectedEventSettingKey]);
+
+  useEffect(() => {
+    if (selectedEventSettingKey === "") {
+      return;
+    }
+
+    if (eventSettingHydratedKeyRef.current !== selectedEventSettingKey) {
+      return;
+    }
+
+    if (suppressEventSettingAutosaveRef.current) {
+      suppressEventSettingAutosaveRef.current = false;
+      return;
+    }
+
+    const itemListIds = categorySlotListIds.slice(0, MAX_CATEGORY_SLOTS).map((id) => id.trim());
+    const normalizedMinCounts = normalizeSelectionCountArrays(categorySlotMinCounts, 0);
+    const normalizedMaxCounts = normalizeSelectionCountArrays(categorySlotMaxCounts, 1);
+    const normalizedAllowDuplicates = normalizeAllowDuplicatesArray(categorySlotAllowDuplicates);
+
+    for (let i = 0; i < itemListIds.length; i += 1) {
+      if (itemListIds[i] === "") {
+        normalizedMinCounts[i] = 0;
+        normalizedMaxCounts[i] = 0;
+        normalizedAllowDuplicates[i] = false;
+      } else if (normalizedMaxCounts[i] < normalizedMinCounts[i]) {
+        normalizedMaxCounts[i] = normalizedMinCounts[i];
+      }
+    }
+
+    const normalizedTotalMinCount = clampNonNegativeInteger(totalItemMinCount, 0);
+    const normalizedTotalMaxCount = Math.max(
+      clampNonNegativeInteger(totalItemMaxCount, 0),
+      normalizedTotalMinCount,
+    );
+
+    const nextSetting = normalizeEventManagementSetting({
+      sideDecisionMethod,
+      itemListIds,
+      categoryMinCounts: normalizedMinCounts,
+      categoryMaxCounts: normalizedMaxCounts,
+      categoryAllowDuplicates: normalizedAllowDuplicates,
+      totalMinCount: normalizedTotalMinCount,
+      totalMaxCount: normalizedTotalMaxCount,
+    });
+
+    setEventMgmtSettings((current) => {
+      if (isSameEventManagementSetting(current[selectedEventSettingKey], nextSetting)) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [selectedEventSettingKey]: nextSetting,
+      };
+    });
+  }, [
+    categorySlotAllowDuplicates,
+    categorySlotListIds,
+    categorySlotMaxCounts,
+    categorySlotMinCounts,
+    selectedEventSettingKey,
+    sideDecisionMethod,
+    totalItemMaxCount,
+    totalItemMinCount,
+  ]);
 
   useEffect(() => {
     if (selectedEventEntrants.length === 0) {
@@ -1113,11 +1715,46 @@ function App() {
       .find((event) => event.eventId === eventId)
       ?.entrants.find((entrant) => entrant.entrantId === entrantId);
 
+    const categorySelections = emptyCategorySelections();
+    const remaining = [...(existingMeta?.characterNames ?? [])]
+      .map((value) => value.trim())
+      .filter((value) => value !== "");
+
+    for (let slotIndex = 0; slotIndex < MAX_CATEGORY_SLOTS; slotIndex += 1) {
+      const listId = categorySlotListIds[slotIndex] ?? "";
+      if (listId.trim() === "") {
+        continue;
+      }
+
+      const itemList = resolveItemListForSelectedEvent(listId);
+      if (!itemList) {
+        continue;
+      }
+
+      const allowDuplicates = Boolean(categorySlotAllowDuplicates[slotIndex]);
+      const selections: string[] = [];
+
+      for (let index = 0; index < remaining.length; index += 1) {
+        const itemName = remaining[index];
+        if (!itemList.items.includes(itemName)) {
+          continue;
+        }
+        if (!allowDuplicates && selections.includes(itemName)) {
+          continue;
+        }
+
+        selections.push(itemName);
+        remaining.splice(index, 1);
+        index -= 1;
+      }
+
+      categorySelections[slotIndex] = selections;
+    }
+
     return (
       metaDrafts[key] ?? {
         playSide: existingMeta?.playSide ?? "",
-        characterNames: existingMeta?.characterNames.join(", ") ?? "",
-        notes: existingMeta?.notes ?? "",
+        categorySelections,
       }
     );
   }
@@ -1131,15 +1768,26 @@ function App() {
     setMetaDrafts((current) => {
       const baseDraft = current[key] ?? {
         playSide: existingMeta?.playSide ?? "",
-        characterNames: existingMeta?.characterNames.join(", ") ?? "",
-        notes: existingMeta?.notes ?? "",
+        categorySelections: emptyCategorySelections(),
       };
+
+      const nextSelections = patch.categorySelections
+        ? patch.categorySelections.slice(0, MAX_CATEGORY_SLOTS).map((items) =>
+          Array.isArray(items)
+            ? items.map((value) => value.trim()).filter((value) => value !== "")
+            : [],
+        )
+        : baseDraft.categorySelections;
+      while (nextSelections.length < MAX_CATEGORY_SLOTS) {
+        nextSelections.push([]);
+      }
 
       return {
         ...current,
         [key]: {
           ...baseDraft,
           ...patch,
+          categorySelections: nextSelections,
         },
       };
     });
@@ -1158,57 +1806,136 @@ function App() {
     return "upper_1p";
   }
 
-  function parseCharacterNames(rawValue: string): string[] {
-    return rawValue
-      .split(/[\n,]/)
+  function getDraftCategorySelections(draft: PlayerMetaDraft, slotIndex: number): string[] {
+    return (draft.categorySelections[slotIndex] ?? [])
       .map((value) => value.trim())
       .filter((value) => value !== "");
   }
 
-  function getDraftSelectionsForCategories(draft: PlayerMetaDraft, lists: ItemListConfig[]): string[] {
-    const remaining = [...parseCharacterNames(draft.characterNames)];
-    return lists.map((list) => {
-      const index = remaining.findIndex((name) => list.items.includes(name));
-      if (index < 0) {
-        return "";
-      }
-
-      const [picked] = remaining.splice(index, 1);
-      return picked;
-    });
-  }
-
-  function updateDraftCategorySelection(
+  function setDraftCategorySelections(
     eventId: string,
     entrantId: string,
-    lists: ItemListConfig[],
-    categoryIndex: number,
-    itemName: string,
+    slotIndex: number,
+    nextSelections: string[],
   ) {
     const draft = getMetaDraft(eventId, entrantId);
-    const selections = getDraftSelectionsForCategories(draft, lists);
-    if (categoryIndex < 0 || categoryIndex >= selections.length) {
+    const categorySelections = draft.categorySelections
+      .slice(0, MAX_CATEGORY_SLOTS)
+      .map((items) => [...items]);
+    while (categorySelections.length < MAX_CATEGORY_SLOTS) {
+      categorySelections.push([]);
+    }
+
+    categorySelections[slotIndex] = nextSelections
+      .map((value) => value.trim())
+      .filter((value) => value !== "");
+
+    setMetaDraft(eventId, entrantId, { categorySelections });
+  }
+
+  function addDraftCategorySelection(
+    eventId: string,
+    entrantId: string,
+    slotIndex: number,
+    list: ItemListConfig,
+    allowDuplicates: boolean,
+    maxCount: number,
+    itemName: string,
+  ) {
+    const normalizedItem = itemName.trim();
+    if (normalizedItem === "") {
+      return;
+    }
+    if (!list.items.includes(normalizedItem)) {
       return;
     }
 
-    if (itemName !== "") {
-      const duplicateIndex = selections.findIndex((value, idx) => idx !== categoryIndex && value === itemName);
-      if (duplicateIndex >= 0) {
-        selections[duplicateIndex] = "";
-      }
+    const draft = getMetaDraft(eventId, entrantId);
+    const currentSelections = getDraftCategorySelections(draft, slotIndex);
+
+    if (!allowDuplicates && currentSelections.includes(normalizedItem)) {
+      return;
     }
 
-    selections[categoryIndex] = itemName;
-    const normalized = selections.map((value) => value.trim()).filter((value) => value !== "");
-    setMetaDraft(eventId, entrantId, {
-      characterNames: normalized.join(", "),
-    });
+    if (currentSelections.length >= maxCount) {
+      return;
+    }
+
+    setDraftCategorySelections(eventId, entrantId, slotIndex, [...currentSelections, normalizedItem]);
+  }
+
+  function removeDraftCategorySelection(
+    eventId: string,
+    entrantId: string,
+    slotIndex: number,
+    removeIndex: number,
+  ) {
+    const draft = getMetaDraft(eventId, entrantId);
+    const currentSelections = getDraftCategorySelections(draft, slotIndex);
+    if (removeIndex < 0 || removeIndex >= currentSelections.length) {
+      return;
+    }
+
+    const next = currentSelections.filter((_, index) => index !== removeIndex);
+    setDraftCategorySelections(eventId, entrantId, slotIndex, next);
+  }
+
+  function buildValidatedSelections(
+    draft: PlayerMetaDraft,
+    slots: Array<{
+      slotIndex: number;
+      list: ItemListConfig;
+      minCount: number;
+      maxCount: number;
+      allowDuplicates: boolean;
+    }>,
+  ): { normalizedBySlot: string[][]; flattened: string[]; errors: string[] } {
+    const normalizedBySlot = emptyCategorySelections();
+    const flattened: string[] = [];
+    const errors: string[] = [];
+
+    for (const slot of slots) {
+      const allowedItems = new Set(slot.list.items);
+      let selections = getDraftCategorySelections(draft, slot.slotIndex)
+        .filter((value) => allowedItems.has(value));
+
+      if (!slot.allowDuplicates) {
+        const unique: string[] = [];
+        for (const value of selections) {
+          if (!unique.includes(value)) {
+            unique.push(value);
+          }
+        }
+        selections = unique;
+      }
+
+      if (selections.length < slot.minCount) {
+        errors.push(`${slot.list.categoryName}: 最低 ${slot.minCount} 件必要です。`);
+      }
+      if (selections.length > slot.maxCount) {
+        errors.push(`${slot.list.categoryName}: 最大 ${slot.maxCount} 件までです。`);
+      }
+
+      normalizedBySlot[slot.slotIndex] = selections;
+      flattened.push(...selections);
+    }
+
+    const totalMin = clampNonNegativeInteger(totalItemMinCount, 0);
+    const totalMax = Math.max(clampNonNegativeInteger(totalItemMaxCount, 0), totalMin);
+    if (flattened.length < totalMin) {
+      errors.push(`全体の選択数が不足しています (最低 ${totalMin} 件)。`);
+    }
+    if (flattened.length > totalMax) {
+      errors.push(`全体の選択数が超過しています (最大 ${totalMax} 件)。`);
+    }
+
+    return { normalizedBySlot, flattened, errors };
   }
 
   function setCategoryListSlot(slotIndex: number, itemListId: string) {
     setCategorySlotListIds((current) => {
       const next = [...current];
-      while (next.length < 3) {
+      while (next.length < MAX_CATEGORY_SLOTS) {
         next.push("");
       }
 
@@ -1221,13 +1948,35 @@ function App() {
       }
 
       next[slotIndex] = itemListId;
-      return next.slice(0, 3);
+      return next.slice(0, MAX_CATEGORY_SLOTS);
     });
-  }
 
-  function toNullableText(rawValue: string): string | null {
-    const trimmed = rawValue.trim();
-    return trimmed === "" ? null : trimmed;
+    if (itemListId.trim() === "") {
+      setCategorySlotMinCounts((current) => {
+        const next = [...current];
+        next[slotIndex] = 0;
+        return next;
+      });
+      setCategorySlotMaxCounts((current) => {
+        const next = [...current];
+        next[slotIndex] = 0;
+        return next;
+      });
+      setCategorySlotAllowDuplicates((current) => {
+        const next = [...current];
+        next[slotIndex] = false;
+        return next;
+      });
+      return;
+    }
+
+    setCategorySlotMaxCounts((current) => {
+      const next = [...current];
+      if ((next[slotIndex] ?? 0) < 1) {
+        next[slotIndex] = 1;
+      }
+      return next;
+    });
   }
 
   function resetItemListEditor() {
@@ -1280,47 +2029,143 @@ function App() {
   function deleteItemList(itemListId: string) {
     setItemLists((current) => current.filter((list) => list.id !== itemListId));
     setCategorySlotListIds((current) => current.map((id) => (id === itemListId ? "" : id)));
+    setCategorySlotMinCounts((current) => current.map((value, index) => (categorySlotListIds[index] === itemListId ? 0 : value)));
+    setCategorySlotMaxCounts((current) => current.map((value, index) => (categorySlotListIds[index] === itemListId ? 0 : value)));
+    setCategorySlotAllowDuplicates((current) => current.map((value, index) => (categorySlotListIds[index] === itemListId ? false : value)));
     if (editingItemListId === itemListId) {
       resetItemListEditor();
     }
     setEventMgmtSettings((current) => {
       const next: Record<string, EventManagementSetting> = {};
       for (const [key, value] of Object.entries(current)) {
-        const ids = (value.itemListIds ?? [])
-          .filter((id) => id !== itemListId)
-          .slice(0, 3);
-        next[key] = {
-          sideDecisionMethod:
-            value.sideDecisionMethod === "upper_2p" || value.sideDecisionMethod === "random"
-              ? value.sideDecisionMethod
-              : "upper_1p",
+        const normalized = normalizeEventManagementSetting(value);
+        const ids = [...normalized.itemListIds];
+        const mins = normalizeSelectionCountArrays(normalized.categoryMinCounts, 0);
+        const maxes = normalizeSelectionCountArrays(normalized.categoryMaxCounts, 1);
+        const allows = normalizeAllowDuplicatesArray(normalized.categoryAllowDuplicates);
+
+        for (let i = 0; i < MAX_CATEGORY_SLOTS; i += 1) {
+          if (ids[i] === itemListId) {
+            ids[i] = "";
+            mins[i] = 0;
+            maxes[i] = 0;
+            allows[i] = false;
+          }
+        }
+
+        next[key] = normalizeEventManagementSetting({
+          ...normalized,
           itemListIds: ids,
-        };
+          categoryMinCounts: mins,
+          categoryMaxCounts: maxes,
+          categoryAllowDuplicates: allows,
+        });
       }
       return next;
     });
     setMessage("アイテムリストを削除しました。");
   }
 
-  function saveEventManagementSetting() {
-    if (selectedEventSettingKey === "") {
+  async function saveEventManagementSetting() {
+    if (selectedEventSettingKey === "" || !selectedEvent) {
       setError("先にイベントを選択してください。");
       return;
     }
 
-    const itemListIds = categorySlotListIds
-      .map((id) => id.trim())
-      .filter((id, index, source) => id !== "" && source.indexOf(id) === index)
-      .slice(0, 3);
+    const itemListIds = categorySlotListIds.slice(0, MAX_CATEGORY_SLOTS).map((id) => id.trim());
+    const normalizedMinCounts = normalizeSelectionCountArrays(categorySlotMinCounts, 0);
+    const normalizedMaxCounts = normalizeSelectionCountArrays(categorySlotMaxCounts, 1);
+    const normalizedAllowDuplicates = normalizeAllowDuplicatesArray(categorySlotAllowDuplicates);
 
-    setEventMgmtSettings((current) => ({
-      ...current,
-      [selectedEventSettingKey]: {
-        sideDecisionMethod,
-        itemListIds,
-      },
-    }));
-    setMessage("大会管理設定を保存しました。");
+    const seen = new Set<string>();
+    for (let i = 0; i < itemListIds.length; i += 1) {
+      if (itemListIds[i] === "") {
+        normalizedMinCounts[i] = 0;
+        normalizedMaxCounts[i] = 0;
+        normalizedAllowDuplicates[i] = false;
+        continue;
+      }
+
+      if (seen.has(itemListIds[i])) {
+        setError("カテゴリは重複して設定できません。");
+        return;
+      }
+      seen.add(itemListIds[i]);
+
+      if (normalizedMaxCounts[i] < normalizedMinCounts[i]) {
+        setError(`カテゴリ${i + 1}: 上限は下限以上にしてください。`);
+        return;
+      }
+    }
+
+    const normalizedTotalMinCount = clampNonNegativeInteger(totalItemMinCount, 0);
+    const normalizedTotalMaxCount = Math.max(
+      clampNonNegativeInteger(totalItemMaxCount, 0),
+      normalizedTotalMinCount,
+    );
+
+    const nextSetting: EventManagementSetting = {
+      sideDecisionMethod,
+      itemListIds,
+      categoryMinCounts: normalizedMinCounts,
+      categoryMaxCounts: normalizedMaxCounts,
+      categoryAllowDuplicates: normalizedAllowDuplicates,
+      totalMinCount: normalizedTotalMinCount,
+      totalMaxCount: normalizedTotalMaxCount,
+    };
+
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const itemListSnapshots = itemListIds.map((listId) => {
+        if (listId === "") {
+          return {
+            id: "",
+            name: "",
+            categoryName: "",
+            items: [],
+          } as ItemListConfig;
+        }
+
+        const source = resolveItemListForSelectedEvent(listId);
+        if (!source) {
+          throw new Error(`選択中のカテゴリ設定に存在しないアイテムリストがあります: ${listId}`);
+        }
+
+        return normalizeItemListConfig(source);
+      });
+
+      const normalizedSlug = toApiSlug(slug);
+      const result = await invoke<TournamentWorkspace>("save_event_management_meta", {
+        input: {
+          slug: normalizedSlug,
+          eventId: selectedEvent.eventId,
+          eventName: selectedEvent.name,
+          setting: {
+            sideDecisionMethod,
+            itemListSnapshots,
+            categoryMinCounts: normalizedMinCounts,
+            categoryMaxCounts: normalizedMaxCounts,
+            categoryAllowDuplicates: normalizedAllowDuplicates,
+            totalMinCount: normalizedTotalMinCount,
+            totalMaxCount: normalizedTotalMaxCount,
+          },
+        },
+      });
+
+      setWorkspace(result);
+      setEventMgmtSettings((current) => ({
+        ...current,
+        [selectedEventSettingKey]: nextSetting,
+      }));
+      setMessage("大会管理設定を保存しました。アイテム選択設定が変わった場合、既存のプレイヤー選択はクリアされます。");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   function formatScoreValue(value: number): string {
@@ -1640,6 +2485,7 @@ function App() {
     } catch (err) {
       setError(String(err));
     } finally {
+      localSnapshotEventsLoadedOnceRef.current = true;
       setLoadingLocalSnapshotEvents(false);
     }
   }
@@ -1651,6 +2497,10 @@ function App() {
 
     try {
       await invoke("save_last_slug", { slug: item.slug });
+      await invoke("save_last_snapshot_selection", {
+        slug: item.slug,
+        eventId: item.eventId,
+      });
       const result = await invoke<TournamentWorkspace>("load_local_tournament_workspace", {
         slug: item.slug,
         eventId: item.eventId,
@@ -1690,7 +2540,22 @@ function App() {
         eventId: item.eventId,
       });
 
-      if (snapshot?.slug === item.slug && selectedEvent?.eventId === item.eventId) {
+      const removedSettingKey = eventSettingKey(item.slug, item.eventId);
+      setEventMgmtSettings((current) => {
+        if (!(removedSettingKey in current)) {
+          return current;
+        }
+
+        const next = { ...current };
+        delete next[removedSettingKey];
+        return next;
+      });
+
+      if (
+        snapshot
+        && selectedEvent
+        && sameSnapshotEventKey(snapshot.slug, selectedEvent.eventId, item.slug, item.eventId)
+      ) {
         setWorkspace(null);
         setSelectedEventId("");
         closeMatchDialog();
@@ -2080,6 +2945,16 @@ function App() {
     const manageBusy = options?.manageBusy ?? true;
     const normalizedSlug = toApiSlug(slug);
     const draft = getMetaDraft(eventSnapshot.eventId, entrantId);
+    const validated = buildValidatedSelections(draft, configuredCategorySlots);
+
+    if (validated.errors.length > 0) {
+      setError(validated.errors.join(" "));
+      return;
+    }
+
+    setMetaDraft(eventSnapshot.eventId, entrantId, {
+      categorySelections: validated.normalizedBySlot,
+    });
 
     if (manageBusy) {
       setBusy(true);
@@ -2098,8 +2973,8 @@ function App() {
           entrantId,
           entrantName,
           playSide: null,
-          characterNames: parseCharacterNames(draft.characterNames),
-          notes: toNullableText(draft.notes),
+          characterNames: validated.flattened,
+          notes: null,
         },
       });
 
@@ -2322,8 +3197,10 @@ function App() {
               <div className="event-list">
                 {localSnapshotEvents.map((item) => {
                   const isSelected =
-                    snapshot?.slug === item.slug &&
-                    selectedEvent?.eventId === item.eventId;
+                    snapshot
+                    && selectedEvent
+                    ? sameSnapshotEventKey(snapshot.slug, selectedEvent.eventId, item.slug, item.eventId)
+                    : false;
                   const seedStatus = eventSeedStatusByKey.get(`${item.slug}:${item.eventId}`) ?? null;
                   const itemKey = `${item.slug}:${item.eventId}`;
                   const isDeleting = deletingSnapshotKey === itemKey;
@@ -2340,13 +3217,14 @@ function App() {
                       onClick={() => {
                         if (!isDeleting && !busy) {
                           void selectLocalSnapshotEvent(item);
-                                              {seedStatus && seedStatus.totalEntrants > 0 && (
-                                                <p className={`meta ${seedStatus.missingSeedEntrants > 0 ? "error-text" : ""}`}>
-                                                  {seedStatus.missingSeedEntrants > 0
-                                                    ? `⚠ seed未設定: ${seedStatus.missingSeedEntrants}/${seedStatus.totalEntrants}`
-                                                    : `seed設定済み: ${seedStatus.totalEntrants}/${seedStatus.totalEntrants}`}
-                                                </p>
-                                              )}
+                        }
+                      }}
+                      onDoubleClick={() => {
+                        if (!isDeleting) {
+                          void (async () => {
+                            await selectLocalSnapshotEvent(item);
+                            setActiveTab("tournament");
+                          })();
                         }
                       }}
                       onKeyDown={(e) => {
@@ -2364,6 +3242,13 @@ function App() {
                       </div>
                       <p className="meta">start.ggのtournament名: {item.tournamentName}</p>
                       <p className="meta">start.ggのevent名: {item.eventName}</p>
+                      {seedStatus && seedStatus.totalEntrants > 0 && (
+                        <p className={`meta ${seedStatus.missingSeedEntrants > 0 ? "error-text" : ""}`}>
+                          {seedStatus.missingSeedEntrants > 0
+                            ? `⚠ seed未設定: ${seedStatus.missingSeedEntrants}/${seedStatus.totalEntrants}`
+                            : `seed設定済み: ${seedStatus.totalEntrants}/${seedStatus.totalEntrants}`}
+                        </p>
+                      )}
                       <button
                         type="button"
                         className="ghost"
@@ -2503,12 +3388,23 @@ function App() {
         {activeTab === "tournament" && (
         <>
           <section className="panel">
-            <h2>大会管理</h2>
-            <p className="meta">
-              参加者一覧、1P/2P決定方式、使用アイテム設定を管理します。
-            </p>
             {selectedEvent ? (
               <>
+                <div className="stats-grid">
+                  <article className="stat-card">
+                    <p className="meta">エイリアス名</p>
+                    <h3>{selectedEventMeta?.eventAlias?.trim() ? selectedEventMeta.eventAlias : "未設定"}</h3>
+                  </article>
+                  <article className="stat-card">
+                    <p className="meta">tournament名 (start.gg)</p>
+                    <h3>{snapshot?.name ?? "-"}</h3>
+                  </article>
+                  <article className="stat-card">
+                    <p className="meta">event名 (start.gg)</p>
+                    <h3>{selectedEvent.name}</h3>
+                  </article>
+                </div>
+
                 <div className="panel-toolbar compact">
                   <p className={`meta ${selectedEventSeedStatus && selectedEventSeedStatus.missingSeedEntrants > 0 ? "error-text" : ""}`}>
                     {selectedEventSeedStatus
@@ -2522,135 +3418,268 @@ function App() {
                   </button>
                 </div>
 
-                <div className="stats-grid">
-                  <article className="stat-card">
-                    <p className="meta">イベント</p>
-                    <h3>{selectedEvent.name}</h3>
-                  </article>
-                  <article className="stat-card">
-                    <p className="meta">参加プレイヤー</p>
-                    <h3>{selectedEventEntrants.length}</h3>
-                  </article>
-                  <article className="stat-card">
-                    <p className="meta">メタ保存済み</p>
-                    <h3>{selectedEventMeta?.entrants.length ?? 0}</h3>
-                  </article>
-                  <article className="stat-card">
-                    <p className="meta">使用アイテム上位</p>
-                    {selectedEventCharacterUsage.length === 0 ? (
-                      <p className="meta">未入力</p>
-                    ) : (
-                      <ul>
-                        {selectedEventCharacterUsage.map((item) => (
-                          <li key={item.name}>
-                            {item.name} / {item.count}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </article>
+                <div className="tournament-settings" style={{ marginTop: "0.9rem" }}>
+                  <div className="setting-row">
+                    <p className="setting-row-title">1P/2P決定方法</p>
+                    <div className="setting-row-fields single">
+                      <select
+                        id="side-method"
+                        value={sideDecisionMethod}
+                        onChange={(e) => setSideDecisionMethod(e.currentTarget.value as EventManagementSetting["sideDecisionMethod"])}
+                      >
+                        <option value="upper_1p">上側を1P</option>
+                        <option value="upper_2p">上側を2P</option>
+                        <option value="random">ランダム</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {Array.from({ length: MAX_CATEGORY_SLOTS }, (_, slotIndex) => {
+                    const listId = categorySlotListIds[slotIndex] ?? "";
+                    const minCount = categorySlotMinCounts[slotIndex] ?? 0;
+                    const maxCount = categorySlotMaxCounts[slotIndex] ?? 0;
+                    const allowDuplicates = categorySlotAllowDuplicates[slotIndex] ?? false;
+                    const disabledSlot = listId.trim() === "";
+
+                    return (
+                      <div className="setting-row" key={`category-setting-${slotIndex}`}>
+                        <p className="setting-row-title">カテゴリ{slotIndex + 1}</p>
+                        <div className="setting-row-fields">
+                          <label htmlFor={`item-list-slot-${slotIndex}`}>使用リスト</label>
+                          <select
+                            id={`item-list-slot-${slotIndex}`}
+                            value={listId}
+                            onChange={(e) => setCategoryListSlot(slotIndex, e.currentTarget.value)}
+                          >
+                            <option value="">未選択</option>
+                            {itemLists
+                              .slice()
+                              .sort((a, b) => a.name.localeCompare(b.name, "ja"))
+                              .map((itemList) => (
+                                <option key={`slot-${slotIndex}-${itemList.id}`} value={itemList.id}>
+                                  {itemList.name} / {itemList.categoryName} ({itemList.items.length})
+                                </option>
+                              ))}
+                          </select>
+
+                          <label htmlFor={`item-list-slot-min-${slotIndex}`}>カテゴリ下限</label>
+                          <input
+                            id={`item-list-slot-min-${slotIndex}`}
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={minCount}
+                            disabled={disabledSlot}
+                            onChange={(e) => {
+                              const nextMin = clampNonNegativeInteger(Number(e.currentTarget.value), 0);
+                              setCategorySlotMinCounts((current) => {
+                                const next = [...current];
+                                next[slotIndex] = nextMin;
+                                return next;
+                              });
+                              setCategorySlotMaxCounts((current) => {
+                                const next = [...current];
+                                if ((next[slotIndex] ?? 0) < nextMin) {
+                                  next[slotIndex] = nextMin;
+                                }
+                                return next;
+                              });
+                            }}
+                          />
+
+                          <label htmlFor={`item-list-slot-max-${slotIndex}`}>カテゴリ上限</label>
+                          <input
+                            id={`item-list-slot-max-${slotIndex}`}
+                            type="number"
+                            min={0}
+                            step={1}
+                            value={maxCount}
+                            disabled={disabledSlot}
+                            onChange={(e) => {
+                              const rawMax = clampNonNegativeInteger(Number(e.currentTarget.value), 0);
+                              const ensuredMax = Math.max(rawMax, categorySlotMinCounts[slotIndex] ?? 0);
+                              setCategorySlotMaxCounts((current) => {
+                                const next = [...current];
+                                next[slotIndex] = ensuredMax;
+                                return next;
+                              });
+                            }}
+                          />
+
+                          <label htmlFor={`item-list-slot-allow-dup-${slotIndex}`}>重複可否</label>
+                          <label className="setting-checkbox" htmlFor={`item-list-slot-allow-dup-${slotIndex}`}>
+                            <input
+                              id={`item-list-slot-allow-dup-${slotIndex}`}
+                              type="checkbox"
+                              checked={allowDuplicates}
+                              disabled={disabledSlot}
+                              onChange={(e) => {
+                                const checked = e.currentTarget.checked;
+                                setCategorySlotAllowDuplicates((current) => {
+                                  const next = [...current];
+                                  next[slotIndex] = checked;
+                                  return next;
+                                });
+                              }}
+                            />
+                            許可
+                          </label>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <div className="setting-row">
+                    <p className="setting-row-title">アイテム全体選択</p>
+                    <div className="setting-row-fields total">
+                      <label htmlFor="total-item-min">下限</label>
+                      <input
+                        id="total-item-min"
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={totalItemMinCount}
+                        onChange={(e) => {
+                          const nextMin = clampNonNegativeInteger(Number(e.currentTarget.value), 0);
+                          setTotalItemMinCount(nextMin);
+                          setTotalItemMaxCount((current) => Math.max(current, nextMin));
+                        }}
+                      />
+
+                      <label htmlFor="total-item-max">上限</label>
+                      <input
+                        id="total-item-max"
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={totalItemMaxCount}
+                        onChange={(e) => {
+                          const nextMax = clampNonNegativeInteger(Number(e.currentTarget.value), 0);
+                          setTotalItemMaxCount(Math.max(nextMax, totalItemMinCount));
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="setting-row save">
+                    <button type="button" className="ghost" onClick={saveEventManagementSetting}>
+                      大会設定を保存
+                    </button>
+                  </div>
                 </div>
-
-                <div className="event-toolbar" style={{ marginTop: "0.9rem" }}>
-                  <label htmlFor="side-method">1P/2P決定方法</label>
-                  <select
-                    id="side-method"
-                    value={sideDecisionMethod}
-                    onChange={(e) => setSideDecisionMethod(e.currentTarget.value as EventManagementSetting["sideDecisionMethod"])}
-                  >
-                    <option value="upper_1p">上側を1P</option>
-                    <option value="upper_2p">上側を2P</option>
-                    <option value="random">ランダム</option>
-                  </select>
-
-                  <label htmlFor="item-list-slot-0">カテゴリ1</label>
-                  <select
-                    id="item-list-slot-0"
-                    value={categorySlotListIds[0] ?? ""}
-                    onChange={(e) => setCategoryListSlot(0, e.currentTarget.value)}
-                  >
-                    <option value="">未選択</option>
-                    {itemLists
-                      .slice()
-                      .sort((a, b) => a.name.localeCompare(b.name, "ja"))
-                      .map((itemList) => (
-                        <option key={itemList.id} value={itemList.id}>
-                          {itemList.name} / {itemList.categoryName} ({itemList.items.length})
-                        </option>
-                      ))}
-                  </select>
-
-                  <label htmlFor="item-list-slot-1">カテゴリ2</label>
-                  <select
-                    id="item-list-slot-1"
-                    value={categorySlotListIds[1] ?? ""}
-                    onChange={(e) => setCategoryListSlot(1, e.currentTarget.value)}
-                  >
-                    <option value="">未選択</option>
-                    {itemLists
-                      .slice()
-                      .sort((a, b) => a.name.localeCompare(b.name, "ja"))
-                      .map((itemList) => (
-                        <option key={`slot1-${itemList.id}`} value={itemList.id}>
-                          {itemList.name} / {itemList.categoryName} ({itemList.items.length})
-                        </option>
-                      ))}
-                  </select>
-
-                  <label htmlFor="item-list-slot-2">カテゴリ3</label>
-                  <select
-                    id="item-list-slot-2"
-                    value={categorySlotListIds[2] ?? ""}
-                    onChange={(e) => setCategoryListSlot(2, e.currentTarget.value)}
-                  >
-                    <option value="">未選択</option>
-                    {itemLists
-                      .slice()
-                      .sort((a, b) => a.name.localeCompare(b.name, "ja"))
-                      .map((itemList) => (
-                        <option key={`slot2-${itemList.id}`} value={itemList.id}>
-                          {itemList.name} / {itemList.categoryName} ({itemList.items.length})
-                        </option>
-                      ))}
-                  </select>
-
-                  <button type="button" className="ghost" onClick={saveEventManagementSetting}>
-                    大会管理設定を保存
-                  </button>
-                </div>
-                <p className="meta">カテゴリは最大3つまで設定できます。プレイヤー選択後、各カテゴリで1つずつ選択します。</p>
+                <p className="meta">カテゴリは最大3つまで設定できます。カテゴリ重複は不可で、カテゴリごとの件数条件と全体件数条件を設定します。</p>
 
                 {selectedEventEntrants.length === 0 ? (
                   <p className="meta" style={{ marginTop: "0.75rem" }}>参加者が見つかりません。</p>
                 ) : (
                   <div className="tournament-manager-grid" style={{ marginTop: "0.8rem" }}>
-                    <section className="panel" style={{ padding: "0.75rem" }}>
-                      <h3>プレイヤー一覧 (seed順)</h3>
-                      <div className="event-list">
-                        {selectedEventEntrants.map((entrant) => {
-                          const isSelected = selectedTournamentEntrant?.entrantId === entrant.entrantId;
-                          return (
-                            <article
-                              key={`${selectedEvent.eventId}-${entrant.entrantId}`}
-                              className={`event-list-item ${isSelected ? "selected" : ""}`}
-                              role="button"
-                              tabIndex={0}
-                              onClick={() => setSelectedTournamentEntrantId(entrant.entrantId)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ") {
-                                  e.preventDefault();
-                                  setSelectedTournamentEntrantId(entrant.entrantId);
-                                }
-                              }}
-                            >
-                              <h4>{entrant.entrantName}</h4>
-                              <p className="meta">entrantId: {entrant.entrantId}</p>
-                              {entrant.seedNum === null && <p className="meta error-text">⚠ seed未設定</p>}
-                            </article>
-                          );
-                        })}
-                      </div>
-                    </section>
+                    <div className="tournament-manager-left-stack">
+                      <section className="panel" style={{ padding: "0.75rem" }}>
+                        <h3>プレイヤー一覧 (seed順)</h3>
+                        <p className="meta">参加人数: {selectedEventEntrants.length}</p>
+                        <p className="meta">メタ情報の保存数: {selectedEventMeta?.entrants.length ?? 0}</p>
+                        <div className={`event-list player-list-scroll ${selectedEventEntrants.length > 8 ? "enabled" : ""}`}>
+                          {selectedEventEntrants.map((entrant) => {
+                            const isSelected = selectedTournamentEntrant?.entrantId === entrant.entrantId;
+                            return (
+                              <article
+                                key={`${selectedEvent.eventId}-${entrant.entrantId}`}
+                                className={`event-list-item ${isSelected ? "selected" : ""}`}
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => setSelectedTournamentEntrantId(entrant.entrantId)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    setSelectedTournamentEntrantId(entrant.entrantId);
+                                  }
+                                }}
+                              >
+                                <h4>{entrant.entrantName}</h4>
+                                <p className="meta">entrantId: {entrant.entrantId}</p>
+                                {entrant.seedNum === null && <p className="meta error-text">⚠ seed未設定</p>}
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </section>
+
+                      <section className="panel" style={{ padding: "0.75rem" }}>
+                        <h3>使用率一覧</h3>
+                        <div className="usage-board">
+                          {configuredCategorySlots.length === 0 ? (
+                            <p className="meta">カテゴリ設定後に表示されます。</p>
+                          ) : (
+                            <div className="usage-category-list">
+                              {selectedCategoryUsageList.map((categoryUsage) => (
+                                <article className="usage-category" key={`usage-${categoryUsage.slotIndex}`}>
+                                  <p className="usage-category-title">
+                                    {categoryUsage.categoryName} ({categoryUsage.listName})
+                                  </p>
+
+                                  {categoryUsage.entries.length === 0 ? (
+                                    <p className="meta">このカテゴリの選択データはまだありません。</p>
+                                  ) : (
+                                    <ul className="usage-item-list">
+                                      {categoryUsage.entries.map((entry) => {
+                                        const rate = Math.max(0, Math.min(100, entry.rate));
+                                        const rateText = `${rate.toFixed(1)}%`;
+                                        const palette = categoryUsage.slotIndex % 3;
+                                        const fillColor = palette === 0
+                                          ? "#2563eb"
+                                          : palette === 1
+                                            ? "#16a34a"
+                                            : "#d97706";
+                                        const complementColor = palette === 0
+                                          ? "#f59e0b"
+                                          : palette === 1
+                                            ? "#a855f7"
+                                            : "#2563eb";
+
+                                        return (
+                                          <li className="usage-item-row" key={`usage-item-${categoryUsage.slotIndex}-${entry.itemName}`}>
+                                            <span className="usage-item-name">{entry.itemName}</span>
+                                            <div className="usage-bar-track">
+                                              <div
+                                                className="usage-bar-fill"
+                                                style={{
+                                                  width: `${rate}%`,
+                                                  backgroundColor: fillColor,
+                                                }}
+                                              >
+                                                {rate >= 50 && (
+                                                  <span
+                                                    className="usage-rate-text in-bar"
+                                                    style={{ color: complementColor }}
+                                                  >
+                                                    {rateText}
+                                                  </span>
+                                                )}
+                                              </div>
+                                              {rate < 50 && (
+                                                <span
+                                                  className="usage-rate-text out-bar"
+                                                  style={{
+                                                    left: `calc(${rate}% + 0.35rem)`,
+                                                    color: fillColor,
+                                                  }}
+                                                >
+                                                  {rateText}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
+                                  )}
+                                </article>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </section>
+                    </div>
 
                     <section className="panel" style={{ padding: "0.75rem" }}>
                       <h3>選択プレイヤー設定</h3>
@@ -2659,52 +3688,86 @@ function App() {
                       ) : (
                         (() => {
                           const draft = getMetaDraft(selectedEvent.eventId, selectedTournamentEntrant.entrantId);
-                          const categorySelections = getDraftSelectionsForCategories(draft, selectedCategoryLists);
+                          const validated = buildValidatedSelections(draft, configuredCategorySlots);
 
                           return (
                             <>
                               <p className="meta">{selectedTournamentEntrant.entrantName}</p>
                               <p className="meta">entrantId: {selectedTournamentEntrant.entrantId}</p>
 
-                              {selectedCategoryLists.length === 0 ? (
+                              {configuredCategorySlots.length === 0 ? (
                                 <p className="meta">先に上部でカテゴリ(最大3つ)を選択してください。</p>
                               ) : (
                                 <div className="entrant-meta-editor">
-                                  {selectedCategoryLists.map((list, index) => (
-                                    <label key={`${selectedTournamentEntrant.entrantId}-${list.id}`}>
-                                      {list.categoryName} ({list.name})
+                                  {configuredCategorySlots.map((slot) => {
+                                    const currentSelections = getDraftCategorySelections(draft, slot.slotIndex);
+                                    const canAddMore = currentSelections.length < slot.maxCount;
+                                    const selectableItems = slot.allowDuplicates
+                                      ? slot.list.items
+                                      : slot.list.items.filter((itemName) => !currentSelections.includes(itemName));
+
+                                    return (
+                                    <div key={`${selectedTournamentEntrant.entrantId}-${slot.list.id}-${slot.slotIndex}`} style={{ border: "1px solid var(--line)", borderRadius: "10px", padding: "0.55rem" }}>
+                                      <p className="meta" style={{ marginBottom: "0.35rem" }}>
+                                        {slot.list.categoryName} ({slot.list.name}) / {currentSelections.length} 件
+                                        {` / 下限 ${slot.minCount} / 上限 ${slot.maxCount} / 重複 ${slot.allowDuplicates ? "可" : "不可"}`}
+                                      </p>
+
                                       <select
-                                        value={categorySelections[index] ?? ""}
+                                        value=""
+                                        disabled={!canAddMore || selectableItems.length === 0}
                                         onChange={(e) =>
-                                          updateDraftCategorySelection(
+                                          addDraftCategorySelection(
                                             selectedEvent.eventId,
                                             selectedTournamentEntrant.entrantId,
-                                            selectedCategoryLists,
-                                            index,
+                                            slot.slotIndex,
+                                            slot.list,
+                                            slot.allowDuplicates,
+                                            slot.maxCount,
                                             e.currentTarget.value,
                                           )
                                         }
                                       >
-                                        <option value="">未選択</option>
-                                        {list.items.map((itemName) => (
-                                          <option key={`${list.id}-${itemName}`} value={itemName}>
+                                        <option value="">アイテムを追加</option>
+                                        {selectableItems.map((itemName) => (
+                                          <option key={`${slot.list.id}-${slot.slotIndex}-${itemName}`} value={itemName}>
                                             {itemName}
                                           </option>
                                         ))}
                                       </select>
-                                    </label>
-                                  ))}
+
+                                      {currentSelections.length > 0 && (
+                                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.45rem" }}>
+                                          {currentSelections.map((itemName, index) => (
+                                            <button
+                                              key={`${slot.list.id}-${slot.slotIndex}-${itemName}-${index}`}
+                                              type="button"
+                                              className="ghost tiny"
+                                              onClick={() =>
+                                                removeDraftCategorySelection(
+                                                  selectedEvent.eventId,
+                                                  selectedTournamentEntrant.entrantId,
+                                                  slot.slotIndex,
+                                                  index,
+                                                )
+                                              }
+                                            >
+                                              {itemName} ×
+                                            </button>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                    );
+                                  })}
                                 </div>
                               )}
 
-                              <label className="entrant-meta-editor" style={{ marginTop: "0.4rem" }}>
-                                メモ
-                                <input
-                                  value={draft.notes}
-                                  onChange={(e) => setMetaDraft(selectedEvent.eventId, selectedTournamentEntrant.entrantId, { notes: e.currentTarget.value })}
-                                  placeholder="自由メモ"
-                                />
-                              </label>
+                              {validated.errors.length > 0 && (
+                                <p className="meta error-text" style={{ marginTop: "0.45rem" }}>
+                                  {validated.errors.join(" ")}
+                                </p>
+                              )}
 
                               <div className="entrant-meta-actions" style={{ marginTop: "0.6rem" }}>
                                 <button
