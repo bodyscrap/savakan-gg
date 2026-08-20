@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import QRCode from "qrcode";
 import "./App.css";
@@ -213,6 +213,7 @@ type CallThreadIdentity = {
   expectedPlayerId: string;
   callEntrantId: string;
   callEntrantName: string;
+  setId: string;
 };
 
 type DqRequestDialogState = {
@@ -225,6 +226,7 @@ type DqRequestDialogState = {
   expectedPlayerId: string;
   callEntrantId: string;
   callEntrantName: string;
+  setId: string;
 };
 
 type EventSeedStatus = {
@@ -679,8 +681,9 @@ function extractCallThreadIdentity(rootMessage: GenericMessage | null): CallThre
   const expectedPlayerId = normalizePlayerId(extractMetaString(rootMessage.messageMeta, "playerId"));
   const callEntrantId = extractMetaString(rootMessage.messageMeta, "callEntrantId");
   const callEntrantName = extractMetaString(rootMessage.messageMeta, "callEntrantName");
+  const setId = extractMetaString(rootMessage.messageMeta, "setId");
 
-  if (expectedPlayerId === "" || callEntrantId === "") {
+  if (expectedPlayerId === "" || callEntrantId === "" || setId === "") {
     return null;
   }
 
@@ -688,6 +691,7 @@ function extractCallThreadIdentity(rootMessage: GenericMessage | null): CallThre
     expectedPlayerId,
     callEntrantId,
     callEntrantName,
+    setId,
   };
 }
 
@@ -712,7 +716,9 @@ function extractPlayerIdFromQrRawValue(rawValue: string): string {
   return normalizePlayerId(trimmed);
 }
 
-async function readPlayerIdFromQrImageFile(file: File): Promise<string> {
+function createQrBarcodeDetector(): {
+  detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
+} | null {
   const barcodeDetectorCtor = (window as unknown as {
     BarcodeDetector?: new (options?: { formats?: string[] }) => {
       detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
@@ -720,25 +726,22 @@ async function readPlayerIdFromQrImageFile(file: File): Promise<string> {
   }).BarcodeDetector;
 
   if (!barcodeDetectorCtor) {
-    throw new Error("この環境では2次元コード読み取りに対応していません。PLAYER IDを手入力してください。");
+    return null;
   }
 
-  const detector = new barcodeDetectorCtor({ formats: ["qr_code"] });
-  const bitmap = await createImageBitmap(file);
-  try {
-    const results = await detector.detect(bitmap);
-    for (const result of results) {
-      const rawValue = typeof result.rawValue === "string" ? result.rawValue : "";
-      const playerId = extractPlayerIdFromQrRawValue(rawValue);
-      if (isLikelyPlayerId(playerId)) {
-        return playerId;
-      }
+  return new barcodeDetectorCtor({ formats: ["qr_code"] });
+}
+
+function extractPlayerIdFromBarcodeResults(results: Array<{ rawValue?: string }>): string {
+  for (const result of results) {
+    const rawValue = typeof result.rawValue === "string" ? result.rawValue : "";
+    const playerId = extractPlayerIdFromQrRawValue(rawValue);
+    if (isLikelyPlayerId(playerId)) {
+      return playerId;
     }
-  } finally {
-    bitmap.close();
   }
 
-  throw new Error("2次元コードからPLAYER IDを取得できませんでした。別の画像を試すか手入力してください。");
+  return "";
 }
 
 function arraysShallowEqual<T>(left: T[], right: T[]): boolean {
@@ -1249,6 +1252,30 @@ function buildDraftStateFromPending(set: SetSnapshot, result: LocalSetResultMeta
   };
 }
 
+function buildDqDraftStateForEntrant(set: SetSnapshot, dqEntrantId: string): SetResultDraftState | null {
+  const entrantIds = set.slots
+    .map((slot) => slot.entrantId)
+    .filter((entrantId): entrantId is string => entrantId !== null);
+
+  if (entrantIds.length < 2 || !entrantIds.includes(dqEntrantId)) {
+    return null;
+  }
+
+  const winnerId = entrantIds.find((entrantId) => entrantId !== dqEntrantId);
+  if (!winnerId) {
+    return null;
+  }
+
+  const scoreDrafts = buildScoreDraftsFromSet(set);
+  scoreDrafts[dqEntrantId] = "-";
+  scoreDrafts[winnerId] = "0";
+
+  return {
+    winnerId,
+    scoreDrafts,
+  };
+}
+
 function resolveWinnerIdFromDrafts(set: SetSnapshot, drafts: SetScoreDraft): string {
   const scored = set.slots
     .map((slot) => {
@@ -1363,6 +1390,7 @@ function App() {
   const [dqReasonDraft, setDqReasonDraft] = useState("");
   const [dqDialogError, setDqDialogError] = useState("");
   const [dqSubmitting, setDqSubmitting] = useState(false);
+  const [dqCameraActive, setDqCameraActive] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState("");
   const [mailboxServiceStarted, setMailboxServiceStarted] = useState(false);
   const [callingEntrantId, setCallingEntrantId] = useState("");
@@ -1402,7 +1430,13 @@ function App() {
   const suppressEventSettingAutosaveRef = useRef(false);
   const autoIpFillTriedRef = useRef(false);
   const tabSelectionAutoLoadInFlightRef = useRef(false);
-  const dqQrFileInputRef = useRef<HTMLInputElement | null>(null);
+  const dqCameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const dqCameraStreamRef = useRef<MediaStream | null>(null);
+  const dqCameraScanTimerRef = useRef<number | null>(null);
+  const dqCameraDetectingRef = useRef(false);
+  const dqCameraDetectorRef = useRef<{
+    detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
+  } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -2709,6 +2743,7 @@ function App() {
       expectedPlayerId: activeCallThreadIdentity.expectedPlayerId,
       callEntrantId: activeCallThreadIdentity.callEntrantId,
       callEntrantName: activeCallThreadIdentity.callEntrantName,
+      setId: activeCallThreadIdentity.setId,
     });
     setDqPlayerIdDraft("");
     setDqReasonDraft("");
@@ -2719,28 +2754,113 @@ function App() {
     if (dqSubmitting) {
       return;
     }
+
+    stopDqCameraScan();
+
     setDqDialog(null);
     setDqPlayerIdDraft("");
     setDqReasonDraft("");
     setDqDialogError("");
   }
 
-  async function importDqPlayerIdFromQrImage(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = "";
-    if (!file) {
+  function stopDqCameraScan() {
+    if (dqCameraScanTimerRef.current !== null) {
+      window.clearInterval(dqCameraScanTimerRef.current);
+      dqCameraScanTimerRef.current = null;
+    }
+    dqCameraDetectingRef.current = false;
+    if (dqCameraStreamRef.current) {
+      dqCameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      dqCameraStreamRef.current = null;
+    }
+    if (dqCameraVideoRef.current) {
+      dqCameraVideoRef.current.srcObject = null;
+    }
+    dqCameraDetectorRef.current = null;
+    setDqCameraActive(false);
+  }
+
+  async function startDqCameraScan() {
+    if (!dqDialog) {
+      setDqDialogError("DQ申請対象が見つかりません。再度開き直してください。");
       return;
     }
 
+    stopDqCameraScan();
     setDqDialogError("");
+
+    const detector = createQrBarcodeDetector();
+    if (!detector) {
+      setDqDialogError("この環境ではカメラ2次元コード読取に対応していません。PLAYER IDを手入力してください。");
+      return;
+    }
+
     try {
-      const playerId = await readPlayerIdFromQrImageFile(file);
-      setDqPlayerIdDraft(playerId);
-      setMessage("2次元コードからPLAYER IDを読み取りました。");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: "environment",
+        },
+        audio: false,
+      });
+
+      dqCameraStreamRef.current = stream;
+      dqCameraDetectorRef.current = detector;
+
+      const video = dqCameraVideoRef.current;
+      if (!video) {
+        stopDqCameraScan();
+        setDqDialogError("カメラプレビューの初期化に失敗しました。");
+        return;
+      }
+
+      video.srcObject = stream;
+      await video.play();
+      setDqCameraActive(true);
+
+      dqCameraScanTimerRef.current = window.setInterval(() => {
+        void (async () => {
+          if (!dqCameraDetectorRef.current || !dqCameraVideoRef.current || dqCameraDetectingRef.current) {
+            return;
+          }
+          if (dqCameraVideoRef.current.readyState < 2) {
+            return;
+          }
+
+          dqCameraDetectingRef.current = true;
+          try {
+            const results = await dqCameraDetectorRef.current.detect(dqCameraVideoRef.current);
+            const playerId = extractPlayerIdFromBarcodeResults(results);
+            if (playerId !== "") {
+              setDqPlayerIdDraft(playerId);
+              setMessage("カメラでPLAYER IDを読み取りました。");
+              stopDqCameraScan();
+            }
+          } catch {
+            // ignore transient detection failures
+          } finally {
+            dqCameraDetectingRef.current = false;
+          }
+        })();
+      }, 400);
     } catch (err) {
-      setDqDialogError(String(err));
+      stopDqCameraScan();
+      setDqDialogError(`カメラを起動できませんでした: ${String(err)}`);
     }
   }
+
+  useEffect(() => {
+    if (dqDialog) {
+      return;
+    }
+
+    stopDqCameraScan();
+  }, [dqDialog]);
+
+  useEffect(() => {
+    return () => {
+      stopDqCameraScan();
+    };
+  }, []);
 
   async function submitDqRequest() {
     setError("");
@@ -2780,6 +2900,7 @@ function App() {
       dqPlayerId: normalizedPlayerId,
       dqCallEntrantId: dqDialog.callEntrantId,
       dqCallEntrantName: dqDialog.callEntrantName,
+      dqSetId: dqDialog.setId,
       dqRequestedByUserId: senderProfile.senderUserId,
       dqRequestedAt: new Date().toISOString(),
     }, selectedMessageScope);
@@ -4443,7 +4564,7 @@ function App() {
     };
   }
 
-  function openMatchDialog(set: SetSnapshot) {
+  function openMatchDialog(set: SetSnapshot, forcedDraftState?: SetResultDraftState) {
     setActiveMatchSetId(set.setId);
     setSetId(set.setId);
 
@@ -4455,6 +4576,15 @@ function App() {
       sideDrafts[slot.entrantId] = getSetSlotSide(set.setId, slot.entrantId);
     }
     setActiveMatchSideDrafts(sideDrafts);
+
+    if (forcedDraftState) {
+      setScoreDrafts(forcedDraftState.scoreDrafts);
+      setSetResultDrafts((current) => ({
+        ...current,
+        [set.setId]: forcedDraftState,
+      }));
+      return;
+    }
 
     const cached = setResultDrafts[set.setId];
     if (cached) {
@@ -4481,6 +4611,70 @@ function App() {
         scoreDrafts: buildScoreDraftsFromSet(set),
       },
     }));
+  }
+
+  function resolveDqRequestContext(message: GenericMessage): { setId: string; dqEntrantId: string } | null {
+    const directSetId = extractMetaString(message.messageMeta, "dqSetId");
+    const directEntrantId = extractMetaString(message.messageMeta, "dqCallEntrantId");
+
+    if (directSetId !== "" && directEntrantId !== "") {
+      return {
+        setId: directSetId,
+        dqEntrantId: directEntrantId,
+      };
+    }
+
+    const root = mailboxThreadSummaries.find((summary) => summary.root.threadId === message.threadId)?.root;
+    if (!root) {
+      return null;
+    }
+
+    const rootSetId = extractMetaString(root.messageMeta, "setId");
+    const rootEntrantId = extractMetaString(root.messageMeta, "callEntrantId");
+    if (rootSetId === "" || rootEntrantId === "") {
+      return null;
+    }
+
+    return {
+      setId: rootSetId,
+      dqEntrantId: rootEntrantId,
+    };
+  }
+
+  function processDqRequestFromMessage(message: GenericMessage) {
+    setError("");
+    setMessage("");
+
+    if (!selectedEvent) {
+      setError("先にイベントを選択してください。DQ処理先を開けません。");
+      return;
+    }
+
+    const context = resolveDqRequestContext(message);
+    if (!context) {
+      setError("DQ申請メッセージから対象setを特定できませんでした。");
+      return;
+    }
+
+    const targetSet = selectedEvent.sets.find((set) => set.setId === context.setId);
+    if (!targetSet) {
+      setError(`対象setが現在のイベント内に見つかりません: ${context.setId}`);
+      return;
+    }
+
+    const draftState = buildDqDraftStateForEntrant(targetSet, context.dqEntrantId);
+    if (!draftState) {
+      setError("DQ入力の自動設定に失敗しました。対象プレイヤーまたは対戦カードを確認してください。");
+      return;
+    }
+
+    const phaseName = targetSet.phaseName && targetSet.phaseName.trim() !== "" ? targetSet.phaseName : "Phase 未設定";
+    const phaseGroupName = targetSet.phaseGroupName && targetSet.phaseGroupName.trim() !== "" ? targetSet.phaseGroupName : "Pool 未設定";
+    setSelectedPhaseName(phaseName);
+    setSelectedPhasePoolKey(`${phaseName}::${phaseGroupName}`);
+    setActiveTab("bracket");
+    openMatchDialog(targetSet, draftState);
+    setMessage("DQ申請から対象setを開きました。DQ入力済みなので「確定」を押すと反映できます。");
   }
 
   function closeMatchDialog() {
@@ -5720,6 +5914,17 @@ function App() {
                           <p className="meta">
                             type: {item.messageType === "resolve" ? "解決" : item.messageType === "dq_request" ? "DQ申請" : "通常"}
                           </p>
+                          {item.messageType === "dq_request" && (
+                            <div style={{ marginTop: "0.45rem", display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+                              <button
+                                type="button"
+                                className="ghost tiny"
+                                onClick={() => processDqRequestFromMessage(item)}
+                              >
+                                DQ処理
+                              </button>
+                            </div>
+                          )}
                           <p className="message-body">{item.body}</p>
                         </article>
                       ))}
@@ -5802,20 +6007,34 @@ function App() {
                   type="button"
                   className="ghost"
                   disabled={dqSubmitting}
-                  onClick={() => dqQrFileInputRef.current?.click()}
-                >
-                  2次元コード画像を読み込む
-                </button>
-                <input
-                  ref={dqQrFileInputRef}
-                  type="file"
-                  accept="image/*"
-                  style={{ display: "none" }}
-                  onChange={(event) => {
-                    void importDqPlayerIdFromQrImage(event);
+                  onClick={() => {
+                    void startDqCameraScan();
                   }}
-                />
+                >
+                  カメラで2次元コードを読む
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={dqSubmitting || !dqCameraActive}
+                  onClick={stopDqCameraScan}
+                >
+                  カメラ停止
+                </button>
               </div>
+
+              {dqCameraActive && (
+                <div style={{ marginTop: "0.7rem" }}>
+                  <p className="meta">カメラをコードに向けると、自動でPLAYER IDを入力します。</p>
+                  <video
+                    ref={dqCameraVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    style={{ width: "100%", maxWidth: "420px", borderRadius: "10px", border: "1px solid var(--line)", background: "#0f172a" }}
+                  />
+                </div>
+              )}
 
               <label style={{ marginTop: "0.7rem" }}>
                 申請理由 (任意)
