@@ -5,6 +5,10 @@ fn default_bind_ip() -> String {
     "0.0.0.0".to_owned()
 }
 
+fn default_broadcast_subnet_mask() -> String {
+    "255.255.255.0".to_owned()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TournamentSnapshot {
@@ -38,6 +42,8 @@ pub struct SenderProfile {
     pub sender_user_id: String,
     #[serde(default = "default_bind_ip")]
     pub bind_ip: String,
+    #[serde(default = "default_broadcast_subnet_mask")]
+    pub broadcast_subnet_mask: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

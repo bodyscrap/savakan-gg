@@ -566,10 +566,16 @@ pub fn save_sender_profile(app: &AppHandle, profile: &SenderProfile) -> Result<(
         return Err("自分のIPはIPv4形式で入力してください。例: 192.168.1.10".to_owned());
     }
 
+    let broadcast_subnet_mask = profile.broadcast_subnet_mask.trim();
+    if broadcast_subnet_mask.parse::<std::net::Ipv4Addr>().is_err() {
+        return Err("ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0".to_owned());
+    }
+
     let normalized = SenderProfile {
         sender_name: sender_name.to_owned(),
         sender_user_id: sender_user_id.to_owned(),
         bind_ip: bind_ip.to_owned(),
+        broadcast_subnet_mask: broadcast_subnet_mask.to_owned(),
     };
 
     let json = serde_json::to_string_pretty(&normalized)

@@ -3,7 +3,7 @@ mod startgg;
 mod startgg_scalars;
 mod storage;
 
-use std::net::UdpSocket;
+use std::net::{Ipv4Addr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::thread;
@@ -20,7 +20,6 @@ use models::{
 use serde::{Deserialize, Serialize};
 
 const UDP_MAILBOX_PORT: u16 = 42690;
-const UDP_BROADCAST_IP: &str = "255.255.255.255";
 
 static UDP_LISTENER_RUNNING: OnceLock<AtomicBool> = OnceLock::new();
 static MESSAGE_ID_SEQUENCE: OnceLock<AtomicU64> = OnceLock::new();
@@ -104,6 +103,9 @@ fn validate_sender_profile(profile: &SenderProfile) -> Result<(), String> {
     if profile.bind_ip.trim().parse::<std::net::Ipv4Addr>().is_err() {
         return Err("自分のIPはIPv4形式で入力してください。例: 192.168.1.10".to_owned());
     }
+    if profile.broadcast_subnet_mask.trim().parse::<std::net::Ipv4Addr>().is_err() {
+        return Err("ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0".to_owned());
+    }
     Ok(())
 }
 
@@ -111,23 +113,64 @@ fn normalize_delivery_target_mode(mode: &str) -> String {
     mode.trim().to_ascii_lowercase()
 }
 
-fn validate_delivery_target(mode: &str, target_ip: Option<&str>) -> Result<(), String> {
+fn split_delivery_target_ips(target_ip: Option<&str>) -> Vec<String> {
+    let Some(raw) = target_ip.map(|value| value.trim()).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+
+    raw.split([' ', ',', ';', '\n', '\r', '\t'])
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_owned())
+        .collect()
+}
+
+fn compute_broadcast_ip(bind_ip: &str, subnet_mask: &str) -> Result<String, String> {
+    let bind = bind_ip
+        .trim()
+        .parse::<Ipv4Addr>()
+        .map_err(|_| "自分のIPはIPv4形式で入力してください。例: 192.168.1.10".to_owned())?;
+    let mask = subnet_mask
+        .trim()
+        .parse::<Ipv4Addr>()
+        .map_err(|_| "ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0".to_owned())?;
+
+    let bind_u32 = u32::from(bind);
+    let mask_u32 = u32::from(mask);
+    let broadcast_u32 = (bind_u32 & mask_u32) | (!mask_u32);
+
+    Ok(Ipv4Addr::from(broadcast_u32).to_string())
+}
+
+fn resolve_delivery_target_ips(
+    profile: &SenderProfile,
+    mode: &str,
+    target_ip: Option<&str>,
+) -> Result<Vec<String>, String> {
     let normalized_mode = normalize_delivery_target_mode(mode);
     match normalized_mode.as_str() {
-        "broadcast" => Ok(()),
+        "broadcast" => Ok(vec![compute_broadcast_ip(&profile.bind_ip, &profile.broadcast_subnet_mask)?]),
         "direct" => {
-            let Some(ip) = target_ip.map(|value| value.trim()).filter(|value| !value.is_empty()) else {
+            let ips = split_delivery_target_ips(target_ip);
+            if ips.is_empty() {
                 return Err("送信先IPを入力してください。".to_owned());
-            };
-
-            if ip.parse::<std::net::Ipv4Addr>().is_err() {
-                return Err("送信先IPはIPv4形式で入力してください。例: 192.168.1.20".to_owned());
             }
 
-            Ok(())
+            for ip in &ips {
+                if ip.parse::<std::net::Ipv4Addr>().is_err() {
+                    return Err("送信先IPはIPv4形式で入力してください。例: 192.168.1.20".to_owned());
+                }
+            }
+
+            Ok(ips)
         }
         _ => Err("deliveryTargetMode は broadcast または direct を指定してください。".to_owned()),
     }
+}
+
+fn validate_delivery_target(mode: &str, target_ip: Option<&str>, profile: &SenderProfile) -> Result<(), String> {
+    let _ = resolve_delivery_target_ips(profile, mode, target_ip)?;
+    Ok(())
 }
 
 fn create_message_id(profile: &SenderProfile, method: &str, body: &str) -> String {
@@ -149,7 +192,7 @@ fn create_message_id(profile: &SenderProfile, method: &str, body: &str) -> Strin
 
 fn build_message_from_input(input: &SendMailboxMessageInput) -> Result<GenericMessage, String> {
     validate_sender_profile(&input.profile)?;
-    validate_delivery_target(&input.delivery_target_mode, input.delivery_target_ip.as_deref())?;
+    validate_delivery_target(&input.delivery_target_mode, input.delivery_target_ip.as_deref(), &input.profile)?;
 
     let method = input.method.trim().to_ascii_lowercase();
     if method.is_empty() {
@@ -249,7 +292,7 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
                             "direct" => packet
                                 .delivery_target_ip
                                 .as_deref()
-                                .map(|value| value.trim() == my_profile.bind_ip.trim())
+                                .map(|value| split_delivery_target_ips(Some(value)).iter().any(|ip| ip.trim() == my_profile.bind_ip.trim()))
                                 .unwrap_or(false),
                             _ => false,
                         };
@@ -322,10 +365,15 @@ fn send_mailbox_message(
     }
 
     let normalized_target_mode = normalize_delivery_target_mode(&input.delivery_target_mode);
+    let target_ips = resolve_delivery_target_ips(&input.profile, &normalized_target_mode, input.delivery_target_ip.as_deref())?;
     let packet = UdpMailboxPacket {
         protocol: "savakan-mailbox-v1".to_owned(),
         delivery_target_mode: normalized_target_mode.clone(),
-        delivery_target_ip: input.delivery_target_ip.as_ref().map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
+        delivery_target_ip: match normalized_target_mode.as_str() {
+            "broadcast" => None,
+            "direct" => Some(target_ips.join(",")),
+            _ => None,
+        },
         message: message.clone(),
     };
 
@@ -341,19 +389,13 @@ fn send_mailbox_message(
 
     let payload = serde_json::to_vec(&packet)
         .map_err(|e| format!("送信データのJSON変換に失敗しました: {e}"))?;
-    let target_addr = if normalized_target_mode == "broadcast" {
-        format!("{}:{}", UDP_BROADCAST_IP, UDP_MAILBOX_PORT)
-    } else {
-        format!(
-            "{}:{}",
-            packet.delivery_target_ip.as_deref().unwrap_or("").trim(),
-            UDP_MAILBOX_PORT,
-        )
-    };
 
-    socket
-        .send_to(&payload, &target_addr)
-        .map_err(|e| format!("UDP送信に失敗しました: {e}"))?;
+    for target_ip in &target_ips {
+        let target_addr = format!("{}:{}", target_ip.trim(), UDP_MAILBOX_PORT);
+        socket
+            .send_to(&payload, &target_addr)
+            .map_err(|e| format!("UDP送信に失敗しました ({target_addr}): {e}"))?;
+    }
 
     storage::append_generic_message(&app, &message)?;
 

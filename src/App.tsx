@@ -233,6 +233,7 @@ type SenderProfile = {
   senderName: string;
   senderUserId: string;
   bindIp: string;
+  broadcastSubnetMask: string;
 };
 
 type GenericMessage = {
@@ -442,11 +443,15 @@ function normalizeSenderProfile(rawValue: unknown): SenderProfile {
     ? source.senderUserId.replace(/\D/g, "").slice(0, 8)
     : "";
   const bindIp = typeof source.bindIp === "string" ? source.bindIp.trim() : "0.0.0.0";
+  const broadcastSubnetMask = typeof source.broadcastSubnetMask === "string"
+    ? source.broadcastSubnetMask.trim()
+    : "255.255.255.0";
 
   return {
     senderName,
     senderUserId,
     bindIp,
+    broadcastSubnetMask,
   };
 }
 
@@ -546,6 +551,18 @@ function isValidIpv4(value: string): boolean {
     const num = Number(part);
     return Number.isInteger(num) && num >= 0 && num <= 255;
   });
+}
+
+function splitIpv4List(value: string): string[] {
+  return value
+    .split(/[\s,;\n\r]+/)
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+}
+
+function isValidIpv4List(value: string): boolean {
+  const values = splitIpv4List(value);
+  return values.length > 0 && values.every((item) => isValidIpv4(item));
 }
 
 function generateRandomSenderUserId(): string {
@@ -1217,11 +1234,12 @@ function App() {
   const [itemListText, setItemListText] = useState("");
   const [eventMgmtSettings, setEventMgmtSettings] = useState<Record<string, EventManagementSetting>>({});
   const [eventMgmtSettingsReady, setEventMgmtSettingsReady] = useState(false);
-  const [senderProfile, setSenderProfile] = useState<SenderProfile>({ senderName: "", senderUserId: "", bindIp: "0.0.0.0" });
+  const [senderProfile, setSenderProfile] = useState<SenderProfile>({ senderName: "", senderUserId: "", bindIp: "0.0.0.0", broadcastSubnetMask: "255.255.255.0" });
   const [senderProfileReady, setSenderProfileReady] = useState(false);
   const [senderNameDraft, setSenderNameDraft] = useState("");
   const [senderUserIdDraft, setSenderUserIdDraft] = useState("");
   const [senderBindIpDraft, setSenderBindIpDraft] = useState("0.0.0.0");
+  const [senderBroadcastSubnetMaskDraft, setSenderBroadcastSubnetMaskDraft] = useState("255.255.255.0");
   const [genericMessages, setGenericMessages] = useState<GenericMessage[]>([]);
   const [genericMessagesReady, setGenericMessagesReady] = useState(false);
   const [mailboxMethodDraft, setMailboxMethodDraft] = useState("generic");
@@ -1389,6 +1407,7 @@ function App() {
           setSenderNameDraft(normalized.senderName);
           setSenderUserIdDraft(normalized.senderUserId);
           setSenderBindIpDraft(normalized.bindIp);
+          setSenderBroadcastSubnetMaskDraft(normalized.broadcastSubnetMask);
           return;
         }
 
@@ -1400,6 +1419,7 @@ function App() {
           setSenderNameDraft(normalized.senderName);
           setSenderUserIdDraft(normalized.senderUserId);
           setSenderBindIpDraft(normalized.bindIp);
+          setSenderBroadcastSubnetMaskDraft(normalized.broadcastSubnetMask);
         }
       } catch {
         // ignore
@@ -2189,6 +2209,8 @@ function App() {
       .map((summary) => summary.root);
   }, [mailboxFilterSetting, mailboxThreadSummaries]);
 
+  const hasMailboxThreads = mailboxThreads.length > 0;
+
   const activeThread = useMemo(() => {
     if (selectedThreadId.trim() === "") {
       return mailboxThreads[0] ?? null;
@@ -2215,8 +2237,8 @@ function App() {
     && activeThread.senderUserId === senderProfile.senderUserId;
 
   useEffect(() => {
-    if (mailboxThreads.length === 0) {
-      setSelectedThreadId("");
+    if (!hasMailboxThreads) {
+      setSelectedThreadId((current) => (current === "" ? current : ""));
       return;
     }
 
@@ -2226,7 +2248,7 @@ function App() {
       }
       return mailboxThreads[0].threadId;
     });
-  }, [mailboxThreads]);
+  }, [hasMailboxThreads, mailboxThreads]);
 
   useEffect(() => {
     if (activeTab !== "message" || !activeThread) {
@@ -2253,6 +2275,7 @@ function App() {
   const normalizedSenderNameDraft = senderNameDraft.trim();
   const normalizedSenderUserIdDraft = senderUserIdDraft.replace(/\D/g, "").slice(0, 8);
   const normalizedSenderBindIpDraft = senderBindIpDraft.trim();
+  const normalizedBroadcastSubnetMaskDraft = senderBroadcastSubnetMaskDraft.trim();
   const normalizedMailboxMethod = mailboxMethodDraft.trim().toLowerCase();
   const normalizedMailboxSubject = mailboxSubjectDraft.trim();
   const normalizedMessageDeliveryIp = messageDeliveryIpDraft.trim();
@@ -2276,15 +2299,17 @@ function App() {
   const canSaveSenderProfile = normalizedSenderNameDraft !== ""
     && isValidSenderUserId(normalizedSenderUserIdDraft)
     && isValidIpv4(normalizedSenderBindIpDraft)
+    && isValidIpv4(normalizedBroadcastSubnetMaskDraft)
     && !senderIdCollision;
 
   const canSendGenericMessage = senderProfile.senderName.trim() !== ""
     && isValidSenderUserId(senderProfile.senderUserId)
     && isValidIpv4(senderProfile.bindIp)
+    && isValidIpv4(senderProfile.broadcastSubnetMask)
     && normalizedMailboxMethod !== ""
     && normalizedMailboxSubject !== ""
     && composedMessageBody !== ""
-    && (messageDeliveryMode === "broadcast" || isValidIpv4(normalizedMessageDeliveryIp));
+    && (messageDeliveryMode === "broadcast" || isValidIpv4List(normalizedMessageDeliveryIp));
 
   const canReplyToThread = !!activeThread
     && senderProfile.senderName.trim() !== ""
@@ -2317,6 +2342,11 @@ function App() {
       return;
     }
 
+    if (!isValidIpv4(normalizedBroadcastSubnetMaskDraft)) {
+      setError("ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0");
+      return;
+    }
+
     if (senderIdCollision) {
       setError("既存メッセージ内で同じユーザーIDが別名義に使われています。別のIDを設定してください。");
       return;
@@ -2326,6 +2356,7 @@ function App() {
       senderName: normalizedSenderNameDraft,
       senderUserId: normalizedSenderUserIdDraft,
       bindIp: normalizedSenderBindIpDraft,
+      broadcastSubnetMask: normalizedBroadcastSubnetMaskDraft,
     };
 
     setSenderProfile(nextProfile);
@@ -2355,8 +2386,8 @@ function App() {
       return;
     }
 
-    if (messageDeliveryMode === "direct" && !isValidIpv4(normalizedMessageDeliveryIp)) {
-      setError("送信先IPはIPv4形式で入力してください。例: 192.168.1.20");
+    if (messageDeliveryMode === "direct" && !isValidIpv4List(normalizedMessageDeliveryIp)) {
+      setError("送信先IPはIPv4形式で複数指定できます。例: 192.168.1.20, 192.168.1.21");
       return;
     }
 
@@ -2377,7 +2408,7 @@ function App() {
           subject: normalizedMailboxSubject,
           body: composedMessageBody,
           deliveryTargetMode: messageDeliveryMode,
-          deliveryTargetIp: messageDeliveryMode === "direct" ? normalizedMessageDeliveryIp : null,
+          deliveryTargetIp: messageDeliveryMode === "direct" ? splitIpv4List(normalizedMessageDeliveryIp).join(",") : null,
           threadId: null,
           parentMessageId: null,
         },
@@ -5267,7 +5298,10 @@ function App() {
                   <input
                     type="checkbox"
                     checked={mailboxFilterSetting.unresolvedOnly}
-                    onChange={(e) => setMailboxFilterSetting((current) => ({ ...current, unresolvedOnly: e.currentTarget.checked }))}
+                    onChange={(e) => {
+                      setSelectedThreadId("");
+                      setMailboxFilterSetting((current) => ({ ...current, unresolvedOnly: e.currentTarget.checked }));
+                    }}
                   />
                   未解決スレッドのみ
                 </label>
@@ -5275,7 +5309,10 @@ function App() {
                   <input
                     type="checkbox"
                     checked={mailboxFilterSetting.unreadOnly}
-                    onChange={(e) => setMailboxFilterSetting((current) => ({ ...current, unreadOnly: e.currentTarget.checked }))}
+                    onChange={(e) => {
+                      setSelectedThreadId("");
+                      setMailboxFilterSetting((current) => ({ ...current, unreadOnly: e.currentTarget.checked }));
+                    }}
                   />
                   未読メッセージがあるスレッドのみ
                 </label>
@@ -5284,7 +5321,7 @@ function App() {
             <div className="mailbox-layout">
               <section className="mailbox-thread-list">
                 <h3>スレッド ({mailboxThreads.length})</h3>
-                {mailboxThreads.length === 0 ? (
+                {!hasMailboxThreads ? (
                   <p className="meta">まだスレッドはありません。</p>
                 ) : (
                   <div className="event-list">
@@ -5519,6 +5556,15 @@ function App() {
                   placeholder="例: 192.168.1.10"
                 />
               </label>
+              <label htmlFor="sender-broadcast-subnet-mask-input" style={{ display: "grid", gap: "0.3rem" }}>
+                <span className="meta">ブロードキャスト用サブネットマスク (IPv4)</span>
+                <input
+                  id="sender-broadcast-subnet-mask-input"
+                  value={senderBroadcastSubnetMaskDraft}
+                  onChange={(e) => setSenderBroadcastSubnetMaskDraft(e.currentTarget.value)}
+                  placeholder="例: 255.255.255.0"
+                />
+              </label>
             </div>
 
             <div className="panel-toolbar compact">
@@ -5527,7 +5573,9 @@ function App() {
                   ? "既存履歴で同一IDが別名義に使われています。"
                   : !isValidIpv4(normalizedSenderBindIpDraft)
                     ? "IPはIPv4形式で入力してください。"
-                    : "例: 12345678 / 192.168.1.10"}
+                    : !isValidIpv4(normalizedBroadcastSubnetMaskDraft)
+                      ? "サブネットマスクはIPv4形式で入力してください。"
+                      : "例: 12345678 / 192.168.1.10 / 255.255.255.0"}
               </p>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button type="button" className="ghost" onClick={fillRandomSenderUserId}>
