@@ -2548,6 +2548,7 @@ function App() {
     && (messageDeliveryMode === "broadcast" || isValidIpv4List(normalizedMessageDeliveryIp));
 
   const canReplyToThread = !!activeThread
+    && !activeThreadResolved
     && senderProfile.senderName.trim() !== ""
     && isValidSenderUserId(senderProfile.senderUserId)
     && isValidIpv4(senderProfile.bindIp)
@@ -2684,6 +2685,11 @@ function App() {
       return;
     }
 
+    if (activeThreadResolved) {
+      setError("解決済みスレッドには返信できません。必要な連絡は汎用メッセージで送信してください。");
+      return;
+    }
+
     if (
       senderProfile.senderName.trim() === ""
       || !isValidSenderUserId(senderProfile.senderUserId)
@@ -2743,6 +2749,11 @@ function App() {
 
     if (!activeThread || !activeCallThreadIdentity) {
       setError("プレイヤー呼び出しスレッドを選択してください。");
+      return;
+    }
+
+    if (activeThreadResolved) {
+      setError("解決済みスレッドではDQ申請できません。必要な連絡は汎用メッセージで送信してください。");
       return;
     }
 

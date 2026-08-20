@@ -357,6 +357,23 @@ fn validate_resolve_permission(
     Ok(())
 }
 
+fn validate_thread_open_for_reply(app: &tauri::AppHandle, thread_id: &str) -> Result<(), String> {
+    let messages = storage::load_generic_messages(app)?.unwrap_or_default();
+    let _root = messages
+        .iter()
+        .find(|item| item.thread_id == thread_id && item.parent_message_id.is_none())
+        .ok_or_else(|| "対象スレッドが見つかりません。".to_owned())?;
+
+    let already_resolved = messages
+        .iter()
+        .any(|item| item.thread_id == thread_id && item.message_type == "resolve");
+    if already_resolved {
+        return Err("解決済みスレッドには返信できません。必要な連絡は汎用メッセージで送信してください。".to_owned());
+    }
+
+    Ok(())
+}
+
 fn validate_dq_request_permission(
     app: &tauri::AppHandle,
     thread_id: &str,
@@ -404,6 +421,10 @@ fn send_mailbox_message(
     input: SendMailboxMessageInput,
 ) -> Result<GenericMessage, String> {
     let message = build_message_from_input(&input)?;
+
+    if message.parent_message_id.is_some() {
+        validate_thread_open_for_reply(&app, &message.thread_id)?;
+    }
 
     if message.message_type == "resolve" {
         validate_resolve_permission(&app, &input.profile.sender_user_id, &message.thread_id)?;
