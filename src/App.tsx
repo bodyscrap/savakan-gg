@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import QRCode from "qrcode";
+import jsQR from "jsqr";
 import "./App.css";
 
 type SetSlot = {
@@ -693,6 +694,24 @@ function extractCallThreadIdentity(rootMessage: GenericMessage | null): CallThre
     callEntrantName,
     setId,
   };
+}
+
+function isDqRequestMessage(message: GenericMessage): boolean {
+  if (message.messageType === "dq_request") {
+    return true;
+  }
+
+  if (message.method !== "call_player") {
+    return false;
+  }
+
+  const hasLegacyMeta = extractMetaString(message.messageMeta, "dqCallEntrantId") !== ""
+    || extractMetaString(message.messageMeta, "dqSetId") !== "";
+  if (hasLegacyMeta) {
+    return true;
+  }
+
+  return message.body.includes("DQ申請");
 }
 
 function extractPlayerIdFromQrRawValue(rawValue: string): string {
@@ -1431,8 +1450,9 @@ function App() {
   const autoIpFillTriedRef = useRef(false);
   const tabSelectionAutoLoadInFlightRef = useRef(false);
   const dqCameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const dqCameraCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const dqCameraStreamRef = useRef<MediaStream | null>(null);
-  const dqCameraScanTimerRef = useRef<number | null>(null);
+  const dqCameraRafRef = useRef<number | null>(null);
   const dqCameraDetectingRef = useRef(false);
   const dqCameraDetectorRef = useRef<{
     detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
@@ -2536,6 +2556,7 @@ function App() {
   const activeCallThreadIdentity = useMemo(() => extractCallThreadIdentity(activeThread), [activeThread]);
   const canOpenDqDialog = !!activeThread
     && !activeThreadResolved
+    && activeThread.senderUserId !== senderProfile.senderUserId
     && !!activeCallThreadIdentity;
 
   function fillRandomSenderUserId() {
@@ -2764,9 +2785,9 @@ function App() {
   }
 
   function stopDqCameraScan() {
-    if (dqCameraScanTimerRef.current !== null) {
-      window.clearInterval(dqCameraScanTimerRef.current);
-      dqCameraScanTimerRef.current = null;
+    if (dqCameraRafRef.current !== null) {
+      cancelAnimationFrame(dqCameraRafRef.current);
+      dqCameraRafRef.current = null;
     }
     dqCameraDetectingRef.current = false;
     if (dqCameraStreamRef.current) {
@@ -2789,11 +2810,12 @@ function App() {
     stopDqCameraScan();
     setDqDialogError("");
 
-    const detector = createQrBarcodeDetector();
-    if (!detector) {
-      setDqDialogError("この環境ではカメラ2次元コード読取に対応していません。PLAYER IDを手入力してください。");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setDqDialogError("この環境ではカメラアクセスに対応していません。PLAYER IDを手入力してください。");
       return;
     }
+
+    const detector = createQrBarcodeDetector();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -2804,7 +2826,7 @@ function App() {
       });
 
       dqCameraStreamRef.current = stream;
-      dqCameraDetectorRef.current = detector;
+  dqCameraDetectorRef.current = detector;
 
       const video = dqCameraVideoRef.current;
       if (!video) {
@@ -2813,35 +2835,79 @@ function App() {
         return;
       }
 
+      const scanCanvas = dqCameraCanvasRef.current;
+      if (!scanCanvas) {
+        stopDqCameraScan();
+        setDqDialogError("カメラスキャンの初期化に失敗しました。");
+        return;
+      }
+
       video.srcObject = stream;
       await video.play();
       setDqCameraActive(true);
 
-      dqCameraScanTimerRef.current = window.setInterval(() => {
+      const tick = () => {
         void (async () => {
-          if (!dqCameraDetectorRef.current || !dqCameraVideoRef.current || dqCameraDetectingRef.current) {
+          if (!dqCameraVideoRef.current) {
             return;
           }
           if (dqCameraVideoRef.current.readyState < 2) {
+            dqCameraRafRef.current = requestAnimationFrame(tick);
+            return;
+          }
+          if (dqCameraDetectingRef.current) {
+            dqCameraRafRef.current = requestAnimationFrame(tick);
             return;
           }
 
           dqCameraDetectingRef.current = true;
           try {
-            const results = await dqCameraDetectorRef.current.detect(dqCameraVideoRef.current);
-            const playerId = extractPlayerIdFromBarcodeResults(results);
+            let playerId = "";
+            if (dqCameraDetectorRef.current) {
+              const results = await dqCameraDetectorRef.current.detect(dqCameraVideoRef.current);
+              playerId = extractPlayerIdFromBarcodeResults(results);
+            }
+
+            if (playerId === "" && dqCameraVideoRef.current) {
+              const videoWidth = dqCameraVideoRef.current.videoWidth;
+              const videoHeight = dqCameraVideoRef.current.videoHeight;
+              if (videoWidth > 0 && videoHeight > 0) {
+                if (scanCanvas.width !== videoWidth || scanCanvas.height !== videoHeight) {
+                  scanCanvas.width = videoWidth;
+                  scanCanvas.height = videoHeight;
+                }
+
+                const ctx = scanCanvas.getContext("2d", { willReadFrequently: true });
+                if (ctx) {
+                  ctx.drawImage(dqCameraVideoRef.current, 0, 0, scanCanvas.width, scanCanvas.height);
+                  const imageData = ctx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+                  const decoded = jsQR(imageData.data, imageData.width, imageData.height, {
+                    inversionAttempts: "attemptBoth",
+                  });
+                  const raw = decoded?.data?.trim() ?? "";
+                  const normalized = extractPlayerIdFromQrRawValue(raw);
+                  playerId = isLikelyPlayerId(normalized) ? normalized : "";
+                }
+              }
+            }
+
             if (playerId !== "") {
               setDqPlayerIdDraft(playerId);
               setMessage("カメラでPLAYER IDを読み取りました。");
               stopDqCameraScan();
+              return;
             }
           } catch {
-            // ignore transient detection failures
+            // keep scanning
           } finally {
             dqCameraDetectingRef.current = false;
           }
+
+          dqCameraRafRef.current = requestAnimationFrame(tick);
         })();
-      }, 400);
+      };
+
+      dqCameraRafRef.current = requestAnimationFrame(tick);
     } catch (err) {
       stopDqCameraScan();
       setDqDialogError(`カメラを起動できませんでした: ${String(err)}`);
@@ -5914,7 +5980,7 @@ function App() {
                           <p className="meta">
                             type: {item.messageType === "resolve" ? "解決" : item.messageType === "dq_request" ? "DQ申請" : "通常"}
                           </p>
-                          {item.messageType === "dq_request" && (
+                          {isDqRequestMessage(item) && (
                             <div style={{ marginTop: "0.45rem", display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
                               <button
                                 type="button"
@@ -6023,18 +6089,28 @@ function App() {
                 </button>
               </div>
 
-              {dqCameraActive && (
-                <div style={{ marginTop: "0.7rem" }}>
-                  <p className="meta">カメラをコードに向けると、自動でPLAYER IDを入力します。</p>
-                  <video
-                    ref={dqCameraVideoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    style={{ width: "100%", maxWidth: "420px", borderRadius: "10px", border: "1px solid var(--line)", background: "#0f172a" }}
-                  />
-                </div>
-              )}
+              <div style={{ marginTop: "0.7rem" }}>
+                <p className="meta">
+                  {dqCameraActive
+                    ? "カメラをコードに向けると、自動でPLAYER IDを入力します。"
+                    : "「カメラで2次元コードを読む」を押すとプレビューが起動します。"}
+                </p>
+                <video
+                  ref={dqCameraVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  style={{
+                    width: "100%",
+                    maxWidth: "420px",
+                    borderRadius: "10px",
+                    border: "1px solid var(--line)",
+                    background: "#0f172a",
+                    display: dqCameraActive ? "block" : "none",
+                  }}
+                />
+                <canvas ref={dqCameraCanvasRef} style={{ display: "none" }} />
+              </div>
 
               <label style={{ marginTop: "0.7rem" }}>
                 申請理由 (任意)
