@@ -216,8 +216,8 @@ fn build_message_from_input(input: &SendMailboxMessageInput) -> Result<GenericMe
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "normal".to_owned());
 
-    if message_type != "normal" && message_type != "resolve" {
-        return Err("messageType は normal または resolve を指定してください。".to_owned());
+    if message_type != "normal" && message_type != "resolve" && message_type != "dq_request" {
+        return Err("messageType は normal / resolve / dq_request を指定してください。".to_owned());
     }
 
     let message_id = create_message_id(&input.profile, &method, body);
@@ -248,6 +248,21 @@ fn build_message_from_input(input: &SendMailboxMessageInput) -> Result<GenericMe
         body: body.to_owned(),
         created_at: chrono::Utc::now().to_rfc3339(),
     })
+}
+
+fn meta_string(meta: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    let value = meta?
+        .as_object()?
+        .get(key)?
+        .as_str()?
+        .trim()
+        .to_owned();
+
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(), String> {
@@ -342,6 +357,36 @@ fn validate_resolve_permission(
     Ok(())
 }
 
+fn validate_dq_request_permission(
+    app: &tauri::AppHandle,
+    thread_id: &str,
+    request_meta: Option<&serde_json::Value>,
+) -> Result<(), String> {
+    let messages = storage::load_generic_messages(app)?.unwrap_or_default();
+    let root = messages
+        .iter()
+        .find(|item| item.thread_id == thread_id && item.parent_message_id.is_none())
+        .ok_or_else(|| "対象スレッドが見つかりません。".to_owned())?;
+
+    if root.method.trim().to_ascii_lowercase() != "call_player" {
+        return Err("DQ申請はプレイヤー呼び出しスレッドでのみ送信できます。".to_owned());
+    }
+
+    let expected_player_id = meta_string(root.message_meta.as_ref(), "playerId")
+        .map(|value| value.to_ascii_uppercase())
+        .ok_or_else(|| "呼び出しスレッドにプレイヤー認証情報がありません。".to_owned())?;
+
+    let supplied_player_id = meta_string(request_meta, "dqPlayerId")
+        .map(|value| value.to_ascii_uppercase())
+        .ok_or_else(|| "DQ申請には認証済みPLAYER IDが必要です。".to_owned())?;
+
+    if expected_player_id != supplied_player_id {
+        return Err("入力したPLAYER IDが呼び出し対象と一致しないため、DQ申請できません。".to_owned());
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 fn start_udp_mailbox_service(app: tauri::AppHandle, profile: SenderProfile) -> Result<(), String> {
     validate_sender_profile(&profile)?;
@@ -362,6 +407,8 @@ fn send_mailbox_message(
 
     if message.message_type == "resolve" {
         validate_resolve_permission(&app, &input.profile.sender_user_id, &message.thread_id)?;
+    } else if message.message_type == "dq_request" {
+        validate_dq_request_permission(&app, &message.thread_id, input.message_meta.as_ref())?;
     }
 
     let normalized_target_mode = normalize_delivery_target_mode(&input.delivery_target_mode);

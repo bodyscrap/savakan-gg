@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import QRCode from "qrcode";
 import "./App.css";
@@ -209,6 +209,24 @@ type BatchConflictDialogState = {
   progress: BatchReportProgress;
 };
 
+type CallThreadIdentity = {
+  expectedPlayerId: string;
+  callEntrantId: string;
+  callEntrantName: string;
+};
+
+type DqRequestDialogState = {
+  threadId: string;
+  parentMessageId: string;
+  method: string;
+  subject: string;
+  replyTargetMode: MailboxDeliveryMode;
+  replyTargetIp: string;
+  expectedPlayerId: string;
+  callEntrantId: string;
+  callEntrantName: string;
+};
+
 type EventSeedStatus = {
   totalEntrants: number;
   missingSeedEntrants: number;
@@ -240,7 +258,7 @@ type GenericMessage = {
   messageId: string;
   threadId: string;
   parentMessageId: string | null;
-  messageType: "normal" | "resolve";
+  messageType: "normal" | "resolve" | "dq_request";
   messageMeta: Record<string, unknown> | null;
   method: string;
   subject: string;
@@ -468,7 +486,11 @@ function normalizeGenericMessage(rawValue: unknown): GenericMessage | null {
   const parentMessageId = typeof source.parentMessageId === "string"
     ? source.parentMessageId.trim()
     : null;
-  const messageType = source.messageType === "resolve" ? "resolve" : "normal";
+  const messageType = source.messageType === "resolve"
+    ? "resolve"
+    : source.messageType === "dq_request"
+      ? "dq_request"
+      : "normal";
   const messageMeta = source.messageMeta && typeof source.messageMeta === "object"
     ? (source.messageMeta as Record<string, unknown>)
     : null;
@@ -630,6 +652,93 @@ function isMessageForScope(message: GenericMessage, scope: MessageScope | null):
   }
 
   return true;
+}
+
+function normalizePlayerId(value: string): string {
+  return value.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function isLikelyPlayerId(value: string): boolean {
+  return /^PG-[A-Z2-7]+$/.test(normalizePlayerId(value));
+}
+
+function extractMetaString(meta: Record<string, unknown> | null, key: string): string {
+  if (!meta) {
+    return "";
+  }
+
+  const value = meta[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function extractCallThreadIdentity(rootMessage: GenericMessage | null): CallThreadIdentity | null {
+  if (!rootMessage || rootMessage.method !== "call_player") {
+    return null;
+  }
+
+  const expectedPlayerId = normalizePlayerId(extractMetaString(rootMessage.messageMeta, "playerId"));
+  const callEntrantId = extractMetaString(rootMessage.messageMeta, "callEntrantId");
+  const callEntrantName = extractMetaString(rootMessage.messageMeta, "callEntrantName");
+
+  if (expectedPlayerId === "" || callEntrantId === "") {
+    return null;
+  }
+
+  return {
+    expectedPlayerId,
+    callEntrantId,
+    callEntrantName,
+  };
+}
+
+function extractPlayerIdFromQrRawValue(rawValue: string): string {
+  const trimmed = rawValue.trim();
+  if (trimmed === "") {
+    return "";
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed && typeof parsed === "object") {
+      const maybePlayerId = (parsed as { playerId?: unknown }).playerId;
+      if (typeof maybePlayerId === "string") {
+        return normalizePlayerId(maybePlayerId);
+      }
+    }
+  } catch {
+    // Non-JSON payload is allowed.
+  }
+
+  return normalizePlayerId(trimmed);
+}
+
+async function readPlayerIdFromQrImageFile(file: File): Promise<string> {
+  const barcodeDetectorCtor = (window as unknown as {
+    BarcodeDetector?: new (options?: { formats?: string[] }) => {
+      detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
+    };
+  }).BarcodeDetector;
+
+  if (!barcodeDetectorCtor) {
+    throw new Error("この環境では2次元コード読み取りに対応していません。PLAYER IDを手入力してください。");
+  }
+
+  const detector = new barcodeDetectorCtor({ formats: ["qr_code"] });
+  const bitmap = await createImageBitmap(file);
+  try {
+    const results = await detector.detect(bitmap);
+    for (const result of results) {
+      const rawValue = typeof result.rawValue === "string" ? result.rawValue : "";
+      const playerId = extractPlayerIdFromQrRawValue(rawValue);
+      if (isLikelyPlayerId(playerId)) {
+        return playerId;
+      }
+    }
+  } finally {
+    bitmap.close();
+  }
+
+  throw new Error("2次元コードからPLAYER IDを取得できませんでした。別の画像を試すか手入力してください。");
 }
 
 function arraysShallowEqual<T>(left: T[], right: T[]): boolean {
@@ -1249,6 +1358,11 @@ function App() {
   const [composeFixedBodyDraft, setComposeFixedBodyDraft] = useState<string | null>(null);
   const [genericMessageBodyDraft, setGenericMessageBodyDraft] = useState("");
   const [replyBodyDraft, setReplyBodyDraft] = useState("");
+  const [dqDialog, setDqDialog] = useState<DqRequestDialogState | null>(null);
+  const [dqPlayerIdDraft, setDqPlayerIdDraft] = useState("");
+  const [dqReasonDraft, setDqReasonDraft] = useState("");
+  const [dqDialogError, setDqDialogError] = useState("");
+  const [dqSubmitting, setDqSubmitting] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState("");
   const [mailboxServiceStarted, setMailboxServiceStarted] = useState(false);
   const [callingEntrantId, setCallingEntrantId] = useState("");
@@ -1288,6 +1402,7 @@ function App() {
   const suppressEventSettingAutosaveRef = useRef(false);
   const autoIpFillTriedRef = useRef(false);
   const tabSelectionAutoLoadInFlightRef = useRef(false);
+  const dqQrFileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -2384,6 +2499,11 @@ function App() {
     && isValidIpv4(senderProfile.bindIp)
     && normalizedReplyBody !== "";
 
+  const activeCallThreadIdentity = useMemo(() => extractCallThreadIdentity(activeThread), [activeThread]);
+  const canOpenDqDialog = !!activeThread
+    && !activeThreadResolved
+    && !!activeCallThreadIdentity;
+
   function fillRandomSenderUserId() {
     const usedIds = new Set(genericMessages.map((item) => item.senderUserId));
     let nextId = generateRandomSenderUserId();
@@ -2559,6 +2679,143 @@ function App() {
       setMessage("返信を送信しました。スレッドに追加されます。");
     } catch (err) {
       setError(String(err));
+    }
+  }
+
+  function openDqRequestDialog() {
+    setError("");
+    setMessage("");
+
+    if (!activeThread || !activeCallThreadIdentity) {
+      setError("プレイヤー呼び出しスレッドを選択してください。");
+      return;
+    }
+
+    const replyTargetMode: MailboxDeliveryMode = activeThread.senderUserId === senderProfile.senderUserId ? "broadcast" : "direct";
+    const replyTargetIp = activeThread.senderIp.trim();
+
+    if (replyTargetMode === "direct" && !isValidIpv4(replyTargetIp)) {
+      setError("返信先メッセージの送信者IPが不正です。DQ申請を開始できません。");
+      return;
+    }
+
+    setDqDialog({
+      threadId: activeThread.threadId,
+      parentMessageId: activeThread.messageId,
+      method: activeThread.method,
+      subject: activeThread.subject,
+      replyTargetMode,
+      replyTargetIp,
+      expectedPlayerId: activeCallThreadIdentity.expectedPlayerId,
+      callEntrantId: activeCallThreadIdentity.callEntrantId,
+      callEntrantName: activeCallThreadIdentity.callEntrantName,
+    });
+    setDqPlayerIdDraft("");
+    setDqReasonDraft("");
+    setDqDialogError("");
+  }
+
+  function closeDqRequestDialog() {
+    if (dqSubmitting) {
+      return;
+    }
+    setDqDialog(null);
+    setDqPlayerIdDraft("");
+    setDqReasonDraft("");
+    setDqDialogError("");
+  }
+
+  async function importDqPlayerIdFromQrImage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) {
+      return;
+    }
+
+    setDqDialogError("");
+    try {
+      const playerId = await readPlayerIdFromQrImageFile(file);
+      setDqPlayerIdDraft(playerId);
+      setMessage("2次元コードからPLAYER IDを読み取りました。");
+    } catch (err) {
+      setDqDialogError(String(err));
+    }
+  }
+
+  async function submitDqRequest() {
+    setError("");
+    setMessage("");
+
+    if (!dqDialog) {
+      setDqDialogError("DQ申請対象が見つかりません。再度開き直してください。");
+      return;
+    }
+
+    if (
+      senderProfile.senderName.trim() === ""
+      || !isValidSenderUserId(senderProfile.senderUserId)
+      || !isValidIpv4(senderProfile.bindIp)
+    ) {
+      setDqDialogError("設定タブで送信者名・8桁ユーザーID・自分のIPを保存してから申請してください。");
+      return;
+    }
+
+    const normalizedPlayerId = normalizePlayerId(dqPlayerIdDraft);
+    if (!isLikelyPlayerId(normalizedPlayerId)) {
+      setDqDialogError("PLAYER IDを入力してください。プレイヤーカードの2次元コード読取にも対応しています。");
+      return;
+    }
+
+    if (normalizedPlayerId !== dqDialog.expectedPlayerId) {
+      setDqDialogError("入力したPLAYER IDが呼び出し対象と一致しません。なりすまし防止のため申請できません。");
+      return;
+    }
+
+    const reasonText = dqReasonDraft.trim();
+    const body = reasonText === ""
+      ? `DQ申請\n対象: ${dqDialog.callEntrantName || dqDialog.callEntrantId}`
+      : `DQ申請\n対象: ${dqDialog.callEntrantName || dqDialog.callEntrantId}\n理由: ${reasonText}`;
+
+    const messageMeta = buildScopedMessageMeta({
+      dqPlayerId: normalizedPlayerId,
+      dqCallEntrantId: dqDialog.callEntrantId,
+      dqCallEntrantName: dqDialog.callEntrantName,
+      dqRequestedByUserId: senderProfile.senderUserId,
+      dqRequestedAt: new Date().toISOString(),
+    }, selectedMessageScope);
+
+    setDqSubmitting(true);
+    setDqDialogError("");
+    try {
+      const sent = await invoke<GenericMessage>("send_mailbox_message", {
+        input: {
+          profile: senderProfile,
+          messageType: "dq_request",
+          method: dqDialog.method,
+          subject: `DQ申請: ${dqDialog.subject}`,
+          body,
+          messageMeta,
+          deliveryTargetMode: dqDialog.replyTargetMode,
+          deliveryTargetIp: dqDialog.replyTargetMode === "direct" ? dqDialog.replyTargetIp : null,
+          threadId: dqDialog.threadId,
+          parentMessageId: dqDialog.parentMessageId,
+        },
+      });
+
+      const normalized = normalizeGenericMessage(sent);
+      if (normalized) {
+        setGenericMessages((current) => {
+          const next = [normalized, ...current.filter((item) => item.messageId !== normalized.messageId)];
+          return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+        });
+      }
+
+      closeDqRequestDialog();
+      setMessage("DQ申請を送信しました。認証済みのPLAYER IDでのみ送信可能です。");
+    } catch (err) {
+      setDqDialogError(String(err));
+    } finally {
+      setDqSubmitting(false);
     }
   }
 
@@ -5460,7 +5717,9 @@ function App() {
                             <p className="meta">{new Date(item.createdAt).toLocaleString()}</p>
                           </div>
                           {item.parentMessageId && <p className="meta">reply to: {item.parentMessageId}</p>}
-                          <p className="meta">type: {item.messageType === "resolve" ? "解決" : "通常"}</p>
+                          <p className="meta">
+                            type: {item.messageType === "resolve" ? "解決" : item.messageType === "dq_request" ? "DQ申請" : "通常"}
+                          </p>
                           <p className="message-body">{item.body}</p>
                         </article>
                       ))}
@@ -5492,9 +5751,14 @@ function App() {
                     </div>
                     <div className="panel-toolbar compact">
                       <p className="meta">返信メッセージはこのスレッドに集約されます。</p>
-                      <button type="button" onClick={() => void replyToThread()} disabled={!canReplyToThread}>
-                        返信
-                      </button>
+                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <button type="button" onClick={() => void replyToThread()} disabled={!canReplyToThread}>
+                          返信
+                        </button>
+                        <button type="button" className="ghost" onClick={openDqRequestDialog} disabled={!canOpenDqDialog}>
+                          DQ申請
+                        </button>
+                      </div>
                     </div>
                   </>
                 )}
@@ -5502,6 +5766,79 @@ function App() {
             </div>
           </section>
         </>
+      )}
+
+      {dqDialog && (
+        <div className="dialog-backdrop" onClick={closeDqRequestDialog}>
+          <section
+            className="dialog-panel conflict-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="DQ申請認証"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="dialog-head">
+              <div>
+                <h3>DQ申請認証</h3>
+                <p className="meta">呼び出しプレイヤー本人確認のため、PLAYER IDを入力してください。</p>
+              </div>
+              <button type="button" className="ghost" disabled={dqSubmitting} onClick={closeDqRequestDialog}>閉じる</button>
+            </div>
+
+            <div className="dialog-body">
+              <p className="meta">対象: {dqDialog.callEntrantName || dqDialog.callEntrantId}</p>
+              <label>
+                PLAYER ID (伏字入力)
+                <input
+                  type="password"
+                  value={dqPlayerIdDraft}
+                  onChange={(event) => setDqPlayerIdDraft(event.currentTarget.value)}
+                  placeholder="PG-..."
+                  autoComplete="off"
+                />
+              </label>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.55rem" }}>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={dqSubmitting}
+                  onClick={() => dqQrFileInputRef.current?.click()}
+                >
+                  2次元コード画像を読み込む
+                </button>
+                <input
+                  ref={dqQrFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: "none" }}
+                  onChange={(event) => {
+                    void importDqPlayerIdFromQrImage(event);
+                  }}
+                />
+              </div>
+
+              <label style={{ marginTop: "0.7rem" }}>
+                申請理由 (任意)
+                <textarea
+                  value={dqReasonDraft}
+                  onChange={(event) => setDqReasonDraft(event.currentTarget.value)}
+                  rows={3}
+                  placeholder="理由を補足する場合に入力"
+                  style={{ width: "100%" }}
+                />
+              </label>
+
+              {dqDialogError !== "" && <p className="message error">{dqDialogError}</p>}
+            </div>
+
+            <div className="dialog-actions dialog-actions-split">
+              <button type="button" className="ghost" disabled={dqSubmitting} onClick={closeDqRequestDialog}>キャンセル</button>
+              <button type="button" disabled={dqSubmitting} onClick={() => void submitDqRequest()}>
+                {dqSubmitting ? "申請中..." : "認証してDQ申請"}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
 
         {activeTab === "item-list" && (
