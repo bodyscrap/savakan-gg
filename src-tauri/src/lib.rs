@@ -3,13 +3,362 @@ mod startgg;
 mod startgg_scalars;
 mod storage;
 
+use std::net::UdpSocket;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use if_addrs::get_if_addrs;
 use models::{
-    BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult, ItemListConfig,
-    CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, LocalPlayerMetaInput,
-    LocalSetPlaySideInput, LocalSetResultInput, LocalSnapshotEventListItem,
-    ReportSetResultInput, SaveEventManagementMetaInput, TournamentPreview, TournamentSnapshot,
-    TournamentWorkspace,
+    BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult,
+    CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, GenericMessage, ItemListConfig,
+    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSnapshotEventListItem,
+    ReportSetResultInput, SaveEventManagementMetaInput, SenderProfile, TournamentPreview,
+    TournamentSnapshot, TournamentWorkspace,
 };
+use serde::{Deserialize, Serialize};
+
+const UDP_MAILBOX_PORT: u16 = 42690;
+const UDP_BROADCAST_IP: &str = "255.255.255.255";
+
+static UDP_LISTENER_RUNNING: OnceLock<AtomicBool> = OnceLock::new();
+static MESSAGE_ID_SEQUENCE: OnceLock<AtomicU64> = OnceLock::new();
+
+fn udp_listener_running() -> &'static AtomicBool {
+    UDP_LISTENER_RUNNING.get_or_init(|| AtomicBool::new(false))
+}
+
+fn message_id_sequence() -> &'static AtomicU64 {
+    MESSAGE_ID_SEQUENCE.get_or_init(|| AtomicU64::new(1))
+}
+
+fn local_ipv4_score(ip: &std::net::Ipv4Addr) -> i32 {
+    if ip.is_private() {
+        return 3;
+    }
+    if ip.is_link_local() {
+        return 2;
+    }
+    if !ip.is_loopback() && !ip.is_unspecified() {
+        return 1;
+    }
+    0
+}
+
+#[tauri::command]
+fn detect_local_ipv4() -> Result<Option<String>, String> {
+    let interfaces = get_if_addrs().map_err(|e| format!("ネットワークIFの取得に失敗しました: {e}"))?;
+
+    let mut candidates = interfaces
+        .into_iter()
+        .filter_map(|iface| match iface.addr {
+            if_addrs::IfAddr::V4(addr) => Some(addr.ip),
+            if_addrs::IfAddr::V6(_) => None,
+        })
+        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|left, right| {
+        local_ipv4_score(right)
+            .cmp(&local_ipv4_score(left))
+            .then_with(|| left.octets().cmp(&right.octets()))
+    });
+
+    Ok(candidates.first().map(|ip| ip.to_string()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UdpMailboxPacket {
+    protocol: String,
+    delivery_target_mode: String,
+    delivery_target_ip: Option<String>,
+    message: GenericMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SendMailboxMessageInput {
+    profile: SenderProfile,
+    method: String,
+    subject: String,
+    body: String,
+    delivery_target_mode: String,
+    delivery_target_ip: Option<String>,
+    message_type: Option<String>,
+    message_meta: Option<serde_json::Value>,
+    thread_id: Option<String>,
+    parent_message_id: Option<String>,
+}
+
+fn validate_sender_profile(profile: &SenderProfile) -> Result<(), String> {
+    if profile.sender_name.trim().is_empty() {
+        return Err("送信者名を入力してください。".to_owned());
+    }
+    if profile.sender_user_id.trim().len() != 8
+        || !profile.sender_user_id.trim().chars().all(|ch| ch.is_ascii_digit())
+    {
+        return Err("ユーザーIDは8桁の数字で入力してください。".to_owned());
+    }
+    if profile.bind_ip.trim().parse::<std::net::Ipv4Addr>().is_err() {
+        return Err("自分のIPはIPv4形式で入力してください。例: 192.168.1.10".to_owned());
+    }
+    Ok(())
+}
+
+fn normalize_delivery_target_mode(mode: &str) -> String {
+    mode.trim().to_ascii_lowercase()
+}
+
+fn validate_delivery_target(mode: &str, target_ip: Option<&str>) -> Result<(), String> {
+    let normalized_mode = normalize_delivery_target_mode(mode);
+    match normalized_mode.as_str() {
+        "broadcast" => Ok(()),
+        "direct" => {
+            let Some(ip) = target_ip.map(|value| value.trim()).filter(|value| !value.is_empty()) else {
+                return Err("送信先IPを入力してください。".to_owned());
+            };
+
+            if ip.parse::<std::net::Ipv4Addr>().is_err() {
+                return Err("送信先IPはIPv4形式で入力してください。例: 192.168.1.20".to_owned());
+            }
+
+            Ok(())
+        }
+        _ => Err("deliveryTargetMode は broadcast または direct を指定してください。".to_owned()),
+    }
+}
+
+fn create_message_id(profile: &SenderProfile, method: &str, body: &str) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let sequence = message_id_sequence().fetch_add(1, Ordering::Relaxed);
+
+    format!(
+        "{}-{:x}-{:x}-{:x}-{:x}",
+        profile.sender_user_id.trim(),
+        now,
+        sequence,
+        method.len(),
+        body.len(),
+    )
+}
+
+fn build_message_from_input(input: &SendMailboxMessageInput) -> Result<GenericMessage, String> {
+    validate_sender_profile(&input.profile)?;
+    validate_delivery_target(&input.delivery_target_mode, input.delivery_target_ip.as_deref())?;
+
+    let method = input.method.trim().to_ascii_lowercase();
+    if method.is_empty() {
+        return Err("メソッド名を入力してください。".to_owned());
+    }
+
+    let subject = input.subject.trim();
+    if subject.is_empty() {
+        return Err("件名を入力してください。".to_owned());
+    }
+
+    let body = input.body.trim();
+    if body.is_empty() {
+        return Err("本文を入力してください。".to_owned());
+    }
+
+    let message_type = input
+        .message_type
+        .as_ref()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "normal".to_owned());
+
+    if message_type != "normal" && message_type != "resolve" {
+        return Err("messageType は normal または resolve を指定してください。".to_owned());
+    }
+
+    let message_id = create_message_id(&input.profile, &method, body);
+    let parent_message_id = input
+        .parent_message_id
+        .as_ref()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    let thread_id = input
+        .thread_id
+        .as_ref()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| message_id.clone());
+
+    Ok(GenericMessage {
+        message_id,
+        thread_id,
+        parent_message_id,
+        message_type,
+        message_meta: input.message_meta.clone(),
+        method,
+        subject: subject.to_owned(),
+        sender_name: input.profile.sender_name.trim().to_owned(),
+        sender_user_id: input.profile.sender_user_id.trim().to_owned(),
+        sender_ip: input.profile.bind_ip.trim().to_owned(),
+        body: body.to_owned(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(), String> {
+    let bind_addr = format!("{}:{}", bind_ip.trim(), UDP_MAILBOX_PORT);
+    let socket = UdpSocket::bind(&bind_addr)
+        .map_err(|e| format!("UDP受信ソケットを起動できませんでした ({bind_addr}): {e}"))?;
+    socket
+        .set_nonblocking(true)
+        .map_err(|e| format!("UDP受信ソケットの非同期設定に失敗しました: {e}"))?;
+
+    let running_flag = udp_listener_running();
+    running_flag.store(true, Ordering::SeqCst);
+
+    thread::spawn(move || {
+        let mut buf = [0_u8; 65_535];
+
+        loop {
+            match socket.recv_from(&mut buf) {
+                Ok((size, _)) => {
+                    let raw = match std::str::from_utf8(&buf[..size]) {
+                        Ok(value) => value,
+                        Err(_) => continue,
+                    };
+
+                    let packet = match serde_json::from_str::<UdpMailboxPacket>(raw) {
+                        Ok(value) => value,
+                        Err(_) => continue,
+                    };
+
+                    if packet.protocol != "savakan-mailbox-v1" {
+                        continue;
+                    }
+
+                    let my_profile = storage::load_sender_profile(&app).ok().flatten();
+                    if let Some(my_profile) = my_profile {
+                        if my_profile.sender_user_id.trim() == packet.message.sender_user_id.trim() {
+                            continue;
+                        }
+
+                        let accept_delivery = match normalize_delivery_target_mode(&packet.delivery_target_mode).as_str() {
+                            "broadcast" => true,
+                            "direct" => packet
+                                .delivery_target_ip
+                                .as_deref()
+                                .map(|value| value.trim() == my_profile.bind_ip.trim())
+                                .unwrap_or(false),
+                            _ => false,
+                        };
+
+                        if !accept_delivery {
+                            continue;
+                        }
+                    }
+
+                    let _ = storage::append_generic_message(&app, &packet.message);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(80));
+                }
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(200));
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+
+fn validate_resolve_permission(
+    app: &tauri::AppHandle,
+    sender_user_id: &str,
+    thread_id: &str,
+) -> Result<(), String> {
+    let messages = storage::load_generic_messages(app)?.unwrap_or_default();
+    let root = messages
+        .iter()
+        .find(|item| item.thread_id == thread_id && item.parent_message_id.is_none())
+        .ok_or_else(|| "対象スレッドが見つかりません。".to_owned())?;
+
+    if root.sender_user_id.trim() != sender_user_id.trim() {
+        return Err("スレッド作成者のみが解決メッセージを送信できます。".to_owned());
+    }
+
+    let already_resolved = messages
+        .iter()
+        .any(|item| item.thread_id == thread_id && item.message_type == "resolve");
+    if already_resolved {
+        return Err("このスレッドはすでに解決済みです。".to_owned());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn start_udp_mailbox_service(app: tauri::AppHandle, profile: SenderProfile) -> Result<(), String> {
+    validate_sender_profile(&profile)?;
+
+    if udp_listener_running().load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    start_udp_listener_thread(app, &profile.bind_ip)
+}
+
+#[tauri::command]
+fn send_mailbox_message(
+    app: tauri::AppHandle,
+    input: SendMailboxMessageInput,
+) -> Result<GenericMessage, String> {
+    let message = build_message_from_input(&input)?;
+
+    if message.message_type == "resolve" {
+        validate_resolve_permission(&app, &input.profile.sender_user_id, &message.thread_id)?;
+    }
+
+    let normalized_target_mode = normalize_delivery_target_mode(&input.delivery_target_mode);
+    let packet = UdpMailboxPacket {
+        protocol: "savakan-mailbox-v1".to_owned(),
+        delivery_target_mode: normalized_target_mode.clone(),
+        delivery_target_ip: input.delivery_target_ip.as_ref().map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
+        message: message.clone(),
+    };
+
+    let sender_bind_addr = format!("{}:0", input.profile.bind_ip.trim());
+    let socket = UdpSocket::bind(&sender_bind_addr)
+        .map_err(|e| format!("UDP送信ソケットを起動できませんでした ({sender_bind_addr}): {e}"))?;
+
+    if normalized_target_mode == "broadcast" {
+        socket
+            .set_broadcast(true)
+            .map_err(|e| format!("UDPブロードキャスト設定に失敗しました: {e}"))?;
+    }
+
+    let payload = serde_json::to_vec(&packet)
+        .map_err(|e| format!("送信データのJSON変換に失敗しました: {e}"))?;
+    let target_addr = if normalized_target_mode == "broadcast" {
+        format!("{}:{}", UDP_BROADCAST_IP, UDP_MAILBOX_PORT)
+    } else {
+        format!(
+            "{}:{}",
+            packet.delivery_target_ip.as_deref().unwrap_or("").trim(),
+            UDP_MAILBOX_PORT,
+        )
+    };
+
+    socket
+        .send_to(&payload, &target_addr)
+        .map_err(|e| format!("UDP送信に失敗しました: {e}"))?;
+
+    storage::append_generic_message(&app, &message)?;
+
+    Ok(message)
+}
 
 async fn refresh_workspace_after_remote_report(
     app: &tauri::AppHandle,
@@ -120,6 +469,29 @@ fn save_event_mgmt_settings(
     settings: serde_json::Value,
 ) -> Result<(), String> {
     storage::save_event_mgmt_settings(&app, &settings)
+}
+
+#[tauri::command]
+fn save_sender_profile(app: tauri::AppHandle, profile: SenderProfile) -> Result<(), String> {
+    storage::save_sender_profile(&app, &profile)
+}
+
+#[tauri::command]
+fn load_sender_profile(app: tauri::AppHandle) -> Result<Option<SenderProfile>, String> {
+    storage::load_sender_profile(&app)
+}
+
+#[tauri::command]
+fn save_generic_messages(
+    app: tauri::AppHandle,
+    messages: Vec<GenericMessage>,
+) -> Result<(), String> {
+    storage::save_generic_messages(&app, &messages)
+}
+
+#[tauri::command]
+fn load_generic_messages(app: tauri::AppHandle) -> Result<Option<Vec<GenericMessage>>, String> {
+    storage::load_generic_messages(&app)
 }
 
 #[tauri::command]
@@ -532,6 +904,13 @@ pub fn run() {
             save_item_lists,
             load_event_mgmt_settings,
             save_event_mgmt_settings,
+            detect_local_ipv4,
+            save_sender_profile,
+            load_sender_profile,
+            save_generic_messages,
+            load_generic_messages,
+            start_udp_mailbox_service,
+            send_mailbox_message,
             save_event_management_meta,
             load_local_tournament,
             load_local_tournament_workspace,

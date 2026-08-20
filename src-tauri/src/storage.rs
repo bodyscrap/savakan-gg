@@ -8,10 +8,11 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::models::{
-    EventEntrantMeta, EventLocalMeta, EventManagementMeta, EventSnapshot, ItemListConfig,
-    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetResultMeta,
-    LocalSetScoreMeta, LocalSnapshotEventListItem, SaveEventManagementMetaInput, SetPlaySideMeta,
-    TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
+    EventEntrantMeta, EventLocalMeta, EventManagementMeta, EventSnapshot, GenericMessage,
+    ItemListConfig, LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput,
+    LocalSetResultMeta, LocalSetScoreMeta, LocalSnapshotEventListItem,
+    SaveEventManagementMetaInput, SenderProfile, SetPlaySideMeta, TournamentLocalMeta,
+    TournamentSnapshot, TournamentWorkspace,
 };
 
 const STORAGE_DIR_NAME: &str = "savakan-gg";
@@ -19,6 +20,8 @@ const TOKEN_FILE: &str = "startgg-token.txt";
 const SLUG_FILE: &str = "last-slug.txt";
 const ITEM_LISTS_FILE: &str = "item-lists.json";
 const EVENT_MGMT_FILE: &str = "event-mgmt-settings.json";
+const SENDER_PROFILE_FILE: &str = "sender-profile.json";
+const GENERIC_MESSAGES_FILE: &str = "generic-messages.json";
 const LAST_SNAPSHOT_SELECTION_FILE: &str = "last-snapshot-selection.json";
 const TEMP_TOKEN_FILE: &str = "token.txt";
 const EVENT_SETTING_CATEGORY_SLOT_COUNT: usize = 3;
@@ -81,6 +84,14 @@ fn item_lists_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn event_mgmt_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(storage_dir(app)?.join(EVENT_MGMT_FILE))
+}
+
+fn sender_profile_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(storage_dir(app)?.join(SENDER_PROFILE_FILE))
+}
+
+fn generic_messages_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(storage_dir(app)?.join(GENERIC_MESSAGES_FILE))
 }
 
 fn last_snapshot_selection_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -536,6 +547,260 @@ pub fn load_event_mgmt_settings(app: &AppHandle) -> Result<Option<serde_json::Va
     let settings = serde_json::from_str::<serde_json::Value>(&raw)
         .map_err(|e| format!("保存済み大会設定のパースに失敗しました: {e}"))?;
     Ok(Some(settings))
+}
+
+pub fn save_sender_profile(app: &AppHandle, profile: &SenderProfile) -> Result<(), String> {
+    let path = sender_profile_path(app)?;
+    let sender_name = profile.sender_name.trim();
+    if sender_name.is_empty() {
+        return Err("送信者名を入力してください。".to_owned());
+    }
+
+    let sender_user_id = profile.sender_user_id.trim();
+    if sender_user_id.len() != 8 || !sender_user_id.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err("ユーザーIDは8桁の数字で入力してください。".to_owned());
+    }
+
+    let bind_ip = profile.bind_ip.trim();
+    if bind_ip.parse::<std::net::Ipv4Addr>().is_err() {
+        return Err("自分のIPはIPv4形式で入力してください。例: 192.168.1.10".to_owned());
+    }
+
+    let normalized = SenderProfile {
+        sender_name: sender_name.to_owned(),
+        sender_user_id: sender_user_id.to_owned(),
+        bind_ip: bind_ip.to_owned(),
+    };
+
+    let json = serde_json::to_string_pretty(&normalized)
+        .map_err(|e| format!("送信者設定のJSON変換に失敗しました: {e}"))?;
+    fs::write(path, json).map_err(|e| format!("送信者設定保存に失敗しました: {e}"))
+}
+
+pub fn load_sender_profile(app: &AppHandle) -> Result<Option<SenderProfile>, String> {
+    let path = sender_profile_path(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("送信者設定読込に失敗しました: {e}"))?;
+    let profile = serde_json::from_str::<SenderProfile>(&raw)
+        .map_err(|e| format!("送信者設定のパースに失敗しました: {e}"))?;
+    Ok(Some(profile))
+}
+
+pub fn save_generic_messages(app: &AppHandle, messages: &[GenericMessage]) -> Result<(), String> {
+    let path = generic_messages_path(app)?;
+    let json = serde_json::to_string_pretty(messages)
+        .map_err(|e| format!("メッセージのJSON変換に失敗しました: {e}"))?;
+    fs::write(path, json).map_err(|e| format!("メッセージ保存に失敗しました: {e}"))
+}
+
+fn call_message_identity(message: &GenericMessage) -> Option<String> {
+    let meta = message.message_meta.as_ref()?;
+    let call_id = meta.get("callId").and_then(|value| value.as_str()).map(|value| value.trim().to_owned());
+    if let Some(call_id) = call_id.filter(|value| !value.is_empty()) {
+        return Some(call_id);
+    }
+
+    let tournament_id = meta.get("tournamentId").and_then(|value| value.as_str())?.trim();
+    let event_id = meta.get("eventId").and_then(|value| value.as_str())?.trim();
+    let set_id = meta.get("setId").and_then(|value| value.as_str())?.trim();
+    let entrant_id = meta.get("callEntrantId").and_then(|value| value.as_str())?.trim();
+
+    if tournament_id.is_empty() || event_id.is_empty() || set_id.is_empty() || entrant_id.is_empty() {
+        return None;
+    }
+
+    Some(format!("{tournament_id}:{event_id}:{set_id}:{entrant_id}"))
+}
+
+fn build_forced_resolve_message(root: &GenericMessage) -> GenericMessage {
+    let message_id = format!("{}-forced-resolve-{}", root.message_id, Utc::now().timestamp_millis());
+
+    GenericMessage {
+        message_id,
+        thread_id: root.thread_id.clone(),
+        parent_message_id: Some(root.message_id.clone()),
+        message_type: "resolve".to_owned(),
+        message_meta: root.message_meta.clone(),
+        method: root.method.clone(),
+        subject: format!("Resolved: {}", root.subject),
+        sender_name: root.sender_name.clone(),
+        sender_user_id: root.sender_user_id.clone(),
+        sender_ip: root.sender_ip.clone(),
+        body: "同一呼び出しを再受信したため、自動的に解決しました。".to_owned(),
+        created_at: Utc::now().to_rfc3339(),
+    }
+}
+
+pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Result<(), String> {
+    let mut messages = load_generic_messages(app)?.unwrap_or_default();
+
+    if message.message_type == "normal"
+        && message.parent_message_id.is_none()
+        && message.method == "call_player"
+    {
+        if let Some(call_identity) = call_message_identity(message) {
+            let matching_roots = messages
+                .iter()
+                .filter(|item| {
+                    item.parent_message_id.is_none()
+                        && item.method == "call_player"
+                        && call_message_identity(item).as_deref() == Some(call_identity.as_str())
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+
+            for root in matching_roots {
+                let thread_has_resolve = messages
+                    .iter()
+                    .any(|item| item.thread_id == root.thread_id && item.message_type == "resolve");
+
+                if !thread_has_resolve {
+                    messages.push(build_forced_resolve_message(&root));
+                }
+            }
+        }
+    }
+
+    if let Some(index) = messages
+        .iter()
+        .position(|item| item.message_id == message.message_id)
+    {
+        messages[index] = message.clone();
+    } else {
+        messages.push(message.clone());
+    }
+
+    messages.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    save_generic_messages(app, &messages)
+}
+
+pub fn load_generic_messages(app: &AppHandle) -> Result<Option<Vec<GenericMessage>>, String> {
+    let path = generic_messages_path(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("保存済みメッセージ読込に失敗しました: {e}"))?;
+
+    let value = serde_json::from_str::<serde_json::Value>(&raw)
+        .map_err(|e| format!("保存済みメッセージのパースに失敗しました: {e}"))?;
+
+    let mut messages = Vec::new();
+    let Some(items) = value.as_array() else {
+        return Ok(Some(messages));
+    };
+
+    for item in items {
+        let message_id = item
+            .get("messageId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        if message_id.is_empty() {
+            continue;
+        }
+
+        let method = item
+            .get("method")
+            .and_then(|v| v.as_str())
+            .unwrap_or("generic")
+            .trim()
+            .to_owned();
+        let message_type_raw = item
+            .get("messageType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("normal")
+            .trim()
+            .to_ascii_lowercase();
+        let message_type = if message_type_raw == "resolve" {
+            "resolve".to_owned()
+        } else {
+            "normal".to_owned()
+        };
+        let subject = item
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .unwrap_or("汎用メッセージ")
+            .trim()
+            .to_owned();
+        let sender_name = item
+            .get("senderName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        let sender_user_id = item
+            .get("senderUserId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        let sender_ip = item
+            .get("senderIp")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        let body = item
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+        let created_at = item
+            .get("createdAt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+
+        if sender_name.is_empty() || sender_user_id.is_empty() || body.is_empty() || created_at.is_empty() {
+            continue;
+        }
+
+        let parent_message_id = item
+            .get("parentMessageId")
+            .and_then(|v| v.as_str())
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty());
+        let message_meta = item.get("messageMeta").cloned();
+        let thread_id = item
+            .get("threadId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_owned();
+
+        let resolved_thread_id = if thread_id.is_empty() {
+            message_id.clone()
+        } else {
+            thread_id
+        };
+
+        messages.push(GenericMessage {
+            message_id,
+            thread_id: resolved_thread_id,
+            parent_message_id,
+            message_type,
+            message_meta,
+            method,
+            subject,
+            sender_name,
+            sender_user_id,
+            sender_ip,
+            body,
+            created_at,
+        });
+    }
+
+    messages.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    Ok(Some(messages))
 }
 
 pub fn load_token(app: &AppHandle) -> Result<String, String> {

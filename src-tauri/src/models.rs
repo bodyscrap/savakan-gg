@@ -1,6 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+fn default_bind_ip() -> String {
+    "0.0.0.0".to_owned()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TournamentSnapshot {
@@ -25,6 +29,39 @@ pub struct ItemListConfig {
     pub name: String,
     pub category_name: String,
     pub items: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SenderProfile {
+    pub sender_name: String,
+    pub sender_user_id: String,
+    #[serde(default = "default_bind_ip")]
+    pub bind_ip: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenericMessage {
+    pub message_id: String,
+    pub thread_id: String,
+    #[serde(default)]
+    pub parent_message_id: Option<String>,
+    #[serde(default = "default_message_type")]
+    pub message_type: String,
+    #[serde(default)]
+    pub message_meta: Option<serde_json::Value>,
+    pub method: String,
+    pub subject: String,
+    pub sender_name: String,
+    pub sender_user_id: String,
+    pub sender_ip: String,
+    pub body: String,
+    pub created_at: String,
+}
+
+fn default_message_type() -> String {
+    "normal".to_owned()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

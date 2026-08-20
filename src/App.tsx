@@ -229,7 +229,41 @@ type PlayerMetaDraft = {
   categorySelections: string[][];
 };
 
-type AppTab = "home" | "create" | "tournament" | "bracket" | "item-list" | "users";
+type SenderProfile = {
+  senderName: string;
+  senderUserId: string;
+  bindIp: string;
+};
+
+type GenericMessage = {
+  messageId: string;
+  threadId: string;
+  parentMessageId: string | null;
+  messageType: "normal" | "resolve";
+  messageMeta: Record<string, unknown> | null;
+  method: string;
+  subject: string;
+  senderName: string;
+  senderUserId: string;
+  senderIp: string;
+  body: string;
+  createdAt: string;
+};
+
+type MessageScope = {
+  tournamentId: string;
+  slug: string;
+  eventId: string;
+};
+
+type MailboxDeliveryMode = "broadcast" | "direct";
+
+type MailboxFilterSetting = {
+  unresolvedOnly: boolean;
+  unreadOnly: boolean;
+};
+
+type AppTab = "home" | "create" | "tournament" | "message" | "bracket" | "item-list" | "users" | "settings";
 
 type UserCardPlayer = {
   tournamentId: string;
@@ -398,6 +432,189 @@ function normalizeItemListConfig(rawValue: unknown): ItemListConfig {
   };
 }
 
+function normalizeSenderProfile(rawValue: unknown): SenderProfile {
+  const source = rawValue && typeof rawValue === "object"
+    ? (rawValue as Partial<SenderProfile>)
+    : {};
+
+  const senderName = typeof source.senderName === "string" ? source.senderName.trim() : "";
+  const senderUserId = typeof source.senderUserId === "string"
+    ? source.senderUserId.replace(/\D/g, "").slice(0, 8)
+    : "";
+  const bindIp = typeof source.bindIp === "string" ? source.bindIp.trim() : "0.0.0.0";
+
+  return {
+    senderName,
+    senderUserId,
+    bindIp,
+  };
+}
+
+function normalizeGenericMessage(rawValue: unknown): GenericMessage | null {
+  const source = rawValue && typeof rawValue === "object"
+    ? (rawValue as Partial<GenericMessage>)
+    : null;
+  if (!source) {
+    return null;
+  }
+
+  const messageId = typeof source.messageId === "string" ? source.messageId.trim() : "";
+  const threadId = typeof source.threadId === "string" ? source.threadId.trim() : messageId;
+  const parentMessageId = typeof source.parentMessageId === "string"
+    ? source.parentMessageId.trim()
+    : null;
+  const messageType = source.messageType === "resolve" ? "resolve" : "normal";
+  const messageMeta = source.messageMeta && typeof source.messageMeta === "object"
+    ? (source.messageMeta as Record<string, unknown>)
+    : null;
+  const method = typeof source.method === "string" ? source.method.trim().toLowerCase() : "generic";
+  const subject = typeof source.subject === "string" ? source.subject.trim() : "汎用メッセージ";
+  const senderName = typeof source.senderName === "string" ? source.senderName.trim() : "";
+  const senderUserId = typeof source.senderUserId === "string"
+    ? source.senderUserId.replace(/\D/g, "").slice(0, 8)
+    : "";
+  const senderIp = typeof source.senderIp === "string" ? source.senderIp.trim() : "";
+  const body = typeof source.body === "string" ? source.body.trim() : "";
+  const createdAt = typeof source.createdAt === "string" ? source.createdAt : "";
+
+  if (
+    messageId === ""
+    || threadId === ""
+    || method === ""
+    || subject === ""
+    || senderName === ""
+    || senderUserId.length !== 8
+    || body === ""
+    || createdAt === ""
+  ) {
+    return null;
+  }
+
+  return {
+    messageId,
+    threadId,
+    parentMessageId,
+    messageType,
+    messageMeta,
+    method,
+    subject,
+    senderName,
+    senderUserId,
+    senderIp,
+    body,
+    createdAt,
+  };
+}
+
+function normalizeMailboxFilterSetting(rawValue: unknown): MailboxFilterSetting {
+  const source = rawValue && typeof rawValue === "object"
+    ? (rawValue as Partial<MailboxFilterSetting>)
+    : {};
+
+  return {
+    unresolvedOnly: Boolean(source.unresolvedOnly),
+    unreadOnly: Boolean(source.unreadOnly),
+  };
+}
+
+function normalizeGenericMessages(rawValue: unknown): GenericMessage[] {
+  if (!Array.isArray(rawValue)) {
+    return [];
+  }
+
+  return rawValue
+    .map((item) => normalizeGenericMessage(item))
+    .filter((item): item is GenericMessage => item !== null)
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+}
+
+function isValidSenderUserId(value: string): boolean {
+  return /^\d{8}$/.test(value.trim());
+}
+
+function isValidIpv4(value: string): boolean {
+  const trimmed = value.trim();
+  const parts = trimmed.split(".");
+  if (parts.length !== 4) {
+    return false;
+  }
+
+  return parts.every((part) => {
+    if (!/^\d+$/.test(part)) {
+      return false;
+    }
+    const num = Number(part);
+    return Number.isInteger(num) && num >= 0 && num <= 255;
+  });
+}
+
+function generateRandomSenderUserId(): string {
+  const array = new Uint32Array(1);
+  window.crypto.getRandomValues(array);
+  const value = 10_000_000 + (array[0] % 90_000_000);
+  return String(value);
+}
+
+function getMailboxMethodLabel(method: string): string {
+  const normalized = method.trim().toLowerCase();
+  if (normalized === "generic") {
+    return "汎用";
+  }
+  if (normalized === "call_player") {
+    return "プレイヤー呼び出し";
+  }
+  return normalized === "" ? "不明" : normalized;
+}
+
+function buildScopedMessageMeta(
+  baseMeta: Record<string, unknown> | null,
+  scope: MessageScope | null,
+): Record<string, unknown> | null {
+  const merged: Record<string, unknown> = { ...(baseMeta ?? {}) };
+
+  if (scope) {
+    merged.scopeTournamentId = scope.tournamentId;
+    merged.scopeSlug = scope.slug;
+    merged.scopeEventId = scope.eventId;
+  }
+
+  return Object.keys(merged).length > 0 ? merged : null;
+}
+
+function isMessageForScope(message: GenericMessage, scope: MessageScope | null): boolean {
+  if (!scope) {
+    return true;
+  }
+
+  const meta = message.messageMeta;
+  if (!meta || typeof meta !== "object") {
+    return true;
+  }
+
+  const source = meta as Record<string, unknown>;
+  const scopeTournamentId = typeof source.scopeTournamentId === "string" ? source.scopeTournamentId.trim() : "";
+  const scopeSlug = typeof source.scopeSlug === "string" ? source.scopeSlug.trim() : "";
+  const scopeEventId = typeof source.scopeEventId === "string" ? source.scopeEventId.trim() : "";
+
+  if (
+    scopeEventId !== ""
+    && scopeEventId === scope.eventId
+    && (scopeTournamentId === "" || scopeTournamentId === scope.tournamentId)
+    && (scopeSlug === "" || scopeSlug === scope.slug)
+  ) {
+    return true;
+  }
+
+  const legacyTournamentId = typeof source.tournamentId === "string" ? source.tournamentId.trim() : "";
+  const legacyEventId = typeof source.eventId === "string" ? source.eventId.trim() : "";
+
+  if (legacyEventId !== "" && legacyEventId === scope.eventId) {
+    return legacyTournamentId === "" || legacyTournamentId === scope.tournamentId;
+  }
+
+  return true;
+}
+
 function arraysShallowEqual<T>(left: T[], right: T[]): boolean {
   if (left.length !== right.length) {
     return false;
@@ -449,6 +666,10 @@ function emptyCategorySelections(): string[][] {
 
 const ITEM_LIST_STORAGE_KEY = "savakan-gg.item-lists.v1";
 const EVENT_MGMT_STORAGE_KEY = "savakan-gg.event-mgmt.v1";
+const SENDER_PROFILE_STORAGE_KEY = "savakan-gg.sender-profile.v1";
+const GENERIC_MESSAGE_STORAGE_KEY = "savakan-gg.generic-messages.v1";
+const MAILBOX_FILTER_STORAGE_KEY = "savakan-gg.mailbox-filter.v1";
+const MAILBOX_READ_IDS_STORAGE_KEY = "savakan-gg.mailbox-read-ids.v1";
 
 const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: boolean }> = [
   { id: "create", label: "新規作成", icon: "➕", implemented: true },
@@ -456,7 +677,9 @@ const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: bo
   { id: "tournament", label: "大会管理", icon: "⚙", implemented: true },
   { id: "bracket", label: "ブラケット", icon: "🏆", implemented: true },
   { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
+  { id: "message", label: "メッセージ", icon: "💬", implemented: true },
   { id: "users", label: "プレイヤーリスト", icon: "👥", implemented: true },
+  { id: "settings", label: "設定", icon: "🔧", implemented: true },
 ];
 
 function parseLinesToUniqueList(value: string): string[] {
@@ -994,6 +1217,29 @@ function App() {
   const [itemListText, setItemListText] = useState("");
   const [eventMgmtSettings, setEventMgmtSettings] = useState<Record<string, EventManagementSetting>>({});
   const [eventMgmtSettingsReady, setEventMgmtSettingsReady] = useState(false);
+  const [senderProfile, setSenderProfile] = useState<SenderProfile>({ senderName: "", senderUserId: "", bindIp: "0.0.0.0" });
+  const [senderProfileReady, setSenderProfileReady] = useState(false);
+  const [senderNameDraft, setSenderNameDraft] = useState("");
+  const [senderUserIdDraft, setSenderUserIdDraft] = useState("");
+  const [senderBindIpDraft, setSenderBindIpDraft] = useState("0.0.0.0");
+  const [genericMessages, setGenericMessages] = useState<GenericMessage[]>([]);
+  const [genericMessagesReady, setGenericMessagesReady] = useState(false);
+  const [mailboxMethodDraft, setMailboxMethodDraft] = useState("generic");
+  const [mailboxSubjectDraft, setMailboxSubjectDraft] = useState("");
+  const [messageDeliveryMode, setMessageDeliveryMode] = useState<MailboxDeliveryMode>("broadcast");
+  const [messageDeliveryIpDraft, setMessageDeliveryIpDraft] = useState("");
+  const [composeFixedBodyDraft, setComposeFixedBodyDraft] = useState<string | null>(null);
+  const [genericMessageBodyDraft, setGenericMessageBodyDraft] = useState("");
+  const [replyBodyDraft, setReplyBodyDraft] = useState("");
+  const [selectedThreadId, setSelectedThreadId] = useState("");
+  const [mailboxServiceStarted, setMailboxServiceStarted] = useState(false);
+  const [callingEntrantId, setCallingEntrantId] = useState("");
+  const [composeMessageMeta, setComposeMessageMeta] = useState<Record<string, unknown> | null>(null);
+  const [mailboxFilterSetting, setMailboxFilterSetting] = useState<MailboxFilterSetting>({
+    unresolvedOnly: false,
+    unreadOnly: false,
+  });
+  const [mailboxReadMessageIds, setMailboxReadMessageIds] = useState<string[]>([]);
   const [sideDecisionMethod, setSideDecisionMethod] = useState<EventManagementSetting["sideDecisionMethod"]>("upper_1p");
   const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
   const [categorySlotListIds, setCategorySlotListIds] = useState<string[]>(["", "", ""]);
@@ -1022,6 +1268,7 @@ function App() {
   const lastPersistedSnapshotSelectionRef = useRef("");
   const eventSettingHydratedKeyRef = useRef("");
   const suppressEventSettingAutosaveRef = useRef(false);
+  const autoIpFillTriedRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -1089,6 +1336,110 @@ function App() {
         if (alive) {
           startupRestoreReadyRef.current = true;
           setItemListsReady(true);
+        }
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      const rawFilter = window.localStorage.getItem(MAILBOX_FILTER_STORAGE_KEY);
+      if (rawFilter) {
+        const parsed = JSON.parse(rawFilter) as unknown;
+        setMailboxFilterSetting(normalizeMailboxFilterSetting(parsed));
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const rawReadIds = window.localStorage.getItem(MAILBOX_READ_IDS_STORAGE_KEY);
+      if (rawReadIds) {
+        const parsed = JSON.parse(rawReadIds) as unknown;
+        if (Array.isArray(parsed)) {
+          const normalized = parsed
+            .filter((item): item is string => typeof item === "string")
+            .map((item) => item.trim())
+            .filter((item) => item !== "");
+          setMailboxReadMessageIds([...new Set(normalized)]);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        const fromRust = await invoke<SenderProfile | null>("load_sender_profile");
+        if (!alive) {
+          return;
+        }
+
+        if (fromRust) {
+          const normalized = normalizeSenderProfile(fromRust);
+          setSenderProfile(normalized);
+          setSenderNameDraft(normalized.senderName);
+          setSenderUserIdDraft(normalized.senderUserId);
+          setSenderBindIpDraft(normalized.bindIp);
+          return;
+        }
+
+        const raw = window.localStorage.getItem(SENDER_PROFILE_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as unknown;
+          const normalized = normalizeSenderProfile(parsed);
+          setSenderProfile(normalized);
+          setSenderNameDraft(normalized.senderName);
+          setSenderUserIdDraft(normalized.senderUserId);
+          setSenderBindIpDraft(normalized.bindIp);
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (alive) {
+          setSenderProfileReady(true);
+        }
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        const fromRust = await invoke<GenericMessage[] | null>("load_generic_messages");
+        if (!alive) {
+          return;
+        }
+
+        if (fromRust) {
+          setGenericMessages(normalizeGenericMessages(fromRust));
+          return;
+        }
+
+        const raw = window.localStorage.getItem(GENERIC_MESSAGE_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as unknown;
+          setGenericMessages(normalizeGenericMessages(parsed));
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (alive) {
+          setGenericMessagesReady(true);
         }
       }
     })();
@@ -1174,6 +1525,162 @@ function App() {
       setError(String(err));
     });
   }, [eventMgmtSettings]);
+
+  useEffect(() => {
+    if (!senderProfileReady) {
+      return;
+    }
+
+    if (autoIpFillTriedRef.current) {
+      return;
+    }
+
+    autoIpFillTriedRef.current = true;
+
+    void invoke<string | null>("detect_local_ipv4")
+      .then((detectedIp) => {
+        if (!detectedIp || !isValidIpv4(detectedIp)) {
+          return;
+        }
+
+        const shouldUpdateDraft = senderBindIpDraft.trim() === ""
+          || senderBindIpDraft.trim() === "0.0.0.0"
+          || !isValidIpv4(senderBindIpDraft.trim());
+
+        if (shouldUpdateDraft) {
+          setSenderBindIpDraft(detectedIp);
+        }
+
+        const currentProfileIp = senderProfile.bindIp.trim();
+        const shouldUpdateProfile = currentProfileIp === ""
+          || currentProfileIp === "0.0.0.0"
+          || !isValidIpv4(currentProfileIp);
+
+        if (shouldUpdateProfile) {
+          setSenderProfile((current) => ({
+            ...current,
+            bindIp: detectedIp,
+          }));
+        }
+      })
+      .catch(() => {
+        // ignore auto detect failure
+      });
+  }, [senderBindIpDraft, senderProfile, senderProfileReady]);
+
+  useEffect(() => {
+    if (!senderProfileReady) {
+      return;
+    }
+
+    if (senderProfile.senderName.trim() === "" || !isValidSenderUserId(senderProfile.senderUserId)) {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(SENDER_PROFILE_STORAGE_KEY, JSON.stringify(senderProfile));
+    } catch {
+      // ignore
+    }
+
+    void invoke("save_sender_profile", { profile: senderProfile }).catch((err) => {
+      setError(String(err));
+    });
+  }, [senderProfile, senderProfileReady]);
+
+  useEffect(() => {
+    if (!genericMessagesReady) {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(GENERIC_MESSAGE_STORAGE_KEY, JSON.stringify(genericMessages));
+    } catch {
+      // ignore
+    }
+
+    void invoke("save_generic_messages", { messages: genericMessages }).catch((err) => {
+      setError(String(err));
+    });
+  }, [genericMessages, genericMessagesReady]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(MAILBOX_FILTER_STORAGE_KEY, JSON.stringify(mailboxFilterSetting));
+    } catch {
+      // ignore
+    }
+  }, [mailboxFilterSetting]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(MAILBOX_READ_IDS_STORAGE_KEY, JSON.stringify(mailboxReadMessageIds));
+    } catch {
+      // ignore
+    }
+  }, [mailboxReadMessageIds]);
+
+  useEffect(() => {
+    setMailboxReadMessageIds((current) => {
+      const known = new Set(genericMessages.map((item) => item.messageId));
+      const next = current.filter((id) => known.has(id));
+      if (next.length === current.length) {
+        return current;
+      }
+      return next;
+    });
+  }, [genericMessages]);
+
+  useEffect(() => {
+    if (!senderProfileReady) {
+      return;
+    }
+
+    if (!isValidSenderUserId(senderProfile.senderUserId) || !isValidIpv4(senderProfile.bindIp)) {
+      return;
+    }
+
+    void invoke("start_udp_mailbox_service", { profile: senderProfile })
+      .then(() => {
+        setMailboxServiceStarted(true);
+      })
+      .catch((err) => {
+        setMailboxServiceStarted(false);
+        setError(String(err));
+      });
+  }, [senderProfile, senderProfileReady]);
+
+  useEffect(() => {
+    if (!genericMessagesReady) {
+      return;
+    }
+
+    let disposed = false;
+    const timer = window.setInterval(() => {
+      void invoke<GenericMessage[] | null>("load_generic_messages")
+        .then((rows) => {
+          if (disposed || !rows) {
+            return;
+          }
+
+          const normalized = normalizeGenericMessages(rows);
+          setGenericMessages((current) => {
+            if (current.length === normalized.length && current[0]?.messageId === normalized[0]?.messageId) {
+              return current;
+            }
+            return normalized;
+          });
+        })
+        .catch(() => {
+          // ignore polling errors
+        });
+    }, 1200);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [genericMessagesReady]);
 
   useEffect(() => {
     if (activeTab !== "home") {
@@ -1322,6 +1829,22 @@ function App() {
 
     return localMeta.events.find((event) => event.eventId === selectedEvent.eventId) ?? null;
   }, [localMeta, selectedEvent]);
+
+  const selectedMessageScope = useMemo<MessageScope | null>(() => {
+    if (!snapshot || !selectedEvent) {
+      return null;
+    }
+
+    return {
+      tournamentId: snapshot.tournamentId,
+      slug: snapshot.slug,
+      eventId: selectedEvent.eventId,
+    };
+  }, [selectedEvent, snapshot]);
+
+  const scopedGenericMessages = useMemo(() => {
+    return genericMessages.filter((message) => isMessageForScope(message, selectedMessageScope));
+  }, [genericMessages, selectedMessageScope]);
 
   const selectedEventItemListSnapshots = useMemo(() => {
     if (!selectedEventMeta?.eventManagement?.itemListSnapshots) {
@@ -1626,6 +2149,445 @@ function App() {
 
     return userCardPlayers.find((player) => player.playerId === selectedUserCardPlayerId) ?? userCardPlayers[0] ?? null;
   }, [selectedUserCardPlayerId, userCardPlayers]);
+
+  const mailboxThreadSummaries = useMemo(() => {
+    const roots = scopedGenericMessages.filter((item) => item.parentMessageId === null);
+
+    return roots
+      .map((root) => {
+        const messages = scopedGenericMessages
+          .filter((item) => item.threadId === root.threadId)
+          .slice()
+          .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
+
+        const resolved = messages.some((item) => item.messageType === "resolve");
+        const unreadCount = messages.filter(
+          (item) => item.senderUserId !== senderProfile.senderUserId && !mailboxReadMessageIds.includes(item.messageId),
+        ).length;
+
+        return {
+          root,
+          messages,
+          resolved,
+          unreadCount,
+        };
+      })
+      .sort((left, right) => new Date(right.root.createdAt).getTime() - new Date(left.root.createdAt).getTime());
+  }, [mailboxReadMessageIds, scopedGenericMessages, senderProfile.senderUserId]);
+
+  const mailboxThreads = useMemo(() => {
+    return mailboxThreadSummaries
+      .filter((summary) => {
+        if (mailboxFilterSetting.unresolvedOnly && summary.resolved) {
+          return false;
+        }
+        if (mailboxFilterSetting.unreadOnly && summary.unreadCount === 0) {
+          return false;
+        }
+        return true;
+      })
+      .map((summary) => summary.root);
+  }, [mailboxFilterSetting, mailboxThreadSummaries]);
+
+  const activeThread = useMemo(() => {
+    if (selectedThreadId.trim() === "") {
+      return mailboxThreads[0] ?? null;
+    }
+
+    return mailboxThreads.find((item) => item.threadId === selectedThreadId) ?? mailboxThreads[0] ?? null;
+  }, [mailboxThreads, selectedThreadId]);
+
+  const activeThreadMessages = useMemo(() => {
+    if (!activeThread) {
+      return [] as GenericMessage[];
+    }
+
+    return mailboxThreadSummaries.find((summary) => summary.root.threadId === activeThread.threadId)?.messages ?? [];
+  }, [activeThread, mailboxThreadSummaries]);
+
+  const activeThreadResolved = useMemo(
+    () => activeThreadMessages.some((item) => item.messageType === "resolve"),
+    [activeThreadMessages],
+  );
+
+  const canResolveActiveThread = !!activeThread
+    && !activeThreadResolved
+    && activeThread.senderUserId === senderProfile.senderUserId;
+
+  useEffect(() => {
+    if (mailboxThreads.length === 0) {
+      setSelectedThreadId("");
+      return;
+    }
+
+    setSelectedThreadId((current) => {
+      if (current !== "" && mailboxThreads.some((item) => item.threadId === current)) {
+        return current;
+      }
+      return mailboxThreads[0].threadId;
+    });
+  }, [mailboxThreads]);
+
+  useEffect(() => {
+    if (activeTab !== "message" || !activeThread) {
+      return;
+    }
+
+    const incomingIds = activeThreadMessages
+      .filter((item) => item.senderUserId !== senderProfile.senderUserId)
+      .map((item) => item.messageId);
+
+    if (incomingIds.length === 0) {
+      return;
+    }
+
+    setMailboxReadMessageIds((current) => {
+      const next = new Set(current);
+      for (const messageId of incomingIds) {
+        next.add(messageId);
+      }
+      return [...next];
+    });
+  }, [activeTab, activeThread, activeThreadMessages, senderProfile.senderUserId]);
+
+  const normalizedSenderNameDraft = senderNameDraft.trim();
+  const normalizedSenderUserIdDraft = senderUserIdDraft.replace(/\D/g, "").slice(0, 8);
+  const normalizedSenderBindIpDraft = senderBindIpDraft.trim();
+  const normalizedMailboxMethod = mailboxMethodDraft.trim().toLowerCase();
+  const normalizedMailboxSubject = mailboxSubjectDraft.trim();
+  const normalizedMessageDeliveryIp = messageDeliveryIpDraft.trim();
+  const normalizedComposeFixedBody = composeFixedBodyDraft?.trim() ?? "";
+  const normalizedGenericMessageBody = genericMessageBodyDraft.trim();
+  const normalizedReplyBody = replyBodyDraft.trim();
+  const composedMessageBody = normalizedComposeFixedBody === ""
+    ? normalizedGenericMessageBody
+    : (normalizedGenericMessageBody === ""
+      ? normalizedComposeFixedBody
+      : `${normalizedComposeFixedBody}\n\n補足:\n${normalizedGenericMessageBody}`);
+
+  const senderIdCollision = useMemo(() => {
+    if (!isValidSenderUserId(normalizedSenderUserIdDraft)) {
+      return false;
+    }
+
+    return genericMessages.some((item) => item.senderUserId === normalizedSenderUserIdDraft && item.senderName !== normalizedSenderNameDraft);
+  }, [genericMessages, normalizedSenderNameDraft, normalizedSenderUserIdDraft]);
+
+  const canSaveSenderProfile = normalizedSenderNameDraft !== ""
+    && isValidSenderUserId(normalizedSenderUserIdDraft)
+    && isValidIpv4(normalizedSenderBindIpDraft)
+    && !senderIdCollision;
+
+  const canSendGenericMessage = senderProfile.senderName.trim() !== ""
+    && isValidSenderUserId(senderProfile.senderUserId)
+    && isValidIpv4(senderProfile.bindIp)
+    && normalizedMailboxMethod !== ""
+    && normalizedMailboxSubject !== ""
+    && composedMessageBody !== ""
+    && (messageDeliveryMode === "broadcast" || isValidIpv4(normalizedMessageDeliveryIp));
+
+  const canReplyToThread = !!activeThread
+    && senderProfile.senderName.trim() !== ""
+    && isValidSenderUserId(senderProfile.senderUserId)
+    && isValidIpv4(senderProfile.bindIp)
+    && normalizedReplyBody !== "";
+
+  function fillRandomSenderUserId() {
+    const usedIds = new Set(genericMessages.map((item) => item.senderUserId));
+    let nextId = generateRandomSenderUserId();
+
+    for (let retry = 0; retry < 40 && usedIds.has(nextId); retry += 1) {
+      nextId = generateRandomSenderUserId();
+    }
+
+    setSenderUserIdDraft(nextId);
+  }
+
+  function saveSenderProfileSettings() {
+    setError("");
+    setMessage("");
+
+    if (normalizedSenderNameDraft === "") {
+      setError("送信者名を入力してください。");
+      return;
+    }
+
+    if (!isValidSenderUserId(normalizedSenderUserIdDraft)) {
+      setError("ユーザーIDは8桁の数字で入力してください。");
+      return;
+    }
+
+    if (senderIdCollision) {
+      setError("既存メッセージ内で同じユーザーIDが別名義に使われています。別のIDを設定してください。");
+      return;
+    }
+
+    const nextProfile: SenderProfile = {
+      senderName: normalizedSenderNameDraft,
+      senderUserId: normalizedSenderUserIdDraft,
+      bindIp: normalizedSenderBindIpDraft,
+    };
+
+    setSenderProfile(nextProfile);
+    setMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp}`);
+  }
+
+  async function postGenericMessage() {
+    setError("");
+    setMessage("");
+
+    if (
+      senderProfile.senderName.trim() === ""
+      || !isValidSenderUserId(senderProfile.senderUserId)
+      || !isValidIpv4(senderProfile.bindIp)
+    ) {
+      setError("設定タブで送信者名・8桁ユーザーID・自分のIPを保存してから送信してください。");
+      return;
+    }
+
+    if (normalizedMailboxMethod === "") {
+      setError("メソッド名を入力してください。");
+      return;
+    }
+
+    if (normalizedMailboxSubject === "") {
+      setError("件名を入力してください。");
+      return;
+    }
+
+    if (messageDeliveryMode === "direct" && !isValidIpv4(normalizedMessageDeliveryIp)) {
+      setError("送信先IPはIPv4形式で入力してください。例: 192.168.1.20");
+      return;
+    }
+
+    if (composedMessageBody === "") {
+      setError("メッセージ本文または補足を入力してください。");
+      return;
+    }
+
+    const scopedMeta = buildScopedMessageMeta(composeMessageMeta, selectedMessageScope);
+
+    try {
+      const sent = await invoke<GenericMessage>("send_mailbox_message", {
+        input: {
+          profile: senderProfile,
+          messageType: "normal",
+          messageMeta: scopedMeta,
+          method: normalizedMailboxMethod,
+          subject: normalizedMailboxSubject,
+          body: composedMessageBody,
+          deliveryTargetMode: messageDeliveryMode,
+          deliveryTargetIp: messageDeliveryMode === "direct" ? normalizedMessageDeliveryIp : null,
+          threadId: null,
+          parentMessageId: null,
+        },
+      });
+
+      const normalized = normalizeGenericMessage(sent);
+      if (normalized) {
+        setGenericMessages((current) => {
+          const next = [normalized, ...current.filter((item) => item.messageId !== normalized.messageId)];
+          return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+        });
+        setSelectedThreadId(normalized.threadId);
+      }
+
+      setGenericMessageBodyDraft("");
+      setMailboxSubjectDraft("");
+      setComposeFixedBodyDraft(null);
+      setComposeMessageMeta(null);
+      setMessage(`メソッド ${normalizedMailboxMethod} でスレッドを開始しました。`);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function replyToThread() {
+    setError("");
+    setMessage("");
+
+    if (!activeThread) {
+      setError("返信先スレッドを選択してください。");
+      return;
+    }
+
+    if (
+      senderProfile.senderName.trim() === ""
+      || !isValidSenderUserId(senderProfile.senderUserId)
+      || !isValidIpv4(senderProfile.bindIp)
+    ) {
+      setError("設定タブで送信者名・8桁ユーザーID・自分のIPを保存してから返信してください。");
+      return;
+    }
+
+    if (normalizedReplyBody === "") {
+      setError("返信本文を入力してください。");
+      return;
+    }
+
+    const replyTargetMode: MailboxDeliveryMode = activeThread.senderUserId === senderProfile.senderUserId ? "broadcast" : "direct";
+    const replyTargetIp = activeThread.senderIp.trim();
+
+    if (replyTargetMode === "direct" && !isValidIpv4(replyTargetIp)) {
+      setError("返信先メッセージの送信者IPが不正です。");
+      return;
+    }
+
+    try {
+      const sent = await invoke<GenericMessage>("send_mailbox_message", {
+        input: {
+          profile: senderProfile,
+          messageType: "normal",
+          method: activeThread.method,
+          subject: `Re: ${activeThread.subject}`,
+          body: normalizedReplyBody,
+          messageMeta: buildScopedMessageMeta(null, selectedMessageScope),
+          deliveryTargetMode: replyTargetMode,
+          deliveryTargetIp: replyTargetMode === "direct" ? replyTargetIp : null,
+          threadId: activeThread.threadId,
+          parentMessageId: activeThread.messageId,
+        },
+      });
+
+      const normalized = normalizeGenericMessage(sent);
+      if (normalized) {
+        setGenericMessages((current) => {
+          const next = [normalized, ...current.filter((item) => item.messageId !== normalized.messageId)];
+          return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+        });
+      }
+
+      setReplyBodyDraft("");
+      setMessage("返信を送信しました。スレッドに追加されます。");
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function resolveActiveThread() {
+    setError("");
+    setMessage("");
+
+    if (!activeThread) {
+      setError("解決するスレッドを選択してください。");
+      return;
+    }
+
+    if (!canResolveActiveThread) {
+      setError("スレッド作成者のみが解決メッセージを送信できます。未解決スレッドを選択してください。");
+      return;
+    }
+
+    const resolveTargetMode: MailboxDeliveryMode = "broadcast";
+
+    try {
+      const sent = await invoke<GenericMessage>("send_mailbox_message", {
+        input: {
+          profile: senderProfile,
+          messageType: "resolve",
+          method: activeThread.method,
+          subject: `Resolved: ${activeThread.subject}`,
+          body: "解決",
+          messageMeta: buildScopedMessageMeta(null, selectedMessageScope),
+          deliveryTargetMode: resolveTargetMode,
+          deliveryTargetIp: null,
+          threadId: activeThread.threadId,
+          parentMessageId: activeThread.messageId,
+        },
+      });
+
+      const normalized = normalizeGenericMessage(sent);
+      if (normalized) {
+        setGenericMessages((current) => {
+          const next = [normalized, ...current.filter((item) => item.messageId !== normalized.messageId)];
+          return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+        });
+      }
+
+      setMessage("解決メッセージを送信しました。スレッドは完了扱いになります。");
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  function deleteActiveThread() {
+    if (!activeThread) {
+      setError("削除するスレッドを選択してください。");
+      return;
+    }
+
+    const confirmed = window.confirm(`「${activeThread.subject}」のスレッドを削除しますか？\nこのスレッド内の全メッセージが削除されます。`);
+    if (!confirmed) {
+      return;
+    }
+
+    const targetThreadId = activeThread.threadId;
+    const deletedMessageIds = genericMessages
+      .filter((item) => item.threadId === targetThreadId)
+      .map((item) => item.messageId);
+
+    setError("");
+    setMessage("");
+    setGenericMessages((current) => current.filter((item) => item.threadId !== targetThreadId));
+    setMailboxReadMessageIds((current) => current.filter((messageId) => !deletedMessageIds.includes(messageId)));
+    setReplyBodyDraft("");
+    setSelectedThreadId("");
+    setMessage("スレッドを削除しました。");
+  }
+
+  async function sendCallMessageFromMatch(slot: SetSlot, entrantId: string) {
+    setError("");
+    setMessage("");
+
+    if (!snapshot || !selectedEvent || !activeMatch) {
+      setError("呼び出し元の試合情報が見つかりません。もう一度試してください。");
+      return;
+    }
+
+    setCallingEntrantId(entrantId);
+
+    try {
+      const playerId = await deriveEncryptedPlayerId(snapshot.tournamentId, selectedEvent.eventId, entrantId);
+      const eventAlias = selectedEventMeta?.eventAlias?.trim() || selectedEvent.name;
+      const senderLine = senderProfile.senderName.trim() !== ""
+        && isValidSenderUserId(senderProfile.senderUserId)
+        && isValidIpv4(senderProfile.bindIp)
+        ? `${senderProfile.senderName} (${senderProfile.senderUserId}) / ${senderProfile.bindIp}`
+        : "未設定 (設定タブで送信者情報を設定してください)";
+
+      const fixedBody = [
+        "【呼び出しメッセージ】",
+        `送信者: ${senderLine}`,
+        `呼び出しプレイヤー: ${slot.entrantName}`,
+        `entrantID: ${entrantId}`,
+        `イベントエイリアス: ${eventAlias}`,
+        `呼び出し元 tournament/event: ${snapshot.name} / ${selectedEvent.name}`,
+      ].join("\n");
+
+      setComposeMessageMeta({
+        callId: `${snapshot.tournamentId}:${selectedEvent.eventId}:${activeMatch.setId}:${entrantId}`,
+        playerId,
+        callEntrantId: entrantId,
+        callEntrantName: slot.entrantName,
+        tournamentId: snapshot.tournamentId,
+        tournamentName: snapshot.name,
+        eventId: selectedEvent.eventId,
+        eventName: selectedEvent.name,
+        eventAlias,
+        setId: activeMatch.setId,
+      });
+      setMailboxMethodDraft("call_player");
+      setMailboxSubjectDraft(`${slot.entrantName}(${eventAlias})`);
+      setComposeFixedBodyDraft(fixedBody);
+      setGenericMessageBodyDraft("");
+      setActiveTab("message");
+      setMessage(`呼び出しメッセージの下書きを作成しました: ${slot.entrantName} / 補足入力後に「スレッド開始」で送信してください。`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setCallingEntrantId("");
+    }
+  }
 
   useEffect(() => {
     let alive = true;
@@ -4209,6 +5171,226 @@ function App() {
         </>
       )}
 
+        {activeTab === "message" && (
+        <>
+          <section className="panel">
+            <h2>メッセージ送信 (メールボックス)</h2>
+            <p className="meta">ブロードキャスト送信と、送信先IP指定送信を切り替えられます。メッセージは選択中のローカルイベントに紐づく形で扱われます。</p>
+            <p className="meta">
+              現在の送信者: {senderProfile.senderName.trim() === "" ? "未設定" : senderProfile.senderName} / {isValidSenderUserId(senderProfile.senderUserId) ? senderProfile.senderUserId : "未設定"} / IP: {isValidIpv4(senderProfile.bindIp) ? senderProfile.bindIp : "未設定"}
+            </p>
+            <p className="meta">受信サービス: {mailboxServiceStarted ? "起動中" : "未起動"}</p>
+
+            <div className="form" style={{ marginTop: "0.6rem" }}>
+              <input
+                value={getMailboxMethodLabel(mailboxMethodDraft)}
+                placeholder="メッセージ属性"
+                readOnly
+              />
+              <input
+                value={mailboxSubjectDraft}
+                onChange={(e) => setMailboxSubjectDraft(e.currentTarget.value)}
+                placeholder="件名"
+              />
+            </div>
+            <div className="form" style={{ marginTop: "0.6rem" }}>
+              <select value={messageDeliveryMode} onChange={(e) => setMessageDeliveryMode(e.currentTarget.value as MailboxDeliveryMode)}>
+                <option value="broadcast">ブロードキャスト</option>
+                <option value="direct">送信先IP指定</option>
+              </select>
+              <input
+                value={messageDeliveryIpDraft}
+                onChange={(e) => setMessageDeliveryIpDraft(e.currentTarget.value)}
+                placeholder="送信先IP (例: 192.168.1.20)"
+                disabled={messageDeliveryMode !== "direct"}
+              />
+            </div>
+            <p className="meta">返信は、スレッド主ならブロードキャスト、それ以外は返信先の送信者IPへ送信します。</p>
+            <p className="meta">メッセージ属性は編集できません。汎用またはプレイヤー呼び出しとして自動設定されます。</p>
+
+            {composeFixedBodyDraft && (
+              <div style={{ marginTop: "0.6rem" }}>
+                <p className="meta">固有メッセージ (自動生成 / 編集不可)</p>
+                <textarea
+                  value={composeFixedBodyDraft}
+                  rows={6}
+                  readOnly
+                  style={{ width: "100%", background: "#f3f4f6" }}
+                />
+              </div>
+            )}
+
+            <div style={{ marginTop: "0.6rem" }}>
+              <p className="meta">{composeFixedBodyDraft ? "補足メッセージ" : "メッセージ本文"}</p>
+              <textarea
+                value={genericMessageBodyDraft}
+                onChange={(e) => setGenericMessageBodyDraft(e.currentTarget.value)}
+                rows={5}
+                placeholder={composeFixedBodyDraft ? "補足を入力" : "メッセージ本文"}
+                style={{ width: "100%" }}
+              />
+            </div>
+
+            <div className="panel-toolbar compact">
+              <p className="meta">この送信で新規スレッドが作成されます。</p>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                {composeFixedBodyDraft && (
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      setComposeFixedBodyDraft(null);
+                      setComposeMessageMeta(null);
+                      setMailboxMethodDraft("generic");
+                      setMailboxSubjectDraft("");
+                      setMessageDeliveryMode("broadcast");
+                      setMessageDeliveryIpDraft("");
+                      setGenericMessageBodyDraft("");
+                      setMessage("呼び出しメッセージをキャンセルしました。汎用メッセージ入力に戻りました。");
+                    }}
+                  >
+                    呼び出しをキャンセル
+                  </button>
+                )}
+                <button type="button" onClick={() => void postGenericMessage()} disabled={!canSendGenericMessage}>
+                  スレッド開始
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>メールボックス</h2>
+            <div className="panel-toolbar compact">
+              <div style={{ display: "flex", gap: "0.8rem", flexWrap: "wrap" }}>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={mailboxFilterSetting.unresolvedOnly}
+                    onChange={(e) => setMailboxFilterSetting((current) => ({ ...current, unresolvedOnly: e.currentTarget.checked }))}
+                  />
+                  未解決スレッドのみ
+                </label>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={mailboxFilterSetting.unreadOnly}
+                    onChange={(e) => setMailboxFilterSetting((current) => ({ ...current, unreadOnly: e.currentTarget.checked }))}
+                  />
+                  未読メッセージがあるスレッドのみ
+                </label>
+              </div>
+            </div>
+            <div className="mailbox-layout">
+              <section className="mailbox-thread-list">
+                <h3>スレッド ({mailboxThreads.length})</h3>
+                {mailboxThreads.length === 0 ? (
+                  <p className="meta">まだスレッドはありません。</p>
+                ) : (
+                  <div className="event-list">
+                    {mailboxThreads.map((thread) => {
+                      const summary = mailboxThreadSummaries.find((item) => item.root.threadId === thread.threadId);
+                      const unreadCount = summary?.unreadCount ?? 0;
+                      const resolved = summary?.resolved ?? false;
+
+                      return (
+                        <article
+                          key={thread.threadId}
+                          className={`event-list-item mailbox-thread-item ${activeThread?.threadId === thread.threadId ? "selected" : ""}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedThreadId(thread.threadId)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setSelectedThreadId(thread.threadId);
+                            }
+                          }}
+                        >
+                          <div className="event-list-head">
+                            <div>
+                              <h4>{thread.subject}</h4>
+                              <p className="meta">属性: {getMailboxMethodLabel(thread.method)}</p>
+                            </div>
+                            <p className="meta">{new Date(thread.createdAt).toLocaleString()}</p>
+                          </div>
+                          <p className="meta">from: {thread.senderName} ({thread.senderUserId})</p>
+                          <p className="meta">
+                            {resolved ? "解決済み" : "未解決"}
+                            {unreadCount > 0 ? ` / 未読 ${unreadCount}` : " / 未読 0"}
+                          </p>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <section className="mailbox-thread-view">
+                {!activeThread ? (
+                  <p className="meta">左のスレッドを選択してください。</p>
+                ) : (
+                  <>
+                    <h3>{activeThread.subject}</h3>
+                    <p className="meta">属性: {getMailboxMethodLabel(activeThread.method)} / threadId: {activeThread.threadId}</p>
+                    <p className="meta">状態: {activeThreadResolved ? "解決済み" : "未解決"}</p>
+                    <p className="meta">返信はこのスレッド配下に自動でまとまります。</p>
+
+                    <div className="mailbox-message-list">
+                      {activeThreadMessages.map((item) => (
+                        <article key={item.messageId} className={`event-list-item mailbox-message ${item.parentMessageId ? "reply" : "root"}`}>
+                          <div className="event-list-head">
+                            <div>
+                              <h4>{item.senderName}</h4>
+                              <p className="meta">ID: {item.senderUserId} / IP: {item.senderIp || "-"}</p>
+                            </div>
+                            <p className="meta">{new Date(item.createdAt).toLocaleString()}</p>
+                          </div>
+                          {item.parentMessageId && <p className="meta">reply to: {item.parentMessageId}</p>}
+                          <p className="meta">type: {item.messageType === "resolve" ? "解決" : "通常"}</p>
+                          <p className="message-body">{item.body}</p>
+                        </article>
+                      ))}
+                    </div>
+
+                    <div className="panel-toolbar compact" style={{ marginTop: "0.6rem" }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                        <p className="meta">スレッド作成者は「解決」メッセージで完了通知できます。</p>
+                        <p className="meta">削除すると、このスレッドのメッセージはすべて消えます。</p>
+                      </div>
+                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <button type="button" className="ghost" onClick={() => void resolveActiveThread()} disabled={!canResolveActiveThread}>
+                          解決
+                        </button>
+                        <button type="button" className="ghost" onClick={deleteActiveThread} disabled={!activeThread}>
+                          スレッド削除
+                        </button>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: "0.6rem" }}>
+                      <textarea
+                        value={replyBodyDraft}
+                        onChange={(e) => setReplyBodyDraft(e.currentTarget.value)}
+                        rows={4}
+                        placeholder="このスレッドへの返信"
+                        style={{ width: "100%" }}
+                      />
+                    </div>
+                    <div className="panel-toolbar compact">
+                      <p className="meta">返信メッセージはこのスレッドに集約されます。</p>
+                      <button type="button" onClick={() => void replyToThread()} disabled={!canReplyToThread}>
+                        返信
+                      </button>
+                    </div>
+                  </>
+                )}
+              </section>
+            </div>
+          </section>
+        </>
+      )}
+
         {activeTab === "item-list" && (
         <>
           <section className="panel">
@@ -4296,6 +5478,97 @@ function App() {
                   ))}
               </div>
             )}
+          </section>
+        </>
+      )}
+
+        {activeTab === "settings" && (
+        <>
+          <section className="panel">
+            <h2>送信者設定</h2>
+            <p className="meta">各クライアントを識別するための送信者名と8桁ユーザーIDを設定します。</p>
+            <p className="meta">ユーザーIDはクライアント間で重複しないよう運用してください。ランダム決定ボタンで簡単に採番できます。</p>
+
+            <div className="form" style={{ marginTop: "0.65rem" }}>
+              <label htmlFor="sender-name-input" style={{ display: "grid", gap: "0.3rem" }}>
+                <span className="meta">送信者名</span>
+                <input
+                  id="sender-name-input"
+                  value={senderNameDraft}
+                  onChange={(e) => setSenderNameDraft(e.currentTarget.value)}
+                  placeholder="例: 配信PC-A"
+                />
+              </label>
+              <label htmlFor="sender-user-id-input" style={{ display: "grid", gap: "0.3rem" }}>
+                <span className="meta">ユーザーID (8桁数字)</span>
+                <input
+                  id="sender-user-id-input"
+                  value={senderUserIdDraft}
+                  onChange={(e) => setSenderUserIdDraft(e.currentTarget.value.replace(/\D/g, "").slice(0, 8))}
+                  placeholder="例: 12345678"
+                  inputMode="numeric"
+                  maxLength={8}
+                />
+              </label>
+              <label htmlFor="sender-bind-ip-input" style={{ display: "grid", gap: "0.3rem" }}>
+                <span className="meta">自分のIP (IPv4)</span>
+                <input
+                  id="sender-bind-ip-input"
+                  value={senderBindIpDraft}
+                  onChange={(e) => setSenderBindIpDraft(e.currentTarget.value)}
+                  placeholder="例: 192.168.1.10"
+                />
+              </label>
+            </div>
+
+            <div className="panel-toolbar compact">
+              <p className="meta">
+                {senderIdCollision
+                  ? "既存履歴で同一IDが別名義に使われています。"
+                  : !isValidIpv4(normalizedSenderBindIpDraft)
+                    ? "IPはIPv4形式で入力してください。"
+                    : "例: 12345678 / 192.168.1.10"}
+              </p>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button type="button" className="ghost" onClick={fillRandomSenderUserId}>
+                  ランダム決定
+                </button>
+                <button type="button" onClick={saveSenderProfileSettings} disabled={!canSaveSenderProfile}>
+                  保存
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>メールボックス表示設定</h2>
+            <p className="meta">メールボックスのスレッド一覧フィルタを設定できます。</p>
+
+            <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.6rem" }}>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={mailboxFilterSetting.unresolvedOnly}
+                  onChange={(e) => setMailboxFilterSetting((current) => ({ ...current, unresolvedOnly: e.currentTarget.checked }))}
+                />
+                未解決スレッドのみ表示
+              </label>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={mailboxFilterSetting.unreadOnly}
+                  onChange={(e) => setMailboxFilterSetting((current) => ({ ...current, unreadOnly: e.currentTarget.checked }))}
+                />
+                未読メッセージがあるスレッドのみ表示
+              </label>
+            </div>
+
+            <div className="panel-toolbar compact">
+              <p className="meta">未読管理数: {mailboxReadMessageIds.length}</p>
+              <button type="button" className="ghost" onClick={() => setMailboxReadMessageIds([])}>
+                未読状態をリセット
+              </button>
+            </div>
           </section>
         </>
       )}
@@ -4674,6 +5947,22 @@ function App() {
                                 DQ
                               </button>
                             )}
+                            <button
+                              type="button"
+                              className="ghost tiny"
+                              disabled={
+                                busy
+                                || callingEntrantId === entrantId
+                              }
+                              onClick={() => {
+                                if (!entrantId) {
+                                  return;
+                                }
+                                void sendCallMessageFromMatch(slot, entrantId);
+                              }}
+                            >
+                              {callingEntrantId === entrantId ? "送信中..." : "呼び出し"}
+                            </button>
                             <p className="meta">authCode: {entrantMeta?.authCode ?? "-"}</p>
                           </>
                         )}

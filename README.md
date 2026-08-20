@@ -11,6 +11,7 @@ start.gg で管理される大会を、1 イベント単位でローカルにミ
 - start.gg とローカルの差分を確認し、競合時は local / remote を選択して継続
 - イベント管理設定として、カテゴリごとのアイテムリストと選択制約を管理
 - イベントごとのプレイヤー一覧と A4 向けのカードプレビュー/出力を扱う
+- 汎用メッセージを送信履歴として管理し、送信者名/8桁ユーザーIDを付与
 
 ## 技術スタック
 
@@ -40,6 +41,8 @@ API ドキュメント入口:
 - app_data_dir/savakan-gg/last-snapshot-selection.json
 - app_data_dir/savakan-gg/item-lists.json
 - app_data_dir/savakan-gg/event-mgmt-settings.json
+- app_data_dir/savakan-gg/sender-profile.json
+- app_data_dir/savakan-gg/generic-messages.json
 - app_data_dir/savakan-gg/tournament-<slugを安全化した文字列>.json
 - app_data_dir/savakan-gg/tournament-meta-<slugを安全化した文字列>-<eventIdを安全化した文字列>.json
 
