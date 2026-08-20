@@ -1307,10 +1307,12 @@ function App() {
           && savedSelection.slug.trim() !== ""
           && savedSelection.eventId.trim() !== ""
         ) {
-          const normalizedSavedSlug = toSlugInput(savedSelection.slug);
-          startupSavedSlugRef.current = normalizedSavedSlug;
-          startupSavedEventIdRef.current = savedSelection.eventId.trim();
-          setSlug(normalizedSavedSlug);
+          const savedSlug = savedSelection.slug.trim();
+          const savedEventId = savedSelection.eventId.trim();
+          startupSavedSlugRef.current = savedSlug;
+          startupSavedEventIdRef.current = savedEventId;
+          setSelectedEventId(savedEventId);
+          setSlug(toSlugInput(savedSlug));
         }
 
         const savedSlug = await invoke<string | null>("load_last_slug");
@@ -1320,9 +1322,9 @@ function App() {
           && savedSlug
           && savedSlug.trim() !== ""
         ) {
-          const normalizedSavedSlug = toSlugInput(savedSlug);
-          startupSavedSlugRef.current = normalizedSavedSlug;
-          setSlug(normalizedSavedSlug);
+          const savedRawSlug = savedSlug.trim();
+          startupSavedSlugRef.current = savedRawSlug;
+          setSlug(toSlugInput(savedRawSlug));
         }
 
         const savedItemLists = await invoke<ItemListConfig[] | null>("load_item_lists");
@@ -1728,7 +1730,7 @@ function App() {
       return;
     }
 
-    const savedSlug = startupSavedSlugRef.current;
+    const savedSlug = startupSavedSlugRef.current.trim();
     const savedEventId = startupSavedEventIdRef.current;
 
     if (savedSlug !== "" && savedEventId !== "" && !startupDirectRestoreTriedRef.current) {
@@ -1746,7 +1748,11 @@ function App() {
           setWorkspace(result);
           startupAutoRestoreDoneRef.current = true;
         } catch {
-          // Fallback to list-based restore below when list loading completes.
+          // Direct restore can fail when old slug formats remain in persisted data.
+          // Trigger list reload so this effect re-runs and falls back to list-based restore.
+          if (!loadingLocalSnapshotEvents) {
+            void refreshLocalSnapshotEvents();
+          }
         }
       })();
       return;
@@ -1780,7 +1786,8 @@ function App() {
     }
 
     if (!matched) {
-      matched = localSnapshotEvents.find((item) => toSlugInput(item.slug) === savedSlug) ?? null;
+      const normalizedSavedSlug = toSlugInput(savedSlug);
+      matched = localSnapshotEvents.find((item) => toSlugInput(item.slug) === normalizedSavedSlug) ?? null;
     }
 
     startupAutoRestoreDoneRef.current = true;
@@ -1972,8 +1979,40 @@ function App() {
       return selectedEvent.name;
     }
 
+    const startupSelectedSlug = startupSavedSlugRef.current.trim();
+    const startupSelectedEventId = startupSavedEventIdRef.current.trim();
+    const currentSelectedSlug = snapshot?.slug?.trim() || startupSelectedSlug;
+    const currentSelectedEventId = selectedEventId.trim() || startupSelectedEventId;
+    if (currentSelectedSlug !== "" && currentSelectedEventId !== "") {
+      const matched = localSnapshotEvents.find((item) =>
+        sameSnapshotEventKey(currentSelectedSlug, currentSelectedEventId, item.slug, item.eventId)
+      );
+      const matchedAlias = matched?.eventAlias?.trim();
+      if (matchedAlias) {
+        return matchedAlias;
+      }
+      if (matched?.eventName) {
+        return matched.eventName;
+      }
+    }
+
     return snapshot?.name ?? "未選択";
-  }, [selectedEventMeta, selectedEvent, snapshot]);
+  }, [localSnapshotEvents, selectedEventMeta, selectedEvent, selectedEventId, snapshot]);
+
+  const selectedSidebarItem = useMemo(() => {
+    const startupSelectedSlug = startupSavedSlugRef.current.trim();
+    const startupSelectedEventId = startupSavedEventIdRef.current.trim();
+    const currentSelectedSlug = snapshot?.slug?.trim() || startupSelectedSlug;
+    const currentSelectedEventId = selectedEvent?.eventId?.trim() || selectedEventId.trim() || startupSelectedEventId;
+
+    if (currentSelectedSlug === "" || currentSelectedEventId === "") {
+      return null;
+    }
+
+    return localSnapshotEvents.find((item) =>
+      sameSnapshotEventKey(currentSelectedSlug, currentSelectedEventId, item.slug, item.eventId)
+    ) ?? null;
+  }, [localSnapshotEvents, selectedEvent, selectedEventId, snapshot]);
 
   const selectedCategoryUsageList = useMemo(() => {
     if (!selectedEventMeta) {
@@ -3749,7 +3788,6 @@ function App() {
 
   useEffect(() => {
     if (!snapshot || snapshot.events.length === 0) {
-      setSelectedEventId("");
       return;
     }
 
@@ -4546,6 +4584,12 @@ function App() {
               <p className="summary-meta">slug: {snapshot.slug}</p>
               <p className="summary-meta">events: {snapshot.events.length}</p>
             </>
+          ) : selectedSidebarItem ? (
+            <>
+              <p className="summary-name">{selectedSummaryName}</p>
+              <p className="summary-meta">slug: {selectedSidebarItem.slug}</p>
+              <p className="summary-meta">tournament: {selectedSidebarItem.tournamentName}</p>
+            </>
           ) : (
             <p className="summary-meta">未選択</p>
           )}
@@ -4605,10 +4649,14 @@ function App() {
             ) : (
               <div className="event-list">
                 {localSnapshotEvents.map((item) => {
+                  const startupSelectedSlug = startupSavedSlugRef.current.trim();
+                  const startupSelectedEventId = startupSavedEventIdRef.current.trim();
+                  const currentSelectedSlug = snapshot?.slug?.trim() || startupSelectedSlug;
+                  const currentSelectedEventId = selectedEvent?.eventId?.trim() || selectedEventId.trim() || startupSelectedEventId;
                   const isSelected =
-                    snapshot
-                    && selectedEvent
-                    ? sameSnapshotEventKey(snapshot.slug, selectedEvent.eventId, item.slug, item.eventId)
+                    currentSelectedSlug !== ""
+                    && currentSelectedEventId !== ""
+                    ? sameSnapshotEventKey(currentSelectedSlug, currentSelectedEventId, item.slug, item.eventId)
                     : false;
                   const seedStatus = eventSeedStatusByKey.get(`${item.slug}:${item.eventId}`) ?? null;
                   const itemKey = `${item.slug}:${item.eventId}`;
