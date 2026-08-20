@@ -1287,6 +1287,7 @@ function App() {
   const eventSettingHydratedKeyRef = useRef("");
   const suppressEventSettingAutosaveRef = useRef(false);
   const autoIpFillTriedRef = useRef(false);
+  const tabSelectionAutoLoadInFlightRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -2013,6 +2014,33 @@ function App() {
       sameSnapshotEventKey(currentSelectedSlug, currentSelectedEventId, item.slug, item.eventId)
     ) ?? null;
   }, [localSnapshotEvents, selectedEvent, selectedEventId, snapshot]);
+
+  useEffect(() => {
+    if (workspace || busy || loadingLocalSnapshotEvents || tabSelectionAutoLoadInFlightRef.current) {
+      return;
+    }
+
+    const requiresSelectedEvent = activeTab === "tournament"
+      || activeTab === "bracket"
+      || activeTab === "message"
+      || activeTab === "users";
+    if (!requiresSelectedEvent) {
+      return;
+    }
+
+    if (!selectedSidebarItem) {
+      return;
+    }
+
+    tabSelectionAutoLoadInFlightRef.current = true;
+    void (async () => {
+      try {
+        await selectLocalSnapshotEvent(selectedSidebarItem);
+      } finally {
+        tabSelectionAutoLoadInFlightRef.current = false;
+      }
+    })();
+  }, [activeTab, busy, loadingLocalSnapshotEvents, selectedSidebarItem, workspace]);
 
   const selectedCategoryUsageList = useMemo(() => {
     if (!selectedEventMeta) {
