@@ -210,6 +210,12 @@ type BatchConflictDialogState = {
   progress: BatchReportProgress;
 };
 
+type ResetSetResultCascadeResult = {
+  workspace: TournamentWorkspace;
+  affectedSetIds: string[];
+  remoteResetApplied: boolean;
+};
+
 type CallThreadIdentity = {
   expectedPlayerId: string;
   callEntrantId: string;
@@ -4823,6 +4829,53 @@ function App() {
     }
   }
 
+  async function resetSetResultCascadeForMatch(resetRemote: boolean) {
+    if (!selectedEvent) {
+      setError("先にイベントを選択してください。");
+      return;
+    }
+
+    if (!activeMatch) {
+      setError("試合が選択されていません。");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      resetRemote
+        ? "このsetと影響するsetの結果を取り消し、start.ggにもresetを送信します。実行しますか？"
+        : "このsetと影響するsetの結果をローカルで取り消します。実行しますか？",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const normalizedSlug = toApiSlug(slug);
+      const result = await invoke<ResetSetResultCascadeResult>("reset_set_result_cascade", {
+        input: {
+          slug: normalizedSlug,
+          eventId: selectedEvent.eventId,
+          setId: activeMatch.setId,
+          resetRemote,
+          perPage: Number(perPage),
+        },
+      });
+
+      setWorkspace(result.workspace);
+      closeMatchDialog();
+      const targetLabel = result.remoteResetApplied ? "ローカル + start.gg" : "ローカル";
+      setMessage(`結果を取り消しました。${targetLabel}で ${result.affectedSetIds.length} 件のsetを更新しています。`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function cancelBracketBatchConflict() {
     setBatchConflictDialog(null);
     setBatchForceOverwriteRemaining(false);
@@ -6756,6 +6809,26 @@ function App() {
                     }}
                   >
                     確定
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy}
+                    onClick={() => {
+                      void resetSetResultCascadeForMatch(false);
+                    }}
+                  >
+                    影響setをローカル取消
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy}
+                    onClick={() => {
+                      void resetSetResultCascadeForMatch(true);
+                    }}
+                  >
+                    影響setをstart.ggも取消
                   </button>
                 </div>
               </section>

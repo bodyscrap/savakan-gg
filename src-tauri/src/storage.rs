@@ -1304,6 +1304,228 @@ fn apply_local_progression(
     }
 }
 
+fn round_depth_for_sort(round: Option<i64>) -> i64 {
+    round.map(|value| value.abs()).unwrap_or(i64::MAX / 4)
+}
+
+fn collect_affected_set_ids_for_reset(
+    event: &EventSnapshot,
+    source_set_id: &str,
+) -> Result<Vec<String>, String> {
+    let source_set = event
+        .sets
+        .iter()
+        .find(|set| set.set_id == source_set_id)
+        .ok_or_else(|| format!("取り消し対象setが見つかりません: {source_set_id}"))?;
+
+    let source_depth = round_depth_for_sort(source_set.round);
+    let mut invalid_entrant_ids = source_set
+        .slots
+        .iter()
+        .filter_map(|slot| slot.entrant_id.clone())
+        .collect::<HashSet<String>>();
+    let mut affected_ids = HashSet::from([source_set_id.to_owned()]);
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+
+        for set in &event.sets {
+            if affected_ids.contains(&set.set_id) {
+                continue;
+            }
+
+            if round_depth_for_sort(set.round) < source_depth {
+                continue;
+            }
+
+            let intersects = set.slots.iter().any(|slot| {
+                slot.entrant_id
+                    .as_ref()
+                    .map(|entrant_id| invalid_entrant_ids.contains(entrant_id))
+                    .unwrap_or(false)
+            });
+            if !intersects {
+                continue;
+            }
+
+            for entrant_id in set.slots.iter().filter_map(|slot| slot.entrant_id.clone()) {
+                invalid_entrant_ids.insert(entrant_id);
+            }
+            if let Some(winner_id) = set.winner_id.as_ref() {
+                invalid_entrant_ids.insert(winner_id.clone());
+            }
+
+            affected_ids.insert(set.set_id.clone());
+            changed = true;
+        }
+    }
+
+    let mut ordered = event
+        .sets
+        .iter()
+        .filter(|set| affected_ids.contains(&set.set_id))
+        .map(|set| set.set_id.clone())
+        .collect::<Vec<String>>();
+
+    ordered.sort_by(|left, right| {
+        if left == source_set_id {
+            return std::cmp::Ordering::Less;
+        }
+        if right == source_set_id {
+            return std::cmp::Ordering::Greater;
+        }
+
+        let left_round = event
+            .sets
+            .iter()
+            .find(|set| set.set_id == *left)
+            .and_then(|set| set.round);
+        let right_round = event
+            .sets
+            .iter()
+            .find(|set| set.set_id == *right)
+            .and_then(|set| set.round);
+
+        round_depth_for_sort(left_round)
+            .cmp(&round_depth_for_sort(right_round))
+            .then_with(|| left.cmp(right))
+    });
+
+    Ok(ordered)
+}
+
+fn clear_set_result_state(set: &mut crate::models::SetSnapshot) {
+    set.winner_id = None;
+    for slot in &mut set.slots {
+        slot.score = None;
+    }
+    set.state = if empty_slot_count(set) == 0 { 2 } else { 1 };
+}
+
+fn clear_invalid_entrants_from_set(
+    set: &mut crate::models::SetSnapshot,
+    invalid_entrant_ids: &HashSet<String>,
+) {
+    for slot in &mut set.slots {
+        let should_clear = slot
+            .entrant_id
+            .as_ref()
+            .map(|entrant_id| invalid_entrant_ids.contains(entrant_id))
+            .unwrap_or(false);
+        if !should_clear {
+            continue;
+        }
+
+        slot.entrant_id = None;
+        slot.entrant_name = "TBD".to_owned();
+        slot.seed_id = None;
+        slot.seed_num = None;
+        slot.score = None;
+    }
+
+    clear_set_result_state(set);
+}
+
+pub fn list_affected_set_ids_for_reset(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+    source_set_id: &str,
+) -> Result<Vec<String>, String> {
+    let snapshot = load_snapshot(app, slug)?;
+    let event = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
+
+    collect_affected_set_ids_for_reset(event, source_set_id)
+}
+
+pub fn reset_local_set_result_with_dependencies(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+    source_set_id: &str,
+) -> Result<(TournamentWorkspace, Vec<String>), String> {
+    let mut snapshot = load_snapshot(app, slug)?;
+    let mut local_meta = load_local_meta(app, slug, event_id)?;
+
+    let event_index = snapshot
+        .events
+        .iter()
+        .position(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
+
+    let affected_set_ids = {
+        let event = snapshot
+            .events
+            .get(event_index)
+            .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
+        collect_affected_set_ids_for_reset(event, source_set_id)?
+    };
+
+    let remove_ids = affected_set_ids.iter().collect::<HashSet<&String>>();
+
+    {
+        let event = snapshot
+            .events
+            .get_mut(event_index)
+            .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
+
+        let source_set = event
+            .sets
+            .iter()
+            .find(|set| set.set_id == source_set_id)
+            .ok_or_else(|| format!("取り消し対象setが見つかりません: {source_set_id}"))?;
+        let mut invalid_entrant_ids = source_set
+            .slots
+            .iter()
+            .filter_map(|slot| slot.entrant_id.clone())
+            .collect::<HashSet<String>>();
+
+        for target_set_id in &affected_set_ids {
+            let Some(set) = event.sets.iter_mut().find(|set| set.set_id == *target_set_id) else {
+                continue;
+            };
+
+            if target_set_id == source_set_id {
+                clear_set_result_state(set);
+                continue;
+            }
+
+            for entrant_id in set.slots.iter().filter_map(|slot| slot.entrant_id.clone()) {
+                invalid_entrant_ids.insert(entrant_id);
+            }
+            if let Some(winner_id) = set.winner_id.as_ref() {
+                invalid_entrant_ids.insert(winner_id.clone());
+            }
+
+            clear_invalid_entrants_from_set(set, &invalid_entrant_ids);
+        }
+    }
+
+    local_meta
+        .pending_set_results
+        .retain(|item| !remove_ids.contains(&item.set_id));
+    local_meta
+        .set_play_sides
+        .retain(|item| !remove_ids.contains(&item.set_id));
+    local_meta.updated_at = Utc::now();
+
+    save_snapshot(app, &snapshot)?;
+    save_local_meta(app, event_id, &local_meta)?;
+
+    Ok((
+        TournamentWorkspace {
+            snapshot,
+            local_meta,
+        },
+        affected_set_ids,
+    ))
+}
+
 pub fn set_event_alias(
     app: &AppHandle,
     slug: &str,

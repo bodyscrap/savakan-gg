@@ -851,3 +851,7 @@ pub async fn report_set_result(
     Ok(())
 }
 
+pub async fn reset_set_result(token: &str, set_id: &str) -> Result<(), String> {
+    reset_set_if_needed(token, set_id).await
+}
+

@@ -290,6 +290,24 @@ pub struct ReportSetResultInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ResetSetResultCascadeInput {
+    pub slug: String,
+    pub event_id: String,
+    pub set_id: String,
+    pub reset_remote: Option<bool>,
+    pub per_page: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetSetResultCascadeResult {
+    pub workspace: TournamentWorkspace,
+    pub affected_set_ids: Vec<String>,
+    pub remote_reset_applied: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateEventSnapshotInput {
     pub slug: String,
     pub event_id: String,

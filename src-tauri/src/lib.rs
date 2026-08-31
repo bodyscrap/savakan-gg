@@ -14,8 +14,9 @@ use models::{
     BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult,
     CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, GenericMessage, ItemListConfig,
     LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSnapshotEventListItem,
-    ReportSetResultInput, SaveEventManagementMetaInput, SenderProfile, TournamentPreview,
-    TournamentSnapshot, TournamentWorkspace,
+    ReportSetResultInput, ResetSetResultCascadeInput, ResetSetResultCascadeResult,
+    SaveEventManagementMetaInput, SenderProfile, TournamentPreview, TournamentSnapshot,
+    TournamentWorkspace,
 };
 use serde::{Deserialize, Serialize};
 
@@ -999,6 +1000,92 @@ async fn report_set_result(
     })
 }
 
+#[tauri::command]
+async fn reset_set_result_cascade(
+    app: tauri::AppHandle,
+    input: ResetSetResultCascadeInput,
+) -> Result<ResetSetResultCascadeResult, String> {
+    let affected_set_ids = storage::list_affected_set_ids_for_reset(
+        &app,
+        &input.slug,
+        &input.event_id,
+        &input.set_id,
+    )?;
+
+    if affected_set_ids.is_empty() {
+        return Err("取り消し対象setが見つかりませんでした。".to_owned());
+    }
+
+    let reset_remote = input.reset_remote.unwrap_or(false);
+    if reset_remote {
+        let token = storage::load_token(&app)?;
+        let workspace_before = storage::load_workspace(&app, &input.slug, &input.event_id)?;
+        let local_event = workspace_before
+            .snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == input.event_id)
+            .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {}", input.event_id))?;
+
+        let mut reset_order = affected_set_ids.clone();
+        reset_order.sort_by(|left, right| {
+            let left_round = local_event
+                .sets
+                .iter()
+                .find(|set| set.set_id == *left)
+                .and_then(|set| set.round);
+            let right_round = local_event
+                .sets
+                .iter()
+                .find(|set| set.set_id == *right)
+                .and_then(|set| set.round);
+
+            round_depth(right_round)
+                .cmp(&round_depth(left_round))
+                .then_with(|| left.cmp(right))
+        });
+
+        for set_id in &reset_order {
+            startgg::reset_set_result(&token, set_id).await?;
+        }
+
+        let mut workspace = refresh_workspace_after_remote_report(
+            &app,
+            &token,
+            &input.slug,
+            &input.event_id,
+            input.per_page.unwrap_or(200),
+        )
+        .await?;
+        let local_meta = storage::remove_pending_set_results(
+            &app,
+            &input.slug,
+            &input.event_id,
+            &affected_set_ids,
+        )?;
+        workspace.local_meta = local_meta;
+
+        return Ok(ResetSetResultCascadeResult {
+            workspace,
+            affected_set_ids,
+            remote_reset_applied: true,
+        });
+    }
+
+    let (workspace, affected_set_ids) = storage::reset_local_set_result_with_dependencies(
+        &app,
+        &input.slug,
+        &input.event_id,
+        &input.set_id,
+    )?;
+
+    Ok(ResetSetResultCascadeResult {
+        workspace,
+        affected_set_ids,
+        remote_reset_applied: false,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1035,7 +1122,8 @@ pub fn run() {
             save_local_set_result,
             report_confirmed_sets_from_bracket,
             sync_tournament,
-            report_set_result
+            report_set_result,
+            reset_set_result_cascade
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
