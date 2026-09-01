@@ -833,6 +833,8 @@ async fn report_confirmed_sets_from_bracket(
     let mut conflict = None;
 
     for item in pending {
+        let is_reset_action = item.winner_id.trim().is_empty();
+
         let local_set = match local_event.sets.iter().find(|set| set.set_id == item.set_id) {
             Some(set) => set,
             None => {
@@ -842,7 +844,7 @@ async fn report_confirmed_sets_from_bracket(
             }
         };
 
-        if local_set.slots.len() < 2 {
+        if !is_reset_action && local_set.slots.len() < 2 {
             skipped_count += 1;
             processed_set_ids.push(item.set_id.clone());
             continue;
@@ -859,6 +861,20 @@ async fn report_confirmed_sets_from_bracket(
                 return Err(err);
             }
         };
+
+        if is_reset_action {
+            let remote_is_already_reset = remote_set.winner_id.is_none() && (remote_set.state == 1 || remote_set.state == 2);
+            if remote_is_already_reset {
+                skipped_count += 1;
+                processed_set_ids.push(item.set_id.clone());
+                continue;
+            }
+
+            startgg::reset_set_result(&token, &item.set_id).await?;
+            reported_count += 1;
+            processed_set_ids.push(item.set_id.clone());
+            continue;
+        }
 
         let is_already_synced = remote_set.winner_id.as_ref() == Some(&item.winner_id);
         if is_already_synced {
@@ -909,6 +925,7 @@ async fn report_confirmed_sets_from_bracket(
         let is_matchup_ready = entrant_ids.len() >= 2 && entrant_ids.iter().any(|entrant_id| entrant_id == &item.winner_id);
         if !is_matchup_ready {
             skipped_count += 1;
+            processed_set_ids.push(item.set_id.clone());
             continue;
         }
 

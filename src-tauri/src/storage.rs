@@ -381,6 +381,11 @@ fn is_pending_result_matched_with_set(
     pending: &LocalSetResultMeta,
     set: &crate::models::SetSnapshot,
 ) -> bool {
+    // winner_id が空の場合は「結果取り消し(reset)」の差分を表す。
+    if pending.winner_id.trim().is_empty() {
+        return set.winner_id.is_none();
+    }
+
     if set.winner_id.as_deref() != Some(pending.winner_id.as_str()) {
         return false;
     }
@@ -1601,6 +1606,28 @@ pub fn reset_local_set_result_with_dependencies(
     local_meta
         .set_play_sides
         .retain(|item| !remove_ids.contains(&item.set_id));
+
+    let event_name = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .map(|event| event.name.clone())
+        .unwrap_or_else(|| "Unnamed event".to_owned());
+
+    // 取り消し後にstart.ggとの差分を一括報告できるよう、reset差分をpendingに積む。
+    for target_set_id in &affected_set_ids {
+        local_meta.pending_set_results.push(LocalSetResultMeta {
+            event_id: event_id.to_owned(),
+            event_name: event_name.clone(),
+            set_id: target_set_id.clone(),
+            winner_id: String::new(),
+            score_csv: String::new(),
+            confirmed: true,
+            slot_scores: Vec::new(),
+            recorded_at: Utc::now(),
+        });
+    }
+
     local_meta.updated_at = Utc::now();
 
     save_snapshot(app, &snapshot)?;

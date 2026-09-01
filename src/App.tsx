@@ -31,6 +31,26 @@ type RoundColumn = {
   sets: SetSnapshot[];
 };
 
+type PositionedSet = {
+  set: SetSnapshot;
+  y: number;
+};
+
+type PositionedRoundColumn = {
+  key: string;
+  title: string;
+  round: number | null;
+  positionedSets: PositionedSet[];
+  height: number;
+};
+
+type BracketSectionForView = {
+  key: string;
+  title: string;
+  columns: PositionedRoundColumn[];
+  setCount: number;
+};
+
 type PhasePoolGroup = {
   key: string;
   phaseName: string;
@@ -38,6 +58,206 @@ type PhasePoolGroup = {
   sets: SetSnapshot[];
   columns: RoundColumn[];
 };
+
+const BRACKET_TOP_PADDING = 10;
+const BRACKET_BOTTOM_PADDING = 16;
+const BRACKET_ROW_STEP = 106;
+const BRACKET_SET_CARD_HEIGHT = 80;
+
+function interpolateLanePositions(previousPositions: number[], nextCount: number): number[] {
+  if (nextCount <= 0) {
+    return [];
+  }
+
+  if (previousPositions.length === 0) {
+    return Array.from({ length: nextCount }, (_, index) => BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP);
+  }
+
+  if (previousPositions.length === 1) {
+    const center = previousPositions[0];
+    return Array.from(
+      { length: nextCount },
+      (_, index) => center + (index - (nextCount - 1) / 2) * BRACKET_ROW_STEP,
+    );
+  }
+
+  return Array.from({ length: nextCount }, (_, index) => {
+    const mapped = ((index + 0.5) * previousPositions.length) / nextCount - 0.5;
+    const left = Math.max(0, Math.floor(mapped));
+    const right = Math.min(previousPositions.length - 1, Math.ceil(mapped));
+
+    if (left === right) {
+      return previousPositions[left];
+    }
+
+    const ratio = mapped - left;
+    return previousPositions[left] + (previousPositions[right] - previousPositions[left]) * ratio;
+  });
+}
+
+function averagePairPositions(previousPositions: number[], nextCount: number): number[] {
+  return Array.from({ length: nextCount }, (_, index) => {
+    const first = previousPositions[index * 2];
+    const second = previousPositions[index * 2 + 1];
+
+    if (first !== undefined && second !== undefined) {
+      return (first + second) / 2;
+    }
+
+    if (first !== undefined) {
+      return first;
+    }
+
+    if (second !== undefined) {
+      return second;
+    }
+
+    return BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP;
+  });
+}
+
+function buildPositionedRoundColumns(
+  columns: RoundColumn[],
+  sectionKey: string,
+): PositionedRoundColumn[] {
+  const positionedColumns: PositionedRoundColumn[] = [];
+  let previousPositions: number[] | null = null;
+
+  for (const column of columns) {
+    const setCount = column.sets.length;
+    let lanePositions: number[] = [];
+
+    if (setCount > 0) {
+      if (!previousPositions) {
+        lanePositions = Array.from(
+          { length: setCount },
+          (_, index) => BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP,
+        );
+      } else if (sectionKey === "losers") {
+        if (previousPositions.length === setCount) {
+          // Merge rounds (winners drop-ins) stay horizontally aligned with previous losers matches.
+          lanePositions = [...previousPositions];
+        } else if (previousPositions.length === setCount * 2) {
+          // Only pure losers progression rounds are centered between the two previous losers cards.
+          lanePositions = averagePairPositions(previousPositions, setCount);
+        } else {
+          lanePositions = interpolateLanePositions(previousPositions, setCount);
+        }
+      } else if (previousPositions.length === setCount * 2) {
+        lanePositions = averagePairPositions(previousPositions, setCount);
+      } else {
+        lanePositions = interpolateLanePositions(previousPositions, setCount);
+      }
+    }
+
+    const positionedSets = column.sets.map((set, index) => ({
+      set,
+      y: lanePositions[index] ?? (BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP),
+    }));
+
+    const maxTop = positionedSets.reduce((max, item) => Math.max(max, item.y), BRACKET_TOP_PADDING);
+    const height = Math.max(
+      BRACKET_TOP_PADDING + BRACKET_SET_CARD_HEIGHT + BRACKET_BOTTOM_PADDING,
+      maxTop + BRACKET_SET_CARD_HEIGHT + BRACKET_BOTTOM_PADDING,
+    );
+
+    positionedColumns.push({
+      key: column.key,
+      title: column.title,
+      round: column.round,
+      positionedSets,
+      height,
+    });
+
+    previousPositions = positionedSets.map((item) => item.y);
+  }
+
+  return positionedColumns;
+}
+
+function formatAlphabetSequence(index: number): string {
+  let n = index;
+  let label = "";
+
+  do {
+    const remainder = n % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    n = Math.floor(n / 26) - 1;
+  } while (n >= 0);
+
+  return label;
+}
+
+function pickPairSourceIds(previousSetIds: string[], currentCount: number, currentIndex: number): string[] {
+  if (previousSetIds.length === 0 || currentCount <= 0) {
+    return [];
+  }
+
+  if (previousSetIds.length === 1) {
+    return [previousSetIds[0]];
+  }
+
+  if (previousSetIds.length >= currentCount * 2) {
+    const first = previousSetIds[currentIndex * 2];
+    const second = previousSetIds[currentIndex * 2 + 1];
+    return [first, second].filter((item): item is string => Boolean(item));
+  }
+
+  const mapped = ((currentIndex + 0.5) * previousSetIds.length) / currentCount - 0.5;
+  const left = Math.max(0, Math.floor(mapped));
+  const right = Math.min(previousSetIds.length - 1, Math.ceil(mapped));
+  const first = previousSetIds[left];
+  const second = previousSetIds[right];
+
+  if (first && second && first !== second) {
+    return [first, second];
+  }
+
+  if (first) {
+    const neighbor = previousSetIds[Math.min(previousSetIds.length - 1, left + 1)] ?? previousSetIds[Math.max(0, left - 1)];
+    if (neighbor && neighbor !== first) {
+      return [first, neighbor];
+    }
+    return [first];
+  }
+
+  return [];
+}
+
+function normalizeSourceText(kind: "winners" | "losers", setCode: string): string {
+  return `${kind} of ${setCode}`;
+}
+
+function isGrandFinalText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (normalized.includes("grand final") || normalized.includes("grand finals") || normalized.includes("グランド")) {
+    return true;
+  }
+  return /(^|\s|\()gf(\s|\)|$)/i.test(text);
+}
+
+function isWinnersFinalText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return normalized.includes("winners final") || normalized.includes("winners finals") || normalized.includes("勝者決勝");
+}
+
+function isLosersFinalText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return normalized.includes("losers final") || normalized.includes("losers finals") || normalized.includes("敗者決勝");
+}
+
+function isSlotTbd(slot: SetSlot): boolean {
+  if (slot.entrantId !== null) {
+    return false;
+  }
+
+  const normalized = slot.entrantName.trim().toUpperCase();
+  if (normalized === "") {
+    return true;
+  }
+
+  return normalized === "TBD" || normalized === "TBA" || normalized === "UNKNOWN";
+}
 
 function buildRoundColumns(sets: SetSnapshot[]): RoundColumn[] {
   const map = new Map<string, RoundColumn>();
@@ -874,6 +1094,10 @@ function isMatchupReady(set: SetSnapshot): boolean {
 
 function isStandbySet(set: SetSnapshot): boolean {
   return set.state === 1;
+}
+
+function isCompletedSet(set: SetSnapshot): boolean {
+  return set.state === 3 || set.winnerId !== null;
 }
 
 function isLosersBracketSet(set: SetSnapshot): boolean {
@@ -4237,6 +4461,208 @@ function App() {
     return sections;
   }, [selectedPhasePoolGroup]);
 
+  const selectedBracketSectionsForView = useMemo(() => {
+    return selectedBracketSections.map((section) => {
+      const visualColumns = section.key === "losers" ? [...section.columns].reverse() : section.columns;
+      return {
+        ...section,
+        columns: buildPositionedRoundColumns(visualColumns, section.key),
+      };
+    });
+  }, [selectedBracketSections]) as BracketSectionForView[];
+
+  const setDisplayCodeById = useMemo(() => {
+    const map = new Map<string, string>();
+    const used = new Set<string>();
+    const orderedSets: SetSnapshot[] = [];
+
+    const orderedSections = [...selectedBracketSectionsForView].sort((left, right) => {
+      const weight = (key: string): number => {
+        if (key === "winners") {
+          return 0;
+        }
+        if (key === "losers") {
+          return 1;
+        }
+        return 2;
+      };
+
+      return weight(left.key) - weight(right.key);
+    });
+
+    for (const section of orderedSections) {
+      for (const column of section.columns) {
+        const setsInColumn = [...column.positionedSets].sort((left, right) => {
+          const byY = left.y - right.y;
+          if (Math.abs(byY) > 0.0001) {
+            return byY;
+          }
+          return left.set.setId.localeCompare(right.set.setId, "ja");
+        });
+
+        for (const item of setsInColumn) {
+          orderedSets.push(item.set);
+        }
+      }
+    }
+
+    let fallbackIndex = 0;
+    for (const set of orderedSets) {
+      if (map.has(set.setId)) {
+        continue;
+      }
+
+      let code = formatAlphabetSequence(fallbackIndex);
+      while (used.has(code)) {
+        fallbackIndex += 1;
+        code = formatAlphabetSequence(fallbackIndex);
+      }
+
+      map.set(set.setId, code);
+      used.add(code);
+      fallbackIndex += 1;
+    }
+
+    return map;
+  }, [selectedBracketSectionsForView]);
+
+  const tbdSourceLabelBySlotKey = useMemo(() => {
+    const map = new Map<string, string>();
+    const winnersSection = selectedBracketSectionsForView.find((section) => section.key === "winners") ?? null;
+    const losersSection = selectedBracketSectionsForView.find((section) => section.key === "losers") ?? null;
+
+    const winnersColumnsOrdered = winnersSection?.columns ?? [];
+    const losersColumnsOrdered = losersSection?.columns ?? [];
+
+    for (let columnIndex = 1; columnIndex < winnersColumnsOrdered.length; columnIndex += 1) {
+      const previousColumn = winnersColumnsOrdered[columnIndex - 1];
+      const currentColumn = winnersColumnsOrdered[columnIndex];
+      const previousIds = previousColumn.positionedSets.map((item) => item.set.setId);
+
+      currentColumn.positionedSets.forEach((item, currentIndex) => {
+        const sources = pickPairSourceIds(previousIds, currentColumn.positionedSets.length, currentIndex)
+          .map((setId) => setDisplayCodeById.get(setId))
+          .filter((code): code is string => Boolean(code));
+
+        sources.forEach((code, sourceIndex) => {
+          map.set(`${item.set.setId}:${sourceIndex}`, normalizeSourceText("winners", code));
+        });
+      });
+    }
+
+    const winnersColumnsByCount = new Map<number, Array<Array<string>>>();
+    for (const column of winnersColumnsOrdered) {
+      const ids = column.positionedSets.map((item) => item.set.setId);
+      if (ids.length === 0) {
+        continue;
+      }
+      const found = winnersColumnsByCount.get(ids.length);
+      if (found) {
+        found.push(ids);
+      } else {
+        winnersColumnsByCount.set(ids.length, [ids]);
+      }
+    }
+
+    const winnersCountUseCursor = new Map<number, number>();
+
+    for (let columnIndex = 1; columnIndex < losersColumnsOrdered.length; columnIndex += 1) {
+      const previousColumn = losersColumnsOrdered[columnIndex - 1];
+      const currentColumn = losersColumnsOrdered[columnIndex];
+      const previousIds = previousColumn.positionedSets.map((item) => item.set.setId);
+      const currentCount = currentColumn.positionedSets.length;
+
+      if (currentCount <= 0) {
+        continue;
+      }
+
+      if (previousIds.length === currentCount) {
+        const candidateWinnersColumns = winnersColumnsByCount.get(currentCount) ?? [];
+        const winnerCursor = winnersCountUseCursor.get(currentCount) ?? 0;
+        const winnersSourceIds = candidateWinnersColumns[winnerCursor] ?? [];
+
+        if (candidateWinnersColumns.length > winnerCursor) {
+          winnersCountUseCursor.set(currentCount, winnerCursor + 1);
+        }
+
+        currentColumn.positionedSets.forEach((item, currentIndex) => {
+          const losersCode = setDisplayCodeById.get(previousIds[currentIndex]);
+          if (losersCode) {
+            map.set(`${item.set.setId}:0`, normalizeSourceText("winners", losersCode));
+          }
+
+          const winnersSourceId = winnersSourceIds[currentIndex];
+          const winnersCode = winnersSourceId ? setDisplayCodeById.get(winnersSourceId) : undefined;
+          if (winnersCode) {
+            map.set(`${item.set.setId}:1`, normalizeSourceText("losers", winnersCode));
+          }
+        });
+        continue;
+      }
+
+      currentColumn.positionedSets.forEach((item, currentIndex) => {
+        const sources = pickPairSourceIds(previousIds, currentCount, currentIndex)
+          .map((setId) => setDisplayCodeById.get(setId))
+          .filter((code): code is string => Boolean(code));
+
+        sources.forEach((code, sourceIndex) => {
+          map.set(`${item.set.setId}:${sourceIndex}`, normalizeSourceText("winners", code));
+        });
+      });
+    }
+
+    const winnersAllSets = winnersColumnsOrdered
+      .flatMap((column) => column.positionedSets.map((item) => item.set));
+    const losersAllSets = losersColumnsOrdered
+      .flatMap((column) => column.positionedSets.map((item) => item.set));
+
+    const winnersFinalSet = winnersAllSets.find((set) => isWinnersFinalText(set.fullRoundText))
+      ?? winnersAllSets
+        .filter((set) => !isGrandFinalText(set.fullRoundText))
+        .slice(-1)[0];
+    const losersFinalSet = losersAllSets.find((set) => isLosersFinalText(set.fullRoundText))
+      ?? losersAllSets.slice(-1)[0];
+
+    const winnersFinalCode = winnersFinalSet ? setDisplayCodeById.get(winnersFinalSet.setId) : undefined;
+    const losersFinalCode = losersFinalSet ? setDisplayCodeById.get(losersFinalSet.setId) : undefined;
+
+    if (winnersFinalCode || losersFinalCode) {
+      for (const set of winnersAllSets) {
+        if (!isGrandFinalText(set.fullRoundText)) {
+          continue;
+        }
+        if (winnersFinalCode) {
+          map.set(`${set.setId}:0`, normalizeSourceText("winners", winnersFinalCode));
+        }
+        if (losersFinalCode) {
+          map.set(`${set.setId}:1`, normalizeSourceText("winners", losersFinalCode));
+        }
+      }
+    }
+
+    return map;
+  }, [selectedBracketSectionsForView, setDisplayCodeById]);
+
+  function resolveTbdSourceLabel(set: SetSnapshot, slotIndex: number, slot: SetSlot): string | null {
+    if (!isSlotTbd(slot)) {
+      return null;
+    }
+
+    const own = tbdSourceLabelBySlotKey.get(`${set.setId}:${slotIndex}`);
+    if (own) {
+      return own;
+    }
+
+    if (set.slots.length === 2) {
+      const other = tbdSourceLabelBySlotKey.get(`${set.setId}:${slotIndex === 0 ? 1 : 0}`);
+      if (other) {
+        return other;
+      }
+    }
+
+    return null;
+  }
+
   const pendingResultBySetId = useMemo(() => {
     const map = new Map<string, LocalSetResultMeta>();
     for (const pending of pendingSetResults) {
@@ -4543,13 +4969,30 @@ function App() {
     return setPlaySideMap.get(`${setId}:${entrantId}`) ?? "";
   }
 
-  function getSetSlotSideLabel(setId: string, entrantId: string | null): string {
+  function getSetSlotSideLabel(
+    setId: string,
+    entrantId: string | null,
+    options?: { fallbackBySlotIndex?: number; finishedSet?: boolean; matchupReady?: boolean },
+  ): string {
     if (!entrantId) {
       return "-";
     }
 
     const side = getSetSlotSide(setId, entrantId);
-    return side === "" ? "-" : side;
+    if (side !== "") {
+      return side;
+    }
+
+    if ((options?.finishedSet || options?.matchupReady) && options.fallbackBySlotIndex !== undefined) {
+      if (options.fallbackBySlotIndex === 0) {
+        return "1P";
+      }
+      if (options.fallbackBySlotIndex === 1) {
+        return "2P";
+      }
+    }
+
+    return "-";
   }
 
   function getSetScoresForDisplay(set: SetSnapshot): { scores: Record<string, string>; isDq: boolean; winnerId: string | null } {
@@ -4829,7 +5272,7 @@ function App() {
     }
   }
 
-  async function resetSetResultCascadeForMatch(resetRemote: boolean) {
+  async function resetSetResultCascadeForMatch() {
     if (!selectedEvent) {
       setError("先にイベントを選択してください。");
       return;
@@ -4840,11 +5283,7 @@ function App() {
       return;
     }
 
-    const confirmed = window.confirm(
-      resetRemote
-        ? "このsetと影響するsetの結果を取り消し、start.ggにもresetを送信します。実行しますか？"
-        : "このsetと影響するsetの結果をローカルで取り消します。実行しますか？",
-    );
+    const confirmed = window.confirm("このsetと影響するsetの結果をローカルで取り消します。実行しますか？");
     if (!confirmed) {
       return;
     }
@@ -4860,15 +5299,14 @@ function App() {
           slug: normalizedSlug,
           eventId: selectedEvent.eventId,
           setId: activeMatch.setId,
-          resetRemote,
+          resetRemote: false,
           perPage: Number(perPage),
         },
       });
 
       setWorkspace(result.workspace);
       closeMatchDialog();
-      const targetLabel = result.remoteResetApplied ? "ローカル + start.gg" : "ローカル";
-      setMessage(`結果を取り消しました。${targetLabel}で ${result.affectedSetIds.length} 件のsetを更新しています。`);
+      setMessage(`結果をローカルで取り消しました。${result.affectedSetIds.length} 件のsetを更新しています。`);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -6576,20 +7014,21 @@ function App() {
                     <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
 
                     <div className="bracket-split-stack">
-                      {selectedBracketSections.map((section) => (
+                      {selectedBracketSectionsForView.map((section) => (
                         <section className="bracket-subgroup" key={`${selectedPhasePoolGroup.key}-${section.key}`}>
                           <h4>{section.title}</h4>
                           <p className="meta">sets: {section.setCount}</p>
                           <div className="bracket-board">
-                            {(section.key === "losers" ? [...section.columns].reverse() : section.columns).map((column) => (
+                            {section.columns.map((column) => (
                               <section className="bracket-column" key={`${selectedPhasePoolGroup.key}-${section.key}-${column.key}`}>
                                 <h4>{column.title}</h4>
                                 {column.round !== null && <p className="meta">round: {column.round}</p>}
 
-                                <div className="column-sets">
-                                  {column.sets.map((set) => (
+                                <div className="column-sets positioned" style={{ height: `${column.height}px` }}>
+                                  {column.positionedSets.map(({ set, y }) => (
                                     (() => {
                                       const pendingResult = pendingResultBySetId.get(set.setId);
+                                      const displayCode = setDisplayCodeById.get(set.setId);
                                       const changeClass = pendingResult
                                         ? (isConfirmedSetResult(pendingResult) ? "set-card-changed-confirmed" : "set-card-changed-draft")
                                         : "";
@@ -6598,6 +7037,7 @@ function App() {
                                     <article
                                       className={`set-card simple-match-card ${changeClass}`}
                                       key={set.setId}
+                                      style={{ top: `${Math.round(y)}px` }}
                                       role="button"
                                       tabIndex={0}
                                       onClick={() => openMatchDialog(set)}
@@ -6608,13 +7048,29 @@ function App() {
                                         }
                                       }}
                                     >
+                                      {displayCode && <p className="set-identifier">Set {displayCode}</p>}
                                       {set.slots.map((slot, idx) => {
                                         const entrantId = slot.entrantId;
+                                        const tbdSourceLabel = resolveTbdSourceLabel(set, idx, slot);
+                                        const displayEntrantName = tbdSourceLabel
+                                          ? tbdSourceLabel
+                                          : slot.entrantName;
+                                        const finishedSet = isCompletedSet(set);
+                                        const matchupReady = isMatchupReady(set);
                                         const setDisplay = getSetScoresForDisplay(set);
                                         const scoreMap = setDisplay.scores;
                                         const winnerId = setDisplay.winnerId ?? set.winnerId;
                                         const isWinner = entrantId && winnerId ? entrantId === winnerId : false;
-                                        const sideLabel = getSetSlotSideLabel(set.setId, entrantId);
+                                        const sideLabel = getSetSlotSideLabel(set.setId, entrantId, {
+                                          fallbackBySlotIndex: idx,
+                                          finishedSet,
+                                          matchupReady,
+                                        });
+                                        const sideBadgeClass = sideLabel === "1P"
+                                          ? (finishedSet ? "side-1p-finished" : "side-1p")
+                                          : sideLabel === "2P"
+                                            ? (finishedSet ? "side-2p-finished" : "side-2p")
+                                            : "side-none";
                                         const gameWins = slot.score !== null
                                           ? (isDqScoreValue(slot.score) ? "DQ" : formatScoreValue(slot.score))
                                           : entrantId
@@ -6626,10 +7082,10 @@ function App() {
 
                                         return (
                                           <div className="simple-match-row" key={`${set.setId}-${idx}`}>
-                                            <span className={`side-badge ${sideLabel === "1P" ? "side-1p" : sideLabel === "2P" ? "side-2p" : "side-none"}`}>
+                                            <span className={`side-badge ${sideBadgeClass}`}>
                                               {sideLabel}
                                             </span>
-                                            <span className="simple-player-name">{slot.entrantName}</span>
+                                            <span className="simple-player-name">{displayEntrantName}</span>
                                             <span className={`simple-games ${scoreClass}`}>{gameWins}</span>
                                           </div>
                                         );
@@ -6677,6 +7133,8 @@ function App() {
                 <div className="dialog-players">
                   {activeMatch.slots.map((slot, idx) => {
                     const entrantId = slot.entrantId;
+                    const dialogTbdLabel = resolveTbdSourceLabel(activeMatch, idx, slot);
+                    const dialogEntrantName = dialogTbdLabel ? dialogTbdLabel : slot.entrantName;
                     const entrantMeta = entrantId
                       ? selectedEventMeta?.entrants.find((entrant) => entrant.entrantId === entrantId)
                       : null;
@@ -6693,7 +7151,7 @@ function App() {
                         className={`dialog-player-card ${currentSide === "1P" ? "side-card-1p" : currentSide === "2P" ? "side-card-2p" : ""}`}
                         key={`${activeMatch.setId}-dialog-${idx}`}
                       >
-                        <p className="dialog-player-name">{slot.entrantName}</p>
+                        <p className="dialog-player-name">{dialogEntrantName}</p>
                         <p className="meta">entrantId: {entrantId ?? "-"}</p>
                         {entrantId && (
                           <>
@@ -6817,20 +7275,10 @@ function App() {
                     className="ghost"
                     disabled={busy}
                     onClick={() => {
-                      void resetSetResultCascadeForMatch(false);
+                      void resetSetResultCascadeForMatch();
                     }}
                   >
-                    影響setをローカル取消
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy}
-                    onClick={() => {
-                      void resetSetResultCascadeForMatch(true);
-                    }}
-                  >
-                    影響setをstart.ggも取消
+                    影響setを取消
                   </button>
                 </div>
               </section>

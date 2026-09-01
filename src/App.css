@@ -21,6 +21,7 @@
   --danger-bg: #fef2f2;
   --danger-line: #fca5a5;
   --danger-ink: #7f1d1d;
+  --bracket-set-card-height: 80px;
 
   color: var(--ink);
   background: var(--bg);
@@ -687,11 +688,30 @@ button:disabled {
   gap: 0.55rem;
 }
 
+.column-sets.positioned {
+  position: relative;
+  display: block;
+}
+
+.column-sets.positioned .set-card {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
 .set-card {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #ffffff;
   padding: 0.65rem;
+  min-height: var(--bracket-set-card-height);
+}
+
+.set-identifier {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #1d4ed8;
 }
 
 .simple-match-card {
@@ -744,6 +764,18 @@ button:disabled {
   color: #ffffff;
 }
 
+.side-badge.side-1p-finished {
+  background: #6b7280;
+  border-color: #6b7280;
+  color: #ffffff;
+}
+
+.side-badge.side-2p-finished {
+  background: #9ca3af;
+  border-color: #9ca3af;
+  color: #111827;
+}
+
 .side-badge.side-none {
   background: #f3f4f6;
   color: #6b7280;
@@ -751,6 +783,9 @@ button:disabled {
 
 .simple-player-name {
   font-size: 0.86rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .simple-games {
