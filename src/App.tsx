@@ -471,6 +471,31 @@ type MatchSideRandomNotice = {
   triggeredAt: number;
 };
 
+type ObsOverlayState = {
+  active: boolean;
+  currentSetId: string | null;
+  eventName: string | null;
+  roundText: string | null;
+  redPlayerName: string;
+  bluePlayerName: string;
+  redSetWins: number;
+  blueSetWins: number;
+  fontScale: number;
+  overlayUrl: string;
+};
+
+type ObsOverlaySetInput = {
+  enabled: boolean;
+  setId: string;
+  eventName: string;
+  roundText: string;
+  redPlayerName: string;
+  bluePlayerName: string;
+  redSetWins: number;
+  blueSetWins: number;
+  fontScale: number;
+};
+
 type PlayerMetaDraft = {
   playSide: PlaySide | "";
   categorySelections: string[][];
@@ -511,7 +536,7 @@ type MailboxFilterSetting = {
   unreadOnly: boolean;
 };
 
-type AppTab = "home" | "create" | "tournament" | "message" | "bracket" | "item-list" | "users" | "settings";
+type AppTab = "home" | "create" | "tournament" | "message" | "bracket" | "item-list" | "users" | "settings" | "overlay";
 
 type UserCardPlayer = {
   tournamentId: string;
@@ -1050,6 +1075,7 @@ const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: bo
   { id: "home", label: "大会一覧", icon: "🏠", implemented: true },
   { id: "tournament", label: "大会管理", icon: "⚙", implemented: true },
   { id: "bracket", label: "ブラケット", icon: "🏆", implemented: true },
+  { id: "overlay", label: "OBSオーバーレイ", icon: "📺", implemented: true },
   { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
   { id: "message", label: "メッセージ", icon: "💬", implemented: true },
   { id: "users", label: "プレイヤーリスト", icon: "👥", implemented: true },
@@ -1146,6 +1172,27 @@ function parseDraftScoreValue(rawValue: string): number | null {
 
 function formatDraftScoreValue(value: number): string {
   return value < 0 ? "-" : String(Math.trunc(value));
+}
+
+function normalizeObsSetWins(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.trunc(value));
+}
+
+function normalizeObsFontScale(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.min(2, Math.max(0.6, value));
+}
+
+function scoreToOverlayGameWins(value: number | null): number {
+  if (value === null || value < 0) {
+    return 0;
+  }
+  return normalizeObsSetWins(value);
 }
 
 function parseScoreCsvText(rawScoreCsv: string): { winnerWins: number; loserWins: number } | null {
@@ -1651,6 +1698,13 @@ function App() {
   const [mailboxReadMessageIds, setMailboxReadMessageIds] = useState<string[]>([]);
   const [sideDecisionMethod, setSideDecisionMethod] = useState<EventManagementSetting["sideDecisionMethod"]>("upper_1p");
   const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
+  const [obsOverlayState, setObsOverlayState] = useState<ObsOverlayState | null>(null);
+  const [obsOverlayBusy, setObsOverlayBusy] = useState(false);
+  const [testOverlayRedName, setTestOverlayRedName] = useState("テストプレイヤー1");
+  const [testOverlayBlueName, setTestOverlayBlueName] = useState("テストプレイヤー2");
+  const [testOverlayRedWins, setTestOverlayRedWins] = useState(0);
+  const [testOverlayBlueWins, setTestOverlayBlueWins] = useState(0);
+  const [isTestOverlayActive, setIsTestOverlayActive] = useState(false);
   const [categorySlotListIds, setCategorySlotListIds] = useState<string[]>(["", "", ""]);
   const [categorySlotMinCounts, setCategorySlotMinCounts] = useState<number[]>([0, 0, 0]);
   const [categorySlotMaxCounts, setCategorySlotMaxCounts] = useState<number[]>([1, 1, 1]);
@@ -1687,6 +1741,8 @@ function App() {
   const dqCameraDetectorRef = useRef<{
     detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
   } | null>(null);
+  const overlayPreviewWrapRef = useRef<HTMLDivElement | null>(null);
+  const overlayPreviewIframeRef = useRef<HTMLIFrameElement | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -3776,6 +3832,67 @@ function App() {
   }, [matchSideRandomNotice]);
 
   useEffect(() => {
+    if (activeTab !== "overlay") {
+      if (isTestOverlayActive) {
+        void stopTestOverlay();
+      }
+      return;
+    }
+
+    let alive = true;
+    const loadState = async () => {
+      try {
+        const next = await invoke<ObsOverlayState>("get_obs_overlay_state");
+        if (!alive) {
+          return;
+        }
+        setObsOverlayState(next);
+        setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
+      } catch (err) {
+        if (alive) {
+          setError(String(err));
+        }
+      }
+    };
+
+    void loadState();
+    const pollId = window.setInterval(() => {
+      void loadState();
+    }, 1200);
+
+    return () => {
+      alive = false;
+      window.clearInterval(pollId);
+    };
+  }, [activeTab, isTestOverlayActive]);
+
+  useEffect(() => {
+    if (activeTab !== "overlay") {
+      return;
+    }
+
+    const postPreviewSize = () => {
+      const width = overlayPreviewWrapRef.current?.clientWidth ?? 0;
+      const height = overlayPreviewWrapRef.current?.clientHeight ?? 0;
+      if (width <= 0 || height <= 0) {
+        return;
+      }
+      overlayPreviewIframeRef.current?.contentWindow?.postMessage({
+        type: "preview-container-width",
+        width,
+        height,
+      }, "*");
+    };
+
+    postPreviewSize();
+    const timer = window.setInterval(postPreviewSize, 500);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [activeTab, obsOverlayState?.overlayUrl]);
+
+  useEffect(() => {
     if (!selectedEvent) {
       standbyReadinessRef.current = {};
       return;
@@ -4333,6 +4450,96 @@ function App() {
     return Number.isInteger(value) ? String(value) : value.toFixed(1);
   }
 
+  async function refreshObsOverlayState() {
+    const next = await invoke<ObsOverlayState>("get_obs_overlay_state");
+    setObsOverlayState(next);
+    setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
+  }
+
+  async function updateObsOverlayFontScaleOnly(fontScale: number) {
+    setObsOverlayBusy(true);
+    try {
+      const next = await invoke<ObsOverlayState>("set_obs_overlay_font_scale", {
+        fontScale: normalizeObsFontScale(fontScale),
+      });
+      setObsOverlayState(next);
+      setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setObsOverlayBusy(false);
+    }
+  }
+
+  async function toggleObsOverlaySet(input: ObsOverlaySetInput) {
+    setObsOverlayBusy(true);
+    try {
+      const next = await invoke<ObsOverlayState>("toggle_obs_overlay_set", {
+        input: {
+          ...input,
+          redSetWins: normalizeObsSetWins(input.redSetWins),
+          blueSetWins: normalizeObsSetWins(input.blueSetWins),
+          fontScale: normalizeObsFontScale(input.fontScale),
+        },
+      });
+      setObsOverlayState(next);
+      setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setObsOverlayBusy(false);
+    }
+  }
+
+  async function startTestOverlay() {
+    if (!obsOverlayState) {
+      return;
+    }
+    await toggleObsOverlaySet({
+      enabled: true,
+      setId: "__test__",
+      eventName: "テスト配信",
+      roundText: "プレビュー",
+      redPlayerName: testOverlayRedName.trim() || "テストプレイヤー1",
+      bluePlayerName: testOverlayBlueName.trim() || "テストプレイヤー2",
+      redSetWins: testOverlayRedWins,
+      blueSetWins: testOverlayBlueWins,
+      fontScale: obsOverlayState.fontScale,
+    });
+  }
+
+  async function stopTestOverlay() {
+    await toggleObsOverlaySet({
+      enabled: false,
+      setId: "__test__",
+      eventName: "",
+      roundText: "",
+      redPlayerName: "",
+      bluePlayerName: "",
+      redSetWins: 0,
+      blueSetWins: 0,
+      fontScale: obsOverlayState?.fontScale ?? 1,
+    });
+  }
+
+  async function toggleActiveMatchOverlay(set: SetSnapshot) {
+    const slot1 = set.slots[0];
+    const slot2 = set.slots[1];
+    const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === set.setId;
+
+    await toggleObsOverlaySet({
+      enabled: !isSameActive,
+      setId: set.setId,
+      eventName: selectedEvent?.name ?? "",
+      roundText: set.fullRoundText,
+      redPlayerName: slot1?.entrantName?.trim() || "RED",
+      bluePlayerName: slot2?.entrantName?.trim() || "BLUE",
+      redSetWins: scoreToOverlayGameWins(slot1?.score ?? null),
+      blueSetWins: scoreToOverlayGameWins(slot2?.score ?? null),
+      fontScale: obsOverlayState?.fontScale ?? 1,
+    });
+  }
+
   const phasePoolGroups = useMemo(() => {
     if (!selectedEvent) {
       return [] as PhasePoolGroup[];
@@ -4420,6 +4627,13 @@ function App() {
 
     return selectedPhasePoolGroup.sets.find((set) => set.setId === activeMatchSetId) ?? null;
   }, [selectedPhasePoolGroup, activeMatchSetId]);
+
+  const activeObsOverlaySet = useMemo(() => {
+    if (!obsOverlayState?.active || !obsOverlayState.currentSetId) {
+      return null;
+    }
+    return allSets.find((entry) => entry.set.setId === obsOverlayState.currentSetId) ?? null;
+  }, [allSets, obsOverlayState]);
 
   const selectedBracketSections = useMemo(() => {
     if (!selectedPhasePoolGroup) {
@@ -6731,6 +6945,144 @@ function App() {
         </>
       )}
 
+      {activeTab === "overlay" && (
+        <>
+          <section className="panel">
+            <h2>OBSオーバーレイ</h2>
+            <p className="meta">配信中セット、またはテスト表示を OBS ブラウザソースに出力します。</p>
+            <p className="meta">URL: {obsOverlayState?.overlayUrl ?? "読み込み中..."}</p>
+          </section>
+
+          <section className="panel overlay-preview-panel">
+            {!obsOverlayState ? (
+              <p className="meta">オーバーレイ状態を読み込んでいます...</p>
+            ) : (
+              <>
+                <div className="overlay-preview-controls">
+                  <p className="meta">
+                    状態: {obsOverlayState.active
+                      ? (isTestOverlayActive ? "テスト配信中" : `配信中 (${obsOverlayState.currentSetId ?? "-"})`)
+                      : "停止中"}
+                  </p>
+                  {activeObsOverlaySet && (
+                    <p className="meta">配信中set: {activeObsOverlaySet.set.fullRoundText}</p>
+                  )}
+
+                  <div className="obs-overlay-grid">
+                    <label>
+                      プレイヤー表示サイズ ({Math.round(normalizeObsFontScale(obsOverlayState.fontScale) * 100)}%)
+                      <input
+                        type="range"
+                        min={0.6}
+                        max={2}
+                        step={0.05}
+                        value={normalizeObsFontScale(obsOverlayState.fontScale)}
+                        onChange={(e) => {
+                          void updateObsOverlayFontScaleOnly(Number(e.currentTarget.value));
+                        }}
+                        disabled={obsOverlayBusy}
+                      />
+                    </label>
+                  </div>
+
+                  <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--line)" }}>
+                    <p className="meta">テスト配信（タブ離脱で自動停止）</p>
+                    <div className="obs-overlay-grid">
+                      <label>
+                        1P プレイヤー名
+                        <input
+                          type="text"
+                          value={testOverlayRedName}
+                          onChange={(e) => setTestOverlayRedName(e.currentTarget.value)}
+                          disabled={obsOverlayBusy || isTestOverlayActive}
+                        />
+                      </label>
+                      <label>
+                        1P 取得ゲーム数
+                        <input
+                          type="number"
+                          min={0}
+                          value={testOverlayRedWins}
+                          onChange={(e) => setTestOverlayRedWins(normalizeObsSetWins(Number(e.currentTarget.value)))}
+                          disabled={obsOverlayBusy || isTestOverlayActive}
+                        />
+                      </label>
+                      <label>
+                        2P プレイヤー名
+                        <input
+                          type="text"
+                          value={testOverlayBlueName}
+                          onChange={(e) => setTestOverlayBlueName(e.currentTarget.value)}
+                          disabled={obsOverlayBusy || isTestOverlayActive}
+                        />
+                      </label>
+                      <label>
+                        2P 取得ゲーム数
+                        <input
+                          type="number"
+                          min={0}
+                          value={testOverlayBlueWins}
+                          onChange={(e) => setTestOverlayBlueWins(normalizeObsSetWins(Number(e.currentTarget.value)))}
+                          disabled={obsOverlayBusy || isTestOverlayActive}
+                        />
+                      </label>
+                    </div>
+                    <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isTestOverlayActive) {
+                            void stopTestOverlay();
+                          } else {
+                            void startTestOverlay();
+                          }
+                        }}
+                        disabled={obsOverlayBusy}
+                      >
+                        {isTestOverlayActive ? "テスト配信停止" : "テスト配信開始"}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          void refreshObsOverlayState();
+                        }}
+                        disabled={obsOverlayBusy}
+                      >
+                        状態再読込
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {(obsOverlayState.active || isTestOverlayActive) && (
+                  <div className="overlay-preview-frame-wrap" ref={overlayPreviewWrapRef}>
+                    <iframe
+                      ref={overlayPreviewIframeRef}
+                      className="overlay-preview-frame"
+                      title="OBSオーバーレイプレビュー"
+                      src={`${obsOverlayState.overlayUrl}?preview=1`}
+                      onLoad={() => {
+                        const width = overlayPreviewWrapRef.current?.clientWidth ?? 0;
+                        const height = overlayPreviewWrapRef.current?.clientHeight ?? 0;
+                        if (width <= 0 || height <= 0) {
+                          return;
+                        }
+                        overlayPreviewIframeRef.current?.contentWindow?.postMessage({
+                          type: "preview-container-width",
+                          width,
+                          height,
+                        }, "*");
+                      }}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </>
+      )}
+
         {activeTab === "settings" && (
         <>
           <section className="panel">
@@ -7032,10 +7384,15 @@ function App() {
                                       const changeClass = pendingResult
                                         ? (isConfirmedSetResult(pendingResult) ? "set-card-changed-confirmed" : "set-card-changed-draft")
                                         : "";
+                                      const isLiveOverlaySet = Boolean(
+                                        obsOverlayState?.active
+                                        && obsOverlayState.currentSetId === set.setId
+                                        && obsOverlayState.currentSetId !== "__test__",
+                                      );
 
                                       return (
                                     <article
-                                      className={`set-card simple-match-card ${changeClass}`}
+                                      className={`set-card simple-match-card ${changeClass} ${isLiveOverlaySet ? "set-card-live" : ""}`}
                                       key={set.setId}
                                       style={{ top: `${Math.round(y)}px` }}
                                       role="button"
@@ -7049,6 +7406,7 @@ function App() {
                                       }}
                                     >
                                       {displayCode && <p className="set-identifier">Set {displayCode}</p>}
+                                      {isLiveOverlaySet && <p className="set-live-badge">配信中</p>}
                                       {set.slots.map((slot, idx) => {
                                         const entrantId = slot.entrantId;
                                         const tbdSourceLabel = resolveTbdSourceLabel(set, idx, slot);
@@ -7252,6 +7610,16 @@ function App() {
                 </div>
 
                 <div className="dialog-actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy || obsOverlayBusy}
+                    onClick={() => {
+                      void toggleActiveMatchOverlay(activeMatch);
+                    }}
+                  >
+                    {obsOverlayState?.active && obsOverlayState.currentSetId === activeMatch.setId ? "配信停止" : "このsetを配信"}
+                  </button>
                   <button
                     type="button"
                     disabled={busy || !isMatchupReady(activeMatch)}

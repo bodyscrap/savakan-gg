@@ -707,11 +707,29 @@ button:disabled {
   min-height: var(--bracket-set-card-height);
 }
 
+.set-card-live {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 1px #fca5a5 inset;
+}
+
 .set-identifier {
   margin: 0;
   font-size: 0.75rem;
   font-weight: 700;
   color: #1d4ed8;
+}
+
+.set-live-badge {
+  margin: 0.12rem 0 0.2rem;
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #7f1d1d;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
 }
 
 .simple-match-card {
@@ -938,6 +956,81 @@ button:disabled {
   margin-top: 0.75rem;
   display: grid;
   gap: 0.5rem;
+}
+
+.obs-overlay-controls {
+  margin-top: 0.7rem;
+  border: 1px solid #dbe3f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 0.65rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.obs-overlay-controls-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.obs-overlay-controls-head h4 {
+  margin: 0;
+}
+
+.obs-overlay-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.55rem;
+}
+
+.obs-overlay-grid label {
+  display: grid;
+  gap: 0.22rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.obs-overlay-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.overlay-preview-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.overlay-preview-controls {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 0.7rem;
+}
+
+.overlay-preview-frame-wrap {
+  width: 100%;
+  max-width: 1100px;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background-color: #e5e7eb;
+  background-image:
+    linear-gradient(45deg, #f8fafc 25%, transparent 25%),
+    linear-gradient(-45deg, #f8fafc 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #f8fafc 75%),
+    linear-gradient(-45deg, transparent 75%, #f8fafc 75%);
+  background-size: 28px 28px;
+  background-position: 0 0, 0 14px, 14px -14px, -14px 0;
+}
+
+.overlay-preview-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
 }
 
 .dialog-body {

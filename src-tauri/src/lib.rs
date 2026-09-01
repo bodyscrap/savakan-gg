@@ -5,7 +5,7 @@ mod storage;
 
 use std::net::{Ipv4Addr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,11 +19,15 @@ use models::{
     TournamentWorkspace,
 };
 use serde::{Deserialize, Serialize};
+use tiny_http::{Header, Response, Server};
 
 const UDP_MAILBOX_PORT: u16 = 42690;
+const OBS_OVERLAY_PORT: u16 = 42691;
 
 static UDP_LISTENER_RUNNING: OnceLock<AtomicBool> = OnceLock::new();
 static MESSAGE_ID_SEQUENCE: OnceLock<AtomicU64> = OnceLock::new();
+static OBS_OVERLAY_SERVER_RUNNING: OnceLock<AtomicBool> = OnceLock::new();
+static OBS_OVERLAY_STATE: OnceLock<Mutex<ObsOverlayRuntimeState>> = OnceLock::new();
 
 fn udp_listener_running() -> &'static AtomicBool {
     UDP_LISTENER_RUNNING.get_or_init(|| AtomicBool::new(false))
@@ -31,6 +35,443 @@ fn udp_listener_running() -> &'static AtomicBool {
 
 fn message_id_sequence() -> &'static AtomicU64 {
     MESSAGE_ID_SEQUENCE.get_or_init(|| AtomicU64::new(1))
+}
+
+fn obs_overlay_server_running() -> &'static AtomicBool {
+    OBS_OVERLAY_SERVER_RUNNING.get_or_init(|| AtomicBool::new(false))
+}
+
+fn obs_overlay_state() -> &'static Mutex<ObsOverlayRuntimeState> {
+    OBS_OVERLAY_STATE.get_or_init(|| {
+        Mutex::new(ObsOverlayRuntimeState {
+            active_set: None,
+            preview_font_scale: 1.0,
+        })
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObsOverlaySetInput {
+    enabled: bool,
+    set_id: String,
+    event_name: String,
+    round_text: String,
+    red_player_name: String,
+    blue_player_name: String,
+    red_set_wins: u32,
+    blue_set_wins: u32,
+    font_scale: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObsOverlayState {
+    active: bool,
+    current_set_id: Option<String>,
+    event_name: Option<String>,
+    round_text: Option<String>,
+    red_player_name: String,
+    blue_player_name: String,
+    red_set_wins: u32,
+    blue_set_wins: u32,
+    font_scale: f64,
+    overlay_url: String,
+}
+
+#[derive(Debug, Clone)]
+struct ObsOverlayActiveSet {
+    set_id: String,
+    event_name: String,
+    round_text: String,
+    red_player_name: String,
+    blue_player_name: String,
+    red_set_wins: u32,
+    blue_set_wins: u32,
+    font_scale: f64,
+}
+
+#[derive(Debug, Clone)]
+struct ObsOverlayRuntimeState {
+    active_set: Option<ObsOverlayActiveSet>,
+    preview_font_scale: f64,
+}
+
+fn clamp_font_scale(value: f64) -> f64 {
+    if !value.is_finite() {
+        return 1.0;
+    }
+    value.clamp(0.6, 2.0)
+}
+
+fn overlay_url() -> String {
+    format!("http://127.0.0.1:{OBS_OVERLAY_PORT}/overlay")
+}
+
+fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
+    let guard = obs_overlay_state()
+        .lock()
+        .map_err(|_| "オーバーレイ状態のロック取得に失敗しました。".to_owned())?;
+
+    if let Some(active) = &guard.active_set {
+        return Ok(ObsOverlayState {
+            active: true,
+            current_set_id: Some(active.set_id.clone()),
+            event_name: Some(active.event_name.clone()),
+            round_text: Some(active.round_text.clone()),
+            red_player_name: active.red_player_name.clone(),
+            blue_player_name: active.blue_player_name.clone(),
+            red_set_wins: active.red_set_wins,
+            blue_set_wins: active.blue_set_wins,
+            font_scale: active.font_scale,
+            overlay_url: overlay_url(),
+        });
+    }
+
+    let preview_font_scale = clamp_font_scale(guard.preview_font_scale);
+
+    Ok(ObsOverlayState {
+        active: false,
+        current_set_id: None,
+        event_name: None,
+        round_text: None,
+        red_player_name: "(Dummy Player1)".to_owned(),
+        blue_player_name: "(Dummy Player2)".to_owned(),
+        red_set_wins: 0,
+        blue_set_wins: 0,
+        font_scale: preview_font_scale,
+        overlay_url: overlay_url(),
+    })
+}
+
+fn build_overlay_html() -> &'static str {
+    r#"<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Savakan OBS Overlay</title>
+  <script>
+    // プレビューモード検出とスケール係数の管理
+    const isPreview = new URLSearchParams(window.location.search).has('preview');
+        function setContainerScaleBySize(width, height) {
+            const w = Number(width);
+            const h = Number(height);
+            if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+                return;
+            }
+            const scale = Math.min(w / 1920, h / 1080);
+            if (Number.isFinite(scale) && scale > 0) {
+                document.documentElement.style.setProperty('--container-scale', String(scale));
+            }
+        }
+
+        function setContainerScaleFromViewport() {
+            setContainerScaleBySize(window.innerWidth, window.innerHeight);
+        }
+
+    if (isPreview) {
+            setContainerScaleFromViewport();
+            window.addEventListener('resize', () => {
+                setContainerScaleFromViewport();
+            });
+
+      // 親フレームからのメッセージでコンテナ幅を受け取る
+      window.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'preview-container-width') {
+                    setContainerScaleBySize(event.data.width, event.data.height);
+        }
+      });
+    }
+  </script>
+    <style>
+        :root {
+            --container-scale: 1;
+            --scale: 1;
+            --name-size: calc(64px * var(--scale) * var(--container-scale));
+            --count-size: calc(46px * var(--scale) * var(--container-scale));
+        }
+        html, body {
+            margin: 0;
+            width: 1920px;
+            height: 1080px;
+            overflow: hidden;
+            background: transparent;
+            font-family: "Noto Sans JP", "Yu Gothic UI", sans-serif;
+        }
+        .stage {
+            width: calc(1920px * var(--container-scale));
+            height: calc(1080px * var(--container-scale));
+            position: relative;
+            background: transparent;
+        }
+        .hud {
+            position: absolute;
+            top: calc(24px * var(--container-scale));
+            left: 50%;
+            transform: translateX(-50%);
+            width: min(calc(1260px * var(--container-scale)), calc(100% - calc(96px * var(--container-scale))));
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            align-items: start;
+            gap: calc(110px * var(--container-scale));
+            pointer-events: none;
+        }
+        .player {
+            background: transparent;
+            color: #fff;
+            text-shadow:
+                -2px -2px 0 rgba(0, 0, 0, 0.82),
+                2px -2px 0 rgba(0, 0, 0, 0.82),
+                -2px 2px 0 rgba(0, 0, 0, 0.82),
+                2px 2px 0 rgba(0, 0, 0, 0.82),
+                0 0 16px rgba(0, 0, 0, 0.55);
+        }
+        .player.p1 {
+            text-align: right;
+        }
+        .player.p2 {
+            text-align: left;
+        }
+        .name {
+            font-weight: 900;
+            font-size: var(--name-size);
+            line-height: 1;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .count {
+            margin-top: 6px;
+            font-weight: 800;
+            font-size: var(--count-size);
+            line-height: 1;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="hud">
+      <section class="player p1">
+        <div id="redName" class="name">(Dummy Player1)</div>
+        <div id="redCount" class="count">SETS 0</div>
+      </section>
+      <section class="player p2">
+        <div id="blueName" class="name">(Dummy Player2)</div>
+        <div id="blueCount" class="count">SETS 0</div>
+      </section>
+    </div>
+  </div>
+  <script>
+    const DUMMY_1 = '(Dummy Player1)';
+    const DUMMY_2 = '(Dummy Player2)';
+    function toSafeWins(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) {
+        return 0;
+      }
+      return Math.max(0, Math.trunc(n));
+    }
+    async function tick() {
+      try {
+        const response = await fetch(`/api/overlay-state?ts=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' },
+        });
+        if (!response.ok) {
+          return;
+        }
+        const state = await response.json();
+        const scale = Number(state.fontScale || 1);
+        document.documentElement.style.setProperty('--scale', String(Number.isFinite(scale) ? scale : 1));
+        const isActive = Boolean(state.active);
+        const redName = isActive ? (state.redPlayerName || DUMMY_1) : DUMMY_1;
+        const blueName = isActive ? (state.bluePlayerName || DUMMY_2) : DUMMY_2;
+        const redWins = isActive ? toSafeWins(state.redSetWins) : 0;
+        const blueWins = isActive ? toSafeWins(state.blueSetWins) : 0;
+        document.getElementById('redName').textContent = redName;
+        document.getElementById('blueName').textContent = blueName;
+        document.getElementById('redCount').textContent = 'SETS ' + String(redWins);
+        document.getElementById('blueCount').textContent = 'SETS ' + String(blueWins);
+      } catch (_err) {
+        // ignore and retry.
+      }
+    }
+    tick();
+    setInterval(tick, 450);
+  </script>
+</body>
+</html>"#
+}
+
+fn handle_obs_overlay_http_request(request: tiny_http::Request) {
+    let path = request.url().split('?').next().unwrap_or("/");
+    let no_cache_header = Header::from_bytes(
+        b"Cache-Control",
+        b"no-store, no-cache, must-revalidate, max-age=0",
+    )
+    .ok();
+
+    if path == "/" || path == "/overlay" {
+        let mut response = Response::from_string(build_overlay_html().to_owned());
+        if let Ok(header) = Header::from_bytes(b"Content-Type", b"text/html; charset=utf-8") {
+            response = response.with_header(header);
+        }
+        if let Some(header) = no_cache_header.clone() {
+            response = response.with_header(header);
+        }
+        let _ = request.respond(response);
+        return;
+    }
+
+    if path == "/api/overlay-state" {
+        match snapshot_obs_overlay_state() {
+            Ok(state) => {
+                let payload = serde_json::to_string(&state)
+                    .unwrap_or_else(|_| "{\"active\":false,\"overlayUrl\":\"\"}".to_owned());
+                let mut response = Response::from_string(payload);
+                if let Ok(header) = Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8") {
+                    response = response.with_header(header);
+                }
+                if let Some(header) = no_cache_header.clone() {
+                    response = response.with_header(header);
+                }
+                let _ = request.respond(response);
+            }
+            Err(err) => {
+                let mut response = Response::from_string(format!(
+                    "{{\"error\":\"{}\"}}",
+                    err.replace('"', "\\\"")
+                ));
+                if let Ok(header) = Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8") {
+                    response = response.with_header(header);
+                }
+                if let Some(header) = no_cache_header {
+                    response = response.with_header(header);
+                }
+                let _ = request.respond(response.with_status_code(500));
+            }
+        }
+        return;
+    }
+
+    let _ = request.respond(Response::from_string("Not Found").with_status_code(404));
+}
+
+fn start_obs_overlay_server_if_needed() -> Result<(), String> {
+    if obs_overlay_server_running().load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    let server = Server::http(format!("0.0.0.0:{OBS_OVERLAY_PORT}"))
+        .map_err(|e| format!("OBSオーバーレイWebサーバーの起動に失敗しました: {e}"))?;
+
+    obs_overlay_server_running().store(true, Ordering::SeqCst);
+
+    thread::spawn(move || {
+        for request in server.incoming_requests() {
+            handle_obs_overlay_http_request(request);
+        }
+
+        obs_overlay_server_running().store(false, Ordering::SeqCst);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_obs_overlay_state() -> Result<ObsOverlayState, String> {
+    start_obs_overlay_server_if_needed()?;
+    snapshot_obs_overlay_state()
+}
+
+#[tauri::command]
+fn set_obs_overlay_font_scale(font_scale: f64) -> Result<ObsOverlayState, String> {
+    start_obs_overlay_server_if_needed()?;
+
+    let mut guard = obs_overlay_state()
+        .lock()
+        .map_err(|_| "オーバーレイ状態のロック取得に失敗しました。".to_owned())?;
+
+    let next_scale = clamp_font_scale(font_scale);
+    guard.preview_font_scale = next_scale;
+    if let Some(active) = guard.active_set.as_mut() {
+        active.font_scale = next_scale;
+    }
+
+    drop(guard);
+    snapshot_obs_overlay_state()
+}
+
+#[tauri::command]
+fn toggle_obs_overlay_set(input: ObsOverlaySetInput) -> Result<ObsOverlayState, String> {
+    let set_id = input.set_id.trim().to_owned();
+
+    if input.enabled {
+        if set_id.is_empty() {
+            return Err("配信対象のsetIdが未指定です。".to_owned());
+        }
+        start_obs_overlay_server_if_needed()?;
+    }
+
+    let mut guard = obs_overlay_state()
+        .lock()
+        .map_err(|_| "オーバーレイ状態のロック取得に失敗しました。".to_owned())?;
+
+    let next_scale = clamp_font_scale(input.font_scale);
+
+    if input.enabled {
+        if let Some(active) = &guard.active_set {
+            if active.set_id != set_id {
+                return Err(format!("すでに別のsetが配信中です: {}", active.set_id));
+            }
+        }
+
+        let red_name = {
+            let trimmed = input.red_player_name.trim();
+            if trimmed.is_empty() {
+                "RED".to_owned()
+            } else {
+                trimmed.to_owned()
+            }
+        };
+        let blue_name = {
+            let trimmed = input.blue_player_name.trim();
+            if trimmed.is_empty() {
+                "BLUE".to_owned()
+            } else {
+                trimmed.to_owned()
+            }
+        };
+
+        guard.active_set = Some(ObsOverlayActiveSet {
+            set_id,
+            event_name: input.event_name.trim().to_owned(),
+            round_text: input.round_text.trim().to_owned(),
+            red_player_name: red_name,
+            blue_player_name: blue_name,
+            red_set_wins: input.red_set_wins,
+            blue_set_wins: input.blue_set_wins,
+            font_scale: next_scale,
+        });
+        guard.preview_font_scale = next_scale;
+    } else if let Some(active) = &guard.active_set {
+        if !set_id.is_empty() && active.set_id != set_id {
+            return Err(format!(
+                "配信停止対象のsetが現在の配信setと一致しません。現在: {}",
+                active.set_id
+            ));
+        }
+        guard.active_set = None;
+        guard.preview_font_scale = next_scale;
+    } else {
+        guard.preview_font_scale = next_scale;
+    }
+
+    drop(guard);
+    snapshot_obs_overlay_state()
 }
 
 fn local_ipv4_score(ip: &std::net::Ipv4Addr) -> i32 {
@@ -1122,6 +1563,9 @@ pub fn run() {
             load_event_mgmt_settings,
             save_event_mgmt_settings,
             detect_local_ipv4,
+            get_obs_overlay_state,
+            set_obs_overlay_font_scale,
+            toggle_obs_overlay_set,
             save_sender_profile,
             load_sender_profile,
             save_generic_messages,
