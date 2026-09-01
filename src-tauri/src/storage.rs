@@ -45,6 +45,62 @@ fn sanitize_slug(slug: &str) -> String {
         .collect()
 }
 
+fn normalize_slug_for_storage(slug: &str) -> String {
+    let trimmed = slug.trim().trim_matches('/');
+
+    if let Some(rest) = trimmed.strip_prefix("https://www.start.gg/tournament/") {
+        return rest.trim_matches('/').to_owned();
+    }
+    if let Some(rest) = trimmed.strip_prefix("http://www.start.gg/tournament/") {
+        return rest.trim_matches('/').to_owned();
+    }
+    if let Some(rest) = trimmed.strip_prefix("www.start.gg/tournament/") {
+        return rest.trim_matches('/').to_owned();
+    }
+    if let Some(rest) = trimmed.strip_prefix("start.gg/tournament/") {
+        return rest.trim_matches('/').to_owned();
+    }
+    if let Some(rest) = trimmed.strip_prefix("tournament/") {
+        return rest.trim_matches('/').to_owned();
+    }
+
+    trimmed.to_owned()
+}
+
+fn alternate_slug_for_legacy_path(slug: &str) -> Option<String> {
+    let trimmed = slug.trim().trim_matches('/');
+    let normalized = normalize_slug_for_storage(slug);
+
+    if let Some(rest) = trimmed.strip_prefix("tournament/") {
+        let candidate = rest.trim_matches('/').to_owned();
+        if candidate != normalized {
+            return Some(candidate);
+        }
+        return None;
+    }
+
+    let candidate = format!("tournament/{normalized}");
+    if candidate == trimmed {
+        None
+    } else {
+        Some(candidate)
+    }
+}
+
+fn snapshot_path_with_slug_key(app: &AppHandle, slug_key: &str) -> Result<PathBuf, String> {
+    let file_name = format!("tournament-{}.json", sanitize_slug(slug_key));
+    Ok(storage_dir(app)?.join(file_name))
+}
+
+fn meta_path_with_slug_key(app: &AppHandle, slug_key: &str, event_id: &str) -> Result<PathBuf, String> {
+    let file_name = format!(
+        "tournament-meta-{}-{}.json",
+        sanitize_slug(slug_key),
+        sanitize_slug(event_id)
+    );
+    Ok(storage_dir(app)?.join(file_name))
+}
+
 fn storage_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let path = app
         .path()
@@ -61,17 +117,13 @@ fn token_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn snapshot_path(app: &AppHandle, slug: &str) -> Result<PathBuf, String> {
-    let file_name = format!("tournament-{}.json", sanitize_slug(slug));
-    Ok(storage_dir(app)?.join(file_name))
+    let normalized = normalize_slug_for_storage(slug);
+    snapshot_path_with_slug_key(app, &normalized)
 }
 
 fn meta_path(app: &AppHandle, slug: &str, event_id: &str) -> Result<PathBuf, String> {
-    let file_name = format!(
-        "tournament-meta-{}-{}.json",
-        sanitize_slug(slug),
-        sanitize_slug(event_id)
-    );
-    Ok(storage_dir(app)?.join(file_name))
+    let normalized = normalize_slug_for_storage(slug);
+    meta_path_with_slug_key(app, &normalized, event_id)
 }
 
 fn slug_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -845,13 +897,50 @@ pub fn save_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(
     let path = snapshot_path(app, &snapshot.slug)?;
     let json = serde_json::to_string_pretty(snapshot)
         .map_err(|e| format!("スナップショットのJSON変換に失敗しました: {e}"))?;
-    fs::write(path, json).map_err(|e| format!("スナップショット保存に失敗しました: {e}"))
+    fs::write(&path, json).map_err(|e| format!("スナップショット保存に失敗しました: {e}"))?;
+
+    if let Some(legacy_slug) = alternate_slug_for_legacy_path(&snapshot.slug) {
+        let legacy_path = snapshot_path_with_slug_key(app, &legacy_slug)?;
+        if legacy_path != path && legacy_path.exists() {
+            let _ = fs::remove_file(legacy_path);
+        }
+    }
+
+    Ok(())
 }
 
 pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, String> {
-    let path = snapshot_path(app, slug)?;
-    let raw = fs::read_to_string(path)
-        .map_err(|e| format!("ローカルスナップショット読込に失敗しました: {e}"))?;
+    let mut candidate_paths = vec![snapshot_path(app, slug)?];
+    if let Some(legacy_slug) = alternate_slug_for_legacy_path(slug) {
+        candidate_paths.push(snapshot_path_with_slug_key(app, &legacy_slug)?);
+    }
+
+    let mut last_error = None;
+    let mut loaded_raw = None;
+    for path in candidate_paths {
+        if !path.exists() {
+            continue;
+        }
+
+        match fs::read_to_string(&path) {
+            Ok(raw) => {
+                loaded_raw = Some(raw);
+                break;
+            }
+            Err(error) => {
+                last_error = Some(error);
+            }
+        }
+    }
+
+    let raw = if let Some(raw) = loaded_raw {
+        raw
+    } else if let Some(error) = last_error {
+        return Err(format!("ローカルスナップショット読込に失敗しました: {error}"));
+    } else {
+        return Err("ローカルスナップショット読込に失敗しました: 保存済みデータが見つかりません。".to_owned());
+    };
+
     serde_json::from_str(&raw)
         .map_err(|e| format!("ローカルスナップショットのパースに失敗しました: {e}"))
 }
@@ -1630,17 +1719,49 @@ pub fn save_local_meta(
     let path = meta_path(app, &normalized.slug, event_id)?;
     let json = serde_json::to_string_pretty(&normalized)
         .map_err(|e| format!("ローカルメタのJSON変換に失敗しました: {e}"))?;
-    fs::write(path, json).map_err(|e| format!("ローカルメタ保存に失敗しました: {e}"))
+    fs::write(&path, json).map_err(|e| format!("ローカルメタ保存に失敗しました: {e}"))?;
+
+    if let Some(legacy_slug) = alternate_slug_for_legacy_path(&normalized.slug) {
+        let legacy_path = meta_path_with_slug_key(app, &legacy_slug, event_id)?;
+        if legacy_path != path && legacy_path.exists() {
+            let _ = fs::remove_file(legacy_path);
+        }
+    }
+
+    Ok(())
 }
 
 pub fn load_local_meta(app: &AppHandle, slug: &str, event_id: &str) -> Result<TournamentLocalMeta, String> {
-    let path = meta_path(app, slug, event_id)?;
-    if !path.exists() {
-        return Ok(build_empty_meta(slug, event_id));
+    let mut candidate_paths = vec![meta_path(app, slug, event_id)?];
+    if let Some(legacy_slug) = alternate_slug_for_legacy_path(slug) {
+        candidate_paths.push(meta_path_with_slug_key(app, &legacy_slug, event_id)?);
     }
 
-    let raw = fs::read_to_string(path)
-        .map_err(|e| format!("ローカルメタ読込に失敗しました: {e}"))?;
+    let mut loaded_raw = None;
+    let mut last_error = None;
+    for path in candidate_paths {
+        if !path.exists() {
+            continue;
+        }
+
+        match fs::read_to_string(&path) {
+            Ok(raw) => {
+                loaded_raw = Some(raw);
+                break;
+            }
+            Err(error) => {
+                last_error = Some(error);
+            }
+        }
+    }
+
+    let Some(raw) = loaded_raw else {
+        if let Some(error) = last_error {
+            return Err(format!("ローカルメタ読込に失敗しました: {error}"));
+        }
+        return Ok(build_empty_meta(slug, event_id));
+    };
+
     let mut parsed: TournamentLocalMeta =
         serde_json::from_str(&raw).map_err(|e| format!("ローカルメタのパースに失敗しました: {e}"))?;
     parsed.slug = slug.to_owned();

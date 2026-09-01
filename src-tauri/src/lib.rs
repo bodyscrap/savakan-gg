@@ -478,7 +478,8 @@ async fn refresh_workspace_after_remote_report(
     event_id: &str,
     per_page: u32,
 ) -> Result<TournamentWorkspace, String> {
-    let snapshot = startgg::fetch_tournament_snapshot(token, slug, per_page).await?;
+    let mut snapshot = startgg::fetch_tournament_snapshot(token, slug, per_page).await?;
+    snapshot.slug = slug.to_owned();
     storage::save_snapshot(app, &snapshot)?;
     let local_meta = storage::sync_local_meta_from_snapshot(app, &snapshot, event_id)?;
 
@@ -953,7 +954,8 @@ async fn sync_tournament(
     per_page: Option<u32>,
 ) -> Result<TournamentWorkspace, String> {
     let token = storage::load_token(&app)?;
-    let snapshot = startgg::sync_tournament(&token, &slug, per_page.unwrap_or(200)).await?;
+    let mut snapshot = startgg::sync_tournament(&token, &slug, per_page.unwrap_or(200)).await?;
+    snapshot.slug = slug.clone();
     storage::save_snapshot(&app, &snapshot)?;
     let event_id = snapshot
         .events
@@ -985,7 +987,8 @@ async fn report_set_result(
     .await?;
 
     // 報告後は必ず再同期して、start.ggとローカルの整合を取る。
-    let snapshot = startgg::sync_tournament(&token, &input.slug, 200).await?;
+    let mut snapshot = startgg::sync_tournament(&token, &input.slug, 200).await?;
+    snapshot.slug = input.slug.clone();
     storage::save_snapshot(&app, &snapshot)?;
     let event_id = snapshot
         .events
