@@ -5341,9 +5341,11 @@ function App() {
 
               <form className="form" onSubmit={saveToken}>
                 <input
+                  type="password"
                   value={token}
                   onChange={(e) => setToken(e.currentTarget.value)}
                   placeholder="start.gg API token"
+                  autoComplete="off"
                 />
                 <button type="submit" disabled={createBusy || token.trim() === ""}>
                   APIキーを保存
