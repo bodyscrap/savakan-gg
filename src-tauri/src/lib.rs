@@ -46,6 +46,9 @@ fn obs_overlay_state() -> &'static Mutex<ObsOverlayRuntimeState> {
         Mutex::new(ObsOverlayRuntimeState {
             active_set: None,
             preview_font_scale: 1.0,
+            name_fit_mode: "truncate".to_owned(),
+            show_set_info: true,
+            fully_stopped: false,
         })
     })
 }
@@ -68,6 +71,7 @@ struct ObsOverlaySetInput {
 #[serde(rename_all = "camelCase")]
 struct ObsOverlayState {
     active: bool,
+    fully_stopped: bool,
     current_set_id: Option<String>,
     event_name: Option<String>,
     round_text: Option<String>,
@@ -76,6 +80,8 @@ struct ObsOverlayState {
     red_set_wins: u32,
     blue_set_wins: u32,
     font_scale: f64,
+    name_fit_mode: String,
+    show_set_info: bool,
     overlay_url: String,
 }
 
@@ -95,6 +101,17 @@ struct ObsOverlayActiveSet {
 struct ObsOverlayRuntimeState {
     active_set: Option<ObsOverlayActiveSet>,
     preview_font_scale: f64,
+    name_fit_mode: String,
+    show_set_info: bool,
+    fully_stopped: bool,
+}
+
+fn normalize_name_fit_mode(value: &str) -> &'static str {
+    if value.trim().eq_ignore_ascii_case("shrink") {
+        "shrink"
+    } else {
+        "truncate"
+    }
 }
 
 fn clamp_font_scale(value: f64) -> f64 {
@@ -116,6 +133,7 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
     if let Some(active) = &guard.active_set {
         return Ok(ObsOverlayState {
             active: true,
+            fully_stopped: false,
             current_set_id: Some(active.set_id.clone()),
             event_name: Some(active.event_name.clone()),
             round_text: Some(active.round_text.clone()),
@@ -124,6 +142,8 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
             red_set_wins: active.red_set_wins,
             blue_set_wins: active.blue_set_wins,
             font_scale: active.font_scale,
+            name_fit_mode: guard.name_fit_mode.clone(),
+            show_set_info: guard.show_set_info,
             overlay_url: overlay_url(),
         });
     }
@@ -132,14 +152,17 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
 
     Ok(ObsOverlayState {
         active: false,
+        fully_stopped: guard.fully_stopped,
         current_set_id: None,
         event_name: None,
         round_text: None,
-        red_player_name: "(Dummy Player1)".to_owned(),
-        blue_player_name: "(Dummy Player2)".to_owned(),
+        red_player_name: String::new(),
+        blue_player_name: String::new(),
         red_set_wins: 0,
         blue_set_wins: 0,
         font_scale: preview_font_scale,
+        name_fit_mode: guard.name_fit_mode.clone(),
+        show_set_info: guard.show_set_info,
         overlay_url: overlay_url(),
     })
 }
@@ -185,11 +208,28 @@ fn build_overlay_html() -> &'static str {
     }
   </script>
     <style>
+        @font-face {
+            font-family: "SavakanOverlayJP";
+            src:
+                local("BIZ UDPGothic"),
+                local("Yu Gothic UI"),
+                local("Yu Gothic"),
+                local("Meiryo UI"),
+                local("Meiryo"),
+                local("Noto Sans CJK JP"),
+                local("Noto Sans JP"),
+                local("Hiragino Kaku Gothic ProN"),
+                local("MS PGothic");
+            font-style: normal;
+            font-display: swap;
+        }
         :root {
             --container-scale: 1;
             --scale: 1;
-            --name-size: calc(64px * var(--scale) * var(--container-scale));
-            --count-size: calc(46px * var(--scale) * var(--container-scale));
+            --name-size: calc(56px * var(--scale) * var(--container-scale));
+            --count-size: calc(54px * var(--scale) * var(--container-scale));
+            --set-main-size: calc(34px * var(--container-scale));
+            --set-sub-size: calc(30px * var(--container-scale));
         }
         html, body {
             margin: 0;
@@ -197,7 +237,7 @@ fn build_overlay_html() -> &'static str {
             height: 1080px;
             overflow: hidden;
             background: transparent;
-            font-family: "Noto Sans JP", "Yu Gothic UI", sans-serif;
+            font-family: "SavakanOverlayJP", "Yu Gothic UI", "Meiryo", sans-serif;
         }
         .stage {
             width: calc(1920px * var(--container-scale));
@@ -207,73 +247,184 @@ fn build_overlay_html() -> &'static str {
         }
         .hud {
             position: absolute;
-            top: calc(24px * var(--container-scale));
+            top: calc(6px * var(--container-scale));
             left: 50%;
             transform: translateX(-50%);
-            width: min(calc(1260px * var(--container-scale)), calc(100% - calc(96px * var(--container-scale))));
+            width: min(calc(1800px * var(--container-scale)), calc(100% - calc(36px * var(--container-scale))));
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 2.22fr 0.48fr 1.30fr 0.48fr 2.22fr;
             align-items: start;
-            gap: calc(110px * var(--container-scale));
+            gap: calc(16px * var(--container-scale));
             pointer-events: none;
         }
-        .player {
-            background: transparent;
+        .hud.hide-set-info .set-cell {
+            visibility: hidden;
+            opacity: 0;
+        }
+        body.full-stop .hud {
+            visibility: hidden;
+            opacity: 0;
+        }
+        .cell {
+            display: grid;
+            gap: 0;
             color: #fff;
             text-shadow:
-                -2px -2px 0 rgba(0, 0, 0, 0.82),
-                2px -2px 0 rgba(0, 0, 0, 0.82),
-                -2px 2px 0 rgba(0, 0, 0, 0.82),
-                2px 2px 0 rgba(0, 0, 0, 0.82),
-                0 0 16px rgba(0, 0, 0, 0.55);
+                calc(-2px * var(--container-scale)) calc(-2px * var(--container-scale)) 0 rgba(0, 0, 0, 0.76),
+                calc(2px * var(--container-scale)) calc(-2px * var(--container-scale)) 0 rgba(0, 0, 0, 0.76),
+                calc(-2px * var(--container-scale)) calc(2px * var(--container-scale)) 0 rgba(0, 0, 0, 0.76),
+                calc(2px * var(--container-scale)) calc(2px * var(--container-scale)) 0 rgba(0, 0, 0, 0.76),
+                0 0 calc(14px * var(--container-scale)) rgba(0, 0, 0, 0.5);
         }
-        .player.p1 {
-            text-align: right;
+        .plate {
+            min-height: calc(83px * var(--container-scale));
+            border-radius: calc(12px * var(--container-scale));
+            border: calc(2px * var(--container-scale)) solid rgba(255, 255, 255, 0.32);
+            display: grid;
+            align-items: center;
+            padding: calc(10px * var(--container-scale)) calc(14px * var(--container-scale));
+            box-sizing: border-box;
+            backdrop-filter: blur(calc(2px * var(--container-scale)));
         }
-        .player.p2 {
-            text-align: left;
+        .plate-p1 {
+            background: linear-gradient(180deg, rgba(185, 28, 28, 0.86), rgba(127, 29, 29, 0.84));
+        }
+        .plate-p2 {
+            background: linear-gradient(180deg, rgba(30, 64, 175, 0.86), rgba(30, 58, 138, 0.84));
+        }
+        .plate-set {
+            background: linear-gradient(180deg, rgba(75, 85, 99, 0.88), rgba(55, 65, 81, 0.88));
+        }
+        .player-cell.p1,
+        .player-cell.p2 {
+            text-align: center;
+        }
+        .player-cell .plate {
+            justify-items: center;
+        }
+        .score-cell {
+            text-align: center;
+        }
+        .set-cell {
+            text-align: center;
         }
         .name {
             font-weight: 900;
             font-size: var(--name-size);
             line-height: 1;
             letter-spacing: 0.02em;
+            width: 100%;
+            font-family: "SavakanOverlayJP", "Yu Gothic UI", "Meiryo", "Noto Sans JP", sans-serif;
+            text-align: center;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        body.fit-shrink .name {
+            text-overflow: clip;
+        }
         .count {
-            margin-top: 6px;
-            font-weight: 800;
+            font-weight: 900;
             font-size: var(--count-size);
             line-height: 1;
+            letter-spacing: 0.02em;
+            font-variant-numeric: tabular-nums;
+            font-feature-settings: "tnum" 1;
+        }
+        .set-main {
+            font-weight: 900;
+            font-size: var(--set-main-size);
+            line-height: 1.1;
             white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .set-sub {
+            margin-top: calc(6px * var(--container-scale));
+            font-weight: 800;
+            font-size: var(--set-sub-size);
+            line-height: 1.05;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-variant-numeric: tabular-nums;
+            font-feature-settings: "tnum" 1;
         }
     </style>
 </head>
 <body>
   <div class="stage">
-    <div class="hud">
-      <section class="player p1">
-        <div id="redName" class="name">(Dummy Player1)</div>
-        <div id="redCount" class="count">SETS 0</div>
+    <div id="hud" class="hud">
+      <section class="cell player-cell p1">
+        <div class="plate plate-p1">
+                    <div id="redName" class="name"></div>
+        </div>
       </section>
-      <section class="player p2">
-        <div id="blueName" class="name">(Dummy Player2)</div>
-        <div id="blueCount" class="count">SETS 0</div>
+      <section class="cell score-cell">
+        <div class="plate plate-p1">
+                    <div id="redCount" class="count"></div>
+        </div>
+      </section>
+      <section class="cell set-cell">
+        <div class="plate plate-set">
+          <div id="setMain" class="set-main">-</div>
+          <div id="setSub" class="set-sub">-</div>
+        </div>
+      </section>
+      <section class="cell score-cell">
+        <div class="plate plate-p2">
+                    <div id="blueCount" class="count"></div>
+        </div>
+      </section>
+      <section class="cell player-cell p2">
+        <div class="plate plate-p2">
+                    <div id="blueName" class="name"></div>
+        </div>
       </section>
     </div>
   </div>
   <script>
-    const DUMMY_1 = '(Dummy Player1)';
-    const DUMMY_2 = '(Dummy Player2)';
-    function toSafeWins(value) {
+        function toSafeWins(value) {
       const n = Number(value);
       if (!Number.isFinite(n)) {
         return 0;
       }
-      return Math.max(0, Math.trunc(n));
+            return Math.min(99, Math.max(0, Math.trunc(n)));
     }
+
+        function fitNameToPlate(element, text, mode) {
+            element.textContent = text;
+            element.style.fontSize = '';
+
+            if (mode !== 'shrink' || text === '') {
+                return;
+            }
+
+            const baseSize = Number.parseFloat(window.getComputedStyle(element).fontSize);
+            const available = element.clientWidth;
+            const needed = element.scrollWidth;
+            if (!Number.isFinite(baseSize) || baseSize <= 0 || available <= 0 || needed <= 0 || needed <= available) {
+                return;
+            }
+
+            const minScale = 0.58;
+            const minSize = baseSize * minScale;
+            const safetyPixels = 3;
+            const targetWidth = Math.max(1, available - safetyPixels);
+            const ratio = targetWidth / needed;
+            let nextSize = Math.max(minSize, baseSize * ratio);
+            element.style.fontSize = `${nextSize}px`;
+
+            // CJK glyph metrics can leave the final character clipped at exact-fit sizes.
+            // Apply a small post-fit reduction until the measured width is safely within bounds.
+            let guard = 0;
+            while (element.scrollWidth > targetWidth && nextSize > minSize && guard < 10) {
+                nextSize = Math.max(minSize, nextSize - 0.35);
+                element.style.fontSize = `${nextSize}px`;
+                guard += 1;
+            }
+        }
+
     async function tick() {
       try {
         const response = await fetch(`/api/overlay-state?ts=${Date.now()}`, {
@@ -287,14 +438,34 @@ fn build_overlay_html() -> &'static str {
         const scale = Number(state.fontScale || 1);
         document.documentElement.style.setProperty('--scale', String(Number.isFinite(scale) ? scale : 1));
         const isActive = Boolean(state.active);
-        const redName = isActive ? (state.redPlayerName || DUMMY_1) : DUMMY_1;
-        const blueName = isActive ? (state.bluePlayerName || DUMMY_2) : DUMMY_2;
-        const redWins = isActive ? toSafeWins(state.redSetWins) : 0;
-        const blueWins = isActive ? toSafeWins(state.blueSetWins) : 0;
-        document.getElementById('redName').textContent = redName;
-        document.getElementById('blueName').textContent = blueName;
-        document.getElementById('redCount').textContent = 'SETS ' + String(redWins);
-        document.getElementById('blueCount').textContent = 'SETS ' + String(blueWins);
+                const isFullyStopped = Boolean(state.fullyStopped);
+                const nameFitMode = String(state.nameFitMode || 'truncate').trim().toLowerCase() === 'shrink'
+                    ? 'shrink'
+                    : 'truncate';
+                document.body.classList.toggle('fit-shrink', nameFitMode === 'shrink');
+                document.body.classList.toggle('full-stop', isFullyStopped);
+                const showSetInfo = Boolean(state.showSetInfo);
+                const redName = isActive ? String(state.redPlayerName || '').trim() : '';
+                const blueName = isActive ? String(state.bluePlayerName || '').trim() : '';
+                const redWins = isActive ? String(toSafeWins(state.redSetWins)) : '';
+                const blueWins = isActive ? String(toSafeWins(state.blueSetWins)) : '';
+                const roundRaw = isActive ? String(state.roundText || '') : '';
+                const lines = roundRaw
+                    .split(/\r?\n/)
+                    .map((item) => item.trim())
+                    .filter((item) => item !== '');
+                const setMain = lines[0] || '-';
+                const setSub = lines[1] || (isActive && state.currentSetId ? `set ${String(state.currentSetId)}` : '-');
+            const hud = document.getElementById('hud');
+            hud?.classList.toggle('hide-set-info', !showSetInfo);
+            const redNameEl = document.getElementById('redName');
+            const blueNameEl = document.getElementById('blueName');
+            fitNameToPlate(redNameEl, redName, nameFitMode);
+            fitNameToPlate(blueNameEl, blueName, nameFitMode);
+                document.getElementById('redCount').textContent = redWins;
+                document.getElementById('blueCount').textContent = blueWins;
+                document.getElementById('setMain').textContent = setMain;
+                document.getElementById('setSub').textContent = setSub;
       } catch (_err) {
         // ignore and retry.
       }
@@ -406,6 +577,49 @@ fn set_obs_overlay_font_scale(font_scale: f64) -> Result<ObsOverlayState, String
 }
 
 #[tauri::command]
+fn set_obs_overlay_name_fit_mode(name_fit_mode: String) -> Result<ObsOverlayState, String> {
+    start_obs_overlay_server_if_needed()?;
+
+    let mut guard = obs_overlay_state()
+        .lock()
+        .map_err(|_| "オーバーレイ状態のロック取得に失敗しました。".to_owned())?;
+
+    guard.name_fit_mode = normalize_name_fit_mode(&name_fit_mode).to_owned();
+    drop(guard);
+    snapshot_obs_overlay_state()
+}
+
+#[tauri::command]
+fn set_obs_overlay_show_set_info(show_set_info: bool) -> Result<ObsOverlayState, String> {
+    start_obs_overlay_server_if_needed()?;
+
+    let mut guard = obs_overlay_state()
+        .lock()
+        .map_err(|_| "オーバーレイ状態のロック取得に失敗しました。".to_owned())?;
+
+    guard.show_set_info = show_set_info;
+    drop(guard);
+    snapshot_obs_overlay_state()
+}
+
+#[tauri::command]
+fn set_obs_overlay_fully_stopped(fully_stopped: bool) -> Result<ObsOverlayState, String> {
+    start_obs_overlay_server_if_needed()?;
+
+    let mut guard = obs_overlay_state()
+        .lock()
+        .map_err(|_| "オーバーレイ状態のロック取得に失敗しました。".to_owned())?;
+
+    guard.fully_stopped = fully_stopped;
+    if fully_stopped {
+        guard.active_set = None;
+    }
+
+    drop(guard);
+    snapshot_obs_overlay_state()
+}
+
+#[tauri::command]
 fn toggle_obs_overlay_set(input: ObsOverlaySetInput) -> Result<ObsOverlayState, String> {
     let set_id = input.set_id.trim().to_owned();
 
@@ -456,6 +670,7 @@ fn toggle_obs_overlay_set(input: ObsOverlaySetInput) -> Result<ObsOverlayState, 
             blue_set_wins: input.blue_set_wins,
             font_scale: next_scale,
         });
+        guard.fully_stopped = false;
         guard.preview_font_scale = next_scale;
     } else if let Some(active) = &guard.active_set {
         if !set_id.is_empty() && active.set_id != set_id {
@@ -1565,6 +1780,9 @@ pub fn run() {
             detect_local_ipv4,
             get_obs_overlay_state,
             set_obs_overlay_font_scale,
+            set_obs_overlay_name_fit_mode,
+            set_obs_overlay_show_set_info,
+            set_obs_overlay_fully_stopped,
             toggle_obs_overlay_set,
             save_sender_profile,
             load_sender_profile,

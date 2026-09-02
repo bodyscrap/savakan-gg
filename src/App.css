@@ -719,15 +719,26 @@ button:disabled {
   color: #1d4ed8;
 }
 
+.set-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  min-height: 1.1rem;
+}
+
 .set-live-badge {
-  margin: 0.12rem 0 0.2rem;
-  display: inline-block;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
   font-size: 0.7rem;
   font-weight: 800;
   letter-spacing: 0.02em;
   color: #7f1d1d;
-  background: #fee2e2;
-  border: 1px solid #fca5a5;
   border-radius: 999px;
   padding: 0.1rem 0.45rem;
 }
@@ -1068,6 +1079,16 @@ button:disabled {
 .set-score-input {
   width: 6ch;
   min-width: 6ch;
+}
+
+.set-score-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.set-score-stepper .set-score-input {
+  text-align: center;
 }
 
 .dialog-actions {

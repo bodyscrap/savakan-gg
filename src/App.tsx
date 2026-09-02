@@ -473,6 +473,7 @@ type MatchSideRandomNotice = {
 
 type ObsOverlayState = {
   active: boolean;
+  fullyStopped: boolean;
   currentSetId: string | null;
   eventName: string | null;
   roundText: string | null;
@@ -481,6 +482,8 @@ type ObsOverlayState = {
   redSetWins: number;
   blueSetWins: number;
   fontScale: number;
+  nameFitMode: "truncate" | "shrink";
+  showSetInfo: boolean;
   overlayUrl: string;
 };
 
@@ -1193,6 +1196,23 @@ function scoreToOverlayGameWins(value: number | null): number {
     return 0;
   }
   return normalizeObsSetWins(value);
+}
+
+function stepScoreDraftValue(currentRaw: string, delta: number): string {
+  const trimmed = currentRaw.trim();
+  const parsed = Number(trimmed);
+  const base = Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+  const next = Math.max(0, base + delta);
+  return String(next);
+}
+
+function abbreviateOverlayRoundText(value: string): string {
+  return value
+    .replace(/\bWinners\b/gi, "W")
+    .replace(/\bWinner\b/gi, "W")
+    .replace(/\bLosers\b/gi, "L")
+    .replace(/\bLoser\b/gi, "L")
+    .trim();
 }
 
 function parseScoreCsvText(rawScoreCsv: string): { winnerWins: number; loserWins: number } | null {
@@ -3867,6 +3887,56 @@ function App() {
   }, [activeTab, isTestOverlayActive]);
 
   useEffect(() => {
+    if (!isTestOverlayActive || !obsOverlayState?.active || obsOverlayState.currentSetId !== "__test__") {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const next = await invoke<ObsOverlayState>("toggle_obs_overlay_set", {
+            input: {
+              enabled: true,
+              setId: "__test__",
+              eventName: "テスト配信",
+              roundText: "Preview\nset T",
+              redPlayerName: testOverlayRedName.trim() || "テストプレイヤー1",
+              bluePlayerName: testOverlayBlueName.trim() || "テストプレイヤー2",
+              redSetWins: normalizeObsSetWins(testOverlayRedWins),
+              blueSetWins: normalizeObsSetWins(testOverlayBlueWins),
+              fontScale: normalizeObsFontScale(obsOverlayState.fontScale),
+            },
+          });
+          if (cancelled) {
+            return;
+          }
+          setObsOverlayState(next);
+          setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
+        } catch (err) {
+          if (!cancelled) {
+            setError(String(err));
+          }
+        }
+      })();
+    }, 140);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    isTestOverlayActive,
+    obsOverlayState?.active,
+    obsOverlayState?.currentSetId,
+    obsOverlayState?.fontScale,
+    testOverlayRedName,
+    testOverlayBlueName,
+    testOverlayRedWins,
+    testOverlayBlueWins,
+  ]);
+
+  useEffect(() => {
     if (activeTab !== "overlay") {
       return;
     }
@@ -4456,11 +4526,41 @@ function App() {
     setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
   }
 
-  async function updateObsOverlayFontScaleOnly(fontScale: number) {
+  async function updateObsOverlayNameFitMode(mode: "truncate" | "shrink") {
     setObsOverlayBusy(true);
     try {
-      const next = await invoke<ObsOverlayState>("set_obs_overlay_font_scale", {
-        fontScale: normalizeObsFontScale(fontScale),
+      const next = await invoke<ObsOverlayState>("set_obs_overlay_name_fit_mode", {
+        nameFitMode: mode,
+      });
+      setObsOverlayState(next);
+      setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setObsOverlayBusy(false);
+    }
+  }
+
+  async function updateObsOverlayShowSetInfo(showSetInfo: boolean) {
+    setObsOverlayBusy(true);
+    try {
+      const next = await invoke<ObsOverlayState>("set_obs_overlay_show_set_info", {
+        showSetInfo,
+      });
+      setObsOverlayState(next);
+      setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setObsOverlayBusy(false);
+    }
+  }
+
+  async function setObsOverlayFullyStopped(fullyStopped: boolean) {
+    setObsOverlayBusy(true);
+    try {
+      const next = await invoke<ObsOverlayState>("set_obs_overlay_fully_stopped", {
+        fullyStopped,
       });
       setObsOverlayState(next);
       setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
@@ -4495,16 +4595,21 @@ function App() {
     if (!obsOverlayState) {
       return;
     }
-    await toggleObsOverlaySet({
+
+    const buildInput = (fontScale: number): ObsOverlaySetInput => ({
       enabled: true,
       setId: "__test__",
       eventName: "テスト配信",
-      roundText: "プレビュー",
+      roundText: "Preview\nset T",
       redPlayerName: testOverlayRedName.trim() || "テストプレイヤー1",
       bluePlayerName: testOverlayBlueName.trim() || "テストプレイヤー2",
       redSetWins: testOverlayRedWins,
       blueSetWins: testOverlayBlueWins,
-      fontScale: obsOverlayState.fontScale,
+      fontScale,
+    });
+
+    await toggleObsOverlaySet({
+      ...buildInput(obsOverlayState.fontScale),
     });
   }
 
@@ -4523,20 +4628,115 @@ function App() {
   }
 
   async function toggleActiveMatchOverlay(set: SetSnapshot) {
-    const slot1 = set.slots[0];
-    const slot2 = set.slots[1];
     const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === set.setId;
+    const displayCode = setDisplayCodeById.get(set.setId);
+    const nextRoundLabel = abbreviateOverlayRoundText(set.fullRoundText);
+    const nextRoundText = `${nextRoundLabel}\nset ${displayCode ?? set.setId}`;
+    const overlaySides = resolveOverlaySidesForSet(set);
 
     await toggleObsOverlaySet({
       enabled: !isSameActive,
       setId: set.setId,
       eventName: selectedEvent?.name ?? "",
-      roundText: set.fullRoundText,
-      redPlayerName: slot1?.entrantName?.trim() || "RED",
-      bluePlayerName: slot2?.entrantName?.trim() || "BLUE",
-      redSetWins: scoreToOverlayGameWins(slot1?.score ?? null),
-      blueSetWins: scoreToOverlayGameWins(slot2?.score ?? null),
+      roundText: nextRoundText,
+      redPlayerName: overlaySides.redPlayerName,
+      bluePlayerName: overlaySides.bluePlayerName,
+      redSetWins: overlaySides.redSetWins,
+      blueSetWins: overlaySides.blueSetWins,
       fontScale: obsOverlayState?.fontScale ?? 1,
+    });
+  }
+
+  function resolveOverlaySidesForSet(
+    set: SetSnapshot,
+    scoreByEntrantId?: Map<string, number>,
+  ): { redPlayerName: string; bluePlayerName: string; redSetWins: number; blueSetWins: number } {
+    const slots = set.slots.slice(0, 2);
+    const slot0 = slots[0] ?? null;
+    const slot1 = slots[1] ?? null;
+
+    const sideOf = (slot: SetSlot | null): PlaySide | "" => {
+      if (!slot || !slot.entrantId) {
+        return "";
+      }
+      return getSetSlotSide(set.setId, slot.entrantId);
+    };
+
+    const getScore = (slot: SetSlot | null): number | null => {
+      if (!slot) {
+        return null;
+      }
+      if (slot.entrantId && scoreByEntrantId?.has(slot.entrantId)) {
+        return scoreByEntrantId.get(slot.entrantId) ?? null;
+      }
+      return slot.score ?? null;
+    };
+
+    let onePSlot: SetSlot | null = null;
+    let twoPSlot: SetSlot | null = null;
+
+    const slot0Side = sideOf(slot0);
+    const slot1Side = sideOf(slot1);
+    if (slot0Side === "1P") {
+      onePSlot = slot0;
+    }
+    if (slot0Side === "2P") {
+      twoPSlot = slot0;
+    }
+    if (slot1Side === "1P") {
+      onePSlot = slot1;
+    }
+    if (slot1Side === "2P") {
+      twoPSlot = slot1;
+    }
+
+    if (!onePSlot) {
+      onePSlot = slot0;
+    }
+    if (!twoPSlot) {
+      twoPSlot = onePSlot === slot0 ? slot1 : slot0;
+    }
+
+    const redPlayerName = onePSlot?.entrantName?.trim() || "RED";
+    const bluePlayerName = twoPSlot?.entrantName?.trim() || "BLUE";
+    const redSetWins = scoreToOverlayGameWins(getScore(onePSlot));
+    const blueSetWins = scoreToOverlayGameWins(getScore(twoPSlot));
+
+    return {
+      redPlayerName,
+      bluePlayerName,
+      redSetWins,
+      blueSetWins,
+    };
+  }
+
+  async function syncObsOverlayScoresForSet(
+    set: SetSnapshot,
+    slotScores: Array<{ entrantId: string; score: number }>,
+  ) {
+    if (!obsOverlayState?.active || obsOverlayState.currentSetId !== set.setId || set.setId === "__test__") {
+      return;
+    }
+
+    const scoreByEntrantId = new Map<string, number>();
+    for (const item of slotScores) {
+      scoreByEntrantId.set(item.entrantId, item.score);
+    }
+
+    const displayCode = setDisplayCodeById.get(set.setId);
+    const nextRoundLabel = abbreviateOverlayRoundText(set.fullRoundText);
+    const overlaySides = resolveOverlaySidesForSet(set, scoreByEntrantId);
+
+    await toggleObsOverlaySet({
+      enabled: true,
+      setId: set.setId,
+      eventName: selectedEvent?.name ?? "",
+      roundText: `${nextRoundLabel}\nset ${displayCode ?? set.setId}`,
+      redPlayerName: overlaySides.redPlayerName,
+      bluePlayerName: overlaySides.bluePlayerName,
+      redSetWins: overlaySides.redSetWins,
+      blueSetWins: overlaySides.blueSetWins,
+      fontScale: obsOverlayState.fontScale,
     });
   }
 
@@ -5471,6 +5671,11 @@ function App() {
           scoreDrafts,
         },
       }));
+      try {
+        await syncObsOverlayScoresForSet(activeMatch, slotScores);
+      } catch {
+        // local結果保存は成功しているため、オーバーレイ反映失敗は致命扱いにしない
+      }
       setMessage(
         confirmed
           ? "結果を確定しました。確定済みの試合だけが一括報告の対象になります。"
@@ -6962,26 +7167,34 @@ function App() {
                   <p className="meta">
                     状態: {obsOverlayState.active
                       ? (isTestOverlayActive ? "テスト配信中" : `配信中 (${obsOverlayState.currentSetId ?? "-"})`)
-                      : "停止中"}
+                      : (obsOverlayState.fullyStopped ? "完全停止中" : "停止中")}
                   </p>
                   {activeObsOverlaySet && (
                     <p className="meta">配信中set: {activeObsOverlaySet.set.fullRoundText}</p>
                   )}
 
                   <div className="obs-overlay-grid">
-                    <label>
-                      プレイヤー表示サイズ ({Math.round(normalizeObsFontScale(obsOverlayState.fontScale) * 100)}%)
+                    <label className="checkbox-row" style={{ alignItems: "center", gap: "0.5rem" }}>
                       <input
-                        type="range"
-                        min={0.6}
-                        max={2}
-                        step={0.05}
-                        value={normalizeObsFontScale(obsOverlayState.fontScale)}
+                        type="checkbox"
+                        checked={obsOverlayState.nameFitMode === "shrink"}
                         onChange={(e) => {
-                          void updateObsOverlayFontScaleOnly(Number(e.currentTarget.value));
+                          void updateObsOverlayNameFitMode(e.currentTarget.checked ? "shrink" : "truncate");
                         }}
                         disabled={obsOverlayBusy}
                       />
+                      プレイヤー名を自動縮小して全体表示（オフで途中切れ）
+                    </label>
+                    <label className="checkbox-row" style={{ alignItems: "center", gap: "0.5rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={obsOverlayState.showSetInfo}
+                        onChange={(e) => {
+                          void updateObsOverlayShowSetInfo(e.currentTarget.checked);
+                        }}
+                        disabled={obsOverlayBusy}
+                      />
+                      中央のセット情報を表示
                     </label>
                   </div>
 
@@ -6994,7 +7207,7 @@ function App() {
                           type="text"
                           value={testOverlayRedName}
                           onChange={(e) => setTestOverlayRedName(e.currentTarget.value)}
-                          disabled={obsOverlayBusy || isTestOverlayActive}
+                          disabled={obsOverlayBusy}
                         />
                       </label>
                       <label>
@@ -7004,7 +7217,7 @@ function App() {
                           min={0}
                           value={testOverlayRedWins}
                           onChange={(e) => setTestOverlayRedWins(normalizeObsSetWins(Number(e.currentTarget.value)))}
-                          disabled={obsOverlayBusy || isTestOverlayActive}
+                          disabled={obsOverlayBusy}
                         />
                       </label>
                       <label>
@@ -7013,7 +7226,7 @@ function App() {
                           type="text"
                           value={testOverlayBlueName}
                           onChange={(e) => setTestOverlayBlueName(e.currentTarget.value)}
-                          disabled={obsOverlayBusy || isTestOverlayActive}
+                          disabled={obsOverlayBusy}
                         />
                       </label>
                       <label>
@@ -7023,7 +7236,7 @@ function App() {
                           min={0}
                           value={testOverlayBlueWins}
                           onChange={(e) => setTestOverlayBlueWins(normalizeObsSetWins(Number(e.currentTarget.value)))}
-                          disabled={obsOverlayBusy || isTestOverlayActive}
+                          disabled={obsOverlayBusy}
                         />
                       </label>
                     </div>
@@ -7040,6 +7253,16 @@ function App() {
                         disabled={obsOverlayBusy}
                       >
                         {isTestOverlayActive ? "テスト配信停止" : "テスト配信開始"}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          void setObsOverlayFullyStopped(true);
+                        }}
+                        disabled={obsOverlayBusy || obsOverlayState.fullyStopped}
+                      >
+                        完全停止
                       </button>
                       <button
                         type="button"
@@ -7277,6 +7500,7 @@ function App() {
           <section className="panel">
             <h2>ブラケット管理</h2>
             <p className="meta">試合カードをクリックすると詳細ダイアログを開き、結果入力と 1P/2P 設定ができます。</p>
+            <p className="meta">配信開始/停止はブラケットカードを Ctrl+クリックで切り替えます（同時配信は1セットのみ）。Ctrl+Shift+クリックで完全停止します。</p>
             <div className="panel-toolbar compact">
               <p className="meta">
                 下書き: {draftSetResults.length} / 確定済み: {confirmedSetResults.length}
@@ -7397,7 +7621,25 @@ function App() {
                                       style={{ top: `${Math.round(y)}px` }}
                                       role="button"
                                       tabIndex={0}
-                                      onClick={() => openMatchDialog(set)}
+                                      onClick={(event) => {
+                                        if (event.ctrlKey && event.shiftKey) {
+                                          event.preventDefault();
+                                          if (busy || obsOverlayBusy) {
+                                            return;
+                                          }
+                                          void setObsOverlayFullyStopped(true);
+                                          return;
+                                        }
+                                        if (event.ctrlKey) {
+                                          event.preventDefault();
+                                          if (busy || obsOverlayBusy) {
+                                            return;
+                                          }
+                                          void toggleActiveMatchOverlay(set);
+                                          return;
+                                        }
+                                        openMatchDialog(set);
+                                      }}
                                       onKeyDown={(e) => {
                                         if (e.key === "Enter" || e.key === " ") {
                                           e.preventDefault();
@@ -7405,8 +7647,12 @@ function App() {
                                         }
                                       }}
                                     >
-                                      {displayCode && <p className="set-identifier">Set {displayCode}</p>}
-                                      {isLiveOverlaySet && <p className="set-live-badge">配信中</p>}
+                                      {(displayCode || isLiveOverlaySet) && (
+                                        <div className="set-header-row">
+                                          {displayCode ? <p className="set-identifier">Set {displayCode}</p> : <span />}
+                                          {isLiveOverlaySet && <span className="set-live-badge">配信中</span>}
+                                        </div>
+                                      )}
                                       {set.slots.map((slot, idx) => {
                                         const entrantId = slot.entrantId;
                                         const tbdSourceLabel = resolveTbdSourceLabel(set, idx, slot);
@@ -7553,22 +7799,56 @@ function App() {
                             </div>
                             <label>
                               取得ゲーム数
-                              <input
-                                className="set-score-input"
-                                type="text"
-                                inputMode="numeric"
-                                value={scoreValue}
-                                onChange={(e) => {
-                                  if (!entrantId) {
-                                    return;
-                                  }
-                                  const nextValue = e.currentTarget.value;
-                                  setScoreDrafts((current) => ({
-                                    ...current,
-                                    [entrantId]: nextValue,
-                                  }));
-                                }}
-                              />
+                              <div className="set-score-stepper">
+                                <button
+                                  type="button"
+                                  className="ghost tiny"
+                                  disabled={busy || !isMatchupReady(activeMatch)}
+                                  onClick={() => {
+                                    if (!entrantId) {
+                                      return;
+                                    }
+                                    setScoreDrafts((current) => ({
+                                      ...current,
+                                      [entrantId]: stepScoreDraftValue(current[entrantId] ?? "", -1),
+                                    }));
+                                  }}
+                                >
+                                  -
+                                </button>
+                                <input
+                                  className="set-score-input"
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={scoreValue}
+                                  onChange={(e) => {
+                                    if (!entrantId) {
+                                      return;
+                                    }
+                                    const nextValue = e.currentTarget.value;
+                                    setScoreDrafts((current) => ({
+                                      ...current,
+                                      [entrantId]: nextValue,
+                                    }));
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  className="ghost tiny"
+                                  disabled={busy || !isMatchupReady(activeMatch)}
+                                  onClick={() => {
+                                    if (!entrantId) {
+                                      return;
+                                    }
+                                    setScoreDrafts((current) => ({
+                                      ...current,
+                                      [entrantId]: stepScoreDraftValue(current[entrantId] ?? "", 1),
+                                    }));
+                                  }}
+                                >
+                                  +
+                                </button>
+                              </div>
                             </label>
                             {entrantId && otherEntrantId && (
                               <button
@@ -7610,16 +7890,6 @@ function App() {
                 </div>
 
                 <div className="dialog-actions">
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy || obsOverlayBusy}
-                    onClick={() => {
-                      void toggleActiveMatchOverlay(activeMatch);
-                    }}
-                  >
-                    {obsOverlayState?.active && obsOverlayState.currentSetId === activeMatch.setId ? "配信停止" : "このsetを配信"}
-                  </button>
                   <button
                     type="button"
                     disabled={busy || !isMatchupReady(activeMatch)}
