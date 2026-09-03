@@ -13,7 +13,8 @@ use if_addrs::get_if_addrs;
 use models::{
     BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult,
     CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, GenericMessage, ItemListConfig,
-    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSnapshotEventListItem,
+    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetScoreUpdateInput,
+    LocalSnapshotEventListItem,
     ReportSetResultInput, ResetSetResultCascadeInput, ResetSetResultCascadeResult,
     SaveEventManagementMetaInput, SenderProfile, TournamentPreview, TournamentSnapshot,
     TournamentWorkspace,
@@ -1506,6 +1507,14 @@ fn save_local_set_result(
 }
 
 #[tauri::command]
+fn save_local_set_scores(
+    app: tauri::AppHandle,
+    input: LocalSetScoreUpdateInput,
+) -> Result<TournamentWorkspace, String> {
+    storage::upsert_local_set_scores(&app, input)
+}
+
+#[tauri::command]
 async fn report_confirmed_sets_from_bracket(
     app: tauri::AppHandle,
     input: BracketBatchReportInput,
@@ -1868,6 +1877,7 @@ pub fn run() {
             save_local_player_meta,
             save_local_set_play_side,
             save_local_set_result,
+            save_local_set_scores,
             report_confirmed_sets_from_bracket,
             sync_tournament,
             report_set_result,

@@ -184,6 +184,15 @@ pub struct LocalSetResultInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LocalSetScoreUpdateInput {
+    pub slug: String,
+    pub event_id: String,
+    pub set_id: String,
+    pub slot_scores: Vec<LocalSetScoreInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LocalSetScoreInput {
     pub entrant_id: String,
     pub score: i64,

@@ -876,6 +876,44 @@ button:disabled {
   min-height: 1.1rem;
 }
 
+.set-header-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.set-status-badge {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  border: 1px solid transparent;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  border-radius: 999px;
+  padding: 0.08rem 0.42rem;
+}
+
+.set-status-badge.status-confirmed {
+  background: #dcfce7;
+  border-color: #86efac;
+  color: #14532d;
+}
+
+.set-status-badge.status-draft {
+  background: #fff7ed;
+  border-color: #fdba74;
+  color: #9a3412;
+}
+
+.set-status-badge.status-inprogress {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1e3a8a;
+}
+
 .set-live-badge {
   margin: 0;
   display: inline-flex;
@@ -910,6 +948,18 @@ button:disabled {
 .set-card-changed-draft {
   border-color: #f59e0b;
   box-shadow: 0 0 0 1px #fed7aa inset;
+}
+
+.set-card-status-confirmed {
+  border-left: 4px solid #22c55e;
+}
+
+.set-card-status-draft {
+  border-left: 4px solid #f59e0b;
+}
+
+.set-card-status-inprogress {
+  border-left: 4px solid #3b82f6;
 }
 
 .simple-match-row {

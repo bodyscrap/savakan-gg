@@ -1827,6 +1827,21 @@ function buildSlotScoresForSave(set: SetSnapshot, drafts: SetScoreDraft): Array<
   return slotScores;
 }
 
+function hasDqScoreInDrafts(set: SetSnapshot, drafts: SetScoreDraft): boolean {
+  for (const slot of set.slots) {
+    if (!slot.entrantId) {
+      continue;
+    }
+
+    const parsed = parseDraftScoreValue(drafts[slot.entrantId] ?? "");
+    if (parsed !== null && parsed < 0) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("home");
   const [token, setToken] = useState("");
@@ -1847,6 +1862,7 @@ function App() {
   const [scoreDrafts, setScoreDrafts] = useState<SetScoreDraft>({});
   const [activeMatchSideDrafts, setActiveMatchSideDrafts] = useState<Record<string, PlaySide | "">>({});
   const [setResultDrafts, setSetResultDrafts] = useState<Record<string, SetResultDraftState>>({});
+  const [interimScoreDraftsBySetId, setInterimScoreDraftsBySetId] = useState<Record<string, SetScoreDraft>>({});
   const [batchConflictDialog, setBatchConflictDialog] = useState<BatchConflictDialogState | null>(null);
   const [batchForceOverwriteRemaining, setBatchForceOverwriteRemaining] = useState(false);
   const [metaDrafts, setMetaDrafts] = useState<Record<string, PlayerMetaDraft>>({});
@@ -5211,7 +5227,23 @@ function App() {
     set: SetSnapshot,
     slotScores: Array<{ entrantId: string; score: number }>,
   ) {
-    if (!obsOverlayState?.active || obsOverlayState.currentSetId !== set.setId || set.setId === "__test__") {
+    if (set.setId === "__test__") {
+      return;
+    }
+
+    let currentOverlayState = obsOverlayState;
+    if (!currentOverlayState?.active || currentOverlayState.currentSetId !== set.setId) {
+      try {
+        const latest = await invoke<ObsOverlayState>("get_obs_overlay_state");
+        setObsOverlayState(latest);
+        setIsTestOverlayActive(latest.active && latest.currentSetId === "__test__");
+        currentOverlayState = latest;
+      } catch {
+        return;
+      }
+    }
+
+    if (!currentOverlayState?.active || currentOverlayState.currentSetId !== set.setId || currentOverlayState.currentSetId === "__test__") {
       return;
     }
 
@@ -5233,7 +5265,7 @@ function App() {
       bluePlayerName: overlaySides.bluePlayerName,
       redSetWins: overlaySides.redSetWins,
       blueSetWins: overlaySides.blueSetWins,
-      fontScale: obsOverlayState.fontScale,
+      fontScale: currentOverlayState.fontScale,
     });
   }
 
@@ -5331,6 +5363,14 @@ function App() {
     }
     return allSets.find((entry) => entry.set.setId === obsOverlayState.currentSetId) ?? null;
   }, [allSets, obsOverlayState]);
+
+  const isActiveMatchDqDraft = useMemo(() => {
+    if (!activeMatch) {
+      return false;
+    }
+
+    return hasDqScoreInDrafts(activeMatch, scoreDrafts);
+  }, [activeMatch, scoreDrafts]);
 
   const selectedBracketSections = useMemo(() => {
     if (!selectedPhasePoolGroup) {
@@ -5870,6 +5910,39 @@ function App() {
 
   function getSetScoresForDisplay(set: SetSnapshot): { scores: Record<string, string>; isDq: boolean; winnerId: string | null } {
     const result = pendingResultBySetId.get(set.setId);
+    const interimDrafts = interimScoreDraftsBySetId[set.setId];
+
+    if (!result && interimDrafts) {
+      const scores: Record<string, string> = {};
+      let hasDq = false;
+
+      for (const slot of set.slots) {
+        if (!slot.entrantId) {
+          continue;
+        }
+
+        const parsed = parseDraftScoreValue(interimDrafts[slot.entrantId] ?? "");
+        if (parsed === null) {
+          continue;
+        }
+
+        if (parsed < 0) {
+          scores[slot.entrantId] = "DQ";
+          hasDq = true;
+        } else {
+          scores[slot.entrantId] = String(parsed);
+        }
+      }
+
+      const resolvedWinnerId = resolveWinnerIdFromDrafts(set, interimDrafts);
+
+      return {
+        scores,
+        isDq: hasDq,
+        winnerId: resolvedWinnerId === "" ? null : resolvedWinnerId,
+      };
+    }
+
     if (!result) {
       const winnerId = set.winnerId;
       if (winnerId) {
@@ -5961,6 +6034,29 @@ function App() {
       isDq: false,
       winnerId: result.winnerId,
     };
+  }
+
+  function getSetResultVisualStatus(set: SetSnapshot): "inprogress" | "draft" | "confirmed" | null {
+    const pending = pendingResultBySetId.get(set.setId);
+    if (pending) {
+      return isConfirmedSetResult(pending) ? "confirmed" : "draft";
+    }
+
+    const interimDrafts = interimScoreDraftsBySetId[set.setId];
+    if (interimDrafts) {
+      return "inprogress";
+    }
+
+    const hasSnapshotScores = set.slots.some((slot) => slot.score !== null);
+    if (!set.winnerId && hasSnapshotScores) {
+      return "inprogress";
+    }
+
+    if (set.winnerId || isCompletedSet(set)) {
+      return "confirmed";
+    }
+
+    return null;
   }
 
   function openMatchDialog(set: SetSnapshot, forcedDraftState?: SetResultDraftState) {
@@ -6108,7 +6204,44 @@ function App() {
       let resolvedWinnerId = resolveWinnerIdFromDrafts(activeMatch, scoreDrafts);
 
       if (resolvedWinnerId === "") {
-        setError("スコアから勝者を特定できませんでした。入力を確認してください。");
+        if (confirmed) {
+          setError("スコアから勝者を特定できませんでした。入力を確認してください。");
+          return;
+        }
+
+        const result = await invoke<TournamentWorkspace>("save_local_set_scores", {
+          input: {
+            slug: normalizedSlug,
+            eventId: selectedEvent.eventId,
+            setId,
+            slotScores,
+          },
+        });
+        setWorkspace(result);
+        setSetResultDrafts((current) => {
+          if (!(setId in current)) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[setId];
+          return next;
+        });
+        setInterimScoreDraftsBySetId((current) => {
+          if (!(setId in current)) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[setId];
+          return next;
+        });
+
+        try {
+          await syncObsOverlayScoresForSet(activeMatch, slotScores);
+        } catch {
+          // オーバーレイ反映失敗は入力中の進行を止めない
+        }
+
+        setMessage("勝者未確定のため結果は確定せず、現在スコアを更新しました。オーバーレイへも同期済みです。");
         return;
       }
 
@@ -6130,6 +6263,14 @@ function App() {
           scoreDrafts,
         },
       }));
+      setInterimScoreDraftsBySetId((current) => {
+        if (!(setId in current)) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[setId];
+        return next;
+      });
       try {
         await syncObsOverlayScoresForSet(activeMatch, slotScores);
       } catch {
@@ -8284,6 +8425,15 @@ function App() {
                                       const changeClass = pendingResult
                                         ? (isConfirmedSetResult(pendingResult) ? "set-card-changed-confirmed" : "set-card-changed-draft")
                                         : "";
+                                      const resultStatus = getSetResultVisualStatus(set);
+                                      const resultStatusClass = resultStatus ? `set-card-status-${resultStatus}` : "";
+                                      const resultStatusLabel = resultStatus === "confirmed"
+                                        ? "確定"
+                                        : resultStatus === "draft"
+                                          ? "下書き"
+                                          : resultStatus === "inprogress"
+                                            ? "途中"
+                                            : "";
                                       const isLiveOverlaySet = Boolean(
                                         obsOverlayState?.active
                                         && obsOverlayState.currentSetId === set.setId
@@ -8292,7 +8442,7 @@ function App() {
 
                                       return (
                                     <article
-                                      className={`set-card simple-match-card ${changeClass} ${isLiveOverlaySet ? "set-card-live" : ""}`}
+                                      className={`set-card simple-match-card ${changeClass} ${resultStatusClass} ${isLiveOverlaySet ? "set-card-live" : ""}`}
                                       key={set.setId}
                                       style={{ top: `${Math.round(y)}px` }}
                                       role="button"
@@ -8323,10 +8473,17 @@ function App() {
                                         }
                                       }}
                                     >
-                                      {(displayCode || isLiveOverlaySet) && (
+                                      {(displayCode || isLiveOverlaySet || resultStatusLabel !== "") && (
                                         <div className="set-header-row">
                                           {displayCode ? <p className="set-identifier">Set {displayCode}</p> : <span />}
-                                          {isLiveOverlaySet && <span className="set-live-badge">配信中</span>}
+                                          <div className="set-header-badges">
+                                            {resultStatusLabel !== "" && (
+                                              <span className={`set-status-badge status-${resultStatus}`}>
+                                                {resultStatusLabel}
+                                              </span>
+                                            )}
+                                            {isLiveOverlaySet && <span className="set-live-badge">配信中</span>}
+                                          </div>
                                         </div>
                                       )}
                                       {set.slots.map((slot, idx) => {
@@ -8568,7 +8725,7 @@ function App() {
                 <div className="dialog-actions">
                   <button
                     type="button"
-                    disabled={busy || !isMatchupReady(activeMatch)}
+                    disabled={busy || !isMatchupReady(activeMatch) || isActiveMatchDqDraft}
                     onClick={() => {
                       void saveLocalResultForMatch(false);
                     }}

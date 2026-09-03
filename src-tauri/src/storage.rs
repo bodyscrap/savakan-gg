@@ -10,6 +10,7 @@ use tauri::{AppHandle, Manager};
 use crate::models::{
     EventEntrantMeta, EventLocalMeta, EventManagementMeta, EventSnapshot, GenericMessage,
     ItemListConfig, LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput,
+    LocalSetScoreUpdateInput,
     LocalSetResultMeta, LocalSetScoreMeta, LocalSnapshotEventListItem,
     SaveEventManagementMetaInput, SenderProfile, SetPlaySideMeta, TournamentLocalMeta,
     TournamentSnapshot, TournamentWorkspace,
@@ -1947,6 +1948,54 @@ pub fn upsert_local_set_result(
     if should_advance {
         apply_local_progression(&mut snapshot, &applied_event_id, &input.set_id, &winner_id_for_progress);
     }
+
+    save_snapshot(app, &snapshot)?;
+    save_local_meta(app, &applied_event_id, &local_meta)?;
+
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
+}
+
+pub fn upsert_local_set_scores(
+    app: &AppHandle,
+    input: LocalSetScoreUpdateInput,
+) -> Result<TournamentWorkspace, String> {
+    let mut snapshot = load_snapshot(app, &input.slug)?;
+    let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
+
+    let applied_event_id = {
+        let (event_id, set_snapshot) = find_set_in_snapshot_mut(&mut snapshot, &input.set_id)
+            .ok_or_else(|| "スコア更新対象setがローカルsnapshotに見つかりません。".to_owned())?;
+
+        set_snapshot.winner_id = None;
+        if set_snapshot.state >= 3 {
+            set_snapshot.state = 2;
+        }
+
+        for slot in &mut set_snapshot.slots {
+            if let Some(entrant_id) = slot.entrant_id.as_ref() {
+                if let Some(found) = input
+                    .slot_scores
+                    .iter()
+                    .find(|score| score.entrant_id == *entrant_id)
+                {
+                    slot.score = Some(found.score as f64);
+                }
+            }
+        }
+
+        event_id.clone()
+    };
+
+    local_meta
+        .pending_set_results
+        .retain(|item| item.set_id != input.set_id);
+
+    local_meta.slug = input.slug;
+    local_meta.tournament_id = snapshot.tournament_id.clone();
+    local_meta.updated_at = Utc::now();
 
     save_snapshot(app, &snapshot)?;
     save_local_meta(app, &applied_event_id, &local_meta)?;
