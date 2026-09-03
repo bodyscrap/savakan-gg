@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import QRCode from "qrcode";
 import jsQR from "jsqr";
 import "./App.css";
@@ -1298,6 +1299,19 @@ function toEventApiSlug(tournamentInput: string, eventInput: string): string {
   return `${tournamentSlug}/event/${eventPart}`;
 }
 
+function toEventSlugInput(raw: string): string {
+  const normalized = raw.trim().replace(/^\/+|\/+$/g, "");
+  if (normalized === "") {
+    return "";
+  }
+
+  const eventPart = normalized.includes("/event/")
+    ? (normalized.split("/event/").pop() ?? "")
+    : normalized;
+
+  return eventPart.replace(/^event\//, "").replace(/^\/+|\/+$/g, "");
+}
+
 function bytesToBase32(bytes: Uint8Array): string {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   let buffer = 0;
@@ -2285,7 +2299,9 @@ function App() {
       return;
     }
 
-    setCreateSelectedEventId(createPreview.events[0]?.eventId ?? "");
+    const fallback = createPreview.events[0] ?? null;
+    setCreateSelectedEventId(fallback?.eventId ?? "");
+    setCreateEventSlugInput(toEventSlugInput(fallback?.eventSlug ?? ""));
   }, [createPreview, createSelectedEventId]);
 
   const snapshot = workspace?.snapshot ?? null;
@@ -5164,52 +5180,14 @@ function App() {
         slug: apiSlug,
       });
       setCreatePreview(preview);
-      setCreateSelectedEventId((current) => {
-        if (current !== "" && preview.events.some((event) => event.eventId === current)) {
-          return current;
-        }
-        return preview.events[0]?.eventId ?? "";
-      });
+      const selected = preview.events.find((event) => event.eventId === createSelectedEventId)
+        ?? preview.events[0]
+        ?? null;
+      setCreateSelectedEventId(selected?.eventId ?? "");
+      setCreateEventSlugInput(toEventSlugInput(selected?.eventSlug ?? ""));
       setMessage("tournamentのイベント一覧を取得しました。");
     } catch (err) {
       setCreatePreviewLoadFailed(true);
-      setError(String(err));
-    } finally {
-      setCreateBusy(false);
-    }
-  }
-
-  async function createEventSnapshot() {
-    const eventId = createSelectedEventId.trim();
-    const apiSlug = toApiSlug(slug);
-    if (apiSlug === "" || eventId === "") {
-      setError("大会IDとeventを選択してください。");
-      return;
-    }
-
-    setCreateBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      await invoke("save_startgg_token", { token });
-      await invoke("save_last_slug", { slug: apiSlug });
-      const result = await invoke<TournamentWorkspace>("create_event_snapshot", {
-        input: {
-          slug: apiSlug,
-          eventId,
-          eventSlug:
-            createPreview?.events.find((event) => event.eventId === eventId)?.eventSlug ?? null,
-          eventAlias: createEventAlias.trim() === "" ? null : createEventAlias.trim(),
-          perPage: Number(perPage),
-        },
-      });
-
-      setWorkspace(result);
-      await refreshLocalSnapshotEvents();
-      setActiveTab("home");
-      setMessage("イベントのローカルスナップショットを作成しました。");
-    } catch (err) {
       setError(String(err));
     } finally {
       setCreateBusy(false);
@@ -6181,7 +6159,7 @@ function App() {
                           void deleteLocalSnapshotEvent(item);
                         }}
                       >
-                        {isDeleting ? "削除中..." : "このイベントを削除"}
+                        {isDeleting ? "削除中..." : "スナップショットの削除"}
                       </button>
                     </article>
                   );
@@ -6252,9 +6230,19 @@ function App() {
                       <article
                         key={event.eventId}
                         className={`event-list-item ${createSelectedEventId === event.eventId ? "selected" : ""}`}
-                        onClick={() => setCreateSelectedEventId(event.eventId)}
+                        onClick={() => {
+                          setCreateSelectedEventId(event.eventId);
+                          setCreateEventSlugInput(toEventSlugInput(event.eventSlug ?? ""));
+                        }}
                         role="button"
                         tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setCreateSelectedEventId(event.eventId);
+                            setCreateEventSlugInput(toEventSlugInput(event.eventSlug ?? ""));
+                          }
+                        }}
                       >
                         <div className="event-list-head">
                           <h3>{event.eventName}</h3>
@@ -6276,13 +6264,6 @@ function App() {
                   onChange={(e) => setCreateEventAlias(e.currentTarget.value)}
                   placeholder="アプリ内表示用のevent alias"
                 />
-                <button
-                  type="button"
-                  disabled={createBusy || token.trim() === "" || toApiSlug(slug) === "" || createSelectedEventId.trim() === ""}
-                  onClick={() => void createEventSnapshot()}
-                >
-                  ローカルスナップショットを作成
-                </button>
               </div>
               <p className="meta">
                 選択中 event: {createPreview?.events.find((event) => event.eventId === createSelectedEventId)?.eventName ?? "-"}
@@ -6292,15 +6273,14 @@ function App() {
                 <input
                   value={createEventSlugInput}
                   onChange={(e) => setCreateEventSlugInput(e.currentTarget.value)}
-                  placeholder="event ID (例: ultimate-singles) または event slug"
+                  placeholder="event名 (slug部分 / 例: ultimate-singles)"
                 />
                 <button
                   type="button"
-                  className="ghost"
                   disabled={createBusy || token.trim() === "" || toApiSlug(slug) === "" || toEventApiSlug(slug, createEventSlugInput) === ""}
                   onClick={() => void createEventSnapshotBySlug()}
                 >
-                  直接指定でスナップショット作成
+                  ローカルスナップショットの作成
                 </button>
               </div>
               <p className="meta">
@@ -7155,7 +7135,23 @@ function App() {
           <section className="panel">
             <h2>OBSオーバーレイ</h2>
             <p className="meta">配信中セット、またはテスト表示を OBS ブラウザソースに出力します。</p>
-            <p className="meta">URL: {obsOverlayState?.overlayUrl ?? "読み込み中..."}</p>
+            <p className="meta">
+              URL: {obsOverlayState?.overlayUrl
+                ? (
+                    <a
+                      href={obsOverlayState.overlayUrl}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        void openUrl(obsOverlayState.overlayUrl).catch((err) => {
+                          setError(`URLをブラウザで開けませんでした: ${String(err)}`);
+                        });
+                      }}
+                    >
+                      {obsOverlayState.overlayUrl}
+                    </a>
+                  )
+                : "読み込み中..."}
+            </p>
           </section>
 
           <section className="panel overlay-preview-panel">
