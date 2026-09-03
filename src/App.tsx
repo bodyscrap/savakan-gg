@@ -7348,8 +7348,9 @@ function App() {
                     type="checkbox"
                     checked={mailboxFilterSetting.unresolvedOnly}
                     onChange={(e) => {
+                      const checked = e.currentTarget.checked;
                       setSelectedThreadId("");
-                      setMailboxFilterSetting((current) => ({ ...current, unresolvedOnly: e.currentTarget.checked }));
+                      setMailboxFilterSetting((current) => ({ ...current, unresolvedOnly: checked }));
                     }}
                   />
                   未解決スレッドのみ
@@ -7359,8 +7360,9 @@ function App() {
                     type="checkbox"
                     checked={mailboxFilterSetting.unreadOnly}
                     onChange={(e) => {
+                      const checked = e.currentTarget.checked;
                       setSelectedThreadId("");
-                      setMailboxFilterSetting((current) => ({ ...current, unreadOnly: e.currentTarget.checked }));
+                      setMailboxFilterSetting((current) => ({ ...current, unreadOnly: checked }));
                     }}
                   />
                   未読メッセージがあるスレッドのみ
@@ -7999,7 +8001,10 @@ function App() {
                 <input
                   type="checkbox"
                   checked={mailboxFilterSetting.unresolvedOnly}
-                  onChange={(e) => setMailboxFilterSetting((current) => ({ ...current, unresolvedOnly: e.currentTarget.checked }))}
+                  onChange={(e) => {
+                    const checked = e.currentTarget.checked;
+                    setMailboxFilterSetting((current) => ({ ...current, unresolvedOnly: checked }));
+                  }}
                 />
                 未解決スレッドのみ表示
               </label>
@@ -8007,7 +8012,10 @@ function App() {
                 <input
                   type="checkbox"
                   checked={mailboxFilterSetting.unreadOnly}
-                  onChange={(e) => setMailboxFilterSetting((current) => ({ ...current, unreadOnly: e.currentTarget.checked }))}
+                  onChange={(e) => {
+                    const checked = e.currentTarget.checked;
+                    setMailboxFilterSetting((current) => ({ ...current, unreadOnly: checked }));
+                  }}
                 />
                 未読メッセージがあるスレッドのみ表示
               </label>
