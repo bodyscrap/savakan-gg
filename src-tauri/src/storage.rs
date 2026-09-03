@@ -701,6 +701,19 @@ fn build_forced_resolve_message(root: &GenericMessage) -> GenericMessage {
 pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Result<(), String> {
     let mut messages = load_generic_messages(app)?.unwrap_or_default();
 
+    if message.message_type == "resolve" && message.method == "call_player" {
+        let known_call_thread = messages.iter().any(|item| {
+            item.thread_id == message.thread_id
+                && item.parent_message_id.is_none()
+                && item.method == "call_player"
+        });
+
+        if !known_call_thread {
+            // 未知の呼び出しスレッドに対する解決メッセージは取り込まない。
+            return Ok(());
+        }
+    }
+
     if message.message_type == "normal"
         && message.parent_message_id.is_none()
         && message.method == "call_player"

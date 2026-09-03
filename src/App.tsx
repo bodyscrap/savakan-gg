@@ -444,6 +444,24 @@ type CallThreadIdentity = {
   setId: string;
 };
 
+type CallListPlayer = {
+  threadId: string;
+  entrantName: string;
+  createdAt: string;
+  senderName: string;
+};
+
+type CallListEventGroup = {
+  key: string;
+  eventAlias: string;
+  tournamentName: string;
+  eventName: string;
+  eventId: string;
+  players: CallListPlayer[];
+};
+
+type CallListEventSortStrategy = "alias" | "max-elapsed";
+
 type DqRequestDialogState = {
   threadId: string;
   parentMessageId: string;
@@ -540,7 +558,7 @@ type MailboxFilterSetting = {
   unreadOnly: boolean;
 };
 
-type AppTab = "home" | "create" | "tournament" | "message" | "bracket" | "item-list" | "users" | "settings" | "overlay";
+type AppTab = "home" | "create" | "tournament" | "message" | "call-list" | "bracket" | "item-list" | "users" | "settings" | "overlay";
 
 type UserCardPlayer = {
   tournamentId: string;
@@ -582,6 +600,13 @@ type EventManagementSetting = {
 
 const MAX_CATEGORY_SLOTS = 3;
 const USER_CARD_PAGE_SIZE = 10;
+const CALL_LIST_EVENT_PAGE_SIZE = 3;
+const CALL_LIST_ROTATE_SECONDS_MIN = 1;
+const CALL_LIST_ROTATE_SECONDS_MAX = 180;
+const CALL_LIST_ROTATE_SECONDS_DEFAULT = 7;
+const CALL_LIST_COLOR_SECONDS_MIN = 30;
+const CALL_LIST_COLOR_SECONDS_MAX = 3600;
+const CALL_LIST_COLOR_SECONDS_DEFAULT = 600;
 
 function normalizeSlugForSettingKey(rawSlug: string): string {
   const trimmed = rawSlug.trim();
@@ -603,6 +628,77 @@ function normalizeEventSettingStorageKey(rawKey: string): string {
   }
 
   return `${normalizeSlugForSettingKey(slugPart)}::${eventId}`;
+}
+
+function normalizeCallListRotateSeconds(rawValue: unknown, fallback = CALL_LIST_ROTATE_SECONDS_DEFAULT): number {
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  const rounded = Math.trunc(numeric);
+  if (rounded < CALL_LIST_ROTATE_SECONDS_MIN) {
+    return CALL_LIST_ROTATE_SECONDS_MIN;
+  }
+  if (rounded > CALL_LIST_ROTATE_SECONDS_MAX) {
+    return CALL_LIST_ROTATE_SECONDS_MAX;
+  }
+
+  return rounded;
+}
+
+function normalizeCallListColorSeconds(rawValue: unknown, fallback = CALL_LIST_COLOR_SECONDS_DEFAULT): number {
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  const rounded = Math.trunc(numeric);
+  if (rounded < CALL_LIST_COLOR_SECONDS_MIN) {
+    return CALL_LIST_COLOR_SECONDS_MIN;
+  }
+  if (rounded > CALL_LIST_COLOR_SECONDS_MAX) {
+    return CALL_LIST_COLOR_SECONDS_MAX;
+  }
+
+  return rounded;
+}
+
+function formatCallElapsedTime(createdAt: string, referenceMs: number): string {
+  const createdMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdMs)) {
+    return "00:00";
+  }
+
+  const elapsedMs = Math.max(0, referenceMs - createdMs);
+  const totalMinutes = Math.floor(elapsedMs / 60000);
+  if (totalMinutes >= 99 * 60 + 99) {
+    return "99:99";
+  }
+  const elapsedHours = Math.floor(totalMinutes / 60);
+  const elapsedMinutes = totalMinutes % 60;
+
+  return `${String(elapsedHours).padStart(2, "0")}:${String(elapsedMinutes).padStart(2, "0")}`;
+}
+
+function callElapsedSeconds(createdAt: string, referenceMs: number): number {
+  const createdMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdMs)) {
+    return 0;
+  }
+  return Math.max(0, (referenceMs - createdMs) / 1000);
+}
+
+function buildCallListPlayerChipStyle(elapsedSeconds: number, redAfterSeconds: number) {
+  const threshold = Math.max(1, redAfterSeconds);
+  const progress = Math.min(Math.max(elapsedSeconds / threshold, 0), 1);
+  const hue = Math.round((1 - progress) * 120);
+
+  return {
+    backgroundColor: `hsl(${hue} 82% 91%)`,
+    borderColor: `hsl(${hue} 74% 43%)`,
+    color: `hsl(${hue} 66% 20%)`,
+  };
 }
 
 function clampNonNegativeInteger(value: number, fallback: number): number {
@@ -860,6 +956,9 @@ function getMailboxMethodLabel(method: string): string {
   if (normalized === "call_player") {
     return "プレイヤー呼び出し";
   }
+  if (normalized === "call_player_sync_request") {
+    return "呼び出し同期要求";
+  }
   return normalized === "" ? "不明" : normalized;
 }
 
@@ -949,6 +1048,65 @@ function extractCallThreadIdentity(rootMessage: GenericMessage | null): CallThre
     callEntrantName,
     setId,
   };
+}
+
+function extractCallEventMeta(
+  rootMessage: GenericMessage,
+): {
+  tournamentId: string;
+  tournamentName: string;
+  eventId: string;
+  eventName: string;
+  eventAlias: string;
+} {
+  const tournamentId = extractMetaString(rootMessage.messageMeta, "scopeTournamentId") || extractMetaString(rootMessage.messageMeta, "tournamentId");
+  const tournamentName = extractMetaString(rootMessage.messageMeta, "tournamentName");
+  const eventId = extractMetaString(rootMessage.messageMeta, "scopeEventId") || extractMetaString(rootMessage.messageMeta, "eventId");
+  const eventName = extractMetaString(rootMessage.messageMeta, "eventName");
+  const eventAlias = extractMetaString(rootMessage.messageMeta, "eventAlias");
+
+  return {
+    tournamentId,
+    tournamentName,
+    eventId,
+    eventName,
+    eventAlias,
+  };
+}
+
+function compareCallListEventGroup(left: CallListEventGroup, right: CallListEventGroup): number {
+  const byAlias = left.eventAlias.localeCompare(right.eventAlias, "ja");
+  if (byAlias !== 0) {
+    return byAlias;
+  }
+
+  const byEventName = left.eventName.localeCompare(right.eventName, "ja");
+  if (byEventName !== 0) {
+    return byEventName;
+  }
+
+  return left.tournamentName.localeCompare(right.tournamentName, "ja");
+}
+
+function compareCallListEventGroupByMaxElapsed(
+  left: CallListEventGroup,
+  right: CallListEventGroup,
+  referenceMs: number,
+): number {
+  const leftMaxElapsed = left.players.reduce(
+    (maxElapsed, player) => Math.max(maxElapsed, callElapsedSeconds(player.createdAt, referenceMs)),
+    0,
+  );
+  const rightMaxElapsed = right.players.reduce(
+    (maxElapsed, player) => Math.max(maxElapsed, callElapsedSeconds(player.createdAt, referenceMs)),
+    0,
+  );
+
+  if (leftMaxElapsed !== rightMaxElapsed) {
+    return rightMaxElapsed - leftMaxElapsed;
+  }
+
+  return compareCallListEventGroup(left, right);
 }
 
 function isDqRequestMessage(message: GenericMessage): boolean {
@@ -1073,6 +1231,8 @@ const SENDER_PROFILE_STORAGE_KEY = "savakan-gg.sender-profile.v1";
 const GENERIC_MESSAGE_STORAGE_KEY = "savakan-gg.generic-messages.v1";
 const MAILBOX_FILTER_STORAGE_KEY = "savakan-gg.mailbox-filter.v1";
 const MAILBOX_READ_IDS_STORAGE_KEY = "savakan-gg.mailbox-read-ids.v1";
+const CALL_LIST_ROTATE_SECONDS_STORAGE_KEY = "savakan-gg.call-list-rotate-seconds.v1";
+const CALL_LIST_COLOR_SECONDS_STORAGE_KEY = "savakan-gg.call-list-color-seconds.v1";
 
 const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: boolean }> = [
   { id: "create", label: "新規作成", icon: "➕", implemented: true },
@@ -1082,6 +1242,7 @@ const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: bo
   { id: "overlay", label: "OBSオーバーレイ", icon: "📺", implemented: true },
   { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
   { id: "message", label: "メッセージ", icon: "💬", implemented: true },
+  { id: "call-list", label: "呼び出しリスト", icon: "📣", implemented: true },
   { id: "users", label: "プレイヤーリスト", icon: "👥", implemented: true },
   { id: "settings", label: "設定", icon: "🔧", implemented: true },
 ];
@@ -1722,6 +1883,14 @@ function App() {
   const [dqSubmitting, setDqSubmitting] = useState(false);
   const [dqCameraActive, setDqCameraActive] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState("");
+  const [callListPageIndex, setCallListPageIndex] = useState(0);
+  const [callListPageRotateSeconds, setCallListPageRotateSeconds] = useState(CALL_LIST_ROTATE_SECONDS_DEFAULT);
+  const [callListColorSeconds, setCallListColorSeconds] = useState(CALL_LIST_COLOR_SECONDS_DEFAULT);
+  const [callListEventSortStrategy, setCallListEventSortStrategy] = useState<CallListEventSortStrategy>("alias");
+  const [callListPageSwitchedAtMs, setCallListPageSwitchedAtMs] = useState(() => Date.now());
+  const [callListProgressNowMs, setCallListProgressNowMs] = useState(() => Date.now());
+  const [callListDisplayGroups, setCallListDisplayGroups] = useState<CallListEventGroup[]>([]);
+  const [callListCycleCount, setCallListCycleCount] = useState(0);
   const [mailboxServiceStarted, setMailboxServiceStarted] = useState(false);
   const [callingEntrantId, setCallingEntrantId] = useState("");
   const [composeMessageMeta, setComposeMessageMeta] = useState<Record<string, unknown> | null>(null);
@@ -1881,7 +2050,47 @@ function App() {
     } catch {
       // ignore
     }
+
+    try {
+      const rawRotateSeconds = window.localStorage.getItem(CALL_LIST_ROTATE_SECONDS_STORAGE_KEY);
+      if (rawRotateSeconds !== null) {
+        setCallListPageRotateSeconds(normalizeCallListRotateSeconds(rawRotateSeconds));
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const rawColorSeconds = window.localStorage.getItem(CALL_LIST_COLOR_SECONDS_STORAGE_KEY);
+      if (rawColorSeconds !== null) {
+        setCallListColorSeconds(normalizeCallListColorSeconds(rawColorSeconds));
+      }
+    } catch {
+      // ignore
+    }
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        CALL_LIST_ROTATE_SECONDS_STORAGE_KEY,
+        String(normalizeCallListRotateSeconds(callListPageRotateSeconds)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [callListPageRotateSeconds]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        CALL_LIST_COLOR_SECONDS_STORAGE_KEY,
+        String(normalizeCallListColorSeconds(callListColorSeconds)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [callListColorSeconds]);
 
   useEffect(() => {
     let alive = true;
@@ -2753,6 +2962,140 @@ function App() {
       .sort((left, right) => new Date(right.root.createdAt).getTime() - new Date(left.root.createdAt).getTime());
   }, [mailboxReadMessageIds, scopedGenericMessages, senderProfile.senderUserId]);
 
+  const unresolvedCallEventGroupsLatest = useMemo(() => {
+    const roots = genericMessages.filter((item) =>
+      item.parentMessageId === null
+      && item.method === "call_player"
+      && item.messageType === "normal"
+    );
+
+    const groups = new Map<string, CallListEventGroup>();
+
+    for (const root of roots) {
+      const resolved = genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve");
+      if (resolved) {
+        continue;
+      }
+
+      const callIdentity = extractCallThreadIdentity(root);
+      const entrantName = callIdentity?.callEntrantName
+        || extractMetaString(root.messageMeta, "callEntrantName")
+        || extractMetaString(root.messageMeta, "callEntrantId")
+        || "不明プレイヤー";
+      const eventMeta = extractCallEventMeta(root);
+      const eventAlias = eventMeta.eventAlias;
+      const eventName = eventMeta.eventName;
+      const tournamentName = eventMeta.tournamentName;
+      const groupKey = [
+        eventMeta.tournamentId,
+        tournamentName,
+        eventMeta.eventId,
+        eventName,
+        eventAlias,
+      ].join("::") || "__unknown__";
+      const found = groups.get(groupKey);
+
+      if (found) {
+        found.players.push({
+          threadId: root.threadId,
+          entrantName,
+          createdAt: root.createdAt,
+          senderName: root.senderName,
+        });
+      } else {
+        groups.set(groupKey, {
+          key: groupKey,
+          eventAlias,
+          tournamentName,
+          eventName,
+          eventId: eventMeta.eventId,
+          players: [{
+            threadId: root.threadId,
+            entrantName,
+            createdAt: root.createdAt,
+            senderName: root.senderName,
+          }],
+        });
+      }
+    }
+
+    return [...groups.values()]
+      .map((group) => ({
+        ...group,
+        players: group.players
+          .slice()
+          .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
+      }));
+  }, [genericMessages]);
+
+  const callListEventGroupComparator = useMemo(() => {
+    if (callListEventSortStrategy === "max-elapsed") {
+      return (left: CallListEventGroup, right: CallListEventGroup) =>
+        compareCallListEventGroupByMaxElapsed(left, right, callListPageSwitchedAtMs);
+    }
+
+    return compareCallListEventGroup;
+  }, [callListEventSortStrategy, callListPageSwitchedAtMs]);
+
+  const unresolvedCallEventGroupsLatestMap = useMemo(
+    () => new Map(unresolvedCallEventGroupsLatest.map((group) => [group.key, group] as const)),
+    [unresolvedCallEventGroupsLatest],
+  );
+
+  useEffect(() => {
+    setCallListDisplayGroups((current) => {
+      if (current.length === 0) {
+        return [...unresolvedCallEventGroupsLatest].sort(callListEventGroupComparator);
+      }
+
+      const currentKeySet = new Set(current.map((item) => item.key));
+      const next = current.map((item) => unresolvedCallEventGroupsLatestMap.get(item.key) ?? item);
+
+      for (const group of unresolvedCallEventGroupsLatest) {
+        if (!currentKeySet.has(group.key)) {
+          // 新規イベントは末尾へ追加し、ページ数を即時増加させる。
+          next.push(group);
+        }
+      }
+
+      return next;
+    });
+  }, [callListEventGroupComparator, unresolvedCallEventGroupsLatest, unresolvedCallEventGroupsLatestMap]);
+
+  useEffect(() => {
+    setCallListDisplayGroups((current) => current.slice().sort(callListEventGroupComparator));
+  }, [callListEventGroupComparator]);
+
+  const unresolvedCallEventGroups = callListDisplayGroups;
+
+  const unresolvedCallEventPages = useMemo(() => {
+    if (unresolvedCallEventGroups.length === 0) {
+      return [] as typeof unresolvedCallEventGroups[];
+    }
+
+    const pages: Array<typeof unresolvedCallEventGroups> = [];
+    for (let index = 0; index < unresolvedCallEventGroups.length; index += CALL_LIST_EVENT_PAGE_SIZE) {
+      pages.push(unresolvedCallEventGroups.slice(index, index + CALL_LIST_EVENT_PAGE_SIZE));
+    }
+    return pages;
+  }, [unresolvedCallEventGroups]);
+
+  const activeUnresolvedCallEventPage = unresolvedCallEventPages[callListPageIndex] ?? [];
+  const callListCurrentPage = unresolvedCallEventPages.length === 0
+    ? 0
+    : Math.min(callListPageIndex + 1, unresolvedCallEventPages.length);
+  const callListTotalPages = unresolvedCallEventPages.length;
+  const callListRotateSeconds = normalizeCallListRotateSeconds(callListPageRotateSeconds);
+  const callListColorToRedSeconds = normalizeCallListColorSeconds(callListColorSeconds);
+  const callListRotateMs = callListRotateSeconds * 1000;
+  const elapsedFromPageSwitchMs = Math.max(0, callListProgressNowMs - callListPageSwitchedAtMs);
+  const normalizedCallListPageProgressPercent = unresolvedCallEventPages.length === 0
+    ? 0
+    : Math.max(0, Math.min(100, (elapsedFromPageSwitchMs / callListRotateMs) * 100));
+  const callListRotateRemainingSeconds = unresolvedCallEventPages.length === 0
+    ? 0
+    : Math.max(0, callListRotateSeconds * (1 - normalizedCallListPageProgressPercent / 100));
+
   const mailboxThreads = useMemo(() => {
     return mailboxThreadSummaries
       .filter((summary) => {
@@ -2809,6 +3152,98 @@ function App() {
   }, [hasMailboxThreads, mailboxThreads]);
 
   useEffect(() => {
+    if (callListCycleCount === 0) {
+      return;
+    }
+
+    // 1周ごとに未解決が消えたイベントを除外し、ソートルールで再整列する。
+    setCallListDisplayGroups([...unresolvedCallEventGroupsLatest].sort(callListEventGroupComparator));
+  }, [callListCycleCount, callListEventGroupComparator, unresolvedCallEventGroupsLatest]);
+
+  useEffect(() => {
+    if (unresolvedCallEventPages.length === 0) {
+      if (callListPageIndex !== 0) {
+        setCallListPageIndex(0);
+      }
+      return;
+    }
+
+    if (callListPageIndex >= unresolvedCallEventPages.length) {
+      setCallListPageIndex(0);
+    }
+  }, [callListPageIndex, unresolvedCallEventPages.length]);
+
+  useEffect(() => {
+    if (activeTab !== "call-list" || unresolvedCallEventPages.length === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    const rotateMs = callListRotateSeconds * 1000;
+    const elapsedMs = Math.max(0, now - callListPageSwitchedAtMs);
+    const missedTurns = Math.floor(elapsedMs / rotateMs);
+    if (missedTurns <= 0) {
+      return;
+    }
+
+    setCallListPageSwitchedAtMs((current) => current + missedTurns * rotateMs);
+    setCallListPageIndex((current) => {
+      const pageCount = unresolvedCallEventPages.length;
+      if (pageCount <= 0) {
+        return 0;
+      }
+
+      const advanced = current + missedTurns;
+      const next = advanced % pageCount;
+      const completedCycles = pageCount === 1 ? missedTurns : Math.floor(advanced / pageCount);
+      if (completedCycles > 0) {
+        setCallListCycleCount((cycle) => cycle + completedCycles);
+      }
+
+      return next;
+    });
+    setCallListProgressNowMs(now);
+  }, [activeTab, callListPageSwitchedAtMs, callListRotateSeconds, unresolvedCallEventPages.length]);
+
+  useEffect(() => {
+    if (activeTab !== "call-list" || unresolvedCallEventPages.length === 0) {
+      setCallListProgressNowMs(Date.now());
+      return;
+    }
+
+    setCallListProgressNowMs(Date.now());
+    const tickerId = window.setInterval(() => {
+      setCallListProgressNowMs(Date.now());
+    }, 100);
+
+    return () => {
+      window.clearInterval(tickerId);
+    };
+  }, [activeTab, unresolvedCallEventPages.length]);
+
+  useEffect(() => {
+    if (activeTab !== "call-list" || unresolvedCallEventPages.length === 0) {
+      setCallListProgressNowMs(Date.now());
+      return;
+    }
+
+    const timerId = window.setInterval(() => {
+      setCallListPageSwitchedAtMs(Date.now());
+      setCallListPageIndex((current) => {
+        const next = (current + 1) % unresolvedCallEventPages.length;
+        if (next === 0) {
+          setCallListCycleCount((cycle) => cycle + 1);
+        }
+        return next;
+      });
+    }, callListRotateSeconds * 1000);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [activeTab, callListRotateSeconds, unresolvedCallEventPages.length]);
+
+  useEffect(() => {
     if (activeTab !== "message" || !activeThread) {
       return;
     }
@@ -2823,9 +3258,18 @@ function App() {
 
     setMailboxReadMessageIds((current) => {
       const next = new Set(current);
+      let changed = false;
       for (const messageId of incomingIds) {
-        next.add(messageId);
+        if (!next.has(messageId)) {
+          next.add(messageId);
+          changed = true;
+        }
       }
+
+      if (!changed) {
+        return current;
+      }
+
       return [...next];
     });
   }, [activeTab, activeThread, activeThreadMessages, senderProfile.senderUserId]);
@@ -2875,6 +3319,10 @@ function App() {
     && isValidSenderUserId(senderProfile.senderUserId)
     && isValidIpv4(senderProfile.bindIp)
     && normalizedReplyBody !== "";
+  const canBroadcastCallListSync = senderProfile.senderName.trim() !== ""
+    && isValidSenderUserId(senderProfile.senderUserId)
+    && isValidIpv4(senderProfile.bindIp)
+    && isValidIpv4(senderProfile.broadcastSubnetMask);
 
   const activeCallThreadIdentity = useMemo(() => extractCallThreadIdentity(activeThread), [activeThread]);
   const canOpenDqDialog = !!activeThread
@@ -3380,6 +3828,39 @@ function App() {
       }
 
       setMessage("解決メッセージを送信しました。スレッドは完了扱いになります。");
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function requestUnresolvedCallSyncBroadcast() {
+    setError("");
+    setMessage("");
+
+    if (!canBroadcastCallListSync) {
+      setError("設定タブで送信者名・8桁ユーザーID・自分のIP・ブロードキャスト用サブネットマスクを保存してから実行してください。");
+      return;
+    }
+
+    try {
+      await invoke<GenericMessage>("send_mailbox_message", {
+        input: {
+          profile: senderProfile,
+          messageType: "normal",
+          method: "call_player_sync_request",
+          subject: "未解決呼び出し同期リクエスト",
+          body: "現在未解決のプレイヤー呼び出し情報を返信してください。",
+          messageMeta: {
+            requestedAt: new Date().toISOString(),
+          },
+          deliveryTargetMode: "broadcast",
+          deliveryTargetIp: null,
+          threadId: null,
+          parentMessageId: null,
+        },
+      });
+
+      setMessage("未解決呼び出しの同期問い合わせをブロードキャスト送信しました。返信が届くと呼び出しリストが更新されます。");
     } catch (err) {
       setError(String(err));
     }
@@ -6058,15 +6539,87 @@ function App() {
         </nav>
       </aside>
 
-      <main className="content">
+      <main className={`content ${activeTab === "call-list" ? "call-list-mode" : ""}`}>
         <section className="hero">
-          <p className="eyebrow">Tournament Workspace</p>
-          <h2>{APP_TABS.find((tab) => tab.id === activeTab)?.label ?? "大会管理"}</h2>
-          <p className="description">start.gg とローカル保存データを統合して運用します。</p>
+          {activeTab === "call-list" ? (
+            <>
+              <div className="hero-call-list-head">
+                <h2 className="call-list-hero-title">プレイヤー呼び出し</h2>
+                <p className="call-list-page-big">{callListCurrentPage}/{callListTotalPages}</p>
+              </div>
+              <div className="hero-call-list-toolbar">
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      setCallListEventSortStrategy((current) => (current === "alias" ? "max-elapsed" : "alias"));
+                    }}
+                  >
+                    並び替え: {callListEventSortStrategy === "alias" ? "エイリアス順" : "最大経過時間順"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={!canBroadcastCallListSync}
+                    onClick={() => void requestUnresolvedCallSyncBroadcast()}
+                  >
+                    未解決呼び出しを問い合わせ
+                  </button>
+                  {unresolvedCallEventPages.length > 1 && (
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => {
+                        setCallListPageSwitchedAtMs(Date.now());
+                        setCallListPageIndex((current) => {
+                          const next = (current + 1) % unresolvedCallEventPages.length;
+                          if (next === 0) {
+                            setCallListCycleCount((cycle) => cycle + 1);
+                          }
+                          return next;
+                        });
+                      }}
+                    >
+                      次ページ
+                    </button>
+                  )}
+                </div>
+              </div>
+              {unresolvedCallEventPages.length > 1 && (
+                <div
+                  className="call-list-rotate-progress"
+                  role="progressbar"
+                  aria-label="次ページ切替までの進捗"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(normalizedCallListPageProgressPercent)}
+                >
+                  <div className="call-list-rotate-progress-track">
+                    <div
+                      className="call-list-rotate-progress-fill"
+                      style={{ width: `${normalizedCallListPageProgressPercent}%` }}
+                    />
+                  </div>
+                  <p className="call-list-rotate-progress-meta">
+                    次のページ切替まで {callListRotateRemainingSeconds.toFixed(1)} 秒
+                  </p>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="eyebrow">Tournament Workspace</p>
+              <h2>{APP_TABS.find((tab) => tab.id === activeTab)?.label ?? "大会管理"}</h2>
+              <p className="description">start.gg とローカル保存データを統合して運用します。</p>
+            </>
+          )}
         </section>
 
-        {message !== "" && <p className="message success">{message}</p>}
-        {error !== "" && <p className="message error">{error}</p>}
+        <section className="message-stack" aria-live="polite">
+          <p className={`message success ${message === "" ? "empty" : ""}`}>{message === "" ? " " : message}</p>
+          <p className={`message error ${error === "" ? "empty" : ""}`}>{error === "" ? " " : error}</p>
+        </section>
 
         {activeTab === "home" && (
           <section className="panel">
@@ -6942,6 +7495,72 @@ function App() {
         </>
       )}
 
+      {activeTab === "call-list" && (
+        <>
+          <section className="panel call-list-panel">
+            <p className="meta">ページ切替間隔: {callListRotateSeconds} 秒</p>
+
+            {unresolvedCallEventGroups.length === 0 ? (
+              <p className="meta">現在未解決の呼び出しはありません。</p>
+            ) : (
+              <div className="call-list-event-grid">
+                {activeUnresolvedCallEventPage.map((group) => (
+                  <article className="event-list-item" key={`call-list-${group.key}`}>
+                    <div className="event-list-head">
+                      <p className="call-list-event-summary">
+                        <span className="call-list-event-alias">{group.eventAlias !== "" ? group.eventAlias : "(イベントエイリアス未設定)"}</span>
+                        <span className="call-list-event-detail">
+                          {"("}
+                          {group.tournamentName !== "" ? group.tournamentName : "-"}
+                          {" / "}
+                          {group.eventName !== "" ? group.eventName : "-"}
+                          {" [eventId:"}
+                          {group.eventId !== "" ? group.eventId : "-"}
+                          {"])"}
+                        </span>
+                      </p>
+                      <span className="meta">{group.players.length} 件</span>
+                    </div>
+                    <div className="call-list-player-tags">
+                      {group.players
+                        .slice()
+                        .sort((left, right) => {
+                          const leftElapsed = callElapsedSeconds(left.createdAt, callListPageSwitchedAtMs);
+                          const rightElapsed = callElapsedSeconds(right.createdAt, callListPageSwitchedAtMs);
+                          if (leftElapsed !== rightElapsed) {
+                            return rightElapsed - leftElapsed;
+                          }
+
+                          const leftMs = Date.parse(left.createdAt);
+                          const rightMs = Date.parse(right.createdAt);
+                          if (Number.isFinite(leftMs) && Number.isFinite(rightMs) && leftMs !== rightMs) {
+                            return leftMs - rightMs;
+                          }
+
+                          return left.threadId.localeCompare(right.threadId, "ja");
+                        })
+                        .map((player) => {
+                        const elapsedSeconds = callElapsedSeconds(player.createdAt, callListPageSwitchedAtMs);
+                        const chipStyle = buildCallListPlayerChipStyle(elapsedSeconds, callListColorToRedSeconds);
+
+                        return (
+                        <span className="call-list-player-chip" key={`${group.key}-${player.threadId}`} style={chipStyle}>
+                          <span className="call-list-player-chip-name">{player.entrantName}</span>
+                          <span className="call-list-player-chip-elapsed">
+                            経過 {formatCallElapsedTime(player.createdAt, callListPageSwitchedAtMs)}
+                          </span>
+                        </span>
+                        );
+                      })}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        </>
+      )}
+
       {dqDialog && (
         <div className="dialog-backdrop" onClick={closeDqRequestDialog}>
           <section
@@ -7400,6 +8019,59 @@ function App() {
                 未読状態をリセット
               </button>
             </div>
+          </section>
+
+          <section className="panel">
+            <h2>呼び出しリスト表示設定</h2>
+            <p className="meta">呼び出しリストのページ切替間隔と、カード色が赤になるまでの時間を秒単位で設定します。</p>
+
+            <div className="form" style={{ marginTop: "0.6rem" }}>
+              <label htmlFor="call-list-rotate-seconds-input" style={{ display: "grid", gap: "0.3rem" }}>
+                <span className="meta">切替間隔 (秒 / 1-180)</span>
+                <input
+                  id="call-list-rotate-seconds-input"
+                  type="number"
+                  min={CALL_LIST_ROTATE_SECONDS_MIN}
+                  max={CALL_LIST_ROTATE_SECONDS_MAX}
+                  step={1}
+                  value={callListPageRotateSeconds}
+                  onChange={(e) => {
+                    const next = normalizeCallListRotateSeconds(e.currentTarget.value, callListPageRotateSeconds);
+                    setCallListPageRotateSeconds(next);
+                  }}
+                  onBlur={(e) => {
+                    const normalized = normalizeCallListRotateSeconds(e.currentTarget.value);
+                    if (normalized !== callListPageRotateSeconds) {
+                      setCallListPageRotateSeconds(normalized);
+                    }
+                  }}
+                />
+              </label>
+              <label htmlFor="call-list-color-seconds-input" style={{ display: "grid", gap: "0.3rem" }}>
+                <span className="meta">赤化までの時間 (秒 / 30-3600)</span>
+                <input
+                  id="call-list-color-seconds-input"
+                  type="number"
+                  min={CALL_LIST_COLOR_SECONDS_MIN}
+                  max={CALL_LIST_COLOR_SECONDS_MAX}
+                  step={1}
+                  value={callListColorSeconds}
+                  onChange={(e) => {
+                    const next = normalizeCallListColorSeconds(e.currentTarget.value, callListColorSeconds);
+                    setCallListColorSeconds(next);
+                  }}
+                  onBlur={(e) => {
+                    const normalized = normalizeCallListColorSeconds(e.currentTarget.value);
+                    if (normalized !== callListColorSeconds) {
+                      setCallListColorSeconds(normalized);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+
+            <p className="meta">現在値: {normalizeCallListRotateSeconds(callListPageRotateSeconds)} 秒</p>
+            <p className="meta">赤化まで: {callListColorToRedSeconds} 秒</p>
           </section>
         </>
       )}

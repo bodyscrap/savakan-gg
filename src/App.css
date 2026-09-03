@@ -154,6 +154,12 @@ body {
   overflow: auto;
 }
 
+.content.call-list-mode {
+  align-content: stretch;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
 .hero {
   background: #ffffff;
   border: 1px solid var(--line);
@@ -180,6 +186,67 @@ body {
   margin: 0;
   font-size: 0.92rem;
   color: var(--muted);
+}
+
+.hero-call-list-toolbar {
+  margin-top: 0.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.call-list-rotate-progress {
+  margin-top: 0.7rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.call-list-rotate-progress-track {
+  height: 0.7rem;
+  width: 100%;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid #93c5fd;
+  background: linear-gradient(90deg, #eff6ff 0%, #dbeafe 100%);
+}
+
+.call-list-rotate-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2563eb 0%, #1d4ed8 100%);
+  transition: width 80ms linear;
+}
+
+.call-list-rotate-progress-meta {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.hero-call-list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.call-list-hero-title {
+  margin: 0;
+  font-size: 3.3rem;
+  line-height: 1.15;
+  font-weight: 800;
+}
+
+.call-list-page-big {
+  margin: 0;
+  font-size: 3.3rem;
+  line-height: 1;
+  font-weight: 800;
+  color: #1d4ed8;
 }
 
 .panel {
@@ -299,6 +366,15 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.message-stack {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.message.empty {
+  visibility: hidden;
+}
+
 .message.success {
   background: var(--success-bg);
   border-color: var(--success-line);
@@ -359,6 +435,79 @@ button:disabled {
 
 .mailbox-message.root {
   border-left: 4px solid #1d4ed8;
+}
+
+.call-list-event-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  height: 100%;
+  overflow: hidden;
+}
+
+.call-list-panel {
+  display: grid;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.call-list-event-grid .event-list-item {
+  height: 100%;
+  overflow: hidden;
+}
+
+.call-list-event-summary {
+  margin: 0;
+  font-size: 1.68rem;
+  line-height: 1.2;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.call-list-event-alias {
+  font-weight: 800;
+}
+
+.call-list-event-detail {
+  font-weight: 400;
+}
+
+.call-list-player-tags {
+  margin-top: 0.45rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.call-list-player-chip {
+  display: inline-grid;
+  gap: 0.18rem;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1e3a8a;
+  border-radius: 999px;
+  min-height: 5.4rem;
+  align-content: center;
+  padding: 0.72rem 1.4rem 0.78rem;
+  line-height: 1.1;
+  font-weight: 600;
+}
+
+.call-list-player-chip-name {
+  font-size: 3.2rem;
+  line-height: 1;
+}
+
+.call-list-player-chip-elapsed {
+  font-size: 1.08rem;
+  line-height: 1.1;
+  font-weight: 500;
+  color: currentColor;
 }
 
 .event-toolbar {
@@ -1203,6 +1352,11 @@ li {
     overflow: visible;
   }
 
+  .content.call-list-mode {
+    max-height: 100vh;
+    overflow: hidden;
+  }
+
   .tab-nav {
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   }
@@ -1215,6 +1369,22 @@ li {
 @media (max-width: 640px) {
   .content {
     padding: 0.8rem;
+  }
+
+  .hero-call-list-toolbar {
+    align-items: stretch;
+  }
+
+  .call-list-hero-title {
+    font-size: 2.2rem;
+  }
+
+  .call-list-page-big {
+    font-size: 2.2rem;
+  }
+
+  .call-list-event-summary {
+    font-size: 1.18rem;
   }
 
   .mailbox-layout {

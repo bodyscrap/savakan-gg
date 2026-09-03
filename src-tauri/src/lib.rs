@@ -23,6 +23,9 @@ use tiny_http::{Header, Response, Server};
 
 const UDP_MAILBOX_PORT: u16 = 42690;
 const OBS_OVERLAY_PORT: u16 = 42691;
+const MAILBOX_PROTOCOL: &str = "savakan-mailbox-v1";
+const MAILBOX_METHOD_CALL_PLAYER: &str = "call_player";
+const MAILBOX_METHOD_CALL_SYNC_REQUEST: &str = "call_player_sync_request";
 
 static UDP_LISTENER_RUNNING: OnceLock<AtomicBool> = OnceLock::new();
 static MESSAGE_ID_SEQUENCE: OnceLock<AtomicU64> = OnceLock::new();
@@ -907,6 +910,77 @@ fn build_message_from_input(input: &SendMailboxMessageInput) -> Result<GenericMe
     })
 }
 
+fn collect_unresolved_call_roots_for_sender(
+    app: &tauri::AppHandle,
+    sender_user_id: &str,
+) -> Vec<GenericMessage> {
+    let Ok(messages) = storage::load_generic_messages(app) else {
+        return Vec::new();
+    };
+    let Some(messages) = messages else {
+        return Vec::new();
+    };
+
+    messages
+        .iter()
+        .filter(|item| {
+            item.parent_message_id.is_none()
+                && item.method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
+                && item.sender_user_id.trim() == sender_user_id.trim()
+        })
+        .filter(|root| {
+            !messages
+                .iter()
+                .any(|item| item.thread_id == root.thread_id && item.message_type == "resolve")
+        })
+        .cloned()
+        .collect()
+}
+
+fn send_udp_mailbox_packet(
+    profile: &SenderProfile,
+    mode: &str,
+    target_ip: Option<&str>,
+    message: &GenericMessage,
+) -> Result<(), String> {
+    let normalized_target_mode = normalize_delivery_target_mode(mode);
+    let target_ips =
+        resolve_delivery_target_ips(profile, &normalized_target_mode, target_ip)?;
+
+    let packet = UdpMailboxPacket {
+        protocol: MAILBOX_PROTOCOL.to_owned(),
+        delivery_target_mode: normalized_target_mode.clone(),
+        delivery_target_ip: match normalized_target_mode.as_str() {
+            "broadcast" => None,
+            "direct" => Some(target_ips.join(",")),
+            _ => None,
+        },
+        message: message.clone(),
+    };
+
+    let sender_bind_addr = format!("{}:0", profile.bind_ip.trim());
+    let socket = UdpSocket::bind(&sender_bind_addr)
+        .map_err(|e| format!("UDP送信ソケットを起動できませんでした ({sender_bind_addr}): {e}"))?;
+
+    if normalized_target_mode == "broadcast" {
+        socket
+            .set_broadcast(true)
+            .map_err(|e| format!("UDPブロードキャスト設定に失敗しました: {e}"))?;
+    }
+
+    let payload = serde_json::to_vec(&packet)
+        .map_err(|e| format!("送信データのJSON変換に失敗しました: {e}"))?;
+
+    for ip in target_ips {
+        let target_addr = format!("{}:{}", ip.trim(), UDP_MAILBOX_PORT);
+        socket
+            .send_to(&payload, &target_addr)
+            .map_err(|e| format!("UDP送信に失敗しました ({target_addr}): {e}"))?;
+    }
+
+    Ok(())
+}
+
 fn meta_string(meta: Option<&serde_json::Value>, key: &str) -> Option<String> {
     let value = meta?
         .as_object()?
@@ -949,7 +1023,7 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
                         Err(_) => continue,
                     };
 
-                    if packet.protocol != "savakan-mailbox-v1" {
+                    if packet.protocol != MAILBOX_PROTOCOL {
                         continue;
                     }
 
@@ -970,6 +1044,24 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
                         };
 
                         if !accept_delivery {
+                            continue;
+                        }
+
+                        if packet.message.method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_SYNC_REQUEST) {
+                            let sender_ip = packet.message.sender_ip.trim();
+                            if sender_ip.parse::<Ipv4Addr>().is_ok() {
+                                let unresolved_calls =
+                                    collect_unresolved_call_roots_for_sender(&app, &my_profile.sender_user_id);
+                                for unresolved in unresolved_calls {
+                                    let _ = send_udp_mailbox_packet(
+                                        &my_profile,
+                                        "direct",
+                                        Some(sender_ip),
+                                        &unresolved,
+                                    );
+                                }
+                            }
+
                             continue;
                         }
                     }
@@ -1089,38 +1181,12 @@ fn send_mailbox_message(
         validate_dq_request_permission(&app, &message.thread_id, input.message_meta.as_ref())?;
     }
 
-    let normalized_target_mode = normalize_delivery_target_mode(&input.delivery_target_mode);
-    let target_ips = resolve_delivery_target_ips(&input.profile, &normalized_target_mode, input.delivery_target_ip.as_deref())?;
-    let packet = UdpMailboxPacket {
-        protocol: "savakan-mailbox-v1".to_owned(),
-        delivery_target_mode: normalized_target_mode.clone(),
-        delivery_target_ip: match normalized_target_mode.as_str() {
-            "broadcast" => None,
-            "direct" => Some(target_ips.join(",")),
-            _ => None,
-        },
-        message: message.clone(),
-    };
-
-    let sender_bind_addr = format!("{}:0", input.profile.bind_ip.trim());
-    let socket = UdpSocket::bind(&sender_bind_addr)
-        .map_err(|e| format!("UDP送信ソケットを起動できませんでした ({sender_bind_addr}): {e}"))?;
-
-    if normalized_target_mode == "broadcast" {
-        socket
-            .set_broadcast(true)
-            .map_err(|e| format!("UDPブロードキャスト設定に失敗しました: {e}"))?;
-    }
-
-    let payload = serde_json::to_vec(&packet)
-        .map_err(|e| format!("送信データのJSON変換に失敗しました: {e}"))?;
-
-    for target_ip in &target_ips {
-        let target_addr = format!("{}:{}", target_ip.trim(), UDP_MAILBOX_PORT);
-        socket
-            .send_to(&payload, &target_addr)
-            .map_err(|e| format!("UDP送信に失敗しました ({target_addr}): {e}"))?;
-    }
+    send_udp_mailbox_packet(
+        &input.profile,
+        &input.delivery_target_mode,
+        input.delivery_target_ip.as_deref(),
+        &message,
+    )?;
 
     storage::append_generic_message(&app, &message)?;
 
