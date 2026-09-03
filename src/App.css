@@ -67,10 +67,29 @@ body {
   border-bottom: 1px solid var(--sidebar-line);
 }
 
+.sidebar-head-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
 .sidebar-head h1 {
   margin: 0;
   font-size: 1rem;
   font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.app-version {
+  display: inline-block;
+  padding: 0.08rem 0.42rem;
+  border-radius: 999px;
+  border: 1px solid #374151;
+  background: rgba(31, 41, 55, 0.72);
+  color: #9ca3af;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  font-weight: 600;
   letter-spacing: 0.02em;
 }
 

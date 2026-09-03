@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import QRCode from "qrcode";
 import jsQR from "jsqr";
@@ -1844,6 +1845,7 @@ function hasDqScoreInDrafts(set: SetSnapshot, drafts: SetScoreDraft): boolean {
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("home");
+  const [appVersion, setAppVersion] = useState("");
   const [token, setToken] = useState("");
   const [slug, setSlug] = useState("");
   const [perPage, setPerPage] = useState("50");
@@ -1962,6 +1964,25 @@ function App() {
   } | null>(null);
   const overlayPreviewWrapRef = useRef<HTMLDivElement | null>(null);
   const overlayPreviewIframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        const version = await getVersion();
+        if (alive) {
+          setAppVersion(version);
+        }
+      } catch {
+        // ignore (e.g. non-Tauri environment)
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -6638,7 +6659,10 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-head">
-          <h1>savakan-gg</h1>
+          <div className="sidebar-head-title">
+            <h1>savakan-gg</h1>
+            {appVersion !== "" ? <span className="app-version">v{appVersion}</span> : null}
+          </div>
           <p>大会運営コンソール</p>
         </div>
 
