@@ -4277,6 +4277,73 @@ function App() {
     setMessage("スレッドを削除しました。");
   }
 
+  function clearCallListThreads() {
+    const callThreadIds = new Set(
+      genericMessages
+        .filter((item) => item.parentMessageId === null && item.method === "call_player")
+        .map((item) => item.threadId),
+    );
+
+    if (callThreadIds.size === 0) {
+      setError("");
+      setMessage("クリア対象の呼び出しスレッドはありません。");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `呼び出し一覧に関連するスレッド ${callThreadIds.size} 件を全削除します。\nこの操作は元に戻せません。実行しますか？`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const normalizedSenderUserId = senderProfile.senderUserId.trim();
+    const ownCallRoots = genericMessages.filter((item) =>
+      item.parentMessageId === null
+      && item.method === "call_player"
+      && item.senderUserId.trim() === normalizedSenderUserId
+    );
+    const ownUnresolvedThreadIds = new Set(
+      ownCallRoots
+        .filter((root) => !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve"))
+        .map((root) => root.threadId),
+    );
+    const ownUnresolvedThreadMessages = genericMessages.filter((item) => ownUnresolvedThreadIds.has(item.threadId));
+    const restoredMessageIds = new Set(ownUnresolvedThreadMessages.map((item) => item.messageId));
+
+    const deletedMessageIds = genericMessages
+      .filter((item) => callThreadIds.has(item.threadId))
+      .map((item) => item.messageId);
+    const deletedMessageIdSet = new Set(deletedMessageIds);
+
+    setError("");
+    setMessage("");
+    setGenericMessages((current) => {
+      const kept = current.filter((item) => !callThreadIds.has(item.threadId));
+      const merged = [
+        ...ownUnresolvedThreadMessages,
+        ...kept.filter((item) => !restoredMessageIds.has(item.messageId)),
+      ];
+      return merged.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+    });
+    setMailboxReadMessageIds((current) =>
+      current.filter((messageId) => !deletedMessageIdSet.has(messageId) || restoredMessageIds.has(messageId))
+    );
+
+    if (selectedThreadId !== "" && callThreadIds.has(selectedThreadId) && !ownUnresolvedThreadIds.has(selectedThreadId)) {
+      setSelectedThreadId("");
+      setReplyBodyDraft("");
+    }
+
+    if (dqDialog && callThreadIds.has(dqDialog.threadId) && !ownUnresolvedThreadIds.has(dqDialog.threadId)) {
+      setDqDialog(null);
+    }
+
+    setMessage(
+      `呼び出し一覧を全クリアしました（${callThreadIds.size}スレッド）。自分が発行した未解決 ${ownUnresolvedThreadIds.size} スレッドを状態判定して復元しました。`,
+    );
+  }
+
   async function sendCallMessageFromMatch(slot: SetSlot, entrantId: string) {
     setError("");
     setMessage("");
@@ -8764,6 +8831,24 @@ function App() {
 
             <p className="meta">現在値: {normalizeCallListRotateSeconds(callListPageRotateSeconds)} 秒</p>
             <p className="meta">赤化まで: {callListColorToRedSeconds} 秒</p>
+          </section>
+
+          <section className="panel">
+            <h2>呼び出しリスト管理</h2>
+            <p className="meta">他PCの切断や大会切替に備えて、次の大会開始前に呼び出し一覧を全クリアできます。</p>
+            <p className="meta">対象: プレイヤー呼び出しスレッド（進行中・解決済みを含む）</p>
+
+            <div className="panel-toolbar compact">
+              <p className="meta">過去大会の呼び出し残りが表示される場合に実行してください。</p>
+              <button
+                type="button"
+                className="ghost"
+                onClick={clearCallListThreads}
+                disabled={!genericMessages.some((item) => item.parentMessageId === null && item.method === "call_player")}
+              >
+                呼び出し一覧を全クリア
+              </button>
+            </div>
           </section>
         </>
       )}
