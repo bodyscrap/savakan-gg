@@ -1010,14 +1010,14 @@ button:disabled {
 }
 
 .side-badge.side-1p {
-  background: #2563eb;
-  border-color: #2563eb;
+  background: #dc2626;
+  border-color: #dc2626;
   color: #ffffff;
 }
 
 .side-badge.side-2p {
-  background: #4f46e5;
-  border-color: #4f46e5;
+  background: #1d4ed8;
+  border-color: #1d4ed8;
   color: #ffffff;
 }
 
@@ -1117,13 +1117,13 @@ button:disabled {
 }
 
 .dialog-player-card.side-card-1p {
-  border-color: #60a5fa;
-  background: #eff6ff;
+  border-color: #fca5a5;
+  background: #fef2f2;
 }
 
 .dialog-player-card.side-card-2p {
-  border-color: #f59e0b;
-  background: #fffbeb;
+  border-color: #93c5fd;
+  background: #eff6ff;
 }
 
 .dialog-player-name {

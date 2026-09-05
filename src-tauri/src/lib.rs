@@ -725,7 +725,7 @@ fn source_label_for_ipv4(ip: &Ipv4Addr) -> &'static str {
     }
 }
 
-fn detect_local_network_settings_candidate() -> Result<Option<LocalNetworkSettingsCandidate>, String> {
+fn detect_local_network_settings_candidates() -> Result<Vec<LocalNetworkSettingsCandidate>, String> {
     let interfaces = get_if_addrs().map_err(|e| format!("ネットワークIFの取得に失敗しました: {e}"))?;
 
     let mut candidates = interfaces
@@ -756,7 +756,11 @@ fn detect_local_network_settings_candidate() -> Result<Option<LocalNetworkSettin
             .then_with(|| left.bind_ip.cmp(&right.bind_ip))
     });
 
-    Ok(candidates.into_iter().next())
+    Ok(candidates)
+}
+
+fn detect_local_network_settings_candidate() -> Result<Option<LocalNetworkSettingsCandidate>, String> {
+    Ok(detect_local_network_settings_candidates()?.into_iter().next())
 }
 
 #[tauri::command]
@@ -767,6 +771,11 @@ fn detect_local_ipv4() -> Result<Option<String>, String> {
 #[tauri::command]
 fn detect_local_network_settings() -> Result<Option<LocalNetworkSettingsCandidate>, String> {
     detect_local_network_settings_candidate()
+}
+
+#[tauri::command]
+fn list_local_network_settings() -> Result<Vec<LocalNetworkSettingsCandidate>, String> {
+    detect_local_network_settings_candidates()
 }
 
 #[tauri::command]
@@ -2024,6 +2033,7 @@ pub fn run() {
             save_event_mgmt_settings,
             detect_local_ipv4,
             detect_local_network_settings,
+            list_local_network_settings,
             test_sender_network,
             get_obs_overlay_state,
             set_obs_overlay_font_scale,

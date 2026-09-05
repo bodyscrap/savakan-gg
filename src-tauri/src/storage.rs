@@ -736,6 +736,11 @@ fn build_forced_resolve_message(root: &GenericMessage) -> GenericMessage {
     }
 }
 
+fn is_same_message_identity(left: &GenericMessage, right: &GenericMessage) -> bool {
+    // Message identity is message_id only; sender IP changes must not affect equality.
+    left.message_id == right.message_id
+}
+
 pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Result<(), String> {
     let mut messages = load_generic_messages(app)?.unwrap_or_default();
 
@@ -783,7 +788,7 @@ pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Resu
 
     if let Some(index) = messages
         .iter()
-        .position(|item| item.message_id == message.message_id)
+        .position(|item| is_same_message_identity(item, message))
     {
         messages[index] = message.clone();
     } else {

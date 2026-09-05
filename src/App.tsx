@@ -545,6 +545,10 @@ type LocalNetworkSettingsCandidate = {
   interfaceName: string;
 };
 
+function localNetworkCandidateKey(candidate: LocalNetworkSettingsCandidate): string {
+  return `${candidate.bindIp.trim()}::${candidate.broadcastSubnetMask.trim()}::${candidate.interfaceName.trim()}`;
+}
+
 type GenericMessage = {
   messageId: string;
   threadId: string;
@@ -1225,6 +1229,11 @@ function extractPlayerIdFromBarcodeResults(results: Array<{ rawValue?: string }>
   return "";
 }
 
+function isSameGenericMessageIdentity(left: GenericMessage, right: GenericMessage): boolean {
+  // Message identity is messageId only; sender IP changes must not affect equality.
+  return left.messageId === right.messageId;
+}
+
 function arraysShallowEqual<T>(left: T[], right: T[]): boolean {
   if (left.length !== right.length) {
     return false;
@@ -1282,6 +1291,7 @@ const MAILBOX_FILTER_STORAGE_KEY = "savakan-gg.mailbox-filter.v1";
 const MAILBOX_READ_IDS_STORAGE_KEY = "savakan-gg.mailbox-read-ids.v1";
 const CALL_LIST_ROTATE_SECONDS_STORAGE_KEY = "savakan-gg.call-list-rotate-seconds.v1";
 const CALL_LIST_COLOR_SECONDS_STORAGE_KEY = "savakan-gg.call-list-color-seconds.v1";
+const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
 
 const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: boolean }> = [
   { id: "create", label: "新規作成", icon: "➕", implemented: true },
@@ -1933,7 +1943,9 @@ function App() {
   const [senderUserIdDraft, setSenderUserIdDraft] = useState("");
   const [senderBindIpDraft, setSenderBindIpDraft] = useState("0.0.0.0");
   const [senderBroadcastSubnetMaskDraft, setSenderBroadcastSubnetMaskDraft] = useState("255.255.255.0");
-  const [senderAutoDetecting, setSenderAutoDetecting] = useState(false);
+  const [senderNetworkCandidates, setSenderNetworkCandidates] = useState<LocalNetworkSettingsCandidate[]>([]);
+  const [selectedSenderNetworkCandidateKey, setSelectedSenderNetworkCandidateKey] = useState("");
+  const [senderNetworkCandidatesLoading, setSenderNetworkCandidatesLoading] = useState(false);
   const [genericMessages, setGenericMessages] = useState<GenericMessage[]>([]);
   const [genericMessagesReady, setGenericMessagesReady] = useState(false);
   const [mailboxMethodDraft, setMailboxMethodDraft] = useState("generic");
@@ -1954,6 +1966,7 @@ function App() {
   const [callListPageRotateSeconds, setCallListPageRotateSeconds] = useState(CALL_LIST_ROTATE_SECONDS_DEFAULT);
   const [callListColorSeconds, setCallListColorSeconds] = useState(CALL_LIST_COLOR_SECONDS_DEFAULT);
   const [callListEventSortStrategy, setCallListEventSortStrategy] = useState<CallListEventSortStrategy>("alias");
+  const [displayBracketPlayersBySide, setDisplayBracketPlayersBySide] = useState(false);
   const [callListPageSwitchedAtMs, setCallListPageSwitchedAtMs] = useState(() => Date.now());
   const [callListProgressNowMs, setCallListProgressNowMs] = useState(() => Date.now());
   const [callListDisplayGroups, setCallListDisplayGroups] = useState<CallListEventGroup[]>([]);
@@ -2154,6 +2167,15 @@ function App() {
     } catch {
       // ignore
     }
+
+    try {
+      const rawBracketSideOrderDisplay = window.localStorage.getItem(BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY);
+      if (rawBracketSideOrderDisplay !== null) {
+        setDisplayBracketPlayersBySide(rawBracketSideOrderDisplay === "true");
+      }
+    } catch {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
@@ -2177,6 +2199,17 @@ function App() {
       // ignore
     }
   }, [callListColorSeconds]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY,
+        displayBracketPlayersBySide ? "true" : "false",
+      );
+    } catch {
+      // ignore
+    }
+  }, [displayBracketPlayersBySide]);
 
   useEffect(() => {
     let alive = true;
@@ -3371,6 +3404,13 @@ function App() {
   const normalizedSenderUserIdDraft = senderUserIdDraft.replace(/\D/g, "").slice(0, 8);
   const normalizedSenderBindIpDraft = senderBindIpDraft.trim();
   const normalizedBroadcastSubnetMaskDraft = senderBroadcastSubnetMaskDraft.trim();
+  const selectedSenderNetworkCandidate = useMemo(
+    () => senderNetworkCandidates.find(
+      (candidate) => localNetworkCandidateKey(candidate) === selectedSenderNetworkCandidateKey,
+    ) ?? null,
+    [selectedSenderNetworkCandidateKey, senderNetworkCandidates],
+  );
+  const hasSelectedSenderNetworkDevice = selectedSenderNetworkCandidate !== null;
   const normalizedMailboxMethod = mailboxMethodDraft.trim().toLowerCase();
   const normalizedMailboxSubject = mailboxSubjectDraft.trim();
   const normalizedMessageDeliveryIp = messageDeliveryIpDraft.trim();
@@ -3393,6 +3433,7 @@ function App() {
 
   const canSaveSenderProfile = normalizedSenderNameDraft !== ""
     && isValidSenderUserId(normalizedSenderUserIdDraft)
+    && hasSelectedSenderNetworkDevice
     && isValidIpv4(normalizedSenderBindIpDraft)
     && isValidIpv4(normalizedBroadcastSubnetMaskDraft)
     && !senderIdCollision;
@@ -3434,34 +3475,63 @@ function App() {
     setSenderUserIdDraft(nextId);
   }
 
-  async function applyLocalNetworkSettingsFromDevice() {
-    setError("");
-    setMessage("");
-    setSenderAutoDetecting(true);
+  async function refreshLocalNetworkSettingsCandidates(showError = true) {
+    if (senderNetworkCandidatesLoading) {
+      return;
+    }
 
+    setSenderNetworkCandidatesLoading(true);
     try {
-      const detected = await invoke<LocalNetworkSettingsCandidate | null>("detect_local_network_settings");
-      if (!detected) {
-        setError("利用可能なIPv4インターフェースが見つかりませんでした。手入力してください。");
+      const listed = await invoke<LocalNetworkSettingsCandidate[]>("list_local_network_settings");
+      const normalized = Array.isArray(listed) ? listed : [];
+      setSenderNetworkCandidates(normalized);
+
+      const selectedStillExists = normalized.some(
+        (candidate) => localNetworkCandidateKey(candidate) === selectedSenderNetworkCandidateKey,
+      );
+
+      if (selectedStillExists) {
         return;
       }
 
-      const detectedIp = detected.bindIp.trim();
-      const detectedMask = detected.broadcastSubnetMask.trim();
-      if (!isValidIpv4(detectedIp) || !isValidIpv4(detectedMask)) {
-        setError("検出したネットワーク設定が不正です。手入力で設定してください。");
+      const matchedByDraft = normalized.find((candidate) =>
+        candidate.bindIp.trim() === senderBindIpDraft.trim()
+        && candidate.broadcastSubnetMask.trim() === senderBroadcastSubnetMaskDraft.trim()
+      );
+
+      if (matchedByDraft) {
+        setSelectedSenderNetworkCandidateKey(localNetworkCandidateKey(matchedByDraft));
         return;
       }
 
-      setSenderBindIpDraft(detectedIp);
-      setSenderBroadcastSubnetMaskDraft(detectedMask);
-      setMessage(`ネットワーク設定を自動入力しました: ${detectedIp} / ${detectedMask} (${detected.source}, IF=${detected.interfaceName})`);
+      setSelectedSenderNetworkCandidateKey(
+        normalized[0] ? localNetworkCandidateKey(normalized[0]) : "",
+      );
     } catch (err) {
-      setError(`ネットワーク設定の自動入力に失敗しました: ${String(err)}`);
+      if (showError) {
+        setError(`ネットワークデバイス一覧の取得に失敗しました: ${String(err)}`);
+      }
     } finally {
-      setSenderAutoDetecting(false);
+      setSenderNetworkCandidatesLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (activeTab !== "settings") {
+      return;
+    }
+
+    void refreshLocalNetworkSettingsCandidates(false);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!selectedSenderNetworkCandidate) {
+      return;
+    }
+
+    setSenderBindIpDraft(selectedSenderNetworkCandidate.bindIp.trim());
+    setSenderBroadcastSubnetMaskDraft(selectedSenderNetworkCandidate.broadcastSubnetMask.trim());
+  }, [selectedSenderNetworkCandidate]);
 
   async function saveSenderProfileSettings() {
     setError("");
@@ -3474,6 +3544,11 @@ function App() {
 
     if (!isValidSenderUserId(normalizedSenderUserIdDraft)) {
       setError("ユーザーIDは8桁の数字で入力してください。");
+      return;
+    }
+
+    if (!hasSelectedSenderNetworkDevice) {
+      setError("ネットワークデバイスを選択してください。");
       return;
     }
 
@@ -3614,7 +3689,7 @@ function App() {
       const normalized = normalizeGenericMessage(sent);
       if (normalized) {
         setGenericMessages((current) => {
-          const next = [normalized, ...current.filter((item) => item.messageId !== normalized.messageId)];
+          const next = [normalized, ...current.filter((item) => !isSameGenericMessageIdentity(item, normalized))];
           return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
         });
         setSelectedThreadId(normalized.threadId);
@@ -3685,7 +3760,7 @@ function App() {
       const normalized = normalizeGenericMessage(sent);
       if (normalized) {
         setGenericMessages((current) => {
-          const next = [normalized, ...current.filter((item) => item.messageId !== normalized.messageId)];
+          const next = [normalized, ...current.filter((item) => !isSameGenericMessageIdentity(item, normalized))];
           return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
         });
       }
@@ -3957,7 +4032,7 @@ function App() {
       const normalized = normalizeGenericMessage(sent);
       if (normalized) {
         setGenericMessages((current) => {
-          const next = [normalized, ...current.filter((item) => item.messageId !== normalized.messageId)];
+          const next = [normalized, ...current.filter((item) => !isSameGenericMessageIdentity(item, normalized))];
           return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
         });
       }
@@ -4006,7 +4081,7 @@ function App() {
       const normalized = normalizeGenericMessage(sent);
       if (normalized) {
         setGenericMessages((current) => {
-          const next = [normalized, ...current.filter((item) => item.messageId !== normalized.messageId)];
+          const next = [normalized, ...current.filter((item) => !isSameGenericMessageIdentity(item, normalized))];
           return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
         });
       }
@@ -4087,6 +4162,7 @@ function App() {
     setCallingEntrantId(entrantId);
 
     try {
+      const targetSetId = activeMatch.setId;
       const playerId = await deriveEncryptedPlayerId(snapshot.tournamentId, selectedEvent.eventId, entrantId);
       const eventAlias = selectedEventMeta?.eventAlias?.trim() || selectedEvent.name;
       const senderLine = senderProfile.senderName.trim() !== ""
@@ -4105,7 +4181,7 @@ function App() {
       ].join("\n");
 
       setComposeMessageMeta({
-        callId: `${snapshot.tournamentId}:${selectedEvent.eventId}:${activeMatch.setId}:${entrantId}`,
+        callId: `${snapshot.tournamentId}:${selectedEvent.eventId}:${targetSetId}:${entrantId}`,
         playerId,
         callEntrantId: entrantId,
         callEntrantName: slot.entrantName,
@@ -4114,12 +4190,13 @@ function App() {
         eventId: selectedEvent.eventId,
         eventName: selectedEvent.name,
         eventAlias,
-        setId: activeMatch.setId,
+        setId: targetSetId,
       });
       setMailboxMethodDraft("call_player");
       setMailboxSubjectDraft(`${slot.entrantName}(${eventAlias})`);
       setComposeFixedBodyDraft(fixedBody);
       setGenericMessageBodyDraft("");
+      closeMatchDialog();
       setActiveTab("message");
       setMessage(`呼び出しメッセージの下書きを作成しました: ${slot.entrantName} / 補足入力後に「スレッド開始」で送信してください。`);
     } catch (err) {
@@ -4833,6 +4910,93 @@ function App() {
     }
 
     return "upper_1p";
+  }
+
+  function resolveSidesByDecisionMethod(
+    set: SetSnapshot,
+    method: EventManagementSetting["sideDecisionMethod"],
+  ): { upperSide: PlaySide; lowerSide: PlaySide } {
+    if (method === "upper_2p") {
+      return { upperSide: "2P", lowerSide: "1P" };
+    }
+
+    if (method === "random") {
+      const upperIsOneP = deterministicUpperIsOneP(set.setId);
+      return {
+        upperSide: upperIsOneP ? "1P" : "2P",
+        lowerSide: upperIsOneP ? "2P" : "1P",
+      };
+    }
+
+    return { upperSide: "1P", lowerSide: "2P" };
+  }
+
+  async function applySideDecisionMethodToAllUnconfirmedSets() {
+    if (!selectedEvent) {
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const method = getConfiguredSideDecisionMethod();
+      const updates: Array<{ setSnapshot: SetSnapshot; entrantId: string; side: PlaySide }> = [];
+
+      for (const set of selectedEvent.sets) {
+        if (isCompletedSet(set) || !isMatchupReady(set)) {
+          continue;
+        }
+
+        const slots = set.slots.filter((slot) => slot.entrantId !== null);
+        if (slots.length < 2) {
+          continue;
+        }
+
+        const upperId = slots[0].entrantId;
+        const lowerId = slots[1].entrantId;
+        if (!upperId || !lowerId) {
+          continue;
+        }
+
+        const decided = resolveSidesByDecisionMethod(set, method);
+        const upperCurrent = getSetSlotSide(set.setId, upperId);
+        const lowerCurrent = getSetSlotSide(set.setId, lowerId);
+
+        if (upperCurrent !== decided.upperSide) {
+          updates.push({ setSnapshot: set, entrantId: upperId, side: decided.upperSide });
+        }
+        if (lowerCurrent !== decided.lowerSide) {
+          updates.push({ setSnapshot: set, entrantId: lowerId, side: decided.lowerSide });
+        }
+      }
+
+      if (updates.length === 0) {
+        setMessage("適用対象の未確定試合はありませんでした。");
+        return;
+      }
+
+      autoAssigningSidesRef.current = true;
+      try {
+        for (const update of updates) {
+          await saveSetPlaySide(selectedEvent, update.setSnapshot, update.entrantId, update.side, {
+            silent: true,
+            manageBusy: false,
+          });
+        }
+      } finally {
+        autoAssigningSidesRef.current = false;
+      }
+
+      const affectedSetCount = new Set(updates.map((update) => update.setSnapshot.setId)).size;
+      setMessage(`未確定試合 ${affectedSetCount} 件に 1P/2P 決定方法を適用しました。`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      autoAssigningSidesRef.current = false;
+      setBusy(false);
+    }
   }
 
   function getDraftCategorySelections(draft: PlayerMetaDraft, slotIndex: number): string[] {
@@ -5883,6 +6047,12 @@ function App() {
     }
   }
 
+  function selectCreateEvent(event: TournamentEventPreviewItem) {
+    setCreateSelectedEventId(event.eventId);
+    setCreateEventSlugInput(toEventSlugInput(event.eventSlug ?? ""));
+    setCreateEventAlias("");
+  }
+
   async function createEventSnapshotBySlug() {
     const tournamentSlug = toApiSlug(slug);
     const eventSlug = toEventApiSlug(slug, createEventSlugInput);
@@ -6074,6 +6244,57 @@ function App() {
     }
 
     return "-";
+  }
+
+  function getDisplaySlotsForSet(
+    set: SetSnapshot,
+    options?: {
+      finishedSet?: boolean;
+      matchupReady?: boolean;
+      sideDrafts?: Record<string, PlaySide | "">;
+    },
+  ): Array<{ slot: SetSlot; slotIndex: number }> {
+    const indexed = set.slots.map((slot, slotIndex) => ({ slot, slotIndex }));
+    if (!displayBracketPlayersBySide) {
+      return indexed;
+    }
+
+    const sideRank = (label: string): number => {
+      if (label === "1P") {
+        return 0;
+      }
+      if (label === "2P") {
+        return 2;
+      }
+      return 1;
+    };
+
+    return indexed
+      .slice()
+      .sort((left, right) => {
+        const leftDraftSide = left.slot.entrantId ? (options?.sideDrafts?.[left.slot.entrantId] ?? "") : "";
+        const rightDraftSide = right.slot.entrantId ? (options?.sideDrafts?.[right.slot.entrantId] ?? "") : "";
+        const leftSide = getSetSlotSideLabel(set.setId, left.slot.entrantId, {
+          fallbackBySlotIndex: left.slotIndex,
+          finishedSet: options?.finishedSet,
+          matchupReady: options?.matchupReady,
+        });
+        const rightSide = getSetSlotSideLabel(set.setId, right.slot.entrantId, {
+          fallbackBySlotIndex: right.slotIndex,
+          finishedSet: options?.finishedSet,
+          matchupReady: options?.matchupReady,
+        });
+
+        const resolvedLeftSide = leftDraftSide !== "" ? leftDraftSide : leftSide;
+        const resolvedRightSide = rightDraftSide !== "" ? rightDraftSide : rightSide;
+
+        const bySide = sideRank(resolvedLeftSide) - sideRank(resolvedRightSide);
+        if (bySide !== 0) {
+          return bySide;
+        }
+
+        return left.slotIndex - right.slotIndex;
+      });
   }
 
   function getSetScoresForDisplay(set: SetSnapshot): { scores: Record<string, string>; isDq: boolean; winnerId: string | null } {
@@ -6717,16 +6938,45 @@ function App() {
     }
   }
 
-  async function togglePlaySide(
-    entrantId: string,
-    targetSide: PlaySide,
-  ) {
-    const currentSide = activeMatchSideDrafts[entrantId] ?? "";
-    const nextSide: PlaySide | "" = currentSide === targetSide ? "" : targetSide;
+  function swapMatchSides(setSnapshot: SetSnapshot) {
+    if (!isMatchupReady(setSnapshot)) {
+      return;
+    }
+
+    const slots = setSnapshot.slots.filter((slot) => slot.entrantId !== null);
+    if (slots.length < 2) {
+      return;
+    }
+
+    const upper = slots[0];
+    const lower = slots[1];
+    const upperId = upper.entrantId;
+    const lowerId = lower.entrantId;
+    if (!upperId || !lowerId) {
+      return;
+    }
+
+    const resolveSide = (entrantId: string, fallbackSlotIndex: number): PlaySide => {
+      const draftSide = activeMatchSideDrafts[entrantId] ?? "";
+      if (draftSide !== "") {
+        return draftSide;
+      }
+
+      const savedSide = getSetSlotSide(setSnapshot.setId, entrantId);
+      if (savedSide !== "") {
+        return savedSide;
+      }
+
+      return fallbackSlotIndex === 0 ? "1P" : "2P";
+    };
+
+    const upperCurrent = resolveSide(upperId, 0);
+    const lowerCurrent = resolveSide(lowerId, 1);
 
     setActiveMatchSideDrafts((current) => ({
       ...current,
-      [entrantId]: nextSide,
+      [upperId]: lowerCurrent,
+      [lowerId]: upperCurrent,
     }));
   }
 
@@ -7096,16 +7346,14 @@ function App() {
                         key={event.eventId}
                         className={`event-list-item ${createSelectedEventId === event.eventId ? "selected" : ""}`}
                         onClick={() => {
-                          setCreateSelectedEventId(event.eventId);
-                          setCreateEventSlugInput(toEventSlugInput(event.eventSlug ?? ""));
+                          selectCreateEvent(event);
                         }}
                         role="button"
                         tabIndex={0}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault();
-                            setCreateSelectedEventId(event.eventId);
-                            setCreateEventSlugInput(toEventSlugInput(event.eventSlug ?? ""));
+                            selectCreateEvent(event);
                           }
                         }}
                       >
@@ -7191,7 +7439,7 @@ function App() {
                 <div className="tournament-settings" style={{ marginTop: "0.9rem" }}>
                   <div className="setting-row">
                     <p className="setting-row-title">1P/2P決定方法</p>
-                    <div className="setting-row-fields single">
+                    <div className="setting-row-fields single" style={{ gridTemplateColumns: "minmax(220px, 340px) auto" }}>
                       <select
                         id="side-method"
                         value={sideDecisionMethod}
@@ -7201,6 +7449,16 @@ function App() {
                         <option value="upper_2p">上側を2P</option>
                         <option value="random">ランダム</option>
                       </select>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={busy}
+                        onClick={() => {
+                          void applySideDecisionMethodToAllUnconfirmedSets();
+                        }}
+                      >
+                        全未確定試合に適用
+                      </button>
                     </div>
                   </div>
 
@@ -8245,6 +8503,7 @@ function App() {
           <section className="panel">
             <h2>送信者設定</h2>
             <p className="meta">各クライアントを識別するための送信者名と8桁ユーザーIDを設定します。</p>
+            <p className="meta">IPとサブネットマスクは選択したネットワークデバイスから自動反映されます。個別調整はOS側のネットワーク設定で行ってください。</p>
             <p className="meta">ユーザーIDはクライアント間で重複しないよう運用してください。ランダム決定ボタンで簡単に採番できます。</p>
 
             <div className="form" style={{ marginTop: "0.65rem" }}>
@@ -8268,44 +8527,54 @@ function App() {
                   maxLength={8}
                 />
               </label>
-              <label htmlFor="sender-bind-ip-input" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">自分のIP (IPv4)</span>
-                <input
-                  id="sender-bind-ip-input"
-                  value={senderBindIpDraft}
-                  onChange={(e) => setSenderBindIpDraft(e.currentTarget.value)}
-                  placeholder="例: 192.168.1.10"
-                />
+              <label htmlFor="sender-network-device-select" style={{ display: "grid", gap: "0.3rem" }}>
+                <span className="meta">ネットワークデバイス</span>
+                <select
+                  id="sender-network-device-select"
+                  value={selectedSenderNetworkCandidateKey}
+                  onChange={(e) => {
+                    setSelectedSenderNetworkCandidateKey(e.currentTarget.value);
+                  }}
+                  disabled={senderNetworkCandidatesLoading || senderNetworkCandidates.length === 0}
+                >
+                  {senderNetworkCandidates.length === 0 ? (
+                    <option value="">利用可能なデバイスがありません</option>
+                  ) : (
+                    senderNetworkCandidates.map((candidate) => {
+                      const key = localNetworkCandidateKey(candidate);
+                      const label = `${candidate.interfaceName} / ${candidate.source} / ${candidate.bindIp} / ${candidate.broadcastSubnetMask}`;
+                      return (
+                        <option key={key} value={key}>{label}</option>
+                      );
+                    })
+                  )}
+                </select>
               </label>
-              <label htmlFor="sender-broadcast-subnet-mask-input" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">ブロードキャスト用サブネットマスク (IPv4)</span>
-                <input
-                  id="sender-broadcast-subnet-mask-input"
-                  value={senderBroadcastSubnetMaskDraft}
-                  onChange={(e) => setSenderBroadcastSubnetMaskDraft(e.currentTarget.value)}
-                  placeholder="例: 255.255.255.0"
-                />
-              </label>
+              <p className="meta" style={{ margin: 0 }}>
+                適用中IP: {normalizedSenderBindIpDraft || "(未選択)"} / サブネット: {normalizedBroadcastSubnetMaskDraft || "(未選択)"}
+              </p>
             </div>
 
             <div className="panel-toolbar compact">
               <p className="meta">
                 {senderIdCollision
                   ? "既存履歴で同一IDが別名義に使われています。"
-                  : !isValidIpv4(normalizedSenderBindIpDraft)
-                    ? "IPはIPv4形式で入力してください。"
+                  : !hasSelectedSenderNetworkDevice
+                    ? "ネットワークデバイスを選択してください。"
+                    : !isValidIpv4(normalizedSenderBindIpDraft)
+                      ? "選択デバイスのIPが不正です。"
                     : !isValidIpv4(normalizedBroadcastSubnetMaskDraft)
-                      ? "サブネットマスクはIPv4形式で入力してください。"
-                      : "例: 12345678 / 192.168.1.10 / 255.255.255.0"}
+                      ? "選択デバイスのサブネットマスクが不正です。"
+                      : "デバイス選択後、IP/サブネットは自動適用されます。"}
               </p>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button
                   type="button"
                   className="ghost"
-                  onClick={() => void applyLocalNetworkSettingsFromDevice()}
-                  disabled={senderAutoDetecting}
+                  onClick={() => void refreshLocalNetworkSettingsCandidates(true)}
+                  disabled={senderNetworkCandidatesLoading}
                 >
-                  {senderAutoDetecting ? "自動入力中..." : "LLA/DHCPから自動入力"}
+                  {senderNetworkCandidatesLoading ? "デバイス検索中..." : "デバイス再検索"}
                 </button>
                 <button type="button" className="ghost" onClick={fillRandomSenderUserId}>
                   ランダム決定
@@ -8535,6 +8804,7 @@ function App() {
                     ))
                   )}
                 </select>
+
               </div>
 
               {selectedEvent && (
@@ -8713,9 +8983,46 @@ function App() {
                     {!matchSideRandomNotice.changed ? " (結果は変更なし)" : ""}
                   </p>
                 )}
+                <label className="checkbox-row" style={{ marginTop: "0.4rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={displayBracketPlayersBySide}
+                    onChange={(event) => setDisplayBracketPlayersBySide(event.currentTarget.checked)}
+                  />
+                  プレイヤーサイドに合わせて表示 (1Pが左 / 2Pが右)
+                </label>
+                <div className="side-toggle-row" style={{ marginTop: "0.45rem" }}>
+                  <button
+                    type="button"
+                    className="ghost tiny"
+                    disabled={busy || !isMatchupReady(activeMatch)}
+                    onClick={() => {
+                      swapMatchSides(activeMatch);
+                    }}
+                  >
+                    1P/2P入替
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost tiny side-choice side-choice-random"
+                    disabled={busy || !isMatchupReady(activeMatch)}
+                    onClick={() => {
+                      void randomizeMatchSides(activeMatch);
+                    }}
+                  >
+                    1P/2Pランダム決定
+                  </button>
+                </div>
 
                 <div className="dialog-players">
-                  {activeMatch.slots.map((slot, idx) => {
+                  {(() => {
+                    const matchupReady = isMatchupReady(activeMatch);
+                    const displaySlots = getDisplaySlotsForSet(activeMatch, {
+                      matchupReady,
+                      sideDrafts: activeMatchSideDrafts,
+                    });
+
+                    return displaySlots.map(({ slot, slotIndex: idx }) => {
                     const entrantId = slot.entrantId;
                     const dialogTbdLabel = resolveTbdSourceLabel(activeMatch, idx, slot);
                     const dialogEntrantName = dialogTbdLabel ? dialogTbdLabel : slot.entrantName;
@@ -8739,44 +9046,7 @@ function App() {
                         <p className="meta">entrantId: {entrantId ?? "-"}</p>
                         {entrantId && (
                           <>
-                            <div className="side-toggle-row">
-                              <button
-                                type="button"
-                                className={`ghost tiny side-choice side-choice-1p ${
-                                  currentSide === "1P" ? "side-choice-enabled" : "side-choice-disabled"
-                                }`}
-                                disabled={busy || !isMatchupReady(activeMatch)}
-                                onClick={() => {
-                                  void togglePlaySide(entrantId, "1P");
-                                }}
-                              >
-                                1P
-                              </button>
-                              <button
-                                type="button"
-                                className={`ghost tiny side-choice side-choice-2p ${
-                                  currentSide === "2P" ? "side-choice-enabled" : "side-choice-disabled"
-                                }`}
-                                disabled={busy || !isMatchupReady(activeMatch)}
-                                onClick={() => {
-                                  void togglePlaySide(entrantId, "2P");
-                                }}
-                              >
-                                2P
-                              </button>
-                              {idx === 0 && otherEntrantId && (
-                                <button
-                                  type="button"
-                                  className="ghost tiny side-choice side-choice-random"
-                                  disabled={busy || !isMatchupReady(activeMatch)}
-                                  onClick={() => {
-                                    void randomizeMatchSides(activeMatch);
-                                  }}
-                                >
-                                  ランダム
-                                </button>
-                              )}
-                            </div>
+                            <p className="meta">プレイヤーサイド: {currentSide === "" ? "-" : currentSide}</p>
                             <label>
                               取得ゲーム数
                               <div className="set-score-stepper">
@@ -8866,7 +9136,8 @@ function App() {
                         )}
                       </article>
                     );
-                  })}
+                    });
+                  })()}
                 </div>
 
                 <div className="dialog-actions">
