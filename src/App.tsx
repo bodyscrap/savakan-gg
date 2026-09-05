@@ -261,6 +261,10 @@ function isSlotTbd(slot: SetSlot): boolean {
   return normalized === "TBD" || normalized === "TBA" || normalized === "UNKNOWN";
 }
 
+function compareSetsForStableLane(left: SetSnapshot, right: SetSnapshot): number {
+  return left.setId.localeCompare(right.setId, "ja");
+}
+
 function buildRoundColumns(sets: SetSnapshot[]): RoundColumn[] {
   const map = new Map<string, RoundColumn>();
   let seq = 0;
@@ -271,6 +275,7 @@ function buildRoundColumns(sets: SetSnapshot[]): RoundColumn[] {
 
     if (found) {
       found.sets.push(set);
+      found.sets.sort(compareSetsForStableLane);
       continue;
     }
 
@@ -446,6 +451,15 @@ type CallThreadIdentity = {
 };
 
 type CallTargetIdentity = {
+  tournamentId: string;
+  eventId: string;
+  setId: string;
+  callEntrantId: string;
+};
+
+type CallSyncStatusTarget = {
+  threadId: string;
+  senderUserId: string;
   tournamentId: string;
   eventId: string;
   setId: string;
@@ -975,8 +989,11 @@ function getMailboxMethodLabel(method: string): string {
   if (normalized === "call_player") {
     return "プレイヤー呼び出し";
   }
+  if (normalized === "call_player_sync") {
+    return "呼び出しの同期";
+  }
   if (normalized === "call_player_sync_request") {
-    return "呼び出し同期要求";
+    return "呼び出しの同期";
   }
   return normalized === "" ? "不明" : normalized;
 }
@@ -1118,6 +1135,48 @@ function extractCallTargetIdentityFromMeta(meta: Record<string, unknown> | null)
     setId,
     callEntrantId,
   };
+}
+
+function buildCallSyncStatusTargets(
+  displayGroups: CallListEventGroup[],
+  messages: GenericMessage[],
+): CallSyncStatusTarget[] {
+  const rootByThreadId = new Map(
+    messages
+      .filter((item) => item.parentMessageId === null && item.method === "call_player" && item.messageType === "normal")
+      .map((item) => [item.threadId, item] as const),
+  );
+  const dedupMap = new Map<string, CallSyncStatusTarget>();
+
+  for (const group of displayGroups) {
+    for (const player of group.players) {
+      const root = rootByThreadId.get(player.threadId);
+      if (!root) {
+        continue;
+      }
+
+      const identity = extractCallTargetIdentityFromMeta(root.messageMeta);
+      if (!identity) {
+        continue;
+      }
+
+      const dedupKey = `${root.senderUserId}::${identity.tournamentId}::${identity.eventId}::${identity.setId}::${identity.callEntrantId}`;
+      if (dedupMap.has(dedupKey)) {
+        continue;
+      }
+
+      dedupMap.set(dedupKey, {
+        threadId: root.threadId,
+        senderUserId: root.senderUserId,
+        tournamentId: identity.tournamentId,
+        eventId: identity.eventId,
+        setId: identity.setId,
+        callEntrantId: identity.callEntrantId,
+      });
+    }
+  }
+
+  return [...dedupMap.values()];
 }
 
 function isSameCallTargetIdentity(left: CallTargetIdentity, right: CallTargetIdentity): boolean {
@@ -4106,10 +4165,11 @@ function App() {
         input: {
           profile: senderProfile,
           messageType: "normal",
-          method: "call_player_sync_request",
-          subject: "未解決呼び出し同期リクエスト",
+          method: "call_player_sync",
+          subject: "呼び出しの同期: 未補足の未解決呼び出しの収集",
           body: "現在未解決のプレイヤー呼び出し情報を返信してください。",
           messageMeta: {
+            syncPhase: "collect_unresolved",
             requestedAt: new Date().toISOString(),
           },
           deliveryTargetMode: "broadcast",
@@ -4119,7 +4179,29 @@ function App() {
         },
       });
 
-      setMessage("未解決呼び出しの同期問い合わせをブロードキャスト送信しました。返信が届くと呼び出しリストが更新されます。");
+      const statusTargets = buildCallSyncStatusTargets(callListDisplayGroups, genericMessages);
+      if (statusTargets.length > 0) {
+        await invoke<GenericMessage>("send_mailbox_message", {
+          input: {
+            profile: senderProfile,
+            messageType: "normal",
+            method: "call_player_sync",
+            subject: "呼び出しの同期: 掲載済み呼び出しの確認",
+            body: "掲載中の呼び出しについて最新状態を確認します。",
+            messageMeta: {
+              syncPhase: "check_published_status",
+              requestedAt: new Date().toISOString(),
+              targets: statusTargets,
+            },
+            deliveryTargetMode: "broadcast",
+            deliveryTargetIp: null,
+            threadId: null,
+            parentMessageId: null,
+          },
+        });
+      }
+
+      setMessage("呼び出しの同期を実行しました。未補足の未解決呼び出しを収集し、掲載済み呼び出しの状態確認を開始しました。");
     } catch (err) {
       setError(String(err));
     }
@@ -7126,7 +7208,7 @@ function App() {
                     disabled={!canBroadcastCallListSync}
                     onClick={() => void requestUnresolvedCallSyncBroadcast()}
                   >
-                    未解決呼び出しを問い合わせ
+                    呼び出しの同期
                   </button>
                   {unresolvedCallEventPages.length > 1 && (
                     <button

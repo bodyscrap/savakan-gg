@@ -26,7 +26,10 @@ const UDP_MAILBOX_PORT: u16 = 42690;
 const OBS_OVERLAY_PORT: u16 = 42691;
 const MAILBOX_PROTOCOL: &str = "savakan-mailbox-v1";
 const MAILBOX_METHOD_CALL_PLAYER: &str = "call_player";
+const MAILBOX_METHOD_CALL_SYNC: &str = "call_player_sync";
 const MAILBOX_METHOD_CALL_SYNC_REQUEST: &str = "call_player_sync_request";
+const CALL_SYNC_PHASE_COLLECT_UNRESOLVED: &str = "collect_unresolved";
+const CALL_SYNC_PHASE_CHECK_PUBLISHED_STATUS: &str = "check_published_status";
 
 static UDP_LISTENER_RUNNING: OnceLock<AtomicBool> = OnceLock::new();
 static MESSAGE_ID_SEQUENCE: OnceLock<AtomicU64> = OnceLock::new();
@@ -1014,6 +1017,93 @@ fn collect_unresolved_call_roots_for_sender(
         .collect()
 }
 
+fn is_call_sync_method(method: &str) -> bool {
+    method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_SYNC)
+        || method
+            .trim()
+            .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_SYNC_REQUEST)
+}
+
+fn call_sync_phase(meta: Option<&serde_json::Value>) -> String {
+    meta_string(meta, "syncPhase").unwrap_or_else(|| CALL_SYNC_PHASE_COLLECT_UNRESOLVED.to_owned())
+}
+
+#[derive(Debug, Clone)]
+struct CallSyncStatusTarget {
+    thread_id: String,
+    sender_user_id: String,
+    identity: CallTargetIdentity,
+}
+
+fn parse_call_sync_status_targets(meta: Option<&serde_json::Value>) -> Vec<CallSyncStatusTarget> {
+    let Some(meta_obj) = meta.and_then(|value| value.as_object()) else {
+        return Vec::new();
+    };
+    let Some(targets) = meta_obj.get("targets").and_then(|value| value.as_array()) else {
+        return Vec::new();
+    };
+
+    targets
+        .iter()
+        .filter_map(|target| {
+            let obj = target.as_object()?;
+
+            let get_str = |key: &str| {
+                obj.get(key)
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.trim().to_owned())
+                    .filter(|value| !value.is_empty())
+            };
+
+            let thread_id = get_str("threadId")?;
+            let sender_user_id = get_str("senderUserId")?;
+            let tournament_id = get_str("scopeTournamentId").or_else(|| get_str("tournamentId"))?;
+            let event_id = get_str("scopeEventId").or_else(|| get_str("eventId"))?;
+            let set_id = get_str("setId")?;
+            let call_entrant_id = get_str("callEntrantId")?;
+
+            Some(CallSyncStatusTarget {
+                thread_id,
+                sender_user_id,
+                identity: CallTargetIdentity {
+                    tournament_id,
+                    event_id,
+                    set_id,
+                    call_entrant_id,
+                },
+            })
+        })
+        .collect()
+}
+
+fn build_call_sync_resolved_message(
+    profile: &SenderProfile,
+    target_thread_id: &str,
+    latest_root: &GenericMessage,
+    latest_resolve: &GenericMessage,
+) -> GenericMessage {
+    let body = "呼び出し同期で解決済みを確認しました。";
+
+    GenericMessage {
+        message_id: create_message_id(profile, MAILBOX_METHOD_CALL_PLAYER, body),
+        thread_id: target_thread_id.to_owned(),
+        parent_message_id: None,
+        message_type: "resolve".to_owned(),
+        message_meta: latest_root.message_meta.clone(),
+        method: MAILBOX_METHOD_CALL_PLAYER.to_owned(),
+        subject: format!("Resolved: {}", latest_root.subject),
+        sender_name: profile.sender_name.trim().to_owned(),
+        sender_user_id: profile.sender_user_id.trim().to_owned(),
+        sender_ip: profile.bind_ip.trim().to_owned(),
+        body: if latest_resolve.body.trim().is_empty() {
+            body.to_owned()
+        } else {
+            latest_resolve.body.clone()
+        },
+        created_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
 fn send_udp_mailbox_packet(
     profile: &SenderProfile,
     mode: &str,
@@ -1124,18 +1214,93 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
                             continue;
                         }
 
-                        if packet.message.method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_SYNC_REQUEST) {
+                        if is_call_sync_method(&packet.message.method) {
                             let sender_ip = packet.message.sender_ip.trim();
                             if sender_ip.parse::<Ipv4Addr>().is_ok() {
-                                let unresolved_calls =
-                                    collect_unresolved_call_roots_for_sender(&app, &my_profile.sender_user_id);
-                                for unresolved in unresolved_calls {
-                                    let _ = send_udp_mailbox_packet(
-                                        &my_profile,
-                                        "direct",
-                                        Some(sender_ip),
-                                        &unresolved,
-                                    );
+                                let phase = call_sync_phase(packet.message.message_meta.as_ref());
+
+                                if phase == CALL_SYNC_PHASE_CHECK_PUBLISHED_STATUS {
+                                    let targets = parse_call_sync_status_targets(packet.message.message_meta.as_ref());
+                                    let messages = storage::load_generic_messages(&app)
+                                        .ok()
+                                        .flatten()
+                                        .unwrap_or_default();
+
+                                    for target in targets {
+                                        if target.sender_user_id.trim() != my_profile.sender_user_id.trim() {
+                                            continue;
+                                        }
+
+                                        let latest_root = messages
+                                            .iter()
+                                            .filter(|item| {
+                                                item.parent_message_id.is_none()
+                                                    && item.message_type == "normal"
+                                                    && item
+                                                        .method
+                                                        .trim()
+                                                        .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
+                                                    && item.sender_user_id.trim()
+                                                        == my_profile.sender_user_id.trim()
+                                            })
+                                            .filter(|root| {
+                                                extract_call_target_identity(root.message_meta.as_ref())
+                                                    .map(|identity| {
+                                                        call_target_identity_matches(
+                                                            &identity,
+                                                            &target.identity,
+                                                        )
+                                                    })
+                                                    .unwrap_or(false)
+                                            })
+                                            .max_by(|left, right| {
+                                                left.created_at.cmp(&right.created_at)
+                                            })
+                                            .cloned();
+
+                                        let Some(latest_root) = latest_root else {
+                                            continue;
+                                        };
+
+                                        let latest_resolve = messages
+                                            .iter()
+                                            .filter(|item| {
+                                                item.thread_id == latest_root.thread_id
+                                                    && item.message_type == "resolve"
+                                            })
+                                            .max_by(|left, right| {
+                                                left.created_at.cmp(&right.created_at)
+                                            })
+                                            .cloned();
+
+                                        let Some(latest_resolve) = latest_resolve else {
+                                            continue;
+                                        };
+
+                                        let resolved = build_call_sync_resolved_message(
+                                            &my_profile,
+                                            &target.thread_id,
+                                            &latest_root,
+                                            &latest_resolve,
+                                        );
+                                        let _ = send_udp_mailbox_packet(
+                                            &my_profile,
+                                            "direct",
+                                            Some(sender_ip),
+                                            &resolved,
+                                        );
+                                    }
+                                } else {
+                                    let unresolved_calls =
+                                        collect_unresolved_call_roots_for_sender(&app, &my_profile.sender_user_id);
+                                    for unresolved in unresolved_calls {
+                                        let _ = send_udp_mailbox_packet(
+                                            &my_profile,
+                                            "direct",
+                                            Some(sender_ip),
+                                            &unresolved,
+                                        );
+                                    }
                                 }
                             }
 
