@@ -1486,6 +1486,36 @@ function stepScoreDraftValue(currentRaw: string, delta: number): string {
   return String(next);
 }
 
+function applyScoreDraftWithOpponentDefault(
+  set: SetSnapshot,
+  current: SetScoreDraft,
+  entrantId: string,
+  nextValue: string,
+): SetScoreDraft {
+  const nextDrafts: SetScoreDraft = {
+    ...current,
+    [entrantId]: nextValue,
+  };
+
+  const parsedNext = parseDraftScoreValue(nextValue);
+  if (parsedNext === null || parsedNext < 0) {
+    return nextDrafts;
+  }
+
+  const otherEntrantId = set.slots.find((slot) => slot.entrantId !== null && slot.entrantId !== entrantId)?.entrantId;
+  if (!otherEntrantId) {
+    return nextDrafts;
+  }
+
+  const otherRaw = nextDrafts[otherEntrantId] ?? "";
+  if (otherRaw.trim() !== "") {
+    return nextDrafts;
+  }
+
+  nextDrafts[otherEntrantId] = "0";
+  return nextDrafts;
+}
+
 function abbreviateOverlayRoundText(value: string): string {
   return value
     .replace(/\bWinners\b/gi, "W")
@@ -1920,26 +1950,41 @@ function resolveWinnerIdFromDrafts(set: SetSnapshot, drafts: SetScoreDraft): str
 }
 
 function buildSlotScoresForSave(set: SetSnapshot, drafts: SetScoreDraft): Array<{ entrantId: string; score: number }> {
+  const entries = set.slots
+    .filter((slot): slot is SetSlot & { entrantId: string } => slot.entrantId !== null)
+    .map((slot) => {
+      const raw = drafts[slot.entrantId] ?? "";
+      return {
+        entrantId: slot.entrantId,
+        entrantName: slot.entrantName,
+        raw,
+        score: parseDraftScoreValue(raw),
+      };
+    });
+
+  if (entries.length < 2) {
+    throw new Error("結果入力には少なくとも2人のプレイヤーが必要です。");
+  }
+
+  const unfilled = entries.filter((entry) => entry.score === null && entry.raw.trim() === "");
+  if (unfilled.length === 1) {
+    const hasNonDqScore = entries.some((entry) => entry.score !== null && entry.score >= 0);
+    if (hasNonDqScore) {
+      unfilled[0].score = 0;
+    }
+  }
+
   const slotScores: Array<{ entrantId: string; score: number }> = [];
 
-  for (const slot of set.slots) {
-    if (!slot.entrantId) {
-      continue;
-    }
-
-    const parsed = parseDraftScoreValue(drafts[slot.entrantId] ?? "");
-    if (parsed === null) {
-      throw new Error(`スコアが未入力です: ${slot.entrantName}`);
+  for (const entry of entries) {
+    if (entry.score === null) {
+      throw new Error(`スコアが未入力です: ${entry.entrantName}`);
     }
 
     slotScores.push({
-      entrantId: slot.entrantId,
-      score: parsed,
+      entrantId: entry.entrantId,
+      score: entry.score,
     });
-  }
-
-  if (slotScores.length < 2) {
-    throw new Error("結果入力には少なくとも2人のプレイヤーが必要です。");
   }
 
   return slotScores;
@@ -9140,10 +9185,13 @@ function App() {
                                     if (!entrantId) {
                                       return;
                                     }
-                                    setScoreDrafts((current) => ({
-                                      ...current,
-                                      [entrantId]: stepScoreDraftValue(current[entrantId] ?? "", -1),
-                                    }));
+                                    setScoreDrafts((current) =>
+                                      applyScoreDraftWithOpponentDefault(
+                                        activeMatch,
+                                        current,
+                                        entrantId,
+                                        stepScoreDraftValue(current[entrantId] ?? "", -1),
+                                      ));
                                   }}
                                 >
                                   -
@@ -9158,10 +9206,13 @@ function App() {
                                       return;
                                     }
                                     const nextValue = e.currentTarget.value;
-                                    setScoreDrafts((current) => ({
-                                      ...current,
-                                      [entrantId]: nextValue,
-                                    }));
+                                    setScoreDrafts((current) =>
+                                      applyScoreDraftWithOpponentDefault(
+                                        activeMatch,
+                                        current,
+                                        entrantId,
+                                        nextValue,
+                                      ));
                                   }}
                                 />
                                 <button
@@ -9172,10 +9223,13 @@ function App() {
                                     if (!entrantId) {
                                       return;
                                     }
-                                    setScoreDrafts((current) => ({
-                                      ...current,
-                                      [entrantId]: stepScoreDraftValue(current[entrantId] ?? "", 1),
-                                    }));
+                                    setScoreDrafts((current) =>
+                                      applyScoreDraftWithOpponentDefault(
+                                        activeMatch,
+                                        current,
+                                        entrantId,
+                                        stepScoreDraftValue(current[entrantId] ?? "", 1),
+                                      ));
                                   }}
                                 >
                                   +

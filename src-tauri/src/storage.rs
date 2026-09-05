@@ -1187,15 +1187,121 @@ fn first_empty_slot_index(set: &crate::models::SetSnapshot) -> Option<usize> {
         .position(|slot| slot.entrant_id.is_none() || slot.entrant_name.trim().eq_ignore_ascii_case("tbd"))
 }
 
+fn is_slot_empty(slot: &crate::models::SetSlotSnapshot) -> bool {
+    slot.entrant_id.is_none() || slot.entrant_name.trim().eq_ignore_ascii_case("tbd")
+}
+
+fn pick_pair_source_indexes(
+    previous_count: usize,
+    current_count: usize,
+    current_index: usize,
+) -> Vec<usize> {
+    if previous_count == 0 || current_count == 0 {
+        return Vec::new();
+    }
+
+    if previous_count == 1 {
+        return vec![0];
+    }
+
+    if previous_count >= current_count * 2 {
+        let first = current_index * 2;
+        let second = current_index * 2 + 1;
+        return [Some(first), Some(second)]
+            .into_iter()
+            .flatten()
+            .filter(|index| *index < previous_count)
+            .collect();
+    }
+
+    let mapped = ((current_index as f64 + 0.5) * previous_count as f64) / current_count as f64 - 0.5;
+    let left = mapped.floor().max(0.0) as usize;
+    let right = mapped.ceil().min((previous_count.saturating_sub(1)) as f64) as usize;
+
+    if left == right {
+        return vec![left];
+    }
+
+    vec![left, right]
+}
+
+fn infer_preferred_slot_index_for_winner(
+    event: &EventSnapshot,
+    source_set_id: &str,
+    source_round: Option<i64>,
+    source_is_losers: bool,
+    source_phase_name: Option<&String>,
+    source_phase_group_name: Option<&String>,
+    target: &crate::models::SetSnapshot,
+) -> Option<usize> {
+    if target.slots.len() < 2 {
+        return None;
+    }
+
+    let source_depth = source_round?.abs();
+    let target_depth = target.round?.abs();
+    if target_depth <= source_depth || target_depth - source_depth != 1 {
+        return None;
+    }
+
+    let src_phase = normalize_group_key(source_phase_name);
+    let src_group = normalize_group_key(source_phase_group_name);
+    let target_phase = normalize_group_key(target.phase_name.as_ref());
+    let target_group = normalize_group_key(target.phase_group_name.as_ref());
+    if src_phase != target_phase || src_group != target_group {
+        return None;
+    }
+
+    let mut previous_round_set_ids = event
+        .sets
+        .iter()
+        .filter(|set| {
+            is_losers_set(set) == source_is_losers
+                && set.round.map(|round| round.abs()) == Some(source_depth)
+                && normalize_group_key(set.phase_name.as_ref()) == src_phase
+                && normalize_group_key(set.phase_group_name.as_ref()) == src_group
+        })
+        .map(|set| set.set_id.clone())
+        .collect::<Vec<String>>();
+    previous_round_set_ids.sort();
+
+    let mut current_round_set_ids = event
+        .sets
+        .iter()
+        .filter(|set| {
+            is_losers_set(set) == source_is_losers
+                && set.round.map(|round| round.abs()) == Some(target_depth)
+                && normalize_group_key(set.phase_name.as_ref()) == src_phase
+                && normalize_group_key(set.phase_group_name.as_ref()) == src_group
+        })
+        .map(|set| set.set_id.clone())
+        .collect::<Vec<String>>();
+    current_round_set_ids.sort();
+
+    let current_index = current_round_set_ids
+        .iter()
+        .position(|set_id| set_id == &target.set_id)?;
+    let source_indexes = pick_pair_source_indexes(
+        previous_round_set_ids.len(),
+        current_round_set_ids.len(),
+        current_index,
+    );
+
+    for (slot_index, source_index) in source_indexes.into_iter().enumerate() {
+        if previous_round_set_ids.get(source_index).is_some_and(|set_id| set_id == source_set_id) {
+            return Some(slot_index);
+        }
+    }
+
+    None
+}
+
 fn place_entrant_to_set(
     set: &mut crate::models::SetSnapshot,
     entrant_id: &str,
     entrant_name: &str,
+    preferred_slot_index: Option<usize>,
 ) -> bool {
-    let Some(slot_index) = first_empty_slot_index(set) else {
-        return false;
-    };
-
     if set
         .slots
         .iter()
@@ -1203,6 +1309,44 @@ fn place_entrant_to_set(
     {
         return false;
     }
+
+    let slot_index = if let Some(preferred) = preferred_slot_index {
+        if preferred >= set.slots.len() {
+            first_empty_slot_index(set)
+        } else if set.slots.get(preferred).is_some_and(is_slot_empty) {
+            Some(preferred)
+        } else if set.slots.len() == 2 {
+            let other = if preferred == 0 { 1 } else { 0 };
+            if set.slots.get(other).is_some_and(is_slot_empty) {
+                let moved = set.slots.get(preferred).cloned();
+                if let Some(item) = moved {
+                    if let Some(slot) = set.slots.get_mut(other) {
+                        *slot = item;
+                    }
+                    if let Some(slot) = set.slots.get_mut(preferred) {
+                        slot.entrant_id = None;
+                        slot.entrant_name = "TBD".to_owned();
+                        slot.seed_id = None;
+                        slot.seed_num = None;
+                        slot.score = None;
+                    }
+                    Some(preferred)
+                } else {
+                    first_empty_slot_index(set)
+                }
+            } else {
+                first_empty_slot_index(set)
+            }
+        } else {
+            first_empty_slot_index(set)
+        }
+    } else {
+        first_empty_slot_index(set)
+    };
+
+    let Some(slot_index) = slot_index else {
+        return false;
+    };
 
     if let Some(slot) = set.slots.get_mut(slot_index) {
         slot.entrant_id = Some(entrant_id.to_owned());
@@ -1292,9 +1436,19 @@ fn advance_winner_within_lane(
                 _ => i64::MAX / 2,
             };
 
-            Some((index, strictness_rank, round_gap, empty_count))
+            let preferred_slot_index = infer_preferred_slot_index_for_winner(
+                event,
+                source_set_id,
+                source_round,
+                source_is_losers,
+                source_phase_name,
+                source_phase_group_name,
+                target,
+            );
+
+            Some((index, strictness_rank, round_gap, empty_count, preferred_slot_index))
         })
-        .collect::<Vec<(usize, i64, i64, usize)>>();
+        .collect::<Vec<(usize, i64, i64, usize, Option<usize>)>>();
 
     candidates.sort_by(|left, right| {
         left.1
@@ -1304,9 +1458,9 @@ fn advance_winner_within_lane(
             .then_with(|| left.0.cmp(&right.0))
     });
 
-    for (index, _, _, _) in candidates {
+    for (index, _, _, _, preferred_slot_index) in candidates {
         if let Some(target) = event.sets.get_mut(index) {
-            if place_entrant_to_set(target, winner_id, winner_name) {
+            if place_entrant_to_set(target, winner_id, winner_name, preferred_slot_index) {
                 return true;
             }
         }
@@ -1387,7 +1541,7 @@ fn drop_loser_to_losers_lane(
 
     for (index, _, _, _) in candidates {
         if let Some(target) = event.sets.get_mut(index) {
-            if place_entrant_to_set(target, loser_id, loser_name) {
+            if place_entrant_to_set(target, loser_id, loser_name, None) {
                 return true;
             }
         }
