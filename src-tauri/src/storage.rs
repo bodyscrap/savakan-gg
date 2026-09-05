@@ -661,23 +661,60 @@ pub fn save_generic_messages(app: &AppHandle, messages: &[GenericMessage]) -> Re
     fs::write(path, json).map_err(|e| format!("メッセージ保存に失敗しました: {e}"))
 }
 
-fn call_message_identity(message: &GenericMessage) -> Option<String> {
-    let meta = message.message_meta.as_ref()?;
-    let call_id = meta.get("callId").and_then(|value| value.as_str()).map(|value| value.trim().to_owned());
-    if let Some(call_id) = call_id.filter(|value| !value.is_empty()) {
-        return Some(call_id);
-    }
+#[derive(Debug, Clone)]
+struct CallMessageIdentity {
+    tournament_id: String,
+    event_id: String,
+    set_id: String,
+    entrant_id: String,
+}
 
-    let tournament_id = meta.get("tournamentId").and_then(|value| value.as_str())?.trim();
-    let event_id = meta.get("eventId").and_then(|value| value.as_str())?.trim();
-    let set_id = meta.get("setId").and_then(|value| value.as_str())?.trim();
-    let entrant_id = meta.get("callEntrantId").and_then(|value| value.as_str())?.trim();
+fn message_meta_string(meta: &serde_json::Value, key: &str) -> String {
+    meta.get(key)
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_owned())
+        .unwrap_or_default()
+}
+
+fn call_message_identity(message: &GenericMessage) -> Option<CallMessageIdentity> {
+    let meta = message.message_meta.as_ref()?;
+
+    let set_id = message_meta_string(meta, "setId");
+    let entrant_id = message_meta_string(meta, "callEntrantId");
+    let tournament_id = {
+        let scoped = message_meta_string(meta, "scopeTournamentId");
+        if !scoped.is_empty() {
+            scoped
+        } else {
+            message_meta_string(meta, "tournamentId")
+        }
+    };
+    let event_id = {
+        let scoped = message_meta_string(meta, "scopeEventId");
+        if !scoped.is_empty() {
+            scoped
+        } else {
+            message_meta_string(meta, "eventId")
+        }
+    };
 
     if tournament_id.is_empty() || event_id.is_empty() || set_id.is_empty() || entrant_id.is_empty() {
         return None;
     }
 
-    Some(format!("{tournament_id}:{event_id}:{set_id}:{entrant_id}"))
+    Some(CallMessageIdentity {
+        tournament_id,
+        event_id,
+        set_id,
+        entrant_id,
+    })
+}
+
+fn call_identity_matches(left: &CallMessageIdentity, right: &CallMessageIdentity) -> bool {
+    left.tournament_id == right.tournament_id
+        && left.event_id == right.event_id
+        && left.set_id == right.set_id
+        && left.entrant_id == right.entrant_id
 }
 
 fn build_forced_resolve_message(root: &GenericMessage) -> GenericMessage {
@@ -725,7 +762,9 @@ pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Resu
                 .filter(|item| {
                     item.parent_message_id.is_none()
                         && item.method == "call_player"
-                        && call_message_identity(item).as_deref() == Some(call_identity.as_str())
+                        && call_message_identity(item)
+                            .map(|item_identity| call_identity_matches(&item_identity, &call_identity))
+                            .unwrap_or(false)
                 })
                 .cloned()
                 .collect::<Vec<_>>();

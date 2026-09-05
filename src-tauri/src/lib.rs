@@ -706,26 +706,93 @@ fn local_ipv4_score(ip: &std::net::Ipv4Addr) -> i32 {
     0
 }
 
-#[tauri::command]
-fn detect_local_ipv4() -> Result<Option<String>, String> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalNetworkSettingsCandidate {
+    bind_ip: String,
+    broadcast_subnet_mask: String,
+    source: String,
+    interface_name: String,
+}
+
+fn source_label_for_ipv4(ip: &Ipv4Addr) -> &'static str {
+    if ip.is_link_local() {
+        "LLA"
+    } else if ip.is_private() {
+        "DHCP/Private"
+    } else {
+        "IPv4"
+    }
+}
+
+fn detect_local_network_settings_candidate() -> Result<Option<LocalNetworkSettingsCandidate>, String> {
     let interfaces = get_if_addrs().map_err(|e| format!("ネットワークIFの取得に失敗しました: {e}"))?;
 
     let mut candidates = interfaces
         .into_iter()
         .filter_map(|iface| match iface.addr {
-            if_addrs::IfAddr::V4(addr) => Some(addr.ip),
-            if_addrs::IfAddr::V6(_) => None,
+            if_addrs::IfAddr::V4(addr)
+                if !addr.ip.is_loopback() && !addr.ip.is_unspecified() =>
+            {
+                Some(LocalNetworkSettingsCandidate {
+                    bind_ip: addr.ip.to_string(),
+                    broadcast_subnet_mask: addr.netmask.to_string(),
+                    source: source_label_for_ipv4(&addr.ip).to_owned(),
+                    interface_name: iface.name,
+                })
+            }
+            _ => None,
         })
-        .filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
         .collect::<Vec<_>>();
 
     candidates.sort_by(|left, right| {
-        local_ipv4_score(right)
-            .cmp(&local_ipv4_score(left))
-            .then_with(|| left.octets().cmp(&right.octets()))
+        let left_ip = left.bind_ip.parse::<Ipv4Addr>().ok();
+        let right_ip = right.bind_ip.parse::<Ipv4Addr>().ok();
+        let left_score = left_ip.as_ref().map(local_ipv4_score).unwrap_or(0);
+        let right_score = right_ip.as_ref().map(local_ipv4_score).unwrap_or(0);
+
+        right_score
+            .cmp(&left_score)
+            .then_with(|| left.bind_ip.cmp(&right.bind_ip))
     });
 
-    Ok(candidates.first().map(|ip| ip.to_string()))
+    Ok(candidates.into_iter().next())
+}
+
+#[tauri::command]
+fn detect_local_ipv4() -> Result<Option<String>, String> {
+    Ok(detect_local_network_settings_candidate()?.map(|item| item.bind_ip))
+}
+
+#[tauri::command]
+fn detect_local_network_settings() -> Result<Option<LocalNetworkSettingsCandidate>, String> {
+    detect_local_network_settings_candidate()
+}
+
+#[tauri::command]
+fn test_sender_network(profile: SenderProfile) -> Result<String, String> {
+    validate_sender_profile(&profile)?;
+
+    let sender_bind_addr = format!("{}:0", profile.bind_ip.trim());
+    let socket = UdpSocket::bind(&sender_bind_addr)
+        .map_err(|e| format!("送信元IPへバインドできませんでした ({sender_bind_addr}): {e}"))?;
+
+    socket
+        .set_broadcast(true)
+        .map_err(|e| format!("ブロードキャスト設定に失敗しました: {e}"))?;
+
+    let broadcast_ip = compute_broadcast_ip(&profile.bind_ip, &profile.broadcast_subnet_mask)?;
+    let target_addr = format!("{}:{}", broadcast_ip, UDP_MAILBOX_PORT);
+
+    socket
+        .send_to(b"network-check", &target_addr)
+        .map_err(|e| format!("簡易ネットワークテストに失敗しました ({target_addr}): {e}"))?;
+
+    Ok(format!(
+        "ネットワークテスト成功: {} -> {}",
+        profile.bind_ip.trim(),
+        target_addr
+    ))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1124,6 +1191,86 @@ fn validate_thread_open_for_reply(app: &tauri::AppHandle, thread_id: &str) -> Re
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct CallTargetIdentity {
+    tournament_id: String,
+    event_id: String,
+    set_id: String,
+    call_entrant_id: String,
+}
+
+fn extract_call_target_identity(meta: Option<&serde_json::Value>) -> Option<CallTargetIdentity> {
+    let tournament_id = meta_string(meta, "scopeTournamentId")
+        .or_else(|| meta_string(meta, "tournamentId"))?;
+    let event_id = meta_string(meta, "scopeEventId")
+        .or_else(|| meta_string(meta, "eventId"))?;
+    let set_id = meta_string(meta, "setId")?;
+    let call_entrant_id = meta_string(meta, "callEntrantId")?;
+
+    Some(CallTargetIdentity {
+        tournament_id,
+        event_id,
+        set_id,
+        call_entrant_id,
+    })
+}
+
+fn call_target_identity_matches(left: &CallTargetIdentity, right: &CallTargetIdentity) -> bool {
+    left.tournament_id == right.tournament_id
+        && left.event_id == right.event_id
+        && left.set_id == right.set_id
+        && left.call_entrant_id == right.call_entrant_id
+}
+
+fn build_auto_resolve_message(profile: &SenderProfile, root: &GenericMessage) -> GenericMessage {
+    let body = "同一セット・同一プレイヤーの再呼び出し前に自動解決しました。";
+
+    GenericMessage {
+        message_id: create_message_id(profile, &root.method, body),
+        thread_id: root.thread_id.clone(),
+        parent_message_id: Some(root.message_id.clone()),
+        message_type: "resolve".to_owned(),
+        message_meta: root.message_meta.clone(),
+        method: root.method.clone(),
+        subject: format!("Resolved: {}", root.subject),
+        sender_name: profile.sender_name.trim().to_owned(),
+        sender_user_id: profile.sender_user_id.trim().to_owned(),
+        sender_ip: profile.bind_ip.trim().to_owned(),
+        body: body.to_owned(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
+fn collect_duplicate_unresolved_call_roots(
+    app: &tauri::AppHandle,
+    identity: &CallTargetIdentity,
+) -> Result<Vec<GenericMessage>, String> {
+    let messages = storage::load_generic_messages(app)?.unwrap_or_default();
+
+    let roots = messages
+        .iter()
+        .filter(|item| {
+            item.parent_message_id.is_none()
+                && item.message_type == "normal"
+                && item.method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
+        })
+        .filter(|root| {
+            let Some(root_identity) = extract_call_target_identity(root.message_meta.as_ref()) else {
+                return false;
+            };
+            call_target_identity_matches(&root_identity, identity)
+        })
+        .filter(|root| {
+            !messages
+                .iter()
+                .any(|item| item.thread_id == root.thread_id && item.message_type == "resolve")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok(roots)
+}
+
 fn validate_dq_request_permission(
     app: &tauri::AppHandle,
     thread_id: &str,
@@ -1171,6 +1318,29 @@ fn send_mailbox_message(
     input: SendMailboxMessageInput,
 ) -> Result<GenericMessage, String> {
     let message = build_message_from_input(&input)?;
+
+    if message.message_type == "normal"
+        && message.parent_message_id.is_none()
+        && message.method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
+    {
+        if let Some(identity) = extract_call_target_identity(message.message_meta.as_ref()) {
+            let duplicate_roots = collect_duplicate_unresolved_call_roots(
+                &app,
+                &identity,
+            )?;
+
+            for root in duplicate_roots {
+                let resolve_message = build_auto_resolve_message(&input.profile, &root);
+                send_udp_mailbox_packet(
+                    &input.profile,
+                    &input.delivery_target_mode,
+                    input.delivery_target_ip.as_deref(),
+                    &resolve_message,
+                )?;
+                storage::append_generic_message(&app, &resolve_message)?;
+            }
+        }
+    }
 
     if message.parent_message_id.is_some() {
         validate_thread_open_for_reply(&app, &message.thread_id)?;
@@ -1853,6 +2023,8 @@ pub fn run() {
             load_event_mgmt_settings,
             save_event_mgmt_settings,
             detect_local_ipv4,
+            detect_local_network_settings,
+            test_sender_network,
             get_obs_overlay_state,
             set_obs_overlay_font_scale,
             set_obs_overlay_name_fit_mode,

@@ -445,6 +445,13 @@ type CallThreadIdentity = {
   setId: string;
 };
 
+type CallTargetIdentity = {
+  tournamentId: string;
+  eventId: string;
+  setId: string;
+  callEntrantId: string;
+};
+
 type CallListPlayer = {
   threadId: string;
   entrantName: string;
@@ -529,6 +536,13 @@ type SenderProfile = {
   senderUserId: string;
   bindIp: string;
   broadcastSubnetMask: string;
+};
+
+type LocalNetworkSettingsCandidate = {
+  bindIp: string;
+  broadcastSubnetMask: string;
+  source: string;
+  interfaceName: string;
 };
 
 type GenericMessage = {
@@ -1073,6 +1087,40 @@ function extractCallEventMeta(
     eventName,
     eventAlias,
   };
+}
+
+function buildCallListDedupKey(rootMessage: GenericMessage): string {
+  const targetIdentity = extractCallTargetIdentityFromMeta(rootMessage.messageMeta);
+  if (!targetIdentity) {
+    return rootMessage.threadId;
+  }
+
+  return `${targetIdentity.tournamentId}::${targetIdentity.eventId}::${targetIdentity.setId}::${targetIdentity.callEntrantId}`;
+}
+
+function extractCallTargetIdentityFromMeta(meta: Record<string, unknown> | null): CallTargetIdentity | null {
+  const callEntrantId = extractMetaString(meta, "callEntrantId");
+  const setId = extractMetaString(meta, "setId");
+  const eventId = extractMetaString(meta, "scopeEventId") || extractMetaString(meta, "eventId");
+  const tournamentId = extractMetaString(meta, "scopeTournamentId") || extractMetaString(meta, "tournamentId");
+
+  if (tournamentId === "" || eventId === "" || callEntrantId === "" || setId === "") {
+    return null;
+  }
+
+  return {
+    tournamentId,
+    eventId,
+    setId,
+    callEntrantId,
+  };
+}
+
+function isSameCallTargetIdentity(left: CallTargetIdentity, right: CallTargetIdentity): boolean {
+  return left.tournamentId === right.tournamentId
+    && left.eventId === right.eventId
+    && left.setId === right.setId
+    && left.callEntrantId === right.callEntrantId;
 }
 
 function compareCallListEventGroup(left: CallListEventGroup, right: CallListEventGroup): number {
@@ -1885,6 +1933,7 @@ function App() {
   const [senderUserIdDraft, setSenderUserIdDraft] = useState("");
   const [senderBindIpDraft, setSenderBindIpDraft] = useState("0.0.0.0");
   const [senderBroadcastSubnetMaskDraft, setSenderBroadcastSubnetMaskDraft] = useState("255.255.255.0");
+  const [senderAutoDetecting, setSenderAutoDetecting] = useState(false);
   const [genericMessages, setGenericMessages] = useState<GenericMessage[]>([]);
   const [genericMessagesReady, setGenericMessagesReady] = useState(false);
   const [mailboxMethodDraft, setMailboxMethodDraft] = useState("generic");
@@ -3007,12 +3056,19 @@ function App() {
     );
 
     const groups = new Map<string, CallListEventGroup>();
+    const dedupKeys = new Set<string>();
 
     for (const root of roots) {
       const resolved = genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve");
       if (resolved) {
         continue;
       }
+
+      const dedupKey = buildCallListDedupKey(root);
+      if (dedupKeys.has(dedupKey)) {
+        continue;
+      }
+      dedupKeys.add(dedupKey);
 
       const callIdentity = extractCallThreadIdentity(root);
       const entrantName = callIdentity?.callEntrantName
@@ -3341,9 +3397,11 @@ function App() {
     && isValidIpv4(normalizedBroadcastSubnetMaskDraft)
     && !senderIdCollision;
 
-  const canSendGenericMessage = senderProfile.senderName.trim() !== ""
+  const isSenderProfileReadyForMessaging = senderProfile.senderName.trim() !== ""
     && isValidSenderUserId(senderProfile.senderUserId)
-    && isValidIpv4(senderProfile.bindIp)
+    && isValidIpv4(senderProfile.bindIp);
+
+  const canSendGenericMessage = isSenderProfileReadyForMessaging
     && isValidIpv4(senderProfile.broadcastSubnetMask)
     && normalizedMailboxMethod !== ""
     && normalizedMailboxSubject !== ""
@@ -3352,9 +3410,7 @@ function App() {
 
   const canReplyToThread = !!activeThread
     && !activeThreadResolved
-    && senderProfile.senderName.trim() !== ""
-    && isValidSenderUserId(senderProfile.senderUserId)
-    && isValidIpv4(senderProfile.bindIp)
+    && isSenderProfileReadyForMessaging
     && normalizedReplyBody !== "";
   const canBroadcastCallListSync = senderProfile.senderName.trim() !== ""
     && isValidSenderUserId(senderProfile.senderUserId)
@@ -3378,7 +3434,36 @@ function App() {
     setSenderUserIdDraft(nextId);
   }
 
-  function saveSenderProfileSettings() {
+  async function applyLocalNetworkSettingsFromDevice() {
+    setError("");
+    setMessage("");
+    setSenderAutoDetecting(true);
+
+    try {
+      const detected = await invoke<LocalNetworkSettingsCandidate | null>("detect_local_network_settings");
+      if (!detected) {
+        setError("利用可能なIPv4インターフェースが見つかりませんでした。手入力してください。");
+        return;
+      }
+
+      const detectedIp = detected.bindIp.trim();
+      const detectedMask = detected.broadcastSubnetMask.trim();
+      if (!isValidIpv4(detectedIp) || !isValidIpv4(detectedMask)) {
+        setError("検出したネットワーク設定が不正です。手入力で設定してください。");
+        return;
+      }
+
+      setSenderBindIpDraft(detectedIp);
+      setSenderBroadcastSubnetMaskDraft(detectedMask);
+      setMessage(`ネットワーク設定を自動入力しました: ${detectedIp} / ${detectedMask} (${detected.source}, IF=${detected.interfaceName})`);
+    } catch (err) {
+      setError(`ネットワーク設定の自動入力に失敗しました: ${String(err)}`);
+    } finally {
+      setSenderAutoDetecting(false);
+    }
+  }
+
+  async function saveSenderProfileSettings() {
     setError("");
     setMessage("");
 
@@ -3409,8 +3494,17 @@ function App() {
       broadcastSubnetMask: normalizedBroadcastSubnetMaskDraft,
     };
 
+    try {
+      await invoke<string>("test_sender_network", {
+        profile: nextProfile,
+      });
+    } catch (err) {
+      setError(`ネットワークテストに失敗したため保存を中止しました: ${String(err)}`);
+      return;
+    }
+
     setSenderProfile(nextProfile);
-    setMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp}`);
+    setMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK)`);
   }
 
   async function postGenericMessage() {
@@ -3449,6 +3543,59 @@ function App() {
     const scopedMeta = buildScopedMessageMeta(composeMessageMeta, selectedMessageScope);
 
     try {
+      if (normalizedMailboxMethod === "call_player") {
+        const targetIdentity = extractCallTargetIdentityFromMeta(scopedMeta);
+
+        if (targetIdentity) {
+          const duplicateRoots = genericMessages
+            .filter((item) =>
+              item.parentMessageId === null
+              && item.messageType === "normal"
+              && item.method === "call_player"
+            )
+            .filter((root) => {
+              const rootIdentity = extractCallTargetIdentityFromMeta(root.messageMeta);
+              if (!rootIdentity) {
+                return false;
+              }
+
+              const threadResolved = genericMessages.some(
+                (item) => item.threadId === root.threadId && item.messageType === "resolve",
+              );
+              if (threadResolved) {
+                return false;
+              }
+
+              return isSameCallTargetIdentity(rootIdentity, targetIdentity);
+            });
+
+          for (const root of duplicateRoots) {
+            const resolved = await invoke<GenericMessage>("send_mailbox_message", {
+              input: {
+                profile: senderProfile,
+                messageType: "resolve",
+                method: root.method,
+                subject: `Resolved: ${root.subject}`,
+                body: "同一セット・同一プレイヤーの再呼び出し前に自動解決しました。",
+                messageMeta: root.messageMeta,
+                deliveryTargetMode: "broadcast",
+                deliveryTargetIp: null,
+                threadId: root.threadId,
+                parentMessageId: root.messageId,
+              },
+            });
+
+            const normalizedResolved = normalizeGenericMessage(resolved);
+            if (normalizedResolved) {
+              setGenericMessages((current) => {
+                const next = [normalizedResolved, ...current.filter((item) => item.messageId !== normalizedResolved.messageId)];
+                return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+              });
+            }
+          }
+        }
+      }
+
       const sent = await invoke<GenericMessage>("send_mailbox_message", {
         input: {
           profile: senderProfile,
@@ -7424,6 +7571,11 @@ function App() {
             <p className="meta">
               現在の送信者: {senderProfile.senderName.trim() === "" ? "未設定" : senderProfile.senderName} / {isValidSenderUserId(senderProfile.senderUserId) ? senderProfile.senderUserId : "未設定"} / IP: {isValidIpv4(senderProfile.bindIp) ? senderProfile.bindIp : "未設定"}
             </p>
+            {!isSenderProfileReadyForMessaging && (
+              <p className="meta meta-attention">
+                送信不可: 設定タブで「送信者名」「8桁ユーザーID」「自分のIP」を保存すると、スレッド開始・返信・DQ申請が可能になります。
+              </p>
+            )}
             <p className="meta">受信サービス: {mailboxServiceStarted ? "起動中" : "未起動"}</p>
 
             <div className="form" style={{ marginTop: "0.6rem" }}>
@@ -8147,50 +8299,21 @@ function App() {
                       : "例: 12345678 / 192.168.1.10 / 255.255.255.0"}
               </p>
               <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void applyLocalNetworkSettingsFromDevice()}
+                  disabled={senderAutoDetecting}
+                >
+                  {senderAutoDetecting ? "自動入力中..." : "LLA/DHCPから自動入力"}
+                </button>
                 <button type="button" className="ghost" onClick={fillRandomSenderUserId}>
                   ランダム決定
                 </button>
-                <button type="button" onClick={saveSenderProfileSettings} disabled={!canSaveSenderProfile}>
+                <button type="button" onClick={() => void saveSenderProfileSettings()} disabled={!canSaveSenderProfile}>
                   保存
                 </button>
               </div>
-            </div>
-          </section>
-
-          <section className="panel">
-            <h2>メールボックス表示設定</h2>
-            <p className="meta">メールボックスのスレッド一覧フィルタを設定できます。</p>
-
-            <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.6rem" }}>
-              <label className="checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={mailboxFilterSetting.unresolvedOnly}
-                  onChange={(e) => {
-                    const checked = e.currentTarget.checked;
-                    setMailboxFilterSetting((current) => ({ ...current, unresolvedOnly: checked }));
-                  }}
-                />
-                未解決スレッドのみ表示
-              </label>
-              <label className="checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={mailboxFilterSetting.unreadOnly}
-                  onChange={(e) => {
-                    const checked = e.currentTarget.checked;
-                    setMailboxFilterSetting((current) => ({ ...current, unreadOnly: checked }));
-                  }}
-                />
-                未読メッセージがあるスレッドのみ表示
-              </label>
-            </div>
-
-            <div className="panel-toolbar compact">
-              <p className="meta">未読管理数: {mailboxReadMessageIds.length}</p>
-              <button type="button" className="ghost" onClick={() => setMailboxReadMessageIds([])}>
-                未読状態をリセット
-              </button>
             </div>
           </section>
 

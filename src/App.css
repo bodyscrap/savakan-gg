@@ -412,6 +412,16 @@ button:disabled {
   font-size: 0.84rem;
 }
 
+.meta-attention {
+  margin-top: 0.45rem;
+  padding: 0.48rem 0.58rem;
+  border: 1px solid var(--danger-line);
+  border-radius: 8px;
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+  font-weight: 700;
+}
+
 .message-body {
   margin: 0.45rem 0 0;
   white-space: pre-wrap;
