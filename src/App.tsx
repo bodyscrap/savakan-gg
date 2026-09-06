@@ -66,6 +66,208 @@ const BRACKET_BOTTOM_PADDING = 16;
 const BRACKET_ROW_STEP = 106;
 const BRACKET_SET_CARD_HEIGHT = 80;
 
+function clampIndex(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function buildExpandedLaneIndexes(previousCount: number, currentCount: number): number[] {
+  if (previousCount <= 0 || currentCount <= 0) {
+    return [];
+  }
+
+  const result: number[] = [];
+  let last = -1;
+
+  for (let previousIndex = 0; previousIndex < previousCount; previousIndex += 1) {
+    const raw = Math.floor(((previousIndex + 0.5) * currentCount) / previousCount);
+    const remaining = previousCount - previousIndex - 1;
+    const minAllowed = last + 1;
+    const maxAllowed = currentCount - 1 - remaining;
+    const laneIndex = clampIndex(raw, minAllowed, maxAllowed);
+    result.push(laneIndex);
+    last = laneIndex;
+  }
+
+  return result;
+}
+
+function buildFirstWinnersColumnPositions(setCount: number, nextCount: number): number[] {
+  const laneIndexes = buildExpandedLaneIndexes(setCount, nextCount);
+  if (laneIndexes.length !== setCount) {
+    return Array.from({ length: setCount }, (_, index) => BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP);
+  }
+
+  return laneIndexes.map((laneIndex) => BRACKET_TOP_PADDING + laneIndex * BRACKET_ROW_STEP);
+}
+
+function buildLosersRoundPositions(
+  previousColumnSets: SetSnapshot[],
+  previousPositions: number[],
+  currentColumnSets: SetSnapshot[],
+): number[] {
+  const previousCount = previousPositions.length;
+  const currentCount = currentColumnSets.length;
+
+  if (previousCount === 0 || currentCount === 0) {
+    return [];
+  }
+
+  const fallback =
+    previousCount === currentCount * 2
+      ? averagePairPositions(previousPositions, currentCount)
+      : interpolateLanePositions(previousPositions, currentCount);
+
+  const previousSetIndexByEntrantId = new Map<string, number>();
+  previousColumnSets.forEach((set, setIndex) => {
+    set.slots.forEach((slot) => {
+      if (!slot.entrantId) {
+        return;
+      }
+      if (!previousSetIndexByEntrantId.has(slot.entrantId)) {
+        previousSetIndexByEntrantId.set(slot.entrantId, setIndex);
+      }
+    });
+  });
+
+  return currentColumnSets.map((set, currentIndex) => {
+    const sourceIndexes = Array.from(new Set(
+      set.slots
+        .map((slot) => (slot.entrantId ? previousSetIndexByEntrantId.get(slot.entrantId) : undefined))
+        .filter((value): value is number => value !== undefined),
+    )).sort((left, right) => left - right);
+
+    if (sourceIndexes.length >= 2) {
+      const first = sourceIndexes[0];
+      const second = sourceIndexes[1];
+      return (previousPositions[first] + previousPositions[second]) / 2;
+    }
+
+    if (sourceIndexes.length === 1) {
+      return previousPositions[sourceIndexes[0]];
+    }
+
+    return fallback[currentIndex] ?? (BRACKET_TOP_PADDING + currentIndex * BRACKET_ROW_STEP);
+  });
+}
+
+function buildWinnersExpandedRoundPositions(
+  previousColumnSets: SetSnapshot[],
+  previousPositions: number[],
+  currentColumnSets: SetSnapshot[],
+): number[] {
+  const previousCount = previousPositions.length;
+  const currentCount = currentColumnSets.length;
+
+  if (previousCount === 0 || currentCount === 0) {
+    return [];
+  }
+
+  const baseInterpolated = interpolateLanePositions(previousPositions, currentCount);
+  const expandedLaneIndexes = buildExpandedLaneIndexes(previousCount, currentCount);
+  const laneYByIndex = Array.from(
+    { length: currentCount },
+    (_, laneIndex) => BRACKET_TOP_PADDING + laneIndex * BRACKET_ROW_STEP,
+  );
+
+  const pickNearestFreeLane = (
+    preferredLane: number,
+    occupiedLanes: Set<number>,
+  ): number | null => {
+    if (!occupiedLanes.has(preferredLane)) {
+      return preferredLane;
+    }
+
+    for (let radius = 1; radius < currentCount; radius += 1) {
+      const left = preferredLane - radius;
+      if (left >= 0 && !occupiedLanes.has(left)) {
+        return left;
+      }
+
+      const right = preferredLane + radius;
+      if (right < currentCount && !occupiedLanes.has(right)) {
+        return right;
+      }
+    }
+
+    return null;
+  };
+
+  const previousSetIndexByEntrantId = new Map<string, number>();
+
+  previousColumnSets.forEach((set, setIndex) => {
+    set.slots.forEach((slot) => {
+      if (!slot.entrantId) {
+        return;
+      }
+      if (!previousSetIndexByEntrantId.has(slot.entrantId)) {
+        previousSetIndexByEntrantId.set(slot.entrantId, setIndex);
+      }
+    });
+  });
+
+  const occupiedLanes = new Set<number>();
+
+  const rawPositions = currentColumnSets.map((set, currentIndex) => {
+    const mapped = ((currentIndex + 0.5) * previousCount) / currentCount - 0.5;
+    const mappedLeft = clampIndex(Math.floor(mapped), 0, previousCount - 1);
+    let mappedRight = clampIndex(Math.ceil(mapped), 0, previousCount - 1);
+
+    if (mappedLeft === mappedRight && previousCount > 1) {
+      mappedRight = mappedLeft < previousCount - 1 ? mappedLeft + 1 : mappedLeft - 1;
+    }
+
+    const sourceIndexes = Array.from(new Set(
+      set.slots
+        .map((slot) => (slot.entrantId ? previousSetIndexByEntrantId.get(slot.entrantId) : undefined))
+        .filter((value): value is number => value !== undefined),
+    )).sort((left, right) => left - right);
+
+    const unresolvedSlotCount = set.slots.filter((slot) => slot.entrantId === null).length;
+
+    if (sourceIndexes.length >= 2) {
+      const first = sourceIndexes[0];
+      const second = sourceIndexes[1];
+      return (previousPositions[first] + previousPositions[second]) / 2;
+    }
+
+    if (sourceIndexes.length === 1) {
+      const sourceIndex = sourceIndexes[0];
+      const laneIndex = expandedLaneIndexes[sourceIndex];
+      if (laneIndex !== undefined) {
+        occupiedLanes.add(laneIndex);
+      }
+      return previousPositions[sourceIndex];
+    }
+
+    if (unresolvedSlotCount >= 2 && previousCount > 1) {
+      return (previousPositions[mappedLeft] + previousPositions[mappedRight]) / 2;
+    }
+
+    if (unresolvedSlotCount === 1) {
+      const anchor = clampIndex(Math.round(mapped), 0, previousCount - 1);
+      const anchorLane = expandedLaneIndexes[anchor] ?? anchor;
+      occupiedLanes.add(anchorLane);
+      return previousPositions[anchor];
+    }
+
+    // No carry-in source from previous round: place on an unused lane so the
+    // left side remains blank like start.gg byes.
+    if (unresolvedSlotCount === 0) {
+      const preferredLane = clampIndex(currentIndex, 0, currentCount - 1);
+      const selectedLane = pickNearestFreeLane(preferredLane, occupiedLanes);
+      if (selectedLane !== null) {
+        occupiedLanes.add(selectedLane);
+        return laneYByIndex[selectedLane] ?? (BRACKET_TOP_PADDING + selectedLane * BRACKET_ROW_STEP);
+      }
+      return baseInterpolated[currentIndex] ?? (BRACKET_TOP_PADDING + currentIndex * BRACKET_ROW_STEP);
+    }
+
+    return baseInterpolated[currentIndex] ?? (BRACKET_TOP_PADDING + currentIndex * BRACKET_ROW_STEP);
+  });
+
+  return rawPositions;
+}
+
 function interpolateLanePositions(previousPositions: number[], nextCount: number): number[] {
   if (nextCount <= 0) {
     return [];
@@ -124,27 +326,29 @@ function buildPositionedRoundColumns(
 ): PositionedRoundColumn[] {
   const positionedColumns: PositionedRoundColumn[] = [];
   let previousPositions: number[] | null = null;
+  let previousSets: SetSnapshot[] | null = null;
 
-  for (const column of columns) {
+  for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {
+    const column = columns[columnIndex];
+    const nextColumn = columns[columnIndex + 1];
     const setCount = column.sets.length;
     let lanePositions: number[] = [];
 
     if (setCount > 0) {
       if (!previousPositions) {
-        lanePositions = Array.from(
-          { length: setCount },
-          (_, index) => BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP,
-        );
-      } else if (sectionKey === "losers") {
-        if (previousPositions.length === setCount) {
-          // Merge rounds (winners drop-ins) stay horizontally aligned with previous losers matches.
-          lanePositions = [...previousPositions];
-        } else if (previousPositions.length === setCount * 2) {
-          // Only pure losers progression rounds are centered between the two previous losers cards.
-          lanePositions = averagePairPositions(previousPositions, setCount);
+        const nextCount = nextColumn?.sets.length ?? 0;
+        if (sectionKey === "winners" && nextCount > setCount) {
+          lanePositions = buildFirstWinnersColumnPositions(setCount, nextCount);
         } else {
-          lanePositions = interpolateLanePositions(previousPositions, setCount);
+          lanePositions = Array.from(
+            { length: setCount },
+            (_, index) => BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP,
+          );
         }
+      } else if (sectionKey === "losers" && previousSets) {
+        lanePositions = buildLosersRoundPositions(previousSets, previousPositions, column.sets);
+      } else if (previousPositions.length < setCount && previousSets) {
+        lanePositions = buildWinnersExpandedRoundPositions(previousSets, previousPositions, column.sets);
       } else if (previousPositions.length === setCount * 2) {
         lanePositions = averagePairPositions(previousPositions, setCount);
       } else {
@@ -172,6 +376,7 @@ function buildPositionedRoundColumns(
     });
 
     previousPositions = positionedSets.map((item) => item.y);
+    previousSets = column.sets;
   }
 
   return positionedColumns;
