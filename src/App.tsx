@@ -658,6 +658,8 @@ type CallThreadIdentity = {
 type CallTargetIdentity = {
   tournamentId: string;
   eventId: string;
+  phaseName: string;
+  phaseGroupName: string;
   setId: string;
   callEntrantId: string;
 };
@@ -667,6 +669,8 @@ type CallSyncStatusTarget = {
   senderUserId: string;
   tournamentId: string;
   eventId: string;
+  phaseName: string;
+  phaseGroupName: string;
   setId: string;
   callEntrantId: string;
 };
@@ -684,6 +688,8 @@ type CallListEventGroup = {
   tournamentName: string;
   eventName: string;
   eventId: string;
+  phaseName: string;
+  phaseGroupName: string;
   players: CallListPlayer[];
 };
 
@@ -787,6 +793,8 @@ type MessageScope = {
   tournamentId: string;
   slug: string;
   eventId: string;
+  phaseName: string;
+  phaseGroupName: string;
 };
 
 type MailboxDeliveryMode = "broadcast" | "direct";
@@ -905,18 +913,15 @@ function normalizeCallListColorSeconds(rawValue: unknown, fallback = CALL_LIST_C
 function formatCallElapsedTime(createdAt: string, referenceMs: number): string {
   const createdMs = Date.parse(createdAt);
   if (!Number.isFinite(createdMs)) {
-    return "00:00";
+    return "00時間00分経過";
   }
 
   const elapsedMs = Math.max(0, referenceMs - createdMs);
   const totalMinutes = Math.floor(elapsedMs / 60000);
-  if (totalMinutes >= 99 * 60 + 99) {
-    return "99:99";
-  }
   const elapsedHours = Math.floor(totalMinutes / 60);
   const elapsedMinutes = totalMinutes % 60;
 
-  return `${String(elapsedHours).padStart(2, "0")}:${String(elapsedMinutes).padStart(2, "0")}`;
+  return `${String(elapsedHours).padStart(2, "0")}時間${String(elapsedMinutes).padStart(2, "0")}分経過`;
 }
 
 function callElapsedSeconds(createdAt: string, referenceMs: number): number {
@@ -1213,6 +1218,8 @@ function buildScopedMessageMeta(
     merged.scopeTournamentId = scope.tournamentId;
     merged.scopeSlug = scope.slug;
     merged.scopeEventId = scope.eventId;
+    merged.scopePhaseName = scope.phaseName;
+    merged.scopePhaseGroupName = scope.phaseGroupName;
   }
 
   return Object.keys(merged).length > 0 ? merged : null;
@@ -1232,6 +1239,17 @@ function isMessageForScope(message: GenericMessage, scope: MessageScope | null):
   const scopeTournamentId = typeof source.scopeTournamentId === "string" ? source.scopeTournamentId.trim() : "";
   const scopeSlug = typeof source.scopeSlug === "string" ? source.scopeSlug.trim() : "";
   const scopeEventId = typeof source.scopeEventId === "string" ? source.scopeEventId.trim() : "";
+  const scopePhaseName = typeof source.scopePhaseName === "string"
+    ? source.scopePhaseName.trim()
+    : (typeof source.phaseName === "string" ? source.phaseName.trim() : "");
+  const scopePhaseGroupName = typeof source.scopePhaseGroupName === "string"
+    ? source.scopePhaseGroupName.trim()
+    : (typeof source.phaseGroupName === "string" ? source.phaseGroupName.trim() : "");
+
+  const hasScopePhase = scope.phaseName.trim() !== "";
+  const hasScopePhaseGroup = scope.phaseGroupName.trim() !== "";
+  const phaseMatches = !hasScopePhase || scopePhaseName === "" || scopePhaseName === scope.phaseName;
+  const phaseGroupMatches = !hasScopePhaseGroup || scopePhaseGroupName === "" || scopePhaseGroupName === scope.phaseGroupName;
 
   if (
     scopeEventId !== ""
@@ -1239,14 +1257,20 @@ function isMessageForScope(message: GenericMessage, scope: MessageScope | null):
     && (scopeTournamentId === "" || scopeTournamentId === scope.tournamentId)
     && (scopeSlug === "" || scopeSlug === scope.slug)
   ) {
-    return true;
+    return phaseMatches && phaseGroupMatches;
   }
 
   const legacyTournamentId = typeof source.tournamentId === "string" ? source.tournamentId.trim() : "";
   const legacyEventId = typeof source.eventId === "string" ? source.eventId.trim() : "";
 
   if (legacyEventId !== "" && legacyEventId === scope.eventId) {
-    return legacyTournamentId === "" || legacyTournamentId === scope.tournamentId;
+    return (legacyTournamentId === "" || legacyTournamentId === scope.tournamentId)
+      && phaseMatches
+      && phaseGroupMatches;
+  }
+
+  if (scopeEventId !== "" || legacyEventId !== "") {
+    return false;
   }
 
   return true;
@@ -1267,6 +1291,52 @@ function extractMetaString(meta: Record<string, unknown> | null, key: string): s
 
   const value = meta[key];
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeCallPhaseName(rawValue: string): string {
+  const trimmed = rawValue.trim();
+  return trimmed === "" ? "Phase 未設定" : trimmed;
+}
+
+function normalizeCallPhaseGroupName(rawValue: string): string {
+  const trimmed = rawValue.trim();
+  return trimmed === "" ? "Pool 未設定" : trimmed;
+}
+
+function parsePhasePoolKey(rawKey: string): { phaseName: string; phaseGroupName: string } | null {
+  const trimmed = rawKey.trim();
+  if (trimmed === "") {
+    return null;
+  }
+
+  const separatorIndex = trimmed.indexOf("::");
+  if (separatorIndex < 0) {
+    return null;
+  }
+
+  const phaseName = trimmed.slice(0, separatorIndex).trim();
+  const phaseGroupName = trimmed.slice(separatorIndex + 2).trim();
+  if (phaseName === "" || phaseGroupName === "") {
+    return null;
+  }
+
+  return {
+    phaseName,
+    phaseGroupName,
+  };
+}
+
+function extractCallPhasePoolMeta(meta: Record<string, unknown> | null): {
+  phaseName: string;
+  phaseGroupName: string;
+} {
+  const phaseName = extractMetaString(meta, "scopePhaseName") || extractMetaString(meta, "phaseName");
+  const phaseGroupName = extractMetaString(meta, "scopePhaseGroupName") || extractMetaString(meta, "phaseGroupName");
+
+  return {
+    phaseName: normalizeCallPhaseName(phaseName),
+    phaseGroupName: normalizeCallPhaseGroupName(phaseGroupName),
+  };
 }
 
 function extractCallThreadIdentity(rootMessage: GenericMessage | null): CallThreadIdentity | null {
@@ -1299,12 +1369,15 @@ function extractCallEventMeta(
   eventId: string;
   eventName: string;
   eventAlias: string;
+  phaseName: string;
+  phaseGroupName: string;
 } {
   const tournamentId = extractMetaString(rootMessage.messageMeta, "scopeTournamentId") || extractMetaString(rootMessage.messageMeta, "tournamentId");
   const tournamentName = extractMetaString(rootMessage.messageMeta, "tournamentName");
   const eventId = extractMetaString(rootMessage.messageMeta, "scopeEventId") || extractMetaString(rootMessage.messageMeta, "eventId");
   const eventName = extractMetaString(rootMessage.messageMeta, "eventName");
   const eventAlias = extractMetaString(rootMessage.messageMeta, "eventAlias");
+  const { phaseName, phaseGroupName } = extractCallPhasePoolMeta(rootMessage.messageMeta);
 
   return {
     tournamentId,
@@ -1312,6 +1385,8 @@ function extractCallEventMeta(
     eventId,
     eventName,
     eventAlias,
+    phaseName,
+    phaseGroupName,
   };
 }
 
@@ -1321,7 +1396,7 @@ function buildCallListDedupKey(rootMessage: GenericMessage): string {
     return rootMessage.threadId;
   }
 
-  return `${targetIdentity.tournamentId}::${targetIdentity.eventId}::${targetIdentity.setId}::${targetIdentity.callEntrantId}`;
+  return `${targetIdentity.tournamentId}::${targetIdentity.eventId}::${targetIdentity.phaseName}::${targetIdentity.phaseGroupName}::${targetIdentity.setId}::${targetIdentity.callEntrantId}`;
 }
 
 function extractCallTargetIdentityFromMeta(meta: Record<string, unknown> | null): CallTargetIdentity | null {
@@ -1329,6 +1404,7 @@ function extractCallTargetIdentityFromMeta(meta: Record<string, unknown> | null)
   const setId = extractMetaString(meta, "setId");
   const eventId = extractMetaString(meta, "scopeEventId") || extractMetaString(meta, "eventId");
   const tournamentId = extractMetaString(meta, "scopeTournamentId") || extractMetaString(meta, "tournamentId");
+  const { phaseName, phaseGroupName } = extractCallPhasePoolMeta(meta);
 
   if (tournamentId === "" || eventId === "" || callEntrantId === "" || setId === "") {
     return null;
@@ -1337,6 +1413,8 @@ function extractCallTargetIdentityFromMeta(meta: Record<string, unknown> | null)
   return {
     tournamentId,
     eventId,
+    phaseName,
+    phaseGroupName,
     setId,
     callEntrantId,
   };
@@ -1365,7 +1443,7 @@ function buildCallSyncStatusTargets(
         continue;
       }
 
-      const dedupKey = `${root.senderUserId}::${identity.tournamentId}::${identity.eventId}::${identity.setId}::${identity.callEntrantId}`;
+      const dedupKey = `${root.senderUserId}::${identity.tournamentId}::${identity.eventId}::${identity.phaseName}::${identity.phaseGroupName}::${identity.setId}::${identity.callEntrantId}`;
       if (dedupMap.has(dedupKey)) {
         continue;
       }
@@ -1375,6 +1453,8 @@ function buildCallSyncStatusTargets(
         senderUserId: root.senderUserId,
         tournamentId: identity.tournamentId,
         eventId: identity.eventId,
+        phaseName: identity.phaseName,
+        phaseGroupName: identity.phaseGroupName,
         setId: identity.setId,
         callEntrantId: identity.callEntrantId,
       });
@@ -1387,6 +1467,8 @@ function buildCallSyncStatusTargets(
 function isSameCallTargetIdentity(left: CallTargetIdentity, right: CallTargetIdentity): boolean {
   return left.tournamentId === right.tournamentId
     && left.eventId === right.eventId
+    && left.phaseName === right.phaseName
+    && left.phaseGroupName === right.phaseGroupName
     && left.setId === right.setId
     && left.callEntrantId === right.callEntrantId;
 }
@@ -1400,6 +1482,16 @@ function compareCallListEventGroup(left: CallListEventGroup, right: CallListEven
   const byEventName = left.eventName.localeCompare(right.eventName, "ja");
   if (byEventName !== 0) {
     return byEventName;
+  }
+
+  const byPhaseName = left.phaseName.localeCompare(right.phaseName, "ja");
+  if (byPhaseName !== 0) {
+    return byPhaseName;
+  }
+
+  const byPhaseGroupName = left.phaseGroupName.localeCompare(right.phaseGroupName, "ja");
+  if (byPhaseGroupName !== 0) {
+    return byPhaseGroupName;
   }
 
   return left.tournamentName.localeCompare(right.tournamentName, "ja");
@@ -2365,7 +2457,12 @@ function App() {
           setToken(savedToken);
         }
 
-        const savedSelection = await invoke<{ slug: string; eventId: string } | null>(
+        const savedSelection = await invoke<{
+          slug: string;
+          eventId: string;
+          phaseName?: string | null;
+          phaseGroupName?: string | null;
+        } | null>(
           "load_last_snapshot_selection",
         );
         if (
@@ -2376,9 +2473,21 @@ function App() {
         ) {
           const savedSlug = savedSelection.slug.trim();
           const savedEventId = savedSelection.eventId.trim();
+          const savedPhaseName = typeof savedSelection.phaseName === "string"
+            ? savedSelection.phaseName.trim()
+            : "";
+          const savedPhaseGroupName = typeof savedSelection.phaseGroupName === "string"
+            ? savedSelection.phaseGroupName.trim()
+            : "";
           startupSavedSlugRef.current = savedSlug;
           startupSavedEventIdRef.current = savedEventId;
           setSelectedEventId(savedEventId);
+          if (savedPhaseName !== "") {
+            setSelectedPhaseName(savedPhaseName);
+          }
+          if (savedPhaseName !== "" && savedPhaseGroupName !== "") {
+            setSelectedPhasePoolKey(`${savedPhaseName}::${savedPhaseGroupName}`);
+          }
           setSlug(toSlugInput(savedSlug));
         }
 
@@ -2991,12 +3100,18 @@ function App() {
       return null;
     }
 
+    const parsedPhasePool = parsePhasePoolKey(selectedPhasePoolKey);
+    const selectedPhase = parsedPhasePool?.phaseName ?? selectedPhaseName.trim();
+    const selectedPhaseGroup = parsedPhasePool?.phaseGroupName ?? "";
+
     return {
       tournamentId: snapshot.tournamentId,
       slug: snapshot.slug,
       eventId: selectedEvent.eventId,
+      phaseName: selectedPhase,
+      phaseGroupName: selectedPhaseGroup,
     };
-  }, [selectedEvent, snapshot]);
+  }, [selectedEvent, selectedPhaseName, selectedPhasePoolKey, snapshot]);
 
   const scopedGenericMessages = useMemo(() => {
     return genericMessages.filter((message) => isMessageForScope(message, selectedMessageScope));
@@ -3031,8 +3146,19 @@ function App() {
       return;
     }
 
-    const selectionKey = `${toSlugInput(snapshot.slug)}::${selectedEvent.eventId.trim()}`;
-    if (selectionKey === "::" || selectionKey === lastPersistedSnapshotSelectionRef.current) {
+    const slugKey = toSlugInput(snapshot.slug);
+    const eventIdKey = selectedEvent.eventId.trim();
+    if (slugKey === "" || eventIdKey === "") {
+      return;
+    }
+
+    const selectionKey = [
+      slugKey,
+      eventIdKey,
+      selectedMessageScope?.phaseName.trim() ?? "",
+      selectedMessageScope?.phaseGroupName.trim() ?? "",
+    ].join("::");
+    if (selectionKey === lastPersistedSnapshotSelectionRef.current) {
       return;
     }
 
@@ -3040,11 +3166,13 @@ function App() {
     void invoke("save_last_snapshot_selection", {
       slug: snapshot.slug,
       eventId: selectedEvent.eventId,
+      phaseName: selectedMessageScope?.phaseName ?? null,
+      phaseGroupName: selectedMessageScope?.phaseGroupName ?? null,
     }).catch((err) => {
       lastPersistedSnapshotSelectionRef.current = "";
       setError(String(err));
     });
-  }, [selectedEvent, snapshot]);
+  }, [selectedEvent, selectedMessageScope, snapshot]);
 
   const selectedEventSettingKey = useMemo(() => {
     if (!snapshot || !selectedEvent) {
@@ -3421,12 +3549,16 @@ function App() {
       const eventAlias = eventMeta.eventAlias;
       const eventName = eventMeta.eventName;
       const tournamentName = eventMeta.tournamentName;
+      const phaseName = eventMeta.phaseName;
+      const phaseGroupName = eventMeta.phaseGroupName;
       const groupKey = [
         eventMeta.tournamentId,
         tournamentName,
         eventMeta.eventId,
         eventName,
         eventAlias,
+        phaseName,
+        phaseGroupName,
       ].join("::") || "__unknown__";
       const found = groups.get(groupKey);
 
@@ -3444,6 +3576,8 @@ function App() {
           tournamentName,
           eventName,
           eventId: eventMeta.eventId,
+          phaseName,
+          phaseGroupName,
           players: [{
             threadId: root.threadId,
             entrantName,
@@ -3762,6 +3896,8 @@ function App() {
     && !activeThreadResolved
     && isSenderProfileReadyForMessaging
     && normalizedReplyBody !== "";
+  const canDeleteActiveThread = !!activeThread
+    && activeThread.senderUserId.trim() !== senderProfile.senderUserId.trim();
   const canBroadcastCallListSync = senderProfile.senderName.trim() !== ""
     && isValidSenderUserId(senderProfile.senderUserId)
     && isValidIpv4(senderProfile.bindIp)
@@ -4463,6 +4599,13 @@ function App() {
       return;
     }
 
+    if (activeThread.senderUserId.trim() === senderProfile.senderUserId.trim()) {
+      const warningMessage = "自分が発行したスレッドは削除できません。完了時は「解決」を送信してください。";
+      window.alert(warningMessage);
+      setError(warningMessage);
+      return;
+    }
+
     const confirmed = window.confirm(`「${activeThread.subject}」のスレッドを削除しますか？\nこのスレッド内の全メッセージが削除されます。`);
     if (!confirmed) {
       return;
@@ -4502,20 +4645,6 @@ function App() {
       return;
     }
 
-    const normalizedSenderUserId = senderProfile.senderUserId.trim();
-    const ownCallRoots = genericMessages.filter((item) =>
-      item.parentMessageId === null
-      && item.method === "call_player"
-      && item.senderUserId.trim() === normalizedSenderUserId
-    );
-    const ownUnresolvedThreadIds = new Set(
-      ownCallRoots
-        .filter((root) => !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve"))
-        .map((root) => root.threadId),
-    );
-    const ownUnresolvedThreadMessages = genericMessages.filter((item) => ownUnresolvedThreadIds.has(item.threadId));
-    const restoredMessageIds = new Set(ownUnresolvedThreadMessages.map((item) => item.messageId));
-
     const deletedMessageIds = genericMessages
       .filter((item) => callThreadIds.has(item.threadId))
       .map((item) => item.messageId);
@@ -4523,30 +4652,19 @@ function App() {
 
     setError("");
     setMessage("");
-    setGenericMessages((current) => {
-      const kept = current.filter((item) => !callThreadIds.has(item.threadId));
-      const merged = [
-        ...ownUnresolvedThreadMessages,
-        ...kept.filter((item) => !restoredMessageIds.has(item.messageId)),
-      ];
-      return merged.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-    });
-    setMailboxReadMessageIds((current) =>
-      current.filter((messageId) => !deletedMessageIdSet.has(messageId) || restoredMessageIds.has(messageId))
-    );
+    setGenericMessages((current) => current.filter((item) => !callThreadIds.has(item.threadId)));
+    setMailboxReadMessageIds((current) => current.filter((messageId) => !deletedMessageIdSet.has(messageId)));
 
-    if (selectedThreadId !== "" && callThreadIds.has(selectedThreadId) && !ownUnresolvedThreadIds.has(selectedThreadId)) {
+    if (selectedThreadId !== "" && callThreadIds.has(selectedThreadId)) {
       setSelectedThreadId("");
       setReplyBodyDraft("");
     }
 
-    if (dqDialog && callThreadIds.has(dqDialog.threadId) && !ownUnresolvedThreadIds.has(dqDialog.threadId)) {
+    if (dqDialog && callThreadIds.has(dqDialog.threadId)) {
       setDqDialog(null);
     }
 
-    setMessage(
-      `呼び出し一覧を全クリアしました（${callThreadIds.size}スレッド）。自分が発行した未解決 ${ownUnresolvedThreadIds.size} スレッドを状態判定して復元しました。`,
-    );
+    setMessage(`呼び出し一覧を全クリアしました（${callThreadIds.size}スレッド）。`);
   }
 
   async function sendCallMessageFromMatch(slot: SetSlot, entrantId: string) {
@@ -4564,6 +4682,8 @@ function App() {
       const targetSetId = activeMatch.setId;
       const playerId = await deriveEncryptedPlayerId(snapshot.tournamentId, selectedEvent.eventId, entrantId);
       const eventAlias = selectedEventMeta?.eventAlias?.trim() || selectedEvent.name;
+      const phaseName = normalizeCallPhaseName(activeMatch.phaseName ?? "");
+      const phaseGroupName = normalizeCallPhaseGroupName(activeMatch.phaseGroupName ?? "");
       const senderLine = senderProfile.senderName.trim() !== ""
         && isValidSenderUserId(senderProfile.senderUserId)
         && isValidIpv4(senderProfile.bindIp)
@@ -4577,10 +4697,11 @@ function App() {
         `entrantID: ${entrantId}`,
         `イベントエイリアス: ${eventAlias}`,
         `呼び出し元 tournament/event: ${snapshot.name} / ${selectedEvent.name}`,
+        `呼び出し元 phase/pool: ${phaseName} / ${phaseGroupName}`,
       ].join("\n");
 
       setComposeMessageMeta({
-        callId: `${snapshot.tournamentId}:${selectedEvent.eventId}:${targetSetId}:${entrantId}`,
+        callId: `${snapshot.tournamentId}:${selectedEvent.eventId}:${phaseName}:${phaseGroupName}:${targetSetId}:${entrantId}`,
         playerId,
         callEntrantId: entrantId,
         callEntrantName: slot.entrantName,
@@ -4589,6 +4710,8 @@ function App() {
         eventId: selectedEvent.eventId,
         eventName: selectedEvent.name,
         eventAlias,
+        phaseName,
+        phaseGroupName,
         setId: targetSetId,
       });
       setMailboxMethodDraft("call_player");
@@ -8437,7 +8560,7 @@ function App() {
                         <button type="button" className="ghost" onClick={() => void resolveActiveThread()} disabled={!canResolveActiveThread}>
                           解決
                         </button>
-                        <button type="button" className="ghost" onClick={deleteActiveThread} disabled={!activeThread}>
+                        <button type="button" className="ghost" onClick={deleteActiveThread} disabled={!canDeleteActiveThread}>
                           スレッド削除
                         </button>
                       </div>
@@ -8484,15 +8607,20 @@ function App() {
                   <article className="event-list-item" key={`call-list-${group.key}`}>
                     <div className="event-list-head">
                       <p className="call-list-event-summary">
-                        <span className="call-list-event-alias">{group.eventAlias !== "" ? group.eventAlias : "(イベントエイリアス未設定)"}</span>
+                        <span className="call-list-event-alias">
+                          {group.eventAlias !== "" ? group.eventAlias : "(イベントエイリアス未設定)"}
+                          {" / "}
+                          {group.phaseName !== "" ? group.phaseName : "-"}
+                          {" / "}
+                          {group.phaseGroupName !== "" ? group.phaseGroupName : "-"}
+                        </span>
                         <span className="call-list-event-detail">
-                          {"("}
                           {group.tournamentName !== "" ? group.tournamentName : "-"}
                           {" / "}
                           {group.eventName !== "" ? group.eventName : "-"}
                           {" [eventId:"}
                           {group.eventId !== "" ? group.eventId : "-"}
-                          {"])"}
+                          {"]"}
                         </span>
                       </p>
                       <span className="meta">{group.players.length} 件</span>
@@ -8523,7 +8651,7 @@ function App() {
                         <span className="call-list-player-chip" key={`${group.key}-${player.threadId}`} style={chipStyle}>
                           <span className="call-list-player-chip-name">{player.entrantName}</span>
                           <span className="call-list-player-chip-elapsed">
-                            経過 {formatCallElapsedTime(player.createdAt, callListPageSwitchedAtMs)}
+                            {formatCallElapsedTime(player.createdAt, callListPageSwitchedAtMs)}
                           </span>
                         </span>
                         );

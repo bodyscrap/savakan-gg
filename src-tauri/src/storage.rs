@@ -32,6 +32,10 @@ const EVENT_SETTING_CATEGORY_SLOT_COUNT: usize = 3;
 pub struct LastSnapshotSelection {
     pub slug: String,
     pub event_id: String,
+    #[serde(default)]
+    pub phase_name: Option<String>,
+    #[serde(default)]
+    pub phase_group_name: Option<String>,
 }
 
 fn sanitize_slug(slug: &str) -> String {
@@ -532,11 +536,19 @@ pub fn save_last_snapshot_selection(
     app: &AppHandle,
     slug: &str,
     event_id: &str,
+    phase_name: Option<&str>,
+    phase_group_name: Option<&str>,
 ) -> Result<(), String> {
     let path = last_snapshot_selection_path(app)?;
     let payload = LastSnapshotSelection {
         slug: slug.trim().to_owned(),
         event_id: event_id.trim().to_owned(),
+        phase_name: phase_name
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty()),
+        phase_group_name: phase_group_name
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty()),
     };
 
     let json = serde_json::to_string_pretty(&payload)
@@ -665,6 +677,8 @@ pub fn save_generic_messages(app: &AppHandle, messages: &[GenericMessage]) -> Re
 struct CallMessageIdentity {
     tournament_id: String,
     event_id: String,
+    phase_name: String,
+    phase_group_name: String,
     set_id: String,
     entrant_id: String,
 }
@@ -697,6 +711,32 @@ fn call_message_identity(message: &GenericMessage) -> Option<CallMessageIdentity
             message_meta_string(meta, "eventId")
         }
     };
+    let phase_name = {
+        let scoped = message_meta_string(meta, "scopePhaseName");
+        let legacy = if scoped.is_empty() {
+            message_meta_string(meta, "phaseName")
+        } else {
+            scoped
+        };
+        if legacy.is_empty() {
+            "Phase 未設定".to_owned()
+        } else {
+            legacy
+        }
+    };
+    let phase_group_name = {
+        let scoped = message_meta_string(meta, "scopePhaseGroupName");
+        let legacy = if scoped.is_empty() {
+            message_meta_string(meta, "phaseGroupName")
+        } else {
+            scoped
+        };
+        if legacy.is_empty() {
+            "Pool 未設定".to_owned()
+        } else {
+            legacy
+        }
+    };
 
     if tournament_id.is_empty() || event_id.is_empty() || set_id.is_empty() || entrant_id.is_empty() {
         return None;
@@ -705,6 +745,8 @@ fn call_message_identity(message: &GenericMessage) -> Option<CallMessageIdentity
     Some(CallMessageIdentity {
         tournament_id,
         event_id,
+        phase_name,
+        phase_group_name,
         set_id,
         entrant_id,
     })
@@ -713,6 +755,8 @@ fn call_message_identity(message: &GenericMessage) -> Option<CallMessageIdentity
 fn call_identity_matches(left: &CallMessageIdentity, right: &CallMessageIdentity) -> bool {
     left.tournament_id == right.tournament_id
         && left.event_id == right.event_id
+    && left.phase_name == right.phase_name
+    && left.phase_group_name == right.phase_group_name
         && left.set_id == right.set_id
         && left.entrant_id == right.entrant_id
 }

@@ -1059,6 +1059,12 @@ fn parse_call_sync_status_targets(meta: Option<&serde_json::Value>) -> Vec<CallS
             let sender_user_id = get_str("senderUserId")?;
             let tournament_id = get_str("scopeTournamentId").or_else(|| get_str("tournamentId"))?;
             let event_id = get_str("scopeEventId").or_else(|| get_str("eventId"))?;
+            let phase_name = get_str("scopePhaseName")
+                .or_else(|| get_str("phaseName"))
+                .unwrap_or_else(|| "Phase 未設定".to_owned());
+            let phase_group_name = get_str("scopePhaseGroupName")
+                .or_else(|| get_str("phaseGroupName"))
+                .unwrap_or_else(|| "Pool 未設定".to_owned());
             let set_id = get_str("setId")?;
             let call_entrant_id = get_str("callEntrantId")?;
 
@@ -1068,6 +1074,8 @@ fn parse_call_sync_status_targets(meta: Option<&serde_json::Value>) -> Vec<CallS
                 identity: CallTargetIdentity {
                     tournament_id,
                     event_id,
+                    phase_name,
+                    phase_group_name,
                     set_id,
                     call_entrant_id,
                 },
@@ -1369,6 +1377,8 @@ fn validate_thread_open_for_reply(app: &tauri::AppHandle, thread_id: &str) -> Re
 struct CallTargetIdentity {
     tournament_id: String,
     event_id: String,
+    phase_name: String,
+    phase_group_name: String,
     set_id: String,
     call_entrant_id: String,
 }
@@ -1378,12 +1388,20 @@ fn extract_call_target_identity(meta: Option<&serde_json::Value>) -> Option<Call
         .or_else(|| meta_string(meta, "tournamentId"))?;
     let event_id = meta_string(meta, "scopeEventId")
         .or_else(|| meta_string(meta, "eventId"))?;
+    let phase_name = meta_string(meta, "scopePhaseName")
+        .or_else(|| meta_string(meta, "phaseName"))
+        .unwrap_or_else(|| "Phase 未設定".to_owned());
+    let phase_group_name = meta_string(meta, "scopePhaseGroupName")
+        .or_else(|| meta_string(meta, "phaseGroupName"))
+        .unwrap_or_else(|| "Pool 未設定".to_owned());
     let set_id = meta_string(meta, "setId")?;
     let call_entrant_id = meta_string(meta, "callEntrantId")?;
 
     Some(CallTargetIdentity {
         tournament_id,
         event_id,
+        phase_name,
+        phase_group_name,
         set_id,
         call_entrant_id,
     })
@@ -1392,6 +1410,8 @@ fn extract_call_target_identity(meta: Option<&serde_json::Value>) -> Option<Call
 fn call_target_identity_matches(left: &CallTargetIdentity, right: &CallTargetIdentity) -> bool {
     left.tournament_id == right.tournament_id
         && left.event_id == right.event_id
+        && left.phase_name == right.phase_name
+        && left.phase_group_name == right.phase_group_name
         && left.set_id == right.set_id
         && left.call_entrant_id == right.call_entrant_id
 }
@@ -1616,8 +1636,16 @@ fn save_last_snapshot_selection(
     app: tauri::AppHandle,
     slug: String,
     event_id: String,
+    phase_name: Option<String>,
+    phase_group_name: Option<String>,
 ) -> Result<(), String> {
-    storage::save_last_snapshot_selection(&app, &slug, &event_id)
+    storage::save_last_snapshot_selection(
+        &app,
+        &slug,
+        &event_id,
+        phase_name.as_deref(),
+        phase_group_name.as_deref(),
+    )
 }
 
 #[tauri::command]
