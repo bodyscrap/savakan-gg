@@ -2415,10 +2415,12 @@ function App() {
   const [callListPageRotateSeconds, setCallListPageRotateSeconds] = useState(CALL_LIST_ROTATE_SECONDS_DEFAULT);
   const [callListColorSeconds, setCallListColorSeconds] = useState(CALL_LIST_COLOR_SECONDS_DEFAULT);
   const [callListEventSortStrategy, setCallListEventSortStrategy] = useState<CallListEventSortStrategy>("alias");
+  const [callListFocusOwnUnresolved, setCallListFocusOwnUnresolved] = useState(false);
   const [displayBracketPlayersBySide, setDisplayBracketPlayersBySide] = useState(false);
   const [callListPageSwitchedAtMs, setCallListPageSwitchedAtMs] = useState(() => Date.now());
   const [callListProgressNowMs, setCallListProgressNowMs] = useState(() => Date.now());
   const [callListDisplayGroups, setCallListDisplayGroups] = useState<CallListEventGroup[]>([]);
+  const [callListRebuildToken, setCallListRebuildToken] = useState(0);
   const [callListCycleCount, setCallListCycleCount] = useState(0);
   const [mailboxServiceStarted, setMailboxServiceStarted] = useState(false);
   const [callingEntrantId, setCallingEntrantId] = useState("");
@@ -3204,9 +3206,22 @@ function App() {
     };
   }, [selectedEvent, selectedPhaseName, selectedPhasePoolKey, snapshot]);
 
+  const selectedMailboxScope = useMemo<MessageScope | null>(() => {
+    if (!selectedMessageScope) {
+      return null;
+    }
+
+    // メッセージボックスは同一イベント内を横断表示する。
+    return {
+      ...selectedMessageScope,
+      phaseName: "",
+      phaseGroupName: "",
+    };
+  }, [selectedMessageScope]);
+
   const scopedGenericMessages = useMemo(() => {
-    return genericMessages.filter((message) => isMessageForScope(message, selectedMessageScope));
-  }, [genericMessages, selectedMessageScope]);
+    return genericMessages.filter((message) => isMessageForScope(message, selectedMailboxScope));
+  }, [genericMessages, selectedMailboxScope]);
 
   const selectedEventItemListSnapshots = useMemo(() => {
     if (!selectedEventMeta?.eventManagement?.itemListSnapshots) {
@@ -3614,6 +3629,7 @@ function App() {
       item.parentMessageId === null
       && item.method === "call_player"
       && item.messageType === "normal"
+      && (!callListFocusOwnUnresolved || item.senderUserId.trim() === senderProfile.senderUserId.trim())
     );
 
     const groups = new Map<string, CallListEventGroup>();
@@ -3626,10 +3642,12 @@ function App() {
       }
 
       const dedupKey = buildCallListDedupKey(root);
-      if (dedupKeys.has(dedupKey)) {
-        continue;
+      if (!callListFocusOwnUnresolved) {
+        if (dedupKeys.has(dedupKey)) {
+          continue;
+        }
+        dedupKeys.add(dedupKey);
       }
-      dedupKeys.add(dedupKey);
 
       const callIdentity = extractCallThreadIdentity(root);
       const entrantName = callIdentity?.callEntrantName
@@ -3686,7 +3704,7 @@ function App() {
           .slice()
           .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
       }));
-  }, [genericMessages]);
+  }, [callListFocusOwnUnresolved, genericMessages, senderProfile.senderUserId]);
 
   const callListEventGroupComparator = useMemo(() => {
     if (callListEventSortStrategy === "max-elapsed") {
@@ -3720,13 +3738,32 @@ function App() {
 
       return next;
     });
-  }, [callListEventGroupComparator, unresolvedCallEventGroupsLatest, unresolvedCallEventGroupsLatestMap]);
+  }, [callListEventGroupComparator, callListRebuildToken, unresolvedCallEventGroupsLatest, unresolvedCallEventGroupsLatestMap]);
 
   useEffect(() => {
     setCallListDisplayGroups((current) => current.slice().sort(callListEventGroupComparator));
   }, [callListEventGroupComparator]);
 
   const unresolvedCallEventGroups = callListDisplayGroups;
+
+  const unresolvedCallRootCounts = useMemo(() => {
+    const unresolvedRoots = genericMessages.filter((root) =>
+      root.parentMessageId === null
+      && root.method === "call_player"
+      && root.messageType === "normal"
+      && !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve")
+    );
+
+    const ownUnresolvedCount = unresolvedRoots.filter(
+      (root) => root.senderUserId.trim() === senderProfile.senderUserId.trim(),
+    ).length;
+
+    return {
+      total: unresolvedRoots.length,
+      own: ownUnresolvedCount,
+      hidden: Math.max(0, unresolvedRoots.length - ownUnresolvedCount),
+    };
+  }, [genericMessages, senderProfile.senderUserId]);
 
   const unresolvedCallEventPages = useMemo(() => {
     if (unresolvedCallEventGroups.length === 0) {
@@ -3752,9 +3789,6 @@ function App() {
   const normalizedCallListPageProgressPercent = unresolvedCallEventPages.length === 0
     ? 0
     : Math.max(0, Math.min(100, (elapsedFromPageSwitchMs / callListRotateMs) * 100));
-  const callListRotateRemainingSeconds = unresolvedCallEventPages.length === 0
-    ? 0
-    : Math.max(0, callListRotateSeconds * (1 - normalizedCallListPageProgressPercent / 100));
 
   const createSnapshotProgressPercent = useMemo(() => {
     if (!createSnapshotProgress) {
@@ -4038,8 +4072,10 @@ function App() {
     && !activeThreadResolved
     && isSenderProfileReadyForMessaging
     && normalizedReplyBody !== "";
+  const isOwnActiveThread = !!activeThread
+    && activeThread.senderUserId.trim() === senderProfile.senderUserId.trim();
   const canDeleteActiveThread = !!activeThread
-    && activeThread.senderUserId.trim() !== senderProfile.senderUserId.trim();
+    && (!isOwnActiveThread || activeThreadResolved);
   const canBroadcastCallListSync = senderProfile.senderName.trim() !== ""
     && isValidSenderUserId(senderProfile.senderUserId)
     && isValidIpv4(senderProfile.bindIp)
@@ -4689,6 +4725,15 @@ function App() {
     }
 
     try {
+      setCallListFocusOwnUnresolved(false);
+      // 同期開始時は表示キャッシュを破棄し、取得結果で最新状態に再構築する。
+      setCallListDisplayGroups([]);
+      setCallListRebuildToken((current) => current + 1);
+      setCallListPageIndex(0);
+      setCallListCycleCount(0);
+      setCallListPageSwitchedAtMs(Date.now());
+      setCallListProgressNowMs(Date.now());
+
       await invoke<GenericMessage>("send_mailbox_message", {
         input: {
           profile: senderProfile,
@@ -4741,8 +4786,8 @@ function App() {
       return;
     }
 
-    if (activeThread.senderUserId.trim() === senderProfile.senderUserId.trim()) {
-      const warningMessage = "自分が発行したスレッドは削除できません。完了時は「解決」を送信してください。";
+    if (activeThread.senderUserId.trim() === senderProfile.senderUserId.trim() && !activeThreadResolved) {
+      const warningMessage = "自分が発行した未解決スレッドは削除できません。先に「解決」を送信してください。";
       window.alert(warningMessage);
       setError(warningMessage);
       return;
@@ -4768,45 +4813,89 @@ function App() {
   }
 
   function clearCallListThreads() {
-    const callThreadIds = new Set(
-      genericMessages
-        .filter((item) => item.parentMessageId === null && item.method === "call_player")
-        .map((item) => item.threadId),
+    const callRoots = genericMessages.filter((item) =>
+      item.parentMessageId === null
+      && item.method === "call_player"
+      && item.messageType === "normal"
     );
-
-    if (callThreadIds.size === 0) {
-      setError("");
-      setMessage("クリア対象の呼び出しスレッドはありません。");
-      return;
-    }
+    const callThreadIds = new Set(callRoots.map((item) => item.threadId));
 
     const confirmed = window.confirm(
-      `呼び出し一覧に関連するスレッド ${callThreadIds.size} 件を全削除します。\nこの操作は元に戻せません。実行しますか？`,
+      "呼び出しリスト表示をいったん全クリアします。\n通常は自分が開始した未解決呼び出しのみ再表示し、0件の場合は全未解決を表示します。\nメッセージデータ自体は削除しません。実行しますか？",
     );
     if (!confirmed) {
       return;
     }
 
-    const deletedMessageIds = genericMessages
-      .filter((item) => callThreadIds.has(item.threadId))
-      .map((item) => item.messageId);
-    const deletedMessageIdSet = new Set(deletedMessageIds);
+    const ownUnresolvedRoots = callRoots.filter((root) =>
+      root.senderUserId.trim() === senderProfile.senderUserId.trim()
+      && !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve")
+    );
+    const focusOwn = ownUnresolvedRoots.length > 0;
+    const hiddenUnresolvedCount = Math.max(0, callRoots.filter((root) =>
+      !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve")
+    ).length - ownUnresolvedRoots.length);
 
     setError("");
     setMessage("");
-    setGenericMessages((current) => current.filter((item) => !callThreadIds.has(item.threadId)));
-    setMailboxReadMessageIds((current) => current.filter((messageId) => !deletedMessageIdSet.has(messageId)));
+    // まず表示中の呼び出しリストだけを空にしてから、再描画ルールを切り替える。
+    setCallListDisplayGroups([]);
+    setCallListRebuildToken((current) => current + 1);
+    setCallListFocusOwnUnresolved(focusOwn);
+    setCallListPageIndex(0);
+    setCallListCycleCount(0);
+    setCallListPageSwitchedAtMs(Date.now());
+    setCallListProgressNowMs(Date.now());
 
-    if (selectedThreadId !== "" && callThreadIds.has(selectedThreadId)) {
-      setSelectedThreadId("");
-      setReplyBodyDraft("");
+    const hiddenText = focusOwn && hiddenUnresolvedCount > 0
+      ? ` / 非表示(他ユーザー起点) ${hiddenUnresolvedCount} 件`
+      : "";
+    if (focusOwn) {
+      setMessage(`呼び出しリストを全クリア後、自分が開始した未解決スレッド ${ownUnresolvedRoots.length} 件を再表示しました${hiddenText}（全呼び出しスレッド ${callThreadIds.size} 件は保持）。`);
+      return;
     }
 
-    if (dqDialog && callThreadIds.has(dqDialog.threadId)) {
-      setDqDialog(null);
+    const allUnresolvedCount = callRoots.filter((root) =>
+      !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve")
+    ).length;
+    setMessage(`呼び出しリストを全クリア後、自分起点の未解決が0件だったため全未解決表示に切り替えました（未解決 ${allUnresolvedCount} 件 / 全呼び出しスレッド ${callThreadIds.size} 件保持）。`);
+  }
+
+  function forceClearMailboxMessages() {
+    if (genericMessages.length === 0) {
+      setError("");
+      setMessage("削除対象のメッセージはありません。");
+      return;
     }
 
-    setMessage(`呼び出し一覧を全クリアしました（${callThreadIds.size}スレッド）。`);
+    const firstConfirmed = window.confirm(
+      `危険: メッセージボックス内の全メッセージ ${genericMessages.length} 件を強制削除します。\nこの操作は元に戻せません。続行しますか？`,
+    );
+    if (!firstConfirmed) {
+      return;
+    }
+
+    const guardWord = window.prompt("最終確認: 強制削除を実行するには DELETE と入力してください。", "");
+    if ((guardWord ?? "").trim() !== "DELETE") {
+      setError("確認文字列が一致しなかったため、メッセージボックスの強制クリアを中止しました。");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    setGenericMessages([]);
+    setMailboxReadMessageIds([]);
+    setSelectedThreadId("");
+    setReplyBodyDraft("");
+    setDqDialog(null);
+    setCallListDisplayGroups([]);
+    setCallListFocusOwnUnresolved(false);
+    setCallListPageIndex(0);
+    setCallListCycleCount(0);
+    setCallListPageSwitchedAtMs(Date.now());
+    setCallListProgressNowMs(Date.now());
+
+    setMessage(`メッセージボックスを強制クリアしました（${genericMessages.length} 件削除）。`);
   }
 
   async function sendCallMessageFromMatch(slot: SetSlot, entrantId: string) {
@@ -7823,7 +7912,7 @@ function App() {
           {activeTab === "call-list" ? (
             <>
               <div className="hero-call-list-head">
-                <h2 className="call-list-hero-title">プレイヤー呼び出し</h2>
+                <h2 className="call-list-hero-title">プレイヤー呼び出し(イベント名/フェーズ名/プール名)</h2>
                 <p className="call-list-page-big">{callListCurrentPage}/{callListTotalPages}</p>
               </div>
               <div className="hero-call-list-toolbar">
@@ -7880,9 +7969,6 @@ function App() {
                       style={{ width: `${normalizedCallListPageProgressPercent}%` }}
                     />
                   </div>
-                  <p className="call-list-rotate-progress-meta">
-                    次のページ切替まで {callListRotateRemainingSeconds.toFixed(1)} 秒
-                  </p>
                 </div>
               )}
             </>
@@ -7891,8 +7977,7 @@ function App() {
               <h2>{activeTab === "create" ? "新規作成" : (APP_TABS.find((tab) => tab.id === activeTab)?.label ?? "大会管理")}</h2>
               {activeTab !== "create" && (
                 <>
-                  <p className="eyebrow">Tournament Workspace</p>
-                  <p className="description">start.gg とローカル保存データを統合して運用します。</p>
+                  <p className="description">start.ggのローカルスナップショットをベースにした大会データ単位で管理</p>
                 </>
               )}
             </>
@@ -7906,10 +7991,6 @@ function App() {
 
         {activeTab === "home" && (
           <section className="panel">
-            <h2>大会一覧</h2>
-
-            <p className="meta">ローカルスナップショット作成済みのイベントを選択します。</p>
-
             <div className="panel-toolbar compact">
               <p className="meta">件数: {localSnapshotEvents.length}</p>
               <button
@@ -8833,10 +8914,34 @@ function App() {
       {activeTab === "call-list" && (
         <>
           <section className="panel call-list-panel">
-            <p className="meta">ページ切替間隔: {callListRotateSeconds} 秒</p>
-
             {unresolvedCallEventGroups.length === 0 ? (
-              <p className="meta">現在未解決の呼び出しはありません。</p>
+              <div style={{ display: "grid", gap: "0.5rem" }}>
+                <p className="meta">現在未解決の呼び出しはありません。</p>
+                {callListFocusOwnUnresolved && unresolvedCallRootCounts.hidden > 0 && (
+                  <>
+                    <p className="meta">
+                      他ユーザー起点の未解決呼び出し {unresolvedCallRootCounts.hidden} 件は、全クリア後の自分起点フィルタにより非表示です。
+                    </p>
+                    <div>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => {
+                          setCallListFocusOwnUnresolved(false);
+                          setCallListDisplayGroups([]);
+                          setCallListPageIndex(0);
+                          setCallListCycleCount(0);
+                          setCallListPageSwitchedAtMs(Date.now());
+                          setCallListProgressNowMs(Date.now());
+                          setMessage("呼び出しリストを全未解決表示に戻しました。");
+                        }}
+                      >
+                        全未解決を表示する
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             ) : (
               <div className="call-list-event-grid">
                 {activeUnresolvedCallEventPage.map((group) => (
@@ -9434,8 +9539,8 @@ function App() {
 
           <section className="panel">
             <h2>呼び出しリスト管理</h2>
-            <p className="meta">他PCの切断や大会切替に備えて、次の大会開始前に呼び出し一覧を全クリアできます。</p>
-            <p className="meta">対象: プレイヤー呼び出しスレッド（進行中・解決済みを含む）</p>
+            <p className="meta">他PCの切断や大会切替に備えて、表示中の呼び出しリストを初期化できます。</p>
+            <p className="meta">全クリア後は「自分が開始した未解決スレッド」のみを再表示します（メッセージは削除しません）。</p>
 
             <div className="panel-toolbar compact">
               <p className="meta">過去大会の呼び出し残りが表示される場合に実行してください。</p>
@@ -9443,9 +9548,27 @@ function App() {
                 type="button"
                 className="ghost"
                 onClick={clearCallListThreads}
-                disabled={!genericMessages.some((item) => item.parentMessageId === null && item.method === "call_player")}
+                disabled={callListDisplayGroups.length === 0 && !genericMessages.some((item) => item.parentMessageId === null && item.method === "call_player")}
               >
                 呼び出し一覧を全クリア
+              </button>
+            </div>
+          </section>
+
+          <section className="panel">
+            <h2>メッセージボックス管理</h2>
+            <p className="meta">危険操作: 保存済みメッセージを含む全メッセージを強制削除します。</p>
+            <p className="meta">確認ダイアログと確認文字入力の後に実行され、元に戻せません。</p>
+
+            <div className="panel-toolbar compact">
+              <p className="meta">不整合解消や初期化が必要な場合のみ実行してください。</p>
+              <button
+                type="button"
+                className="ghost"
+                onClick={forceClearMailboxMessages}
+                disabled={genericMessages.length === 0}
+              >
+                メッセージボックスを強制クリア
               </button>
             </div>
           </section>
