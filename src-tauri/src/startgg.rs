@@ -1,9 +1,11 @@
 use chrono::Utc;
 use std::collections::BTreeMap;
+use std::time::Duration;
 use graphql_client::{GraphQLQuery, Response};
 use reqwest::StatusCode;
 use reqwest::Client;
 use serde::Serialize;
+use tokio::time::sleep;
 
 use crate::models::{
     EventSnapshot, SetSlotSnapshot, SetSnapshot, TournamentEventPreviewItem, TournamentPreview,
@@ -11,7 +13,20 @@ use crate::models::{
 };
 
 const START_GG_GQL_ENDPOINT: &str = "https://api.start.gg/gql/alpha";
-const START_GG_RETRY_ATTEMPTS: usize = 3;
+const START_GG_RETRY_ATTEMPTS: usize = 8;
+const START_GG_RETRY_BASE_DELAY_MS: u64 = 500;
+const START_GG_RETRY_MAX_DELAY_MS: u64 = 10_000;
+const START_GG_REQUEST_INTERVAL_MS: u64 = 120;
+
+#[derive(Debug, Clone)]
+pub struct EventSnapshotFetchProgress {
+    pub phase: &'static str,
+    pub completed_requests: usize,
+    pub total_requests: Option<usize>,
+    pub current_page: Option<i64>,
+    pub current_set_id: Option<String>,
+    pub total_planned_set_requests: Option<usize>,
+}
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -106,6 +121,33 @@ fn is_retryable_status(status: StatusCode) -> bool {
         || status.as_u16() == 520
 }
 
+fn parse_retry_after_seconds(response: &reqwest::Response) -> Option<u64> {
+    let value = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
+
+    // start.gg generally returns seconds in Retry-After when rate limited.
+    value.parse::<u64>().ok()
+}
+
+fn retry_delay_for_attempt(attempt: usize, retry_after_seconds: Option<u64>) -> Duration {
+    let shift = (attempt as u32).min(6);
+    let exponential = START_GG_RETRY_BASE_DELAY_MS.saturating_mul(1_u64 << shift);
+    let mut wait_ms = exponential.min(START_GG_RETRY_MAX_DELAY_MS);
+
+    if let Some(seconds) = retry_after_seconds {
+        let retry_after_ms = seconds.saturating_mul(1_000);
+        wait_ms = wait_ms.max(retry_after_ms.min(START_GG_RETRY_MAX_DELAY_MS));
+    }
+
+    // Small deterministic jitter reduces collision when multiple clients retry simultaneously.
+    let jitter_ms = ((attempt as u64 + 1) * 137) % 250;
+    Duration::from_millis(wait_ms.saturating_add(jitter_ms))
+}
+
 async fn post_graphql_with_retry<T: Serialize + ?Sized>(
     client: &Client,
     token: &str,
@@ -122,6 +164,9 @@ async fn post_graphql_with_retry<T: Serialize + ?Sized>(
         {
             Ok(response) => {
                 if is_retryable_status(response.status()) && attempt + 1 < START_GG_RETRY_ATTEMPTS {
+                    let retry_after_seconds = parse_retry_after_seconds(&response);
+                    let wait = retry_delay_for_attempt(attempt, retry_after_seconds);
+                    sleep(wait).await;
                     continue;
                 }
                 return Ok(response);
@@ -129,6 +174,8 @@ async fn post_graphql_with_retry<T: Serialize + ?Sized>(
             Err(err) => {
                 let retryable_error = err.is_timeout() || err.is_connect() || err.is_request();
                 if retryable_error && attempt + 1 < START_GG_RETRY_ATTEMPTS {
+                    let wait = retry_delay_for_attempt(attempt, None);
+                    sleep(wait).await;
                     continue;
                 }
 
@@ -566,6 +613,7 @@ pub async fn fetch_event_snapshot_by_slug(
     token: &str,
     event_slug: &str,
     per_page: u32,
+    mut progress_cb: impl FnMut(EventSnapshotFetchProgress),
 ) -> Result<TournamentSnapshot, String> {
     let client = Client::new();
     let min_chunk_per_page: i64 = 10;
@@ -580,6 +628,16 @@ pub async fn fetch_event_snapshot_by_slug(
     let mut tournament_slug = String::new();
     let mut event_id = String::new();
     let mut event_name = String::new();
+    let mut completed_requests = 0_usize;
+
+    progress_cb(EventSnapshotFetchProgress {
+        phase: "discovering",
+        completed_requests,
+        total_requests: None,
+        current_page: Some(1),
+        current_set_id: None,
+        total_planned_set_requests: None,
+    });
 
     'retry: loop {
         page = 1;
@@ -588,6 +646,10 @@ pub async fn fetch_event_snapshot_by_slug(
         all_sets.clear();
 
         loop {
+            if page > 1 {
+                sleep(Duration::from_millis(START_GG_REQUEST_INTERVAL_MS)).await;
+            }
+
             let variables = event_sync::Variables {
                 slug: event_slug.to_owned(),
                 page,
@@ -596,6 +658,15 @@ pub async fn fetch_event_snapshot_by_slug(
             let body = EventSync::build_query(variables);
 
             let response = post_graphql_with_retry(&client, token, &body, "event取得").await?;
+            completed_requests += 1;
+            progress_cb(EventSnapshotFetchProgress {
+                phase: "discovering",
+                completed_requests,
+                total_requests: None,
+                current_page: Some(page),
+                current_set_id: None,
+                total_planned_set_requests: None,
+            });
 
             let status = response.status();
             let raw_body = response
@@ -677,17 +748,58 @@ pub async fn fetch_event_snapshot_by_slug(
         break;
     }
 
+    let total_set_requests = round_set_ids.values().map(|set_ids| set_ids.len()).sum::<usize>() + no_round_set_ids.len();
+    let total_requests = completed_requests + total_set_requests;
+
+    progress_cb(EventSnapshotFetchProgress {
+        phase: "fetchingSetDetails",
+        completed_requests,
+        total_requests: Some(total_requests),
+        current_page: None,
+        current_set_id: None,
+        total_planned_set_requests: Some(total_set_requests),
+    });
+
     for set_ids in round_set_ids.values() {
         for set_id in set_ids {
+            sleep(Duration::from_millis(START_GG_REQUEST_INTERVAL_MS)).await;
             let set = fetch_set_snapshot_detail_with_client(&client, token, set_id).await?;
+            completed_requests += 1;
+            progress_cb(EventSnapshotFetchProgress {
+                phase: "fetchingSetDetails",
+                completed_requests,
+                total_requests: Some(total_requests),
+                current_page: None,
+                current_set_id: Some(set_id.clone()),
+                total_planned_set_requests: Some(total_set_requests),
+            });
             all_sets.push(set);
         }
     }
 
     for set_id in &no_round_set_ids {
+        sleep(Duration::from_millis(START_GG_REQUEST_INTERVAL_MS)).await;
         let set = fetch_set_snapshot_detail_with_client(&client, token, set_id).await?;
+        completed_requests += 1;
+        progress_cb(EventSnapshotFetchProgress {
+            phase: "fetchingSetDetails",
+            completed_requests,
+            total_requests: Some(total_requests),
+            current_page: None,
+            current_set_id: Some(set_id.clone()),
+            total_planned_set_requests: Some(total_set_requests),
+        });
         all_sets.push(set);
     }
+
+    progress_cb(EventSnapshotFetchProgress {
+        phase: "completed",
+        completed_requests: total_requests,
+        total_requests: Some(total_requests),
+        current_page: None,
+        current_set_id: None,
+        total_planned_set_requests: Some(total_set_requests),
+    });
 
     Ok(TournamentSnapshot {
         tournament_id,

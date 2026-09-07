@@ -20,6 +20,7 @@ use models::{
     TournamentWorkspace,
 };
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 use tiny_http::{Header, Response, Server};
 
 const UDP_MAILBOX_PORT: u16 = 42690;
@@ -30,6 +31,34 @@ const MAILBOX_METHOD_CALL_SYNC: &str = "call_player_sync";
 const MAILBOX_METHOD_CALL_SYNC_REQUEST: &str = "call_player_sync_request";
 const CALL_SYNC_PHASE_COLLECT_UNRESOLVED: &str = "collect_unresolved";
 const CALL_SYNC_PHASE_CHECK_PUBLISHED_STATUS: &str = "check_published_status";
+const EVENT_SNAPSHOT_PROGRESS_EVENT: &str = "event_snapshot_progress";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventSnapshotProgressPayload {
+    phase: String,
+    completed_requests: usize,
+    total_requests: Option<usize>,
+    current_page: Option<i64>,
+    current_set_id: Option<String>,
+    total_planned_set_requests: Option<usize>,
+}
+
+fn emit_event_snapshot_progress(
+    app: &tauri::AppHandle,
+    progress: startgg::EventSnapshotFetchProgress,
+) {
+    let payload = EventSnapshotProgressPayload {
+        phase: progress.phase.to_owned(),
+        completed_requests: progress.completed_requests,
+        total_requests: progress.total_requests,
+        current_page: progress.current_page,
+        current_set_id: progress.current_set_id,
+        total_planned_set_requests: progress.total_planned_set_requests,
+    };
+
+    let _ = app.emit(EVENT_SNAPSHOT_PROGRESS_EVENT, payload);
+}
 
 static UDP_LISTENER_RUNNING: OnceLock<AtomicBool> = OnceLock::new();
 static MESSAGE_ID_SEQUENCE: OnceLock<AtomicU64> = OnceLock::new();
@@ -1752,6 +1781,7 @@ async fn create_event_snapshot(
         &token,
         &event_slug,
         input.per_page.unwrap_or(200),
+        |progress| emit_event_snapshot_progress(&app, progress),
     )
     .await?;
     snapshot.slug = input.slug.clone();
@@ -1773,6 +1803,7 @@ async fn create_event_snapshot_by_slug(
         &token,
         &input.event_slug,
         input.per_page.unwrap_or(200),
+        |progress| emit_event_snapshot_progress(&app, progress),
     )
     .await?;
 
@@ -1817,6 +1848,7 @@ async fn refresh_local_event_snapshot_from_remote(
         &token,
         &event_slug,
         per_page.unwrap_or(200),
+        |progress| emit_event_snapshot_progress(&app, progress),
     )
     .await?;
     snapshot.slug = slug.clone();

@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import QRCode from "qrcode";
 import jsQR from "jsqr";
@@ -642,6 +643,15 @@ type BatchConflictDialogState = {
   progress: BatchReportProgress;
 };
 
+type EventSnapshotProgress = {
+  phase: string;
+  completedRequests: number;
+  totalRequests: number | null;
+  currentPage: number | null;
+  currentSetId: string | null;
+  totalPlannedSetRequests: number | null;
+};
+
 type ResetSetResultCascadeResult = {
   workspace: TournamentWorkspace;
   affectedSetIds: string[];
@@ -751,6 +761,8 @@ type ObsOverlaySetInput = {
   fontScale: number;
 };
 
+const EVENT_SNAPSHOT_PROGRESS_EVENT = "event_snapshot_progress";
+
 type PlayerMetaDraft = {
   playSide: PlaySide | "";
   categorySelections: string[][];
@@ -853,6 +865,7 @@ const CALL_LIST_ROTATE_SECONDS_DEFAULT = 7;
 const CALL_LIST_COLOR_SECONDS_MIN = 30;
 const CALL_LIST_COLOR_SECONDS_MAX = 3600;
 const CALL_LIST_COLOR_SECONDS_DEFAULT = 600;
+const STARTGG_FETCH_PER_PAGE_DEFAULT = 50;
 
 function normalizeSlugForSettingKey(rawSlug: string): string {
   const trimmed = rawSlug.trim();
@@ -905,6 +918,20 @@ function normalizeCallListColorSeconds(rawValue: unknown, fallback = CALL_LIST_C
   }
   if (rounded > CALL_LIST_COLOR_SECONDS_MAX) {
     return CALL_LIST_COLOR_SECONDS_MAX;
+  }
+
+  return rounded;
+}
+
+function normalizeStartggFetchPerPage(rawValue: unknown, fallback = STARTGG_FETCH_PER_PAGE_DEFAULT): number {
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  const rounded = Math.trunc(numeric);
+  if (rounded < 1) {
+    return 1;
   }
 
   return rounded;
@@ -1648,6 +1675,7 @@ const MAILBOX_READ_IDS_STORAGE_KEY = "savakan-gg.mailbox-read-ids.v1";
 const CALL_LIST_ROTATE_SECONDS_STORAGE_KEY = "savakan-gg.call-list-rotate-seconds.v1";
 const CALL_LIST_COLOR_SECONDS_STORAGE_KEY = "savakan-gg.call-list-color-seconds.v1";
 const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
+const STARTGG_FETCH_PER_PAGE_STORAGE_KEY = "savakan-gg.startgg-fetch-per-page.v1";
 
 const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: boolean }> = [
   { id: "create", label: "新規作成", icon: "➕", implemented: true },
@@ -1916,6 +1944,24 @@ function toEventSlugInput(raw: string): string {
     : normalized;
 
   return eventPart.replace(/^event\//, "").replace(/^\/+|\/+$/g, "");
+}
+
+function resolveCreatePreviewSelection(
+  preview: TournamentPreview,
+  preferredEventId: string,
+): TournamentEventPreviewItem | null {
+  if (preferredEventId !== "") {
+    const matched = preview.events.find((event) => event.eventId === preferredEventId) ?? null;
+    if (matched) {
+      return matched;
+    }
+  }
+
+  return preview.events[0] ?? null;
+}
+
+function createPreviewEventSearchLabel(event: TournamentEventPreviewItem): string {
+  return `${event.eventName} (${event.eventId})`;
 }
 
 function bytesToBase32(bytes: Uint8Array): string {
@@ -2307,13 +2353,15 @@ function App() {
   const [appVersion, setAppVersion] = useState("");
   const [token, setToken] = useState("");
   const [slug, setSlug] = useState("");
-  const [perPage, setPerPage] = useState("50");
+  const [startggFetchPerPage, setStartggFetchPerPage] = useState(STARTGG_FETCH_PER_PAGE_DEFAULT);
   const [createPreview, setCreatePreview] = useState<TournamentPreview | null>(null);
   const [createPreviewLoadFailed, setCreatePreviewLoadFailed] = useState(false);
   const [createSelectedEventId, setCreateSelectedEventId] = useState("");
+  const [createEventSearchInput, setCreateEventSearchInput] = useState("");
   const [createEventSlugInput, setCreateEventSlugInput] = useState("");
   const [createEventAlias, setCreateEventAlias] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
+  const [createSnapshotProgress, setCreateSnapshotProgress] = useState<EventSnapshotProgress | null>(null);
   const [workspace, setWorkspace] = useState<TournamentWorkspace | null>(null);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [selectedPhaseName, setSelectedPhaseName] = useState("");
@@ -2444,6 +2492,32 @@ function App() {
 
     return () => {
       alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        const off = await listen<EventSnapshotProgress>(EVENT_SNAPSHOT_PROGRESS_EVENT, (event) => {
+          if (!alive) {
+            return;
+          }
+          setCreateSnapshotProgress(event.payload);
+        });
+        unlisten = off;
+      } catch {
+        // ignore listener setup failure in non-Tauri environments
+      }
+    })();
+
+    return () => {
+      alive = false;
+      if (unlisten) {
+        unlisten();
+      }
     };
   }, []);
 
@@ -2594,6 +2668,15 @@ function App() {
     } catch {
       // ignore
     }
+
+    try {
+      const rawStartggFetchPerPage = window.localStorage.getItem(STARTGG_FETCH_PER_PAGE_STORAGE_KEY);
+      if (rawStartggFetchPerPage !== null) {
+        setStartggFetchPerPage(normalizeStartggFetchPerPage(rawStartggFetchPerPage));
+      }
+    } catch {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
@@ -2628,6 +2711,17 @@ function App() {
       // ignore
     }
   }, [displayBracketPlayersBySide]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        STARTGG_FETCH_PER_PAGE_STORAGE_KEY,
+        String(normalizeStartggFetchPerPage(startggFetchPerPage)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [startggFetchPerPage]);
 
   useEffect(() => {
     let alive = true;
@@ -3038,16 +3132,13 @@ function App() {
       return;
     }
 
-    if (
-      createSelectedEventId !== "" &&
-      createPreview.events.some((event) => event.eventId === createSelectedEventId)
-    ) {
+    const selected = resolveCreatePreviewSelection(createPreview, createSelectedEventId);
+    if (selected?.eventId === createSelectedEventId) {
       return;
     }
 
-    const fallback = createPreview.events[0] ?? null;
-    setCreateSelectedEventId(fallback?.eventId ?? "");
-    setCreateEventSlugInput(toEventSlugInput(fallback?.eventSlug ?? ""));
+    setCreateSelectedEventId(selected?.eventId ?? "");
+    setCreateEventSlugInput(toEventSlugInput(selected?.eventSlug ?? ""));
   }, [createPreview, createSelectedEventId]);
 
   const snapshot = workspace?.snapshot ?? null;
@@ -3664,6 +3755,57 @@ function App() {
   const callListRotateRemainingSeconds = unresolvedCallEventPages.length === 0
     ? 0
     : Math.max(0, callListRotateSeconds * (1 - normalizedCallListPageProgressPercent / 100));
+
+  const createSnapshotProgressPercent = useMemo(() => {
+    if (!createSnapshotProgress) {
+      return 0;
+    }
+
+    if (!createBusy && createSnapshotProgress.totalRequests !== null && createSnapshotProgress.totalRequests > 0) {
+      return 100;
+    }
+
+    if (createSnapshotProgress.totalRequests === null || createSnapshotProgress.totalRequests <= 0) {
+      return 0;
+    }
+
+    const raw = (createSnapshotProgress.completedRequests / createSnapshotProgress.totalRequests) * 100;
+    return Math.max(0, Math.min(100, raw));
+  }, [createBusy, createSnapshotProgress]);
+
+  const createSnapshotProgressLabel = useMemo(() => {
+    if (!createSnapshotProgress) {
+      return "";
+    }
+
+    if (createSnapshotProgress.phase === "starting") {
+      return "開始準備中...";
+    }
+
+    if (createSnapshotProgress.phase === "discovering") {
+      const pageText = createSnapshotProgress.currentPage !== null
+        ? `ページ${createSnapshotProgress.currentPage}を確認中`
+        : "ページを確認中";
+      return `${pageText}（総リクエスト数を見積り中）`;
+    }
+
+    if (createSnapshotProgress.phase === "fetchingSetDetails") {
+      const total = createSnapshotProgress.totalRequests ?? 0;
+      const details = total > 0
+        ? `${createSnapshotProgress.completedRequests}/${total} リクエスト完了`
+        : `${createSnapshotProgress.completedRequests} リクエスト完了`;
+      if (createSnapshotProgress.currentSetId) {
+        return `${details} / set ${createSnapshotProgress.currentSetId} を取得中`;
+      }
+      return details;
+    }
+
+    if (createSnapshotProgress.phase === "completed") {
+      return "取得完了";
+    }
+
+    return "取得中...";
+  }, [createSnapshotProgress]);
 
   const mailboxThreads = useMemo(() => {
     return mailboxThreadSummaries
@@ -6520,16 +6662,32 @@ function App() {
   async function saveToken(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
-    setError("");
-    setMessage("");
+    clearStatusMessages();
 
     try {
-      await invoke("save_startgg_token", { token });
+      await saveStartggToken();
       setMessage("start.ggトークンを保存しました。");
     } catch (err) {
       setError(String(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function clearStatusMessages() {
+    setError("");
+    setMessage("");
+  }
+
+  async function saveStartggToken() {
+    await invoke("save_startgg_token", { token });
+  }
+
+  function applyCreateEventSelection(event: TournamentEventPreviewItem | null, options?: { resetAlias?: boolean }) {
+    setCreateSelectedEventId(event?.eventId ?? "");
+    setCreateEventSlugInput(toEventSlugInput(event?.eventSlug ?? ""));
+    if (options?.resetAlias) {
+      setCreateEventAlias("");
     }
   }
 
@@ -6542,24 +6700,22 @@ function App() {
       return;
     }
 
+    const previousSelectedEventId = createSelectedEventId;
     setCreateBusy(true);
-    setError("");
-    setMessage("");
+    clearStatusMessages();
+    setCreateSnapshotProgress(null);
     setCreatePreview(null);
     setCreatePreviewLoadFailed(false);
-    setCreateSelectedEventId("");
+    setCreateEventSearchInput("");
 
     try {
-      await invoke("save_startgg_token", { token });
+      await saveStartggToken();
       const preview = await invoke<TournamentPreview>("preview_tournament", {
         slug: apiSlug,
       });
       setCreatePreview(preview);
-      const selected = preview.events.find((event) => event.eventId === createSelectedEventId)
-        ?? preview.events[0]
-        ?? null;
-      setCreateSelectedEventId(selected?.eventId ?? "");
-      setCreateEventSlugInput(toEventSlugInput(selected?.eventSlug ?? ""));
+      const selected = resolveCreatePreviewSelection(preview, previousSelectedEventId);
+      applyCreateEventSelection(selected);
       setMessage("tournamentのイベント一覧を取得しました。");
     } catch (err) {
       setCreatePreviewLoadFailed(true);
@@ -6569,11 +6725,42 @@ function App() {
     }
   }
 
-  function selectCreateEvent(event: TournamentEventPreviewItem) {
-    setCreateSelectedEventId(event.eventId);
-    setCreateEventSlugInput(toEventSlugInput(event.eventSlug ?? ""));
-    setCreateEventAlias("");
+  function handleCreateEventSearchInputChange(nextValue: string) {
+    setCreateEventSearchInput(nextValue);
   }
+
+  function handleCreateEventDropdownChange(nextEventId: string) {
+    if (!createPreview) {
+      return;
+    }
+
+    const selected = createPreview.events.find((event) => event.eventId === nextEventId) ?? null;
+    if (!selected || selected.eventId === createSelectedEventId) {
+      return;
+    }
+
+    applyCreateEventSelection(selected, { resetAlias: true });
+  }
+
+  const createFilteredEvents = useMemo(() => {
+    if (!createPreview) {
+      return [] as TournamentEventPreviewItem[];
+    }
+
+    const normalizedQuery = createEventSearchInput.trim().toLocaleLowerCase();
+    if (normalizedQuery === "") {
+      return createPreview.events;
+    }
+
+    return createPreview.events.filter((event) => {
+      const eventName = event.eventName.toLocaleLowerCase();
+      const eventId = event.eventId.toLocaleLowerCase();
+      const eventSlug = (event.eventSlug ?? "").toLocaleLowerCase();
+      return eventName.includes(normalizedQuery)
+        || eventId.includes(normalizedQuery)
+        || eventSlug.includes(normalizedQuery);
+    });
+  }, [createPreview, createEventSearchInput]);
 
   async function createEventSnapshotBySlug() {
     const tournamentSlug = toApiSlug(slug);
@@ -6584,11 +6771,18 @@ function App() {
     }
 
     setCreateBusy(true);
-    setError("");
-    setMessage("");
+    clearStatusMessages();
+    setCreateSnapshotProgress({
+      phase: "starting",
+      completedRequests: 0,
+      totalRequests: null,
+      currentPage: null,
+      currentSetId: null,
+      totalPlannedSetRequests: null,
+    });
 
     try {
-      await invoke("save_startgg_token", { token });
+      await saveStartggToken();
       await invoke("save_last_slug", { slug: tournamentSlug });
 
       const result = await invoke<TournamentWorkspace>("create_event_snapshot_by_slug", {
@@ -6596,14 +6790,15 @@ function App() {
           tournamentSlug,
           eventSlug,
           eventAlias: createEventAlias.trim() === "" ? null : createEventAlias.trim(),
-          perPage: Number(perPage),
+          perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
         },
       });
 
       setWorkspace(result);
+      setCreateSnapshotProgress(null);
       await refreshLocalSnapshotEvents();
       setActiveTab("home");
-      setMessage("直接指定したeventのローカルスナップショットを作成しました。");
+      setMessage("eventのローカルスナップショットを作成しました。");
     } catch (err) {
       setError(String(err));
     } finally {
@@ -6721,7 +6916,7 @@ function App() {
       const result = await invoke<TournamentWorkspace>("refresh_local_event_snapshot_from_remote", {
         slug: normalizedSlug,
         eventId,
-        perPage: Number(perPage),
+        perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
       });
       setWorkspace(result);
       closeMatchDialog();
@@ -7230,7 +7425,7 @@ function App() {
           eventId: selectedEvent.eventId,
           setId: activeMatch.setId,
           resetRemote: false,
-          perPage: Number(perPage),
+          perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
         },
       });
 
@@ -7264,7 +7459,7 @@ function App() {
       input: {
         slug: normalizedSlug,
         eventId: selectedEvent.eventId,
-        perPage: Number(perPage),
+        perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
         forceOverwriteCurrentConflict,
         forceOverwriteRemainingConflicts,
       },
@@ -7693,9 +7888,13 @@ function App() {
             </>
           ) : (
             <>
-              <p className="eyebrow">Tournament Workspace</p>
-              <h2>{APP_TABS.find((tab) => tab.id === activeTab)?.label ?? "大会管理"}</h2>
-              <p className="description">start.gg とローカル保存データを統合して運用します。</p>
+              <h2>{activeTab === "create" ? "新規作成" : (APP_TABS.find((tab) => tab.id === activeTab)?.label ?? "大会管理")}</h2>
+              {activeTab !== "create" && (
+                <>
+                  <p className="eyebrow">Tournament Workspace</p>
+                  <p className="description">start.gg とローカル保存データを統合して運用します。</p>
+                </>
+              )}
             </>
           )}
         </section>
@@ -7807,17 +8006,22 @@ function App() {
         )}
 
         {activeTab === "create" && (
-          <>
-            <section className="panel">
+          <div className="create-layout">
+            <section className="panel create-layout-half">
               <h2>1.APIキーの設定</h2>
 
-              <form className="form" onSubmit={saveToken}>
+              <form
+                className="form"
+                onSubmit={saveToken}
+                style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}
+              >
                 <input
                   type="password"
                   value={token}
                   onChange={(e) => setToken(e.currentTarget.value)}
                   placeholder="start.gg API token"
                   autoComplete="off"
+                  style={{ flex: "1 1 18rem" }}
                 />
                 <button type="submit" disabled={createBusy || token.trim() === ""}>
                   APIキーを保存
@@ -7825,32 +8029,27 @@ function App() {
               </form>
             </section>
 
-            <section className="panel">
+            <section className="panel create-layout-half">
               <h2>2. tournamentの選択</h2>
-              <div className="panel-toolbar compact">
-                <p className="meta">大会IDを直接入力してイベント一覧を取得します。</p>
-              </div>
-
-              <form className="form" onSubmit={loadCreatePreview}>
+              <form
+                className="form"
+                onSubmit={loadCreatePreview}
+                style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}
+              >
                 <input
                   value={slug}
                   onChange={(e) => setSlug(e.currentTarget.value)}
                   placeholder="大会ID (例: sabakan-weekly-1)"
+                  style={{ flex: "1 1 18rem" }}
                 />
-                <input
-                  value={perPage}
-                  onChange={(e) => setPerPage(e.currentTarget.value)}
-                  placeholder="ページサイズ (例: 50)"
-                />
-                <p className="meta">start.ggのobject上限ではなく、取得時の1ページ件数です。通常は50のままで問題ありません。</p>
                 <button type="submit" disabled={createBusy || toApiSlug(slug) === "" || token.trim() === ""}>
-                  tournamentからイベント一覧を取得
+                  イベント一覧取得
                 </button>
               </form>
             </section>
 
-            <section className="panel">
-              <h2>3. event一覧の表示</h2>
+            <section className="panel create-layout-full">
+              <h2>3. tournament内のevent一覧示</h2>
               {createPreviewLoadFailed ? (
                 <p className="meta">イベント一覧の取得に失敗しました</p>
               ) : !createPreview ? (
@@ -7862,36 +8061,51 @@ function App() {
                   <p className="meta">
                     {createPreview.name} / slug: {createPreview.slug} / updatedAt: {new Date(createPreview.updatedAt).toLocaleString()}
                   </p>
-                  <div className="event-list">
-                    {createPreview.events.map((event) => (
-                      <article
-                        key={event.eventId}
-                        className={`event-list-item ${createSelectedEventId === event.eventId ? "selected" : ""}`}
-                        onClick={() => {
-                          selectCreateEvent(event);
+                  <div className="form" style={{ marginTop: "0.7rem" }}>
+                    <label htmlFor="create-event-search-input" style={{ display: "grid", gap: "0.3rem" }}>
+                      <span className="meta">event検索</span>
+                      <input
+                        id="create-event-search-input"
+                        type="search"
+                        value={createEventSearchInput}
+                        onChange={(e) => {
+                          handleCreateEventSearchInputChange(e.currentTarget.value);
                         }}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            selectCreateEvent(event);
-                          }
+                        placeholder="event名 または eventId で検索"
+                        autoComplete="off"
+                      />
+                    </label>
+                    <label htmlFor="create-event-select" style={{ display: "grid", gap: "0.3rem" }}>
+                      <span className="meta">event選択</span>
+                      <select
+                        id="create-event-select"
+                        value={createFilteredEvents.some((event) => event.eventId === createSelectedEventId) ? createSelectedEventId : ""}
+                        onChange={(e) => {
+                          handleCreateEventDropdownChange(e.currentTarget.value);
                         }}
                       >
-                        <div className="event-list-head">
-                          <h3>{event.eventName}</h3>
-                          <span className="meta">sets: {event.setCount}</span>
-                        </div>
-                        <p className="meta">eventId: {event.eventId}</p>
-                      </article>
-                    ))}
+                        <option value="" disabled>
+                          {createFilteredEvents.length === 0 ? "一致するeventがありません" : "eventを選択"}
+                        </option>
+                        {createFilteredEvents.map((event) => (
+                          <option key={event.eventId} value={event.eventId}>
+                            {createPreviewEventSearchLabel(event)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
+                  <p className="meta" style={{ marginTop: "0.4rem" }}>
+                    候補: {createFilteredEvents.length}件 / 全{createPreview.events.length}件
+                  </p>
+                  <p className="meta" style={{ marginTop: "0.2rem" }}>
+                    選択中: {createPreview.events.find((event) => event.eventId === createSelectedEventId)?.eventName ?? "-"}
+                  </p>
                 </>
               )}
             </section>
 
-            <section className="panel">
+            <section className="panel create-layout-full">
               <h2>4. eventのスナップショット作成</h2>
               <div className="form">
                 <input
@@ -7918,11 +8132,33 @@ function App() {
                   ローカルスナップショットの作成
                 </button>
               </div>
+              {(createBusy || createSnapshotProgress) && (
+                <div className="create-snapshot-progress" role="status" aria-live="polite">
+                  <div
+                    className="create-snapshot-progress-track"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(createSnapshotProgressPercent)}
+                  >
+                    <div
+                      className="create-snapshot-progress-fill"
+                      style={{ width: `${createSnapshotProgressPercent}%` }}
+                    />
+                  </div>
+                  <p className="create-snapshot-progress-meta">
+                    {createSnapshotProgressLabel}
+                    {createSnapshotProgress && createSnapshotProgress.totalRequests !== null
+                      ? ` (${Math.round(createSnapshotProgressPercent)}%)`
+                      : ""}
+                  </p>
+                </div>
+              )}
               <p className="meta">
                 event一覧が取得できない場合は、上記で tournament + event を直接指定して作成できます。
               </p>
             </section>
-          </>
+          </div>
         )}
 
         {activeTab === "tournament" && (
@@ -9111,6 +9347,36 @@ function App() {
                 </button>
               </div>
             </div>
+          </section>
+
+          <section className="panel">
+            <h2>start.gg取得設定</h2>
+            <p className="meta">イベント取得・更新時の1ページあたり件数です。通常は既定値のままで問題ありません。</p>
+
+            <div className="form" style={{ marginTop: "0.6rem" }}>
+              <label htmlFor="startgg-fetch-per-page-input" style={{ display: "grid", gap: "0.3rem" }}>
+                <span className="meta">1ページ件数 (1以上 / 既定値: 50)</span>
+                <input
+                  id="startgg-fetch-per-page-input"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={startggFetchPerPage}
+                  onChange={(e) => {
+                    const next = normalizeStartggFetchPerPage(e.currentTarget.value, startggFetchPerPage);
+                    setStartggFetchPerPage(next);
+                  }}
+                  onBlur={(e) => {
+                    const normalized = normalizeStartggFetchPerPage(e.currentTarget.value);
+                    if (normalized !== startggFetchPerPage) {
+                      setStartggFetchPerPage(normalized);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+
+            <p className="meta">現在値: {normalizeStartggFetchPerPage(startggFetchPerPage)} 件</p>
           </section>
 
           <section className="panel">

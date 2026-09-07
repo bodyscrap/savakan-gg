@@ -811,6 +811,49 @@ button:disabled {
   background: #eff6ff;
 }
 
+.create-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.create-layout-half {
+  grid-column: span 1;
+}
+
+.create-layout-full {
+  grid-column: 1 / -1;
+}
+
+.create-snapshot-progress {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.create-snapshot-progress-track {
+  height: 0.72rem;
+  width: 100%;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid #67e8f9;
+  background: linear-gradient(90deg, #ecfeff 0%, #cffafe 100%);
+}
+
+.create-snapshot-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0891b2 0%, #0e7490 100%);
+  transition: width 120ms linear;
+}
+
+.create-snapshot-progress-meta {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
 .event-list-head {
   display: flex;
   align-items: flex-start;
@@ -1503,6 +1546,15 @@ li {
 
   .users-grid-panel {
     grid-template-columns: 1fr;
+  }
+
+  .create-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .create-layout-half,
+  .create-layout-full {
+    grid-column: auto;
   }
 
   .player-list-scroll.enabled {
