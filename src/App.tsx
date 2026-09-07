@@ -1178,6 +1178,20 @@ function normalizeGenericMessages(rawValue: unknown): GenericMessage[] {
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
 }
 
+function hasSameGenericMessageOrder(left: GenericMessage[], right: GenericMessage[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index].messageId !== right[index].messageId) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function isValidSenderUserId(value: string): boolean {
   return /^\d{8}$/.test(value.trim());
 }
@@ -1682,7 +1696,7 @@ const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: bo
   { id: "home", label: "大会一覧", icon: "🏠", implemented: true },
   { id: "tournament", label: "大会管理", icon: "⚙", implemented: true },
   { id: "bracket", label: "ブラケット", icon: "🏆", implemented: true },
-  { id: "overlay", label: "OBSオーバーレイ", icon: "📺", implemented: true },
+  { id: "overlay", label: "オーバーレイ", icon: "📺", implemented: true },
   { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
   { id: "message", label: "メッセージ", icon: "💬", implemented: true },
   { id: "call-list", label: "呼び出しリスト", icon: "📣", implemented: true },
@@ -2408,6 +2422,7 @@ function App() {
   const [senderNetworkCandidates, setSenderNetworkCandidates] = useState<LocalNetworkSettingsCandidate[]>([]);
   const [selectedSenderNetworkCandidateKey, setSelectedSenderNetworkCandidateKey] = useState("");
   const [senderNetworkCandidatesLoading, setSenderNetworkCandidatesLoading] = useState(false);
+  const [senderIdentityChangedSinceMailboxClear, setSenderIdentityChangedSinceMailboxClear] = useState(false);
   const [genericMessages, setGenericMessages] = useState<GenericMessage[]>([]);
   const [genericMessagesReady, setGenericMessagesReady] = useState(false);
   const [mailboxMethodDraft, setMailboxMethodDraft] = useState("generic");
@@ -3062,7 +3077,7 @@ function App() {
 
           const normalized = normalizeGenericMessages(rows);
           setGenericMessages((current) => {
-            if (current.length === normalized.length && current[0]?.messageId === normalized[0]?.messageId) {
+            if (hasSameGenericMessageOrder(current, normalized)) {
               return current;
             }
             return normalized;
@@ -4157,6 +4172,26 @@ function App() {
     return genericMessages.some((item) => item.senderUserId === normalizedSenderUserIdDraft && item.senderName !== normalizedSenderNameDraft);
   }, [genericMessages, normalizedSenderNameDraft, normalizedSenderUserIdDraft]);
 
+  const senderIdentityChanged = useMemo(() => {
+    const currentId = senderProfile.senderUserId.trim();
+    const currentName = senderProfile.senderName.trim();
+    if (currentId === "" && currentName === "") {
+      return false;
+    }
+
+    const idChanged = normalizedSenderUserIdDraft !== currentId;
+    const nameChanged = normalizedSenderNameDraft !== currentName;
+    return idChanged || nameChanged;
+  }, [
+    normalizedSenderNameDraft,
+    normalizedSenderUserIdDraft,
+    senderProfile.senderName,
+    senderProfile.senderUserId,
+  ]);
+
+  const shouldRecommendMailboxClearForIdentityChange = senderIdentityChanged
+    || senderIdentityChangedSinceMailboxClear;
+
   const canSaveSenderProfile = normalizedSenderNameDraft !== ""
     && isValidSenderUserId(normalizedSenderUserIdDraft)
     && hasSelectedSenderNetworkDevice
@@ -4297,6 +4332,20 @@ function App() {
       return;
     }
 
+    if (senderIdentityChanged) {
+      const confirmed = window.confirm(
+        "送信者名またはユーザーIDを変更して保存しようとしています。\n"
+        + "状態不整合を防ぐため、先に設定タブ下部の「メッセージボックスを強制クリア」を実行することを推奨します。\n"
+        + "このまま保存しますか？",
+      );
+      if (!confirmed) {
+        setSenderNameDraft(senderProfile.senderName);
+        setSenderUserIdDraft(senderProfile.senderUserId);
+        setError("送信者設定の保存を中止し、送信者名/ユーザーIDを元の値に戻しました。");
+        return;
+      }
+    }
+
     const nextProfile: SenderProfile = {
       senderName: normalizedSenderNameDraft,
       senderUserId: normalizedSenderUserIdDraft,
@@ -4314,6 +4363,12 @@ function App() {
     }
 
     setSenderProfile(nextProfile);
+    if (senderIdentityChanged) {
+      setSenderIdentityChangedSinceMailboxClear(true);
+      setMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK) / 注意: 状態整合のため、可能なタイミングでメッセージボックス強制クリアを実行してください。`);
+      return;
+    }
+
     setMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK)`);
   }
 
@@ -4967,45 +5022,31 @@ function App() {
     );
     const callThreadIds = new Set(callRoots.map((item) => item.threadId));
 
+    if (shouldRecommendMailboxClearForIdentityChange) {
+      window.alert("送信者情報が変更されています。意図しない挙動になることがあります。");
+    }
+
     const confirmed = window.confirm(
-      "呼び出しリスト表示をいったん全クリアします。\n通常は自分が開始した未解決呼び出しのみ再表示し、0件の場合は全未解決を表示します。\nメッセージデータ自体は削除しません。実行しますか？",
+      "呼び出しリスト表示をいったん全クリアします。\n保持中の呼び出しデータから再描画します。\nメッセージデータ自体は削除しません。実行しますか？",
     );
     if (!confirmed) {
       return;
     }
 
-    const ownUnresolvedRoots = callRoots.filter((root) =>
-      root.senderUserId.trim() === senderProfile.senderUserId.trim()
-      && !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve")
-    );
-    const focusOwn = ownUnresolvedRoots.length > 0;
-    const hiddenUnresolvedCount = Math.max(0, callRoots.filter((root) =>
+    const unresolvedCount = callRoots.filter((root) =>
       !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve")
-    ).length - ownUnresolvedRoots.length);
+    ).length;
 
     setError("");
     setMessage("");
-    // まず表示中の呼び出しリストだけを空にしてから、再描画ルールを切り替える。
+    // 表示キャッシュのみを初期化し、呼び出しデータ本体や表示フィルタは変更しない。
     setCallListDisplayGroups([]);
     setCallListRebuildToken((current) => current + 1);
-    setCallListFocusOwnUnresolved(focusOwn);
     setCallListPageIndex(0);
     setCallListCycleCount(0);
     setCallListPageSwitchedAtMs(Date.now());
     setCallListProgressNowMs(Date.now());
-
-    const hiddenText = focusOwn && hiddenUnresolvedCount > 0
-      ? ` / 非表示(他ユーザー起点) ${hiddenUnresolvedCount} 件`
-      : "";
-    if (focusOwn) {
-      setMessage(`呼び出しリストを全クリア後、自分が開始した未解決スレッド ${ownUnresolvedRoots.length} 件を再表示しました${hiddenText}（全呼び出しスレッド ${callThreadIds.size} 件は保持）。`);
-      return;
-    }
-
-    const allUnresolvedCount = callRoots.filter((root) =>
-      !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve")
-    ).length;
-    setMessage(`呼び出しリストを全クリア後、自分起点の未解決が0件だったため全未解決表示に切り替えました（未解決 ${allUnresolvedCount} 件 / 全呼び出しスレッド ${callThreadIds.size} 件保持）。`);
+    setMessage(`呼び出しリスト表示を初期化しました（未解決 ${unresolvedCount} 件 / 全呼び出しスレッド ${callThreadIds.size} 件保持）。`);
   }
 
   function forceClearMailboxMessages() {
@@ -5041,6 +5082,7 @@ function App() {
     setCallListCycleCount(0);
     setCallListPageSwitchedAtMs(Date.now());
     setCallListProgressNowMs(Date.now());
+    setSenderIdentityChangedSinceMailboxClear(false);
 
     setMessage(`メッセージボックスを強制クリアしました（${genericMessages.length} 件削除）。`);
   }
@@ -9401,8 +9443,8 @@ function App() {
       {activeTab === "overlay" && (
         <>
           <section className="panel">
-            <h2>OBSオーバーレイ</h2>
-            <p className="meta">配信中セット、またはテスト表示を OBS ブラウザソースに出力します。</p>
+            <h2>オーバーレイ</h2>
+            <p className="meta">配信中セット、またはテスト表示を オーバーレイ画面に出力します。</p>
             <p className="meta">
               URL: {obsOverlayState?.overlayUrl
                 ? (
@@ -9547,7 +9589,7 @@ function App() {
                     <iframe
                       ref={overlayPreviewIframeRef}
                       className="overlay-preview-frame"
-                      title="OBSオーバーレイプレビュー"
+                      title="オーバーレイプレビュー"
                       src={`${obsOverlayState.overlayUrl}?preview=1`}
                       onLoad={() => {
                         const width = overlayPreviewWrapRef.current?.clientWidth ?? 0;
@@ -9577,6 +9619,7 @@ function App() {
             <p className="meta">各クライアントを識別するための送信者名と8桁ユーザーIDを設定します。</p>
             <p className="meta">IPとサブネットマスクは選択したネットワークデバイスから自動反映されます。個別調整はOS側のネットワーク設定で行ってください。</p>
             <p className="meta">ユーザーIDはクライアント間で重複しないよう運用してください。ランダム決定ボタンで簡単に採番できます。</p>
+            <p className="meta">注意: 運用開始後（メッセージ履歴あり）に送信者名/IDを変更する場合は、先にメッセージボックスの強制クリア実行を推奨します（最終実行はユーザー操作）。</p>
 
             <label className="checkbox-row" style={{ marginTop: "0.6rem" }}>
               <input
@@ -9651,6 +9694,8 @@ function App() {
               <p className="meta">
                 {senderIdCollision
                   ? "既存履歴で同一IDが別名義に使われています。"
+                  : shouldRecommendMailboxClearForIdentityChange
+                    ? "履歴メッセージあり: 送信者名/ID変更前にメッセージボックス強制クリアを推奨します。"
                   : !hasSelectedSenderNetworkDevice
                     ? "ネットワークデバイスを選択してください。"
                     : !isValidIpv4(normalizedSenderBindIpDraft)
@@ -9764,7 +9809,7 @@ function App() {
           <section className="panel">
             <h2>呼び出しリスト管理</h2>
             <p className="meta">他PCの切断や大会切替に備えて、表示中の呼び出しリストを初期化できます。</p>
-            <p className="meta">全クリア後は「自分が開始した未解決スレッド」のみを再表示します（メッセージは削除しません）。</p>
+            <p className="meta">全クリア後は現在保持している呼び出しデータから再描画します（メッセージは削除しません）。</p>
 
             <div className="panel-toolbar compact">
               <p className="meta">過去大会の呼び出し残りが表示される場合に実行してください。</p>
