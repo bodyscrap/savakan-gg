@@ -163,6 +163,8 @@ fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
             event_id: event_id.to_owned(),
             event_name: String::new(),
             event_alias: None,
+            last_selected_phase_name: None,
+            last_selected_phase_group_name: None,
             event_management: None,
             entrants: Vec::new(),
         }],
@@ -436,6 +438,8 @@ fn merge_snapshot_into_meta(
             event_id: event.event_id.clone(),
             event_name: event.name.clone(),
             event_alias: None,
+            last_selected_phase_name: None,
+            last_selected_phase_group_name: None,
             event_management: None,
             entrants: Vec::new(),
         });
@@ -1089,14 +1093,21 @@ pub fn list_local_snapshot_events(app: &AppHandle) -> Result<Vec<LocalSnapshotEv
         };
 
         for event in snapshot.events {
-            let event_alias = load_local_meta(app, &snapshot.slug, &event.event_id)
+            let (event_alias, last_selected_phase_name, last_selected_phase_group_name) = load_local_meta(app, &snapshot.slug, &event.event_id)
                 .ok()
                 .and_then(|meta| {
                     meta.events
                         .into_iter()
                         .find(|item| item.event_id == event.event_id)
-                        .and_then(|item| item.event_alias)
-                });
+                        .map(|item| {
+                            (
+                                item.event_alias,
+                                item.last_selected_phase_name,
+                                item.last_selected_phase_group_name,
+                            )
+                        })
+                })
+                .unwrap_or((None, None, None));
 
             items.push(LocalSnapshotEventListItem {
                 tournament_id: snapshot.tournament_id.clone(),
@@ -1106,6 +1117,8 @@ pub fn list_local_snapshot_events(app: &AppHandle) -> Result<Vec<LocalSnapshotEv
                 event_id: event.event_id,
                 event_name: event.name,
                 event_alias,
+                last_selected_phase_name,
+                last_selected_phase_group_name,
                 set_count: event.sets.len(),
             });
         }
@@ -1916,6 +1929,8 @@ pub fn set_event_alias(
             event_id: event_id.to_owned(),
             event_name: String::new(),
             event_alias: None,
+            last_selected_phase_name: None,
+            last_selected_phase_group_name: None,
             event_management: None,
             entrants: Vec::new(),
         });
@@ -1991,6 +2006,8 @@ pub fn save_local_meta(
             event_id: event_id.to_owned(),
             event_name: String::new(),
             event_alias: None,
+            last_selected_phase_name: None,
+            last_selected_phase_group_name: None,
             event_management: None,
             entrants: Vec::new(),
         });
@@ -2054,6 +2071,8 @@ pub fn load_local_meta(app: &AppHandle, slug: &str, event_id: &str) -> Result<To
             event_id: event_id.to_owned(),
             event_name: String::new(),
             event_alias: None,
+            last_selected_phase_name: None,
+            last_selected_phase_group_name: None,
             event_management: None,
             entrants: Vec::new(),
         });
@@ -2303,6 +2322,8 @@ pub fn upsert_local_player_meta(
             event_id: input.event_id.clone(),
             event_name: input.event_name.clone(),
             event_alias: None,
+            last_selected_phase_name: None,
+            last_selected_phase_group_name: None,
             event_management: None,
             entrants: Vec::new(),
         });
@@ -2422,6 +2443,8 @@ pub fn save_event_management_meta(
             event_id: input.event_id.clone(),
             event_name: input.event_name.clone(),
             event_alias: None,
+            last_selected_phase_name: None,
+            last_selected_phase_group_name: None,
             event_management: None,
             entrants: Vec::new(),
         });
@@ -2449,5 +2472,57 @@ pub fn save_event_management_meta(
     local_meta.slug = input.slug;
     local_meta.updated_at = Utc::now();
     save_local_meta(app, &input.event_id, &local_meta)?;
+    Ok(local_meta)
+}
+
+pub fn set_event_last_phase_pool_selection(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+    event_name: &str,
+    phase_name: Option<&str>,
+    phase_group_name: Option<&str>,
+) -> Result<TournamentLocalMeta, String> {
+    let mut local_meta = load_local_meta(app, slug, event_id)?;
+
+    let event_index = if let Some(index) = local_meta
+        .events
+        .iter()
+        .position(|event| event.event_id == event_id)
+    {
+        index
+    } else {
+        local_meta.events.push(EventLocalMeta {
+            event_id: event_id.to_owned(),
+            event_name: event_name.to_owned(),
+            event_alias: None,
+            last_selected_phase_name: None,
+            last_selected_phase_group_name: None,
+            event_management: None,
+            entrants: Vec::new(),
+        });
+        local_meta.events.len().saturating_sub(1)
+    };
+
+    let normalized_phase_name = phase_name
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let normalized_phase_group_name = phase_group_name
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    let event_meta = local_meta
+        .events
+        .get_mut(event_index)
+        .ok_or_else(|| "イベントメタの更新先を特定できませんでした。".to_owned())?;
+    if !event_name.trim().is_empty() {
+        event_meta.event_name = event_name.trim().to_owned();
+    }
+    event_meta.last_selected_phase_name = normalized_phase_name;
+    event_meta.last_selected_phase_group_name = normalized_phase_group_name;
+
+    local_meta.slug = slug.to_owned();
+    local_meta.updated_at = Utc::now();
+    save_local_meta(app, event_id, &local_meta)?;
     Ok(local_meta)
 }

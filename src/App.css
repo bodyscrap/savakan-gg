@@ -865,6 +865,24 @@ button:disabled {
   margin: 0;
 }
 
+.home-selector-grid {
+  margin-top: 0.7rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.6rem;
+}
+
+.home-detail-card {
+  margin-top: 0.7rem;
+}
+
+.home-detail-actions {
+  margin-top: 0.7rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .phase-groups {
   margin-top: 0.95rem;
   display: grid;

@@ -108,6 +108,10 @@ pub struct EventLocalMeta {
     #[serde(default)]
     pub event_alias: Option<String>,
     #[serde(default)]
+    pub last_selected_phase_name: Option<String>,
+    #[serde(default)]
+    pub last_selected_phase_group_name: Option<String>,
+    #[serde(default)]
     pub event_management: Option<EventManagementMeta>,
     pub entrants: Vec<EventEntrantMeta>,
 }
@@ -364,6 +368,10 @@ pub struct LocalSnapshotEventListItem {
     pub event_name: String,
     #[serde(default)]
     pub event_alias: Option<String>,
+    #[serde(default)]
+    pub last_selected_phase_name: Option<String>,
+    #[serde(default)]
+    pub last_selected_phase_group_name: Option<String>,
     pub set_count: usize,
 }
 

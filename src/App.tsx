@@ -541,6 +541,8 @@ type EventLocalMeta = {
   eventId: string;
   eventName: string;
   eventAlias: string | null;
+  lastSelectedPhaseName?: string | null;
+  lastSelectedPhaseGroupName?: string | null;
   eventManagement?: EventManagementMeta | null;
   entrants: EventEntrantMeta[];
 };
@@ -611,6 +613,8 @@ type LocalSnapshotEventListItem = {
   eventId: string;
   eventName: string;
   eventAlias: string | null;
+  lastSelectedPhaseName?: string | null;
+  lastSelectedPhaseGroupName?: string | null;
   setCount: number;
 };
 
@@ -716,11 +720,6 @@ type DqRequestDialogState = {
   callEntrantId: string;
   callEntrantName: string;
   setId: string;
-};
-
-type EventSeedStatus = {
-  totalEntrants: number;
-  missingSeedEntrants: number;
 };
 
 type MatchSideRandomNotice = {
@@ -1676,6 +1675,7 @@ const CALL_LIST_ROTATE_SECONDS_STORAGE_KEY = "savakan-gg.call-list-rotate-second
 const CALL_LIST_COLOR_SECONDS_STORAGE_KEY = "savakan-gg.call-list-color-seconds.v1";
 const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
 const STARTGG_FETCH_PER_PAGE_STORAGE_KEY = "savakan-gg.startgg-fetch-per-page.v1";
+const LOCAL_COMMUNICATION_DISABLED_STORAGE_KEY = "savakan-gg.local-communication-disabled.v1";
 
 const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: boolean }> = [
   { id: "create", label: "新規作成", icon: "➕", implemented: true },
@@ -1962,6 +1962,17 @@ function resolveCreatePreviewSelection(
 
 function createPreviewEventSearchLabel(event: TournamentEventPreviewItem): string {
   return `${event.eventName} (${event.eventId})`;
+}
+
+function localSnapshotItemKey(item: LocalSnapshotEventListItem): string {
+  return `${item.slug}:${item.eventId}`;
+}
+
+function localSnapshotAliasLabel(item: LocalSnapshotEventListItem): string {
+  if (item.eventAlias && item.eventAlias.trim() !== "") {
+    return item.eventAlias;
+  }
+  return "-";
 }
 
 function bytesToBase32(bytes: Uint8Array): string {
@@ -2376,6 +2387,8 @@ function App() {
   const [batchForceOverwriteRemaining, setBatchForceOverwriteRemaining] = useState(false);
   const [metaDrafts, setMetaDrafts] = useState<Record<string, PlayerMetaDraft>>({});
   const [localSnapshotEvents, setLocalSnapshotEvents] = useState<LocalSnapshotEventListItem[]>([]);
+  const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
+  const [homeSelectedSnapshotKey, setHomeSelectedSnapshotKey] = useState("");
   const [loadingLocalSnapshotEvents, setLoadingLocalSnapshotEvents] = useState(false);
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
   const [itemLists, setItemLists] = useState<ItemListConfig[]>([]);
@@ -2430,6 +2443,7 @@ function App() {
     unreadOnly: false,
   });
   const [mailboxReadMessageIds, setMailboxReadMessageIds] = useState<string[]>([]);
+  const [disableLocalCommunication, setDisableLocalCommunication] = useState(false);
   const [sideDecisionMethod, setSideDecisionMethod] = useState<EventManagementSetting["sideDecisionMethod"]>("upper_1p");
   const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
   const [obsOverlayState, setObsOverlayState] = useState<ObsOverlayState | null>(null);
@@ -2463,6 +2477,7 @@ function App() {
   const startupDirectRestoreTriedRef = useRef(false);
   const startupListRestoreRetryCountRef = useRef(0);
   const lastPersistedSnapshotSelectionRef = useRef("");
+  const lastPersistedEventMetaPhasePoolRef = useRef("");
   const eventSettingHydratedKeyRef = useRef("");
   const suppressEventSettingAutosaveRef = useRef(false);
   const autoIpFillTriedRef = useRef(false);
@@ -2679,6 +2694,15 @@ function App() {
     } catch {
       // ignore
     }
+
+    try {
+      const rawDisableLocalCommunication = window.localStorage.getItem(LOCAL_COMMUNICATION_DISABLED_STORAGE_KEY);
+      if (rawDisableLocalCommunication !== null) {
+        setDisableLocalCommunication(rawDisableLocalCommunication === "true");
+      }
+    } catch {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
@@ -2724,6 +2748,17 @@ function App() {
       // ignore
     }
   }, [startggFetchPerPage]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        LOCAL_COMMUNICATION_DISABLED_STORAGE_KEY,
+        disableLocalCommunication ? "true" : "false",
+      );
+    } catch {
+      // ignore
+    }
+  }, [disableLocalCommunication]);
 
   useEffect(() => {
     let alive = true;
@@ -2990,6 +3025,14 @@ function App() {
       return;
     }
 
+    if (disableLocalCommunication) {
+      setMailboxServiceStarted(false);
+      void invoke("stop_udp_mailbox_service").catch(() => {
+        // ignore
+      });
+      return;
+    }
+
     if (!isValidSenderUserId(senderProfile.senderUserId) || !isValidIpv4(senderProfile.bindIp)) {
       return;
     }
@@ -3002,7 +3045,7 @@ function App() {
         setMailboxServiceStarted(false);
         setError(String(err));
       });
-  }, [senderProfile, senderProfileReady]);
+  }, [disableLocalCommunication, senderProfile, senderProfileReady]);
 
   useEffect(() => {
     if (!genericMessagesReady) {
@@ -3280,6 +3323,55 @@ function App() {
     });
   }, [selectedEvent, selectedMessageScope, snapshot]);
 
+  useEffect(() => {
+    if (!snapshot || !selectedEvent) {
+      return;
+    }
+
+    const parsed = parsePhasePoolKey(selectedPhasePoolKey);
+    const phaseName = (parsed?.phaseName ?? selectedPhaseName).trim();
+    const phaseGroupName = (parsed?.phaseGroupName ?? "").trim();
+    if (phaseName === "" || phaseGroupName === "") {
+      return;
+    }
+
+    const slugKey = toSlugInput(snapshot.slug);
+    const eventIdKey = selectedEvent.eventId.trim();
+    if (slugKey === "" || eventIdKey === "") {
+      return;
+    }
+
+    const persistKey = `${slugKey}::${eventIdKey}::${phaseName}::${phaseGroupName}`;
+    if (persistKey === lastPersistedEventMetaPhasePoolRef.current) {
+      return;
+    }
+
+    lastPersistedEventMetaPhasePoolRef.current = persistKey;
+
+    setLocalSnapshotEvents((current) => current.map((item) => {
+      if (!sameSnapshotEventKey(item.slug, item.eventId, snapshot.slug, selectedEvent.eventId)) {
+        return item;
+      }
+
+      return {
+        ...item,
+        lastSelectedPhaseName: phaseName,
+        lastSelectedPhaseGroupName: phaseGroupName,
+      };
+    }));
+
+    void invoke("save_event_last_phase_pool_selection", {
+      slug: snapshot.slug,
+      eventId: selectedEvent.eventId,
+      eventName: selectedEvent.name,
+      phaseName,
+      phaseGroupName,
+    }).catch((err) => {
+      lastPersistedEventMetaPhasePoolRef.current = "";
+      setError(String(err));
+    });
+  }, [selectedEvent, selectedPhaseName, selectedPhasePoolKey, snapshot]);
+
   const selectedEventSettingKey = useMemo(() => {
     if (!snapshot || !selectedEvent) {
       return "";
@@ -3377,6 +3469,70 @@ function App() {
     ) ?? null;
   }, [localSnapshotEvents, selectedEvent, selectedEventId, snapshot]);
 
+  const homeFilteredSnapshotEvents = useMemo(() => {
+    const normalizedQuery = homeSnapshotSearchInput.trim().toLocaleLowerCase();
+    if (normalizedQuery === "") {
+      return localSnapshotEvents;
+    }
+
+    return localSnapshotEvents.filter((item) => {
+      const alias = localSnapshotAliasLabel(item).toLocaleLowerCase();
+      const tournamentName = item.tournamentName.toLocaleLowerCase();
+      const eventName = item.eventName.toLocaleLowerCase();
+      const slugText = item.slug.toLocaleLowerCase();
+      return alias.includes(normalizedQuery)
+        || tournamentName.includes(normalizedQuery)
+        || eventName.includes(normalizedQuery)
+        || slugText.includes(normalizedQuery);
+    });
+  }, [homeSnapshotSearchInput, localSnapshotEvents]);
+
+  const homeSelectedSnapshotItem = useMemo(() => {
+    if (homeFilteredSnapshotEvents.length === 0) {
+      return null;
+    }
+
+    if (homeSelectedSnapshotKey !== "") {
+      const matched = homeFilteredSnapshotEvents.find((item) => localSnapshotItemKey(item) === homeSelectedSnapshotKey);
+      if (matched) {
+        return matched;
+      }
+    }
+
+    if (selectedSidebarItem) {
+      const selectedKey = localSnapshotItemKey(selectedSidebarItem);
+      const matched = homeFilteredSnapshotEvents.find((item) => localSnapshotItemKey(item) === selectedKey);
+      if (matched) {
+        return matched;
+      }
+    }
+
+    return homeFilteredSnapshotEvents[0] ?? null;
+  }, [homeFilteredSnapshotEvents, homeSelectedSnapshotKey, selectedSidebarItem]);
+
+  useEffect(() => {
+    if (homeFilteredSnapshotEvents.length === 0) {
+      if (homeSelectedSnapshotKey !== "") {
+        setHomeSelectedSnapshotKey("");
+      }
+      return;
+    }
+
+    if (homeSelectedSnapshotKey !== "") {
+      const stillExists = homeFilteredSnapshotEvents.some((item) => localSnapshotItemKey(item) === homeSelectedSnapshotKey);
+      if (stillExists) {
+        return;
+      }
+    }
+
+    if (homeSelectedSnapshotItem) {
+      setHomeSelectedSnapshotKey(localSnapshotItemKey(homeSelectedSnapshotItem));
+      return;
+    }
+
+    setHomeSelectedSnapshotKey(localSnapshotItemKey(homeFilteredSnapshotEvents[0]));
+  }, [homeFilteredSnapshotEvents, homeSelectedSnapshotItem, homeSelectedSnapshotKey]);
+
   useEffect(() => {
     if (workspace || busy || loadingLocalSnapshotEvents || tabSelectionAutoLoadInFlightRef.current) {
       return;
@@ -3454,48 +3610,6 @@ function App() {
       };
     });
   }, [configuredCategorySlots, selectedEventMeta]);
-  const eventSeedStatusByKey = useMemo(() => {
-    const map = new Map<string, EventSeedStatus>();
-
-    if (!snapshot) {
-      return map;
-    }
-
-    for (const event of snapshot.events) {
-      const byEntrantId = new Map<string, number | null>();
-
-      for (const set of event.sets) {
-        for (const slot of set.slots) {
-          if (!slot.entrantId) {
-            continue;
-          }
-
-          const current = byEntrantId.get(slot.entrantId);
-          const normalizedSeedNum = typeof slot.seedNum === "number" ? slot.seedNum : null;
-
-          if (current === undefined) {
-            byEntrantId.set(slot.entrantId, normalizedSeedNum);
-            continue;
-          }
-
-          if (current === null && normalizedSeedNum !== null) {
-            byEntrantId.set(slot.entrantId, normalizedSeedNum);
-          }
-        }
-      }
-
-      const totalEntrants = byEntrantId.size;
-      const missingSeedEntrants = [...byEntrantId.values()].filter((seedNum) => seedNum === null).length;
-
-      map.set(`${snapshot.slug}:${event.eventId}`, {
-        totalEntrants,
-        missingSeedEntrants,
-      });
-    }
-
-    return map;
-  }, [snapshot]);
-
   const selectedEventEntrants = useMemo(() => {
     if (!selectedEvent) {
       return [] as Array<{ entrantId: string; entrantName: string; seedId: string | null; seedNum: number | null }>;
@@ -3575,14 +3689,6 @@ function App() {
       return 0;
     });
   }, [selectedEvent]);
-  const selectedEventSeedStatus = useMemo(() => {
-    if (!snapshot || !selectedEvent) {
-      return null;
-    }
-
-    return eventSeedStatusByKey.get(`${snapshot.slug}:${selectedEvent.eventId}`) ?? null;
-  }, [eventSeedStatusByKey, selectedEvent, snapshot]);
-
   const selectedTournamentEntrant = useMemo(() => {
     if (selectedTournamentEntrantId === "") {
       return selectedEventEntrants[0] ?? null;
@@ -3880,6 +3986,7 @@ function App() {
 
   const canResolveActiveThread = !!activeThread
     && !activeThreadResolved
+    && !disableLocalCommunication
     && activeThread.senderUserId === senderProfile.senderUserId;
 
   useEffect(() => {
@@ -4062,6 +4169,7 @@ function App() {
     && isValidIpv4(senderProfile.bindIp);
 
   const canSendGenericMessage = isSenderProfileReadyForMessaging
+    && !disableLocalCommunication
     && isValidIpv4(senderProfile.broadcastSubnetMask)
     && normalizedMailboxMethod !== ""
     && normalizedMailboxSubject !== ""
@@ -4070,13 +4178,16 @@ function App() {
 
   const canReplyToThread = !!activeThread
     && !activeThreadResolved
+    && !disableLocalCommunication
     && isSenderProfileReadyForMessaging
     && normalizedReplyBody !== "";
   const isOwnActiveThread = !!activeThread
     && activeThread.senderUserId.trim() === senderProfile.senderUserId.trim();
   const canDeleteActiveThread = !!activeThread
+    && !disableLocalCommunication
     && (!isOwnActiveThread || activeThreadResolved);
   const canBroadcastCallListSync = senderProfile.senderName.trim() !== ""
+    && !disableLocalCommunication
     && isValidSenderUserId(senderProfile.senderUserId)
     && isValidIpv4(senderProfile.bindIp)
     && isValidIpv4(senderProfile.broadcastSubnetMask);
@@ -4084,6 +4195,7 @@ function App() {
   const activeCallThreadIdentity = useMemo(() => extractCallThreadIdentity(activeThread), [activeThread]);
   const canOpenDqDialog = !!activeThread
     && !activeThreadResolved
+    && !disableLocalCommunication
     && activeThread.senderUserId !== senderProfile.senderUserId
     && !!activeCallThreadIdentity;
 
@@ -4209,6 +4321,11 @@ function App() {
     setError("");
     setMessage("");
 
+    if (disableLocalCommunication) {
+      setError("ローカル通信を行わない設定のため、メッセージ送信は無効です。設定タブで解除してください。");
+      return;
+    }
+
     if (
       senderProfile.senderName.trim() === ""
       || !isValidSenderUserId(senderProfile.senderUserId)
@@ -4332,6 +4449,11 @@ function App() {
     setError("");
     setMessage("");
 
+    if (disableLocalCommunication) {
+      setError("ローカル通信を行わない設定のため、返信は無効です。設定タブで解除してください。");
+      return;
+    }
+
     if (!activeThread) {
       setError("返信先スレッドを選択してください。");
       return;
@@ -4398,6 +4520,11 @@ function App() {
   function openDqRequestDialog() {
     setError("");
     setMessage("");
+
+    if (disableLocalCommunication) {
+      setError("ローカル通信を行わない設定のため、DQ申請は無効です。設定タブで解除してください。");
+      return;
+    }
 
     if (!activeThread || !activeCallThreadIdentity) {
       setError("プレイヤー呼び出しスレッドを選択してください。");
@@ -4595,6 +4722,11 @@ function App() {
     setError("");
     setMessage("");
 
+    if (disableLocalCommunication) {
+      setDqDialogError("ローカル通信を行わない設定のため、DQ申請は無効です。設定タブで解除してください。");
+      return;
+    }
+
     if (!dqDialog) {
       setDqDialogError("DQ申請対象が見つかりません。再度開き直してください。");
       return;
@@ -4673,6 +4805,11 @@ function App() {
     setError("");
     setMessage("");
 
+    if (disableLocalCommunication) {
+      setError("ローカル通信を行わない設定のため、解決メッセージ送信は無効です。設定タブで解除してください。");
+      return;
+    }
+
     if (!activeThread) {
       setError("解決するスレッドを選択してください。");
       return;
@@ -4718,6 +4855,11 @@ function App() {
   async function requestUnresolvedCallSyncBroadcast() {
     setError("");
     setMessage("");
+
+    if (disableLocalCommunication) {
+      setError("ローカル通信を行わない設定のため、呼び出し同期は無効です。設定タブで解除してください。");
+      return;
+    }
 
     if (!canBroadcastCallListSync) {
       setError("設定タブで送信者名・8桁ユーザーID・自分のIP・ブロードキャスト用サブネットマスクを保存してから実行してください。");
@@ -4781,6 +4923,11 @@ function App() {
   }
 
   function deleteActiveThread() {
+    if (disableLocalCommunication) {
+      setError("ローカル通信を行わない設定のため、スレッド削除は無効です。必要な場合は設定タブの強制クリアを利用してください。");
+      return;
+    }
+
     if (!activeThread) {
       setError("削除するスレッドを選択してください。");
       return;
@@ -4901,6 +5048,11 @@ function App() {
   async function sendCallMessageFromMatch(slot: SetSlot, entrantId: string) {
     setError("");
     setMessage("");
+
+    if (disableLocalCommunication) {
+      setError("ローカル通信を行わない設定のため、プレイヤー呼び出しメッセージは作成できません。設定タブで解除してください。");
+      return;
+    }
 
     if (!snapshot || !selectedEvent || !activeMatch) {
       setError("呼び出し元の試合情報が見つかりません。もう一度試してください。");
@@ -5051,6 +5203,11 @@ function App() {
   }, [selectedUserCardPlayer]);
 
   async function saveSelectedUserCardImage() {
+    if (disableLocalCommunication) {
+      setError("ローカル通信を行わない設定のため、プレイヤーリスト機能は無効です。設定タブで解除してください。");
+      return;
+    }
+
     if (!selectedUserCardPlayer) {
       setError("保存するプレイヤーカードがありません。");
       return;
@@ -5074,6 +5231,11 @@ function App() {
   }
 
   async function exportAllPlayerCardsAsA4Pages() {
+    if (disableLocalCommunication) {
+      setError("ローカル通信を行わない設定のため、プレイヤーリスト機能は無効です。設定タブで解除してください。");
+      return;
+    }
+
     if (userCardPlayers.length === 0) {
       setError("出力対象のプレイヤーがいません。");
       return;
@@ -6914,11 +7076,20 @@ function App() {
     setError("");
     setMessage("");
 
+    const savedPhaseName = typeof item.lastSelectedPhaseName === "string"
+      ? item.lastSelectedPhaseName.trim()
+      : "";
+    const savedPhaseGroupName = typeof item.lastSelectedPhaseGroupName === "string"
+      ? item.lastSelectedPhaseGroupName.trim()
+      : "";
+
     try {
       await invoke("save_last_slug", { slug: item.slug });
       await invoke("save_last_snapshot_selection", {
         slug: item.slug,
         eventId: item.eventId,
+        phaseName: savedPhaseName === "" ? null : savedPhaseName,
+        phaseGroupName: savedPhaseGroupName === "" ? null : savedPhaseGroupName,
       });
       const result = await invoke<TournamentWorkspace>("load_local_tournament_workspace", {
         slug: item.slug,
@@ -6927,6 +7098,13 @@ function App() {
 
       setSlug(toSlugInput(item.slug));
       setSelectedEventId(item.eventId);
+      if (savedPhaseName !== "" && savedPhaseGroupName !== "") {
+        setSelectedPhaseName(savedPhaseName);
+        setSelectedPhasePoolKey(`${savedPhaseName}::${savedPhaseGroupName}`);
+      } else {
+        setSelectedPhaseName("");
+        setSelectedPhasePoolKey("");
+      }
       setWorkspace(result);
       closeMatchDialog();
       setMessage(`イベントを読み込みました: ${item.tournamentName} / ${item.eventName}`);
@@ -7992,7 +8170,7 @@ function App() {
         {activeTab === "home" && (
           <section className="panel">
             <div className="panel-toolbar compact">
-              <p className="meta">件数: {localSnapshotEvents.length}</p>
+              <p className="meta">件数: {homeFilteredSnapshotEvents.length} / 全{localSnapshotEvents.length}</p>
               <button
                 type="button"
                 className="ghost"
@@ -8008,80 +8186,100 @@ function App() {
             ) : localSnapshotEvents.length === 0 ? (
               <p className="meta">保存済みイベントがありません。大会管理タブから start.gg 同期を実行してください。</p>
             ) : (
-              <div className="event-list">
-                {localSnapshotEvents.map((item) => {
+              <>
+                <div className="home-selector-grid">
+                  <label htmlFor="home-snapshot-search-input" style={{ display: "grid", gap: "0.3rem" }}>
+                    <span className="meta">大会検索</span>
+                    <input
+                      id="home-snapshot-search-input"
+                      type="search"
+                      value={homeSnapshotSearchInput}
+                      onChange={(e) => setHomeSnapshotSearchInput(e.currentTarget.value)}
+                      placeholder="エイリアス名 / tournament名 / event名 で検索"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <label htmlFor="home-snapshot-select" style={{ display: "grid", gap: "0.3rem" }}>
+                    <span className="meta">大会選択</span>
+                    <select
+                      id="home-snapshot-select"
+                      value={homeSelectedSnapshotItem ? localSnapshotItemKey(homeSelectedSnapshotItem) : ""}
+                      onChange={(e) => setHomeSelectedSnapshotKey(e.currentTarget.value)}
+                    >
+                      <option value="" disabled>
+                        {homeFilteredSnapshotEvents.length === 0 ? "一致する大会がありません" : "大会を選択"}
+                      </option>
+                      {homeFilteredSnapshotEvents.map((item) => (
+                        <option key={localSnapshotItemKey(item)} value={localSnapshotItemKey(item)}>
+                          {localSnapshotAliasLabel(item)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                {homeSelectedSnapshotItem ? (() => {
+                  const item = homeSelectedSnapshotItem;
+                  const itemKey = localSnapshotItemKey(item);
+                  const isDeleting = deletingSnapshotKey === itemKey;
+                  const selectedPhaseName = typeof item.lastSelectedPhaseName === "string"
+                    ? item.lastSelectedPhaseName.trim()
+                    : "";
+                  const selectedPhaseGroupName = typeof item.lastSelectedPhaseGroupName === "string"
+                    ? item.lastSelectedPhaseGroupName.trim()
+                    : "";
+                  const selectedPhasePoolLabel = selectedPhaseName !== "" && selectedPhaseGroupName !== ""
+                    ? `${selectedPhaseName} / Pool ${selectedPhaseGroupName}`
+                    : "-";
+
                   const startupSelectedSlug = startupSavedSlugRef.current.trim();
                   const startupSelectedEventId = startupSavedEventIdRef.current.trim();
                   const currentSelectedSlug = snapshot?.slug?.trim() || startupSelectedSlug;
                   const currentSelectedEventId = selectedEvent?.eventId?.trim() || selectedEventId.trim() || startupSelectedEventId;
-                  const isSelected =
+                  const isCurrentActive =
                     currentSelectedSlug !== ""
                     && currentSelectedEventId !== ""
                     ? sameSnapshotEventKey(currentSelectedSlug, currentSelectedEventId, item.slug, item.eventId)
                     : false;
-                  const seedStatus = eventSeedStatusByKey.get(`${item.slug}:${item.eventId}`) ?? null;
-                  const itemKey = `${item.slug}:${item.eventId}`;
-                  const isDeleting = deletingSnapshotKey === itemKey;
-                  const aliasName = item.eventAlias && item.eventAlias.trim() !== ""
-                    ? item.eventAlias
-                    : "-";
 
                   return (
-                    <article
-                      key={`${item.slug}:${item.eventId}`}
-                      className={`event-list-item ${isSelected ? "selected" : ""}`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => {
-                        if (!isDeleting && !busy) {
-                          void selectLocalSnapshotEvent(item);
-                        }
-                      }}
-                      onDoubleClick={() => {
-                        if (!isDeleting) {
-                          void (async () => {
-                            await selectLocalSnapshotEvent(item);
-                            setActiveTab("tournament");
-                          })();
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          if (!isDeleting && !busy) {
-                            void selectLocalSnapshotEvent(item);
-                          }
-                        }
-                      }}
-                    >
+                    <article className={`event-list-item selected home-detail-card`}>
                       <div className="event-list-head">
-                        <h3>{aliasName}</h3>
+                        <h3>{localSnapshotAliasLabel(item)}</h3>
                         <span className="meta">{new Date(item.updatedAt).toLocaleString()}</span>
                       </div>
                       <p className="meta">start.ggのtournament名: {item.tournamentName}</p>
                       <p className="meta">start.ggのevent名: {item.eventName}</p>
-                      {seedStatus && seedStatus.totalEntrants > 0 && (
-                        <p className={`meta ${seedStatus.missingSeedEntrants > 0 ? "error-text" : ""}`}>
-                          {seedStatus.missingSeedEntrants > 0
-                            ? `⚠ seed未設定: ${seedStatus.missingSeedEntrants}/${seedStatus.totalEntrants}`
-                            : `seed設定済み: ${seedStatus.totalEntrants}/${seedStatus.totalEntrants}`}
-                        </p>
-                      )}
-                      <button
-                        type="button"
-                        className="ghost"
-                        disabled={busy || isDeleting}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void deleteLocalSnapshotEvent(item);
-                        }}
-                      >
-                        {isDeleting ? "削除中..." : "スナップショットの削除"}
-                      </button>
+                      <p className="meta">前回選択Phase/Pool: {selectedPhasePoolLabel}</p>
+                      <p className="meta">現在の選択状態: {isCurrentActive ? "表示中のイベントです" : "未表示"}</p>
+                      <div className="home-detail-actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          disabled={busy || isDeleting}
+                          onClick={() => {
+                            void selectLocalSnapshotEvent(item);
+                          }}
+                        >
+                          イベントを選択
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          disabled={busy || isDeleting}
+                          onClick={() => {
+                            void deleteLocalSnapshotEvent(item);
+                          }}
+                        >
+                          {isDeleting ? "削除中..." : "スナップショットの削除"}
+                        </button>
+                      </div>
                     </article>
                   );
-                })}
-              </div>
+                })() : (
+                  <p className="meta" style={{ marginTop: "0.7rem" }}>一致する大会がありません。</p>
+                )}
+              </>
             )}
           </section>
         )}
@@ -8263,13 +8461,6 @@ function App() {
                 </div>
 
                 <div className="panel-toolbar compact">
-                  <p className={`meta ${selectedEventSeedStatus && selectedEventSeedStatus.missingSeedEntrants > 0 ? "error-text" : ""}`}>
-                    {selectedEventSeedStatus
-                      ? (selectedEventSeedStatus.missingSeedEntrants > 0
-                        ? `⚠ seed未設定のプレイヤーがあります (${selectedEventSeedStatus.missingSeedEntrants}/${selectedEventSeedStatus.totalEntrants})`
-                        : `seed設定済み (${selectedEventSeedStatus.totalEntrants}/${selectedEventSeedStatus.totalEntrants})`)
-                      : "seed状態: 不明"}
-                  </p>
                   <button type="button" className="ghost" disabled={busy || toApiSlug(slug) === ""} onClick={updateSnapshot}>
                     スナップショットを更新
                   </button>
@@ -8464,7 +8655,6 @@ function App() {
                               >
                                 <h4>{entrant.entrantName}</h4>
                                 <p className="meta">entrantId: {entrant.entrantId}</p>
-                                {entrant.seedNum === null && <p className="meta error-text">⚠ seed未設定</p>}
                               </article>
                             );
                           })}
@@ -8673,6 +8863,11 @@ function App() {
                 送信不可: 設定タブで「送信者名」「8桁ユーザーID」「自分のIP」を保存すると、スレッド開始・返信・DQ申請が可能になります。
               </p>
             )}
+            {disableLocalCommunication && (
+              <p className="meta meta-attention">
+                ローカル通信OFF: 閲覧のみ可能です（スレッド開始・返信・DQ申請・解決・削除は無効）。
+              </p>
+            )}
             <p className="meta">受信サービス: {mailboxServiceStarted ? "起動中" : "未起動"}</p>
 
             <div className="form" style={{ marginTop: "0.6rem" }}>
@@ -8685,10 +8880,15 @@ function App() {
                 value={mailboxSubjectDraft}
                 onChange={(e) => setMailboxSubjectDraft(e.currentTarget.value)}
                 placeholder="件名"
+                disabled={disableLocalCommunication}
               />
             </div>
             <div className="form" style={{ marginTop: "0.6rem" }}>
-              <select value={messageDeliveryMode} onChange={(e) => setMessageDeliveryMode(e.currentTarget.value as MailboxDeliveryMode)}>
+              <select
+                value={messageDeliveryMode}
+                onChange={(e) => setMessageDeliveryMode(e.currentTarget.value as MailboxDeliveryMode)}
+                disabled={disableLocalCommunication}
+              >
                 <option value="broadcast">ブロードキャスト</option>
                 <option value="direct">送信先IP指定</option>
               </select>
@@ -8696,7 +8896,7 @@ function App() {
                 value={messageDeliveryIpDraft}
                 onChange={(e) => setMessageDeliveryIpDraft(e.currentTarget.value)}
                 placeholder="送信先IP (例: 192.168.1.20)"
-                disabled={messageDeliveryMode !== "direct"}
+                disabled={disableLocalCommunication || messageDeliveryMode !== "direct"}
               />
             </div>
             <p className="meta">返信は、スレッド主ならブロードキャスト、それ以外は返信先の送信者IPへ送信します。</p>
@@ -8722,6 +8922,7 @@ function App() {
                 rows={5}
                 placeholder={composeFixedBodyDraft ? "補足を入力" : "メッセージ本文"}
                 style={{ width: "100%" }}
+                disabled={disableLocalCommunication}
               />
             </div>
 
@@ -8742,6 +8943,7 @@ function App() {
                       setGenericMessageBodyDraft("");
                       setMessage("呼び出しメッセージをキャンセルしました。汎用メッセージ入力に戻りました。");
                     }}
+                    disabled={disableLocalCommunication}
                   >
                     呼び出しをキャンセル
                   </button>
@@ -8858,6 +9060,7 @@ function App() {
                                 type="button"
                                 className="ghost tiny"
                                 onClick={() => processDqRequestFromMessage(item)}
+                                disabled={disableLocalCommunication}
                               >
                                 DQ処理
                               </button>
@@ -8890,6 +9093,7 @@ function App() {
                         rows={4}
                         placeholder="このスレッドへの返信"
                         style={{ width: "100%" }}
+                        disabled={disableLocalCommunication}
                       />
                     </div>
                     <div className="panel-toolbar compact">
@@ -9243,7 +9447,7 @@ function App() {
                         }}
                         disabled={obsOverlayBusy}
                       />
-                      プレイヤー名を自動縮小して全体表示（オフで途中切れ）
+                      プレイヤー名を縮小表示
                     </label>
                     <label className="checkbox-row" style={{ alignItems: "center", gap: "0.5rem" }}>
                       <input
@@ -9373,6 +9577,26 @@ function App() {
             <p className="meta">各クライアントを識別するための送信者名と8桁ユーザーIDを設定します。</p>
             <p className="meta">IPとサブネットマスクは選択したネットワークデバイスから自動反映されます。個別調整はOS側のネットワーク設定で行ってください。</p>
             <p className="meta">ユーザーIDはクライアント間で重複しないよう運用してください。ランダム決定ボタンで簡単に採番できます。</p>
+
+            <label className="checkbox-row" style={{ marginTop: "0.6rem" }}>
+              <input
+                type="checkbox"
+                checked={disableLocalCommunication}
+                onChange={(event) => {
+                  const checked = event.currentTarget.checked;
+                  setDisableLocalCommunication(checked);
+                  if (checked) {
+                    setMessage("ローカル通信を無効化しました。メッセージ機能とプレイヤーリストは閲覧のみになります。");
+                  } else {
+                    setMessage("ローカル通信を有効化しました。メッセージ機能とプレイヤーリストを再開できます。");
+                  }
+                }}
+              />
+              ローカル通信を行わない
+            </label>
+            <p className="meta">
+              ON中はメッセージ機能とプレイヤーリストの送受信系操作を無効化します。既存データの閲覧は可能です。解決・スレッド削除は不可ですが、下部の「メッセージボックスを強制クリア」は実行できます。
+            </p>
 
             <div className="form" style={{ marginTop: "0.65rem" }}>
               <label htmlFor="sender-name-input" style={{ display: "grid", gap: "0.3rem" }}>
@@ -9579,6 +9803,9 @@ function App() {
         <>
           <section className="panel">
             <h2>プレイヤーリスト</h2>
+            {disableLocalCommunication && (
+              <p className="meta meta-attention">ローカル通信OFF中のため、プレイヤーリスト機能は停止中です。</p>
+            )}
             {!snapshot || !selectedEvent ? (
               <p className="meta">ホームの大会一覧からイベントを選択してください。</p>
             ) : (
@@ -9590,7 +9817,7 @@ function App() {
                 <div className="form" style={{ marginTop: "0.65rem" }}>
                   <button
                     type="button"
-                    disabled={userCardBusy || !selectedUserCardPlayer}
+                    disabled={disableLocalCommunication || userCardBusy || !selectedUserCardPlayer}
                     onClick={() => void saveSelectedUserCardImage()}
                   >
                     選択カードを保存
@@ -9598,7 +9825,7 @@ function App() {
                   <button
                     type="button"
                     className="ghost"
-                    disabled={userCardBusy || userCardPlayers.length === 0}
+                    disabled={disableLocalCommunication || userCardBusy || userCardPlayers.length === 0}
                     onClick={() => void exportAllPlayerCardsAsA4Pages()}
                   >
                     全カードをA4画像で出力
@@ -9665,9 +9892,9 @@ function App() {
         {activeTab === "bracket" && (
         <>
           <section className="panel">
-            <h2>ブラケット管理</h2>
-            <p className="meta">試合カードをクリックすると詳細ダイアログを開き、結果入力と 1P/2P 設定ができます。</p>
-            <p className="meta">配信開始/停止はブラケットカードを Ctrl+クリックで切り替えます（同時配信は1セットのみ）。Ctrl+Shift+クリックで完全停止します。</p>
+            <h2>使用方法</h2>
+            <p className="meta">試合setのカードをクリックすると詳細ダイアログが開き、各種入力が可能です。</p>
+            <p className="meta">カードを Ctrl+クリックで配信画面のON/OFF(最大1set)。Ctrl+Shift+クリックで完全停止します。</p>
             <div className="panel-toolbar compact">
               <p className="meta">
                 下書き: {draftSetResults.length} / 確定済み: {confirmedSetResults.length}
@@ -9690,7 +9917,9 @@ function App() {
 
           {snapshot && (
             <section className="panel">
-              <h2>{snapshot.name}</h2>
+              <h2>{selectedEventMeta?.eventAlias?.trim() ? selectedEventMeta.eventAlias : "未設定"}</h2>
+              <p className="meta">start.ggのtournament名: {snapshot.name}</p>
+              <p className="meta">start.ggのevent名: {selectedEvent?.name ?? "-"}</p>
               <p className="meta">
                 slug: {snapshot.slug} / updatedAt: {new Date(snapshot.updatedAt).toLocaleString()}
               </p>
@@ -9740,21 +9969,11 @@ function App() {
                 </select>
 
               </div>
-
-              {selectedEvent && (
-                <p className="meta">
-                  表示中: {selectedEvent.name} / sets: {selectedEvent.sets.length} / phase-pool groups: {phasePoolGroups.length}
-                </p>
-              )}
-
               <div className="phase-groups">
                 {!selectedPhasePoolGroup ? (
                   <p className="meta">選択中イベントにフェーズ/プール情報がありません。</p>
                 ) : (
                   <section className="phase-group" key={selectedPhasePoolGroup.key}>
-                    <h3>
-                      {selectedPhasePoolGroup.phaseName} / Pool {selectedPhasePoolGroup.phaseGroupName}
-                    </h3>
                     <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
 
                     <div className="bracket-split-stack">

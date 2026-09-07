@@ -1215,6 +1215,10 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
         let mut buf = [0_u8; 65_535];
 
         loop {
+            if !running_flag.load(Ordering::SeqCst) {
+                break;
+            }
+
             match socket.recv_from(&mut buf) {
                 Ok((size, _)) => {
                     let raw = match std::str::from_utf8(&buf[..size]) {
@@ -1536,6 +1540,12 @@ fn start_udp_mailbox_service(app: tauri::AppHandle, profile: SenderProfile) -> R
 }
 
 #[tauri::command]
+fn stop_udp_mailbox_service() -> Result<(), String> {
+    udp_listener_running().store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
 fn send_mailbox_message(
     app: tauri::AppHandle,
     input: SendMailboxMessageInput,
@@ -1682,6 +1692,26 @@ fn load_last_snapshot_selection(
     app: tauri::AppHandle,
 ) -> Result<Option<storage::LastSnapshotSelection>, String> {
     storage::load_last_snapshot_selection(&app)
+}
+
+#[tauri::command]
+fn save_event_last_phase_pool_selection(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+    event_name: String,
+    phase_name: Option<String>,
+    phase_group_name: Option<String>,
+) -> Result<(), String> {
+    storage::set_event_last_phase_pool_selection(
+        &app,
+        &slug,
+        &event_id,
+        &event_name,
+        phase_name.as_deref(),
+        phase_group_name.as_deref(),
+    )?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2252,6 +2282,7 @@ pub fn run() {
             load_last_slug,
             save_last_snapshot_selection,
             load_last_snapshot_selection,
+            save_event_last_phase_pool_selection,
             load_item_lists,
             save_item_lists,
             load_event_mgmt_settings,
@@ -2271,6 +2302,7 @@ pub fn run() {
             save_generic_messages,
             load_generic_messages,
             start_udp_mailbox_service,
+            stop_udp_mailbox_service,
             send_mailbox_message,
             save_event_management_meta,
             load_local_tournament,
