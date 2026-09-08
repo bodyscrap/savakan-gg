@@ -144,7 +144,7 @@ function buildLosersRoundPositions(
     }
 
     if (sourceIndexes.length === 1) {
-      return fallback[currentIndex] ?? (BRACKET_TOP_PADDING + currentIndex * BRACKET_ROW_STEP);
+      return previousPositions[sourceIndexes[0]] ?? fallback[currentIndex] ?? (BRACKET_TOP_PADDING + currentIndex * BRACKET_ROW_STEP);
     }
 
     return fallback[currentIndex] ?? (BRACKET_TOP_PADDING + currentIndex * BRACKET_ROW_STEP);
@@ -232,7 +232,7 @@ function buildWinnersExpandedRoundPositions(
     }
 
     if (sourceIndexes.length === 1) {
-      return baseInterpolated[currentIndex] ?? (BRACKET_TOP_PADDING + currentIndex * BRACKET_ROW_STEP);
+      return previousPositions[sourceIndexes[0]] ?? baseInterpolated[currentIndex] ?? (BRACKET_TOP_PADDING + currentIndex * BRACKET_ROW_STEP);
     }
 
     if (unresolvedSlotCount >= 2 && previousCount > 1) {
@@ -320,38 +320,82 @@ function buildPositionedRoundColumns(
   columns: RoundColumn[],
   sectionKey: string,
 ): PositionedRoundColumn[] {
-  const positionedColumns: PositionedRoundColumn[] = [];
-  let previousPositions: number[] | null = null;
-  let previousSets: SetSnapshot[] | null = null;
+  const positionedColumns: Array<PositionedRoundColumn | null> = Array.from(
+    { length: columns.length },
+    () => null,
+  );
+  const resolvedPositions: number[][] = Array.from({ length: columns.length }, () => []);
+  const maxSetCount = Math.max(0, ...columns.map((column) => column.sets.length));
+  const maxSetCountIndex = columns.findIndex((column) => column.sets.length === maxSetCount && column.sets.length > 0);
+
+  const assignDefaultPositions = (columnIndex: number): number[] => {
+    const column = columns[columnIndex];
+    if (!column || column.sets.length === 0) {
+      return [];
+    }
+
+    const nextColumn = columns[columnIndex + 1];
+    const nextCount = nextColumn?.sets.length ?? 0;
+    const defaultPositions =
+      sectionKey === "winners" && columnIndex === 0 && nextCount > column.sets.length
+        ? buildFirstWinnersColumnPositions(column.sets.length, nextCount)
+        : Array.from(
+          { length: column.sets.length },
+          (_, index) => BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP,
+        );
+
+    resolvedPositions[columnIndex] = defaultPositions;
+    return defaultPositions;
+  };
+
+  if (maxSetCountIndex >= 0) {
+    assignDefaultPositions(maxSetCountIndex);
+  }
+
+  for (let columnIndex = maxSetCountIndex - 1; columnIndex >= 0; columnIndex -= 1) {
+    const column = columns[columnIndex];
+    const nextColumn = columns[columnIndex + 1];
+    if (!column || column.sets.length === 0 || !nextColumn || nextColumn.sets.length === 0) {
+      if (resolvedPositions[columnIndex].length === 0) {
+        assignDefaultPositions(columnIndex);
+      }
+      continue;
+    }
+
+    const referencePositions = resolvedPositions[columnIndex + 1];
+    const lanePositions =
+      sectionKey === "losers"
+        ? buildLosersRoundPositions(nextColumn.sets, referencePositions, column.sets)
+        : buildWinnersExpandedRoundPositions(nextColumn.sets, referencePositions, column.sets);
+
+    resolvedPositions[columnIndex] = lanePositions.length > 0 ? lanePositions : assignDefaultPositions(columnIndex);
+  }
+
+  for (let columnIndex = maxSetCountIndex + 1; columnIndex < columns.length; columnIndex += 1) {
+    const previousColumn = columns[columnIndex - 1];
+    const column = columns[columnIndex];
+    if (!column || column.sets.length === 0) {
+      continue;
+    }
+
+    const previousPositions = resolvedPositions[columnIndex - 1];
+    const lanePositions =
+      previousColumn && previousColumn.sets.length > 0
+        ? sectionKey === "losers"
+          ? buildLosersRoundPositions(previousColumn.sets, previousPositions, column.sets)
+          : buildWinnersExpandedRoundPositions(previousColumn.sets, previousPositions, column.sets)
+        : assignDefaultPositions(columnIndex);
+
+    resolvedPositions[columnIndex] = lanePositions.length > 0 ? lanePositions : assignDefaultPositions(columnIndex);
+  }
 
   for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {
     const column = columns[columnIndex];
-    const nextColumn = columns[columnIndex + 1];
-    const setCount = column.sets.length;
-    let lanePositions: number[] = [];
-
-    if (setCount > 0) {
-      if (!previousPositions) {
-        const nextCount = nextColumn?.sets.length ?? 0;
-        if (sectionKey === "winners" && nextCount > setCount) {
-          lanePositions = buildFirstWinnersColumnPositions(setCount, nextCount);
-        } else {
-          lanePositions = Array.from(
-            { length: setCount },
-            (_, index) => BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP,
-          );
-        }
-      } else if (sectionKey === "losers" && previousSets) {
-        lanePositions = buildLosersRoundPositions(previousSets, previousPositions, column.sets);
-      } else if (previousPositions.length < setCount && previousSets) {
-        lanePositions = buildWinnersExpandedRoundPositions(previousSets, previousPositions, column.sets);
-      } else if (previousPositions.length === setCount * 2) {
-        lanePositions = averagePairPositions(previousPositions, setCount);
-      } else {
-        lanePositions = interpolateLanePositions(previousPositions, setCount);
-      }
+    if (!column || column.sets.length === 0) {
+      continue;
     }
 
+    const lanePositions = resolvedPositions[columnIndex];
     const positionedSets = column.sets.map((set, index) => ({
       set,
       y: lanePositions[index] ?? (BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP),
@@ -363,19 +407,16 @@ function buildPositionedRoundColumns(
       maxTop + BRACKET_SET_CARD_HEIGHT + BRACKET_BOTTOM_PADDING,
     );
 
-    positionedColumns.push({
+    positionedColumns[columnIndex] = {
       key: column.key,
       title: column.title,
       round: column.round,
       positionedSets,
       height,
-    });
-
-    previousPositions = positionedSets.map((item) => item.y);
-    previousSets = column.sets;
+    };
   }
 
-  return positionedColumns;
+  return positionedColumns.filter((item): item is PositionedRoundColumn => item !== null);
 }
 
 function formatAlphabetSequence(index: number): string {
@@ -1903,6 +1944,9 @@ function applyScoreDraftWithOpponentDefault(
 
 function abbreviateOverlayRoundText(value: string): string {
   return value
+    .replace(/\bGrand\s+Finals?\s+Reset\b/gi, "GF Reset")
+    .replace(/\bGF\s+Reset\b/gi, "GF Reset")
+    .replace(/\bGrand\s+Finals?\b/gi, "GF")
     .replace(/\bWinners\b/gi, "W")
     .replace(/\bWinner\b/gi, "W")
     .replace(/\bLosers\b/gi, "L")
