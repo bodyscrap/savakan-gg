@@ -73,3 +73,19 @@ applyTo: ["src-tauri/src/**/*.rs", "src-tauri/src/graphql/**/*.graphql"]
 |1|STANDBY|試合が開始されていない。マッチが決定していない状態も含む。|
 |2|IN_PROGRESS|試合が開始され、現在プレイ中の状態。途中経過として現時点のスコアが入力されていることもある。|
 |3|COMPLETED|試合が完了し勝敗が確定した状態。|
+
+## 6. 参考文献
+
+### 6.1. schemaのドキュメント
+
+start.ggの公式のGraphQLスキーマのドキュメントは以下
+https://smashgg-schema.netlify.app/reference/
+
+ここに無いものは上記ライブラリにも存在しない。
+
+### 6.2. brackets-manager.jsのドキュメント
+
+bracketの作成ルールについて実装されている。
+start.ggの形式に近づけようとしているようなので参考になるはず。  
+
+https://github.com/Drarig29/brackets-manager.js/

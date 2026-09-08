@@ -19,6 +19,24 @@ query TournamentSync($slug: String!, $perPage: Int!) {
           }
           state
           winnerId
+          entrant1Source {
+            typeId
+            condition
+            conditionString
+          }
+          entrant2Source {
+            typeId
+            condition
+            conditionString
+          }
+          winnerProgressionSeed {
+            id
+            seedNum
+          }
+          loserProgressionSeed {
+            id
+            seedNum
+          }
           slots {
             seed {
               id

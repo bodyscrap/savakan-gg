@@ -144,7 +144,7 @@ function buildLosersRoundPositions(
     }
 
     if (sourceIndexes.length === 1) {
-      return previousPositions[sourceIndexes[0]];
+      return fallback[currentIndex] ?? (BRACKET_TOP_PADDING + currentIndex * BRACKET_ROW_STEP);
     }
 
     return fallback[currentIndex] ?? (BRACKET_TOP_PADDING + currentIndex * BRACKET_ROW_STEP);
@@ -232,12 +232,7 @@ function buildWinnersExpandedRoundPositions(
     }
 
     if (sourceIndexes.length === 1) {
-      const sourceIndex = sourceIndexes[0];
-      const laneIndex = expandedLaneIndexes[sourceIndex];
-      if (laneIndex !== undefined) {
-        occupiedLanes.add(laneIndex);
-      }
-      return previousPositions[sourceIndex];
+      return baseInterpolated[currentIndex] ?? (BRACKET_TOP_PADDING + currentIndex * BRACKET_ROW_STEP);
     }
 
     if (unresolvedSlotCount >= 2 && previousCount > 1) {
@@ -433,7 +428,7 @@ function pickPairSourceIds(previousSetIds: string[], currentCount: number, curre
 }
 
 function normalizeSourceText(kind: "winners" | "losers", setCode: string): string {
-  return `${kind} of ${setCode}`;
+  return `${kind === "winners" ? "winner" : "loser"} of ${setCode}`;
 }
 
 function isGrandFinalText(text: string): boolean {
@@ -442,6 +437,33 @@ function isGrandFinalText(text: string): boolean {
     return true;
   }
   return /(^|\s|\()gf(\s|\)|$)/i.test(text);
+}
+
+function isGrandFinalResetText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (normalized.includes("reset") || normalized.includes("リセット")) {
+    return true;
+  }
+  return /(^|\s|\()gfr(\s|\)|$)/i.test(text);
+}
+
+function isGrandFinalResetSet(set: SetSnapshot): boolean {
+  return isGrandFinalText(set.fullRoundText) && isGrandFinalResetText(set.fullRoundText);
+}
+
+function shouldShowGrandFinalResetColumn(column: RoundColumn): boolean {
+  const hasResetSet = column.sets.some((set) => isGrandFinalResetSet(set));
+  if (!hasResetSet) {
+    return true;
+  }
+
+  return column.sets.some((set) => {
+    if (set.winnerId !== null) {
+      return true;
+    }
+
+    return set.slots.some((slot) => slot.entrantId !== null || slot.score !== null);
+  });
 }
 
 function isWinnersFinalText(text: string): boolean {
@@ -476,7 +498,10 @@ function buildRoundColumns(sets: SetSnapshot[]): RoundColumn[] {
   let seq = 0;
 
   for (const set of sets) {
-    const roundKey = set.round !== null ? `round-${set.round}` : `text-${set.fullRoundText}`;
+    const normalizedRoundTitle = set.fullRoundText.trim().toLowerCase();
+    const roundKey = set.round !== null
+      ? `round-${set.round}-title-${normalizedRoundTitle}`
+      : `text-${normalizedRoundTitle}`;
     const found = map.get(roundKey);
 
     if (found) {
@@ -497,7 +522,18 @@ function buildRoundColumns(sets: SetSnapshot[]): RoundColumn[] {
 
   return [...map.values()].sort((a, b) => {
     if (a.round !== null && b.round !== null) {
-      return a.round - b.round;
+      const byRound = a.round - b.round;
+      if (byRound !== 0) {
+        return byRound;
+      }
+
+      const leftIsReset = a.sets.some((set) => isGrandFinalResetSet(set));
+      const rightIsReset = b.sets.some((set) => isGrandFinalResetSet(set));
+      if (leftIsReset !== rightIsReset) {
+        return leftIsReset ? 1 : -1;
+      }
+
+      return a.seq - b.seq;
     }
 
     if (a.round !== null) {
@@ -656,6 +692,15 @@ type EventSnapshotProgress = {
   totalPlannedSetRequests: number | null;
 };
 
+type BracketReportProgressEvent = {
+  phase: string;
+  totalCount: number;
+  processedCount: number;
+  reportedCount: number;
+  skippedCount: number;
+  currentSetId: string | null;
+};
+
 type ResetSetResultCascadeResult = {
   workspace: TournamentWorkspace;
   affectedSetIds: string[];
@@ -761,6 +806,7 @@ type ObsOverlaySetInput = {
 };
 
 const EVENT_SNAPSHOT_PROGRESS_EVENT = "event_snapshot_progress";
+const BRACKET_REPORT_PROGRESS_EVENT = "bracket_report_progress";
 
 type PlayerMetaDraft = {
   playSide: PlaySide | "";
@@ -2387,6 +2433,7 @@ function App() {
   const [createEventAlias, setCreateEventAlias] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
   const [createSnapshotProgress, setCreateSnapshotProgress] = useState<EventSnapshotProgress | null>(null);
+  const [bracketReportProgress, setBracketReportProgress] = useState<BracketReportProgressEvent | null>(null);
   const [workspace, setWorkspace] = useState<TournamentWorkspace | null>(null);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [selectedPhaseName, setSelectedPhaseName] = useState("");
@@ -2538,6 +2585,32 @@ function App() {
             return;
           }
           setCreateSnapshotProgress(event.payload);
+        });
+        unlisten = off;
+      } catch {
+        // ignore listener setup failure in non-Tauri environments
+      }
+    })();
+
+    return () => {
+      alive = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        const off = await listen<BracketReportProgressEvent>(BRACKET_REPORT_PROGRESS_EVENT, (event) => {
+          if (!alive) {
+            return;
+          }
+          setBracketReportProgress(event.payload);
         });
         unlisten = off;
       } catch {
@@ -3916,7 +3989,7 @@ function App() {
       return 0;
     }
 
-    if (!createBusy && createSnapshotProgress.totalRequests !== null && createSnapshotProgress.totalRequests > 0) {
+    if (createSnapshotProgress.phase === "completed") {
       return 100;
     }
 
@@ -3926,7 +3999,7 @@ function App() {
 
     const raw = (createSnapshotProgress.completedRequests / createSnapshotProgress.totalRequests) * 100;
     return Math.max(0, Math.min(100, raw));
-  }, [createBusy, createSnapshotProgress]);
+  }, [createSnapshotProgress]);
 
   const createSnapshotProgressLabel = useMemo(() => {
     if (!createSnapshotProgress) {
@@ -3961,6 +4034,60 @@ function App() {
 
     return "取得中...";
   }, [createSnapshotProgress]);
+
+  const bracketReportProgressPercent = useMemo(() => {
+    if (!bracketReportProgress) {
+      return 0;
+    }
+
+    if (bracketReportProgress.totalCount <= 0) {
+      return 100;
+    }
+
+    const raw = (bracketReportProgress.processedCount / bracketReportProgress.totalCount) * 100;
+    return Math.max(0, Math.min(100, raw));
+  }, [bracketReportProgress]);
+
+  const bracketReportProgressLabel = useMemo(() => {
+    if (!bracketReportProgress) {
+      return "";
+    }
+
+    const doneText = `${bracketReportProgress.processedCount}/${bracketReportProgress.totalCount} 件`;
+    const detailText = `送信 ${bracketReportProgress.reportedCount} / スキップ ${bracketReportProgress.skippedCount}`;
+
+    if (bracketReportProgress.phase === "starting") {
+      return `結果報告の準備中...（${doneText}）`;
+    }
+
+    if (bracketReportProgress.phase === "processing") {
+      if (bracketReportProgress.currentSetId) {
+        return `結果報告中 ${doneText} / ${detailText} / set ${bracketReportProgress.currentSetId}`;
+      }
+      return `結果報告中 ${doneText} / ${detailText}`;
+    }
+
+    if (bracketReportProgress.phase === "refreshingSnapshot") {
+      return `結果報告後のスナップショット更新中... ${doneText} / ${detailText}`;
+    }
+
+    if (bracketReportProgress.phase === "paused") {
+      if (bracketReportProgress.currentSetId) {
+        return `競合のため一時停止 ${doneText} / ${detailText} / set ${bracketReportProgress.currentSetId}`;
+      }
+      return `競合のため一時停止 ${doneText} / ${detailText}`;
+    }
+
+    if (bracketReportProgress.phase === "completed") {
+      return `結果報告が完了しました。${detailText}`;
+    }
+
+    return `結果報告中 ${doneText} / ${detailText}`;
+  }, [bracketReportProgress]);
+
+  const shouldShowBracketSnapshotRefreshProgress = useMemo(() => {
+    return bracketReportProgress?.phase === "refreshingSnapshot" && createSnapshotProgress !== null;
+  }, [bracketReportProgress, createSnapshotProgress]);
 
   const mailboxThreads = useMemo(() => {
     return mailboxThreadSummaries
@@ -6703,7 +6830,8 @@ function App() {
 
   const selectedBracketSectionsForView = useMemo(() => {
     return selectedBracketSections.map((section) => {
-      const visualColumns = section.key === "losers" ? [...section.columns].reverse() : section.columns;
+      const visibleColumns = section.columns.filter((column) => shouldShowGrandFinalResetColumn(column));
+      const visualColumns = section.key === "losers" ? [...visibleColumns].reverse() : visibleColumns;
       return {
         ...section,
         columns: buildPositionedRoundColumns(visualColumns, section.key),
@@ -6773,6 +6901,20 @@ function App() {
 
     const winnersColumnsOrdered = winnersSection?.columns ?? [];
     const losersColumnsOrdered = losersSection?.columns ?? [];
+
+    const winnersRoundOneIds = winnersColumnsOrdered[0]?.positionedSets.map((item) => item.set.setId) ?? [];
+    const losersRoundOne = losersColumnsOrdered[0];
+    if (losersRoundOne && winnersRoundOneIds.length > 0) {
+      losersRoundOne.positionedSets.forEach((item, currentIndex) => {
+        const sources = pickPairSourceIds(winnersRoundOneIds, losersRoundOne.positionedSets.length, currentIndex)
+          .map((setId) => setDisplayCodeById.get(setId))
+          .filter((code): code is string => Boolean(code));
+
+        sources.forEach((code, sourceIndex) => {
+          map.set(`${item.set.setId}:${sourceIndex}`, normalizeSourceText("losers", code));
+        });
+      });
+    }
 
     for (let columnIndex = 1; columnIndex < winnersColumnsOrdered.length; columnIndex += 1) {
       const previousColumn = winnersColumnsOrdered[columnIndex - 1];
@@ -7228,9 +7370,11 @@ function App() {
         perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
       });
       setWorkspace(result);
+      setSetResultDrafts({});
+      setInterimScoreDraftsBySetId({});
       closeMatchDialog();
       await refreshLocalSnapshotEvents();
-      setMessage("スナップショットを更新しました。反映済みの変更は自動で変更リストから除外されます。");
+      setMessage("スナップショットを更新しました。未報告のローカル結果・途中経過は破棄され、start.gg状態に合わせました。");
     } catch (err) {
       setError(String(err));
     } finally {
@@ -7751,6 +7895,7 @@ function App() {
   function cancelBracketBatchConflict() {
     setBatchConflictDialog(null);
     setBatchForceOverwriteRemaining(false);
+    setBracketReportProgress(null);
     setMessage("一括報告を中断しました。未送信のsetはそのまま残しています。");
   }
 
@@ -7786,8 +7931,10 @@ function App() {
     if (result.completed) {
       setBatchConflictDialog(null);
       setBatchForceOverwriteRemaining(false);
+      setBracketReportProgress(null);
+      const unsentCount = Math.max(0, nextProgress.totalCount - nextProgress.reportedCount - nextProgress.skippedCount);
       setMessage(
-        `一括報告を実行しました。対象 ${nextProgress.totalCount} 件 / 送信 ${nextProgress.reportedCount} 件 / スキップ ${nextProgress.skippedCount} 件`,
+        `一括報告を実行しました。対象 ${nextProgress.totalCount} 件 / 送信 ${nextProgress.reportedCount} 件 / スキップ ${nextProgress.skippedCount} 件 / 未送信 ${unsentCount} 件`,
       );
       return;
     }
@@ -7821,6 +7968,15 @@ function App() {
     setBusy(true);
     setError("");
     setMessage("");
+    setCreateSnapshotProgress(null);
+    setBracketReportProgress({
+      phase: "starting",
+      totalCount: confirmedSetResults.length,
+      processedCount: 0,
+      reportedCount: 0,
+      skippedCount: 0,
+      currentSetId: null,
+    });
     setBatchConflictDialog(null);
     setBatchForceOverwriteRemaining(false);
 
@@ -7836,6 +7992,7 @@ function App() {
       );
     } catch (err) {
       setError(String(err));
+      setBracketReportProgress(null);
     } finally {
       setBusy(false);
     }
@@ -7858,6 +8015,7 @@ function App() {
       );
     } catch (err) {
       setError(String(err));
+      setBracketReportProgress(null);
     } finally {
       setBusy(false);
     }
@@ -9944,6 +10102,9 @@ function App() {
               <p className="meta">
                 下書き: {draftSetResults.length} / 確定済み: {confirmedSetResults.length}
               </p>
+              <p className="meta">
+                一括報告は「確定済み」のみ送信します。下書きはローカル入力保持のみで start.gg には送信しません。
+              </p>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button type="button" className="ghost" disabled={busy || toApiSlug(slug) === ""} onClick={updateSnapshot}>
                   スナップショットを更新
@@ -9957,6 +10118,48 @@ function App() {
                 </button>
               </div>
             </div>
+            {(busy || bracketReportProgress) && (
+              <div className="create-snapshot-progress" role="status" aria-live="polite" style={{ marginTop: "0.7rem" }}>
+                <div
+                  className="create-snapshot-progress-track"
+                  role="progressbar"
+                  aria-label="結果報告の進捗"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(bracketReportProgressPercent)}
+                >
+                  <div
+                    className="create-snapshot-progress-fill"
+                    style={{ width: `${bracketReportProgressPercent}%` }}
+                  />
+                </div>
+                <p className="create-snapshot-progress-meta">
+                  {bracketReportProgressLabel}
+                  {bracketReportProgress ? ` (${Math.round(bracketReportProgressPercent)}%)` : ""}
+                </p>
+              </div>
+            )}
+            {shouldShowBracketSnapshotRefreshProgress && (
+              <div className="create-snapshot-progress" role="status" aria-live="polite" style={{ marginTop: "0.45rem" }}>
+                <div
+                  className="create-snapshot-progress-track"
+                  role="progressbar"
+                  aria-label="報告後スナップショット更新の進捗"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(createSnapshotProgressPercent)}
+                >
+                  <div
+                    className="create-snapshot-progress-fill"
+                    style={{ width: `${createSnapshotProgressPercent}%` }}
+                  />
+                </div>
+                <p className="create-snapshot-progress-meta">
+                  {`報告後スナップショット更新: ${createSnapshotProgressLabel}`}
+                  {createSnapshotProgress?.totalRequests !== null ? ` (${Math.round(createSnapshotProgressPercent)}%)` : ""}
+                </p>
+              </div>
+            )}
             <p className="meta">カード枠が黄色の試合は、現在のスナップショットからローカル変更があります。</p>
           </section>
 

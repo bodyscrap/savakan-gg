@@ -14,7 +14,7 @@ use models::{
     BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult,
     CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, GenericMessage, ItemListConfig,
     LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetScoreUpdateInput,
-    LocalSnapshotEventListItem,
+    LocalSnapshotEventListItem, SetSnapshot,
     ReportSetResultInput, ResetSetResultCascadeInput, ResetSetResultCascadeResult,
     SaveEventManagementMetaInput, SenderProfile, TournamentPreview, TournamentSnapshot,
     TournamentWorkspace,
@@ -32,6 +32,7 @@ const MAILBOX_METHOD_CALL_SYNC_REQUEST: &str = "call_player_sync_request";
 const CALL_SYNC_PHASE_COLLECT_UNRESOLVED: &str = "collect_unresolved";
 const CALL_SYNC_PHASE_CHECK_PUBLISHED_STATUS: &str = "check_published_status";
 const EVENT_SNAPSHOT_PROGRESS_EVENT: &str = "event_snapshot_progress";
+const EVENT_BRACKET_REPORT_PROGRESS_EVENT: &str = "bracket_report_progress";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +43,17 @@ struct EventSnapshotProgressPayload {
     current_page: Option<i64>,
     current_set_id: Option<String>,
     total_planned_set_requests: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BracketReportProgressPayload {
+    phase: String,
+    total_count: usize,
+    processed_count: usize,
+    reported_count: usize,
+    skipped_count: usize,
+    current_set_id: Option<String>,
 }
 
 fn emit_event_snapshot_progress(
@@ -58,6 +70,27 @@ fn emit_event_snapshot_progress(
     };
 
     let _ = app.emit(EVENT_SNAPSHOT_PROGRESS_EVENT, payload);
+}
+
+fn emit_bracket_report_progress(
+    app: &tauri::AppHandle,
+    phase: &str,
+    total_count: usize,
+    processed_count: usize,
+    reported_count: usize,
+    skipped_count: usize,
+    current_set_id: Option<&str>,
+) {
+    let payload = BracketReportProgressPayload {
+        phase: phase.to_owned(),
+        total_count,
+        processed_count,
+        reported_count,
+        skipped_count,
+        current_set_id: current_set_id.map(str::to_owned),
+    };
+
+    let _ = app.emit(EVENT_BRACKET_REPORT_PROGRESS_EVENT, payload);
 }
 
 static UDP_LISTENER_RUNNING: OnceLock<AtomicBool> = OnceLock::new();
@@ -1604,10 +1637,16 @@ async fn refresh_workspace_after_remote_report(
     event_id: &str,
     per_page: u32,
 ) -> Result<TournamentWorkspace, String> {
-    let mut snapshot = startgg::fetch_tournament_snapshot(token, slug, per_page).await?;
-    snapshot.slug = slug.to_owned();
-    storage::save_snapshot(app, &snapshot)?;
-    let local_meta = storage::sync_local_meta_from_snapshot(app, &snapshot, event_id)?;
+    let snapshot = fetch_event_snapshot_with_fallback(app, token, slug, event_id, per_page).await?;
+
+    let existing_alias = storage::load_local_meta(app, slug, event_id)?
+        .events
+        .into_iter()
+        .find(|item| item.event_id == event_id)
+        .and_then(|item| item.event_alias);
+
+    let local_meta = storage::save_event_snapshot(app, &snapshot, event_id, existing_alias)?;
+    let snapshot = storage::load_snapshot(app, slug)?;
 
     Ok(TournamentWorkspace {
         snapshot,
@@ -1615,8 +1654,152 @@ async fn refresh_workspace_after_remote_report(
     })
 }
 
+async fn fetch_event_snapshot_with_fallback(
+    app: &tauri::AppHandle,
+    token: &str,
+    slug: &str,
+    event_id: &str,
+    per_page: u32,
+) -> Result<TournamentSnapshot, String> {
+    let (event_slug, preview_error) = match startgg::fetch_tournament_preview(token, slug).await {
+        Ok(preview) => (
+            preview
+                .events
+                .iter()
+                .find(|item| item.event_id == event_id)
+                .and_then(|item| item.event_slug.clone()),
+            None,
+        ),
+        Err(err) => (None, Some(err)),
+    };
+
+    let mut event_snapshot_error: Option<String> = None;
+
+    if let Some(event_slug) = event_slug {
+        match startgg::fetch_event_snapshot_by_slug(
+            token,
+            &event_slug,
+            per_page,
+            |progress| emit_event_snapshot_progress(app, progress),
+        )
+        .await
+        {
+            Ok(mut snapshot) => {
+                snapshot.slug = slug.to_owned();
+                let set_count = snapshot
+                    .events
+                    .iter()
+                    .find(|event| event.event_id == event_id)
+                    .map(|event| event.sets.len())
+                    .unwrap_or(0);
+                if set_count > 0 {
+                    return Ok(snapshot);
+                }
+                event_snapshot_error = Some(
+                    "event別取得では対象eventのsetが0件でした。".to_owned(),
+                );
+            }
+            Err(err) => {
+                event_snapshot_error = Some(err);
+            }
+        }
+    }
+
+    let mut snapshot = startgg::fetch_tournament_snapshot(token, slug, per_page).await?;
+    snapshot.slug = slug.to_owned();
+
+    let target_event_set_count = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .map(|event| event.sets.len())
+        .ok_or_else(|| format!("指定eventがtournament内に見つかりません: {event_id}"))?;
+
+    if target_event_set_count == 0 {
+        let mut reasons = Vec::new();
+        if let Some(err) = preview_error {
+            reasons.push(format!("preview取得失敗: {err}"));
+        }
+        if let Some(err) = event_snapshot_error {
+            reasons.push(format!("event別取得失敗: {err}"));
+        }
+
+        if reasons.is_empty() {
+            return Err("対象eventのsetが0件でした。start.gg側のブラケット生成状態と公開状態を確認してください。".to_owned());
+        }
+
+        return Err(format!(
+            "対象eventのsetが0件でした。start.gg側のブラケット生成状態と公開状態を確認してください。詳細: {}",
+            reasons.join(" / ")
+        ));
+    }
+
+    Ok(snapshot)
+}
+
+fn derive_tournament_slug_from_event_slug(event_slug: &str) -> Option<String> {
+    let trimmed = event_slug.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let marker = "/event/";
+    let index = trimmed.find(marker)?;
+    let prefix = trimmed[..index].trim_matches('/');
+    if prefix.is_empty() {
+        None
+    } else {
+        Some(prefix.to_owned())
+    }
+}
+
 fn round_depth(round: Option<i64>) -> i64 {
     round.map(|value| value.abs()).unwrap_or(i64::MAX / 4)
+}
+
+fn normalize_score_csv(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace(' ', "")
+}
+
+fn integer_score(value: Option<f64>) -> Option<i64> {
+    let score = value?;
+    let rounded = score.round();
+    if (score - rounded).abs() > 0.000_001 {
+        return None;
+    }
+    Some(rounded as i64)
+}
+
+fn derive_score_csv_from_set(set: &SetSnapshot, winner_id: &str) -> Option<String> {
+    let winner_slot = set
+        .slots
+        .iter()
+        .find(|slot| slot.entrant_id.as_deref() == Some(winner_id))?;
+    let loser_slot = set
+        .slots
+        .iter()
+        .find(|slot| slot.entrant_id.as_deref().is_some() && slot.entrant_id.as_deref() != Some(winner_id))?;
+
+    let winner_score = integer_score(winner_slot.score)?;
+    let loser_score = integer_score(loser_slot.score)?;
+
+    if loser_score < 0 {
+        return Some(format!("{winner_score}-DQ"));
+    }
+
+    Some(format!("{winner_score}-{loser_score}"))
+}
+
+fn is_grand_final_reset_text(text: &str) -> bool {
+    let lowered = text.trim().to_lowercase();
+    let has_grand_final = lowered.contains("grand final")
+        || lowered.contains("grand finals")
+        || lowered.contains("グランド")
+        || lowered
+            .split(|ch: char| !ch.is_alphanumeric())
+            .any(|token| token.eq_ignore_ascii_case("gf"));
+    let has_reset = lowered.contains("reset") || lowered.contains("リセット");
+    has_grand_final && has_reset
 }
 
 fn resolve_event_alias(
@@ -1803,18 +1986,14 @@ async fn create_event_snapshot(
     input: CreateEventSnapshotInput,
 ) -> Result<TournamentWorkspace, String> {
     let token = storage::load_token(&app)?;
-    let event_slug = input
-        .event_slug
-        .clone()
-        .ok_or_else(|| "event slugが未指定です。イベント一覧を再取得してください。".to_owned())?;
-    let mut snapshot = startgg::fetch_event_snapshot_by_slug(
+    let snapshot = fetch_event_snapshot_with_fallback(
+        &app,
         &token,
-        &event_slug,
+        &input.slug,
+        &input.event_id,
         input.per_page.unwrap_or(200),
-        |progress| emit_event_snapshot_progress(&app, progress),
     )
     .await?;
-    snapshot.slug = input.slug.clone();
     let event_alias = resolve_event_alias(input.event_alias.clone(), &snapshot, &input.event_id);
 
     let local_meta = storage::save_event_snapshot(&app, &snapshot, &input.event_id, event_alias)?;
@@ -1829,23 +2008,96 @@ async fn create_event_snapshot_by_slug(
     input: CreateEventSnapshotBySlugInput,
 ) -> Result<TournamentWorkspace, String> {
     let token = storage::load_token(&app)?;
-    let mut snapshot = startgg::fetch_event_snapshot_by_slug(
+    let per_page = input.per_page.unwrap_or(200);
+    let fallback_slug = if !input.tournament_slug.trim().is_empty() {
+        input.tournament_slug.trim().to_owned()
+    } else {
+        derive_tournament_slug_from_event_slug(&input.event_slug).unwrap_or_default()
+    };
+
+    let mut target_event_id = None::<String>;
+    let mut fetch_error_reason = None::<String>;
+
+    let mut snapshot = match startgg::fetch_event_snapshot_by_slug(
         &token,
         &input.event_slug,
-        input.per_page.unwrap_or(200),
+        per_page,
         |progress| emit_event_snapshot_progress(&app, progress),
     )
-    .await?;
+    .await
+    {
+        Ok(snapshot) => {
+            target_event_id = snapshot.events.first().map(|event| event.event_id.clone());
+            snapshot
+        }
+        Err(err) => {
+            fetch_error_reason = Some(err);
+
+            if fallback_slug.is_empty() {
+                return Err("event slugの取得に失敗し、fallback先tournament slugも特定できませんでした。大会slugを指定して再実行してください。".to_owned());
+            }
+
+            let mut fallback_snapshot = startgg::fetch_tournament_snapshot(&token, &fallback_slug, per_page).await?;
+            fallback_snapshot.slug = fallback_slug.clone();
+            fallback_snapshot
+        }
+    };
+
+    if !fallback_slug.is_empty() {
+        if let Ok(preview) = startgg::fetch_tournament_preview(&token, &fallback_slug).await {
+            let input_event_slug = input.event_slug.trim().trim_matches('/').to_ascii_lowercase();
+            let matched_event_id = preview
+                .events
+                .iter()
+                .find(|item| {
+                    item.event_slug
+                        .as_deref()
+                        .map(|slug| slug.trim().trim_matches('/').eq_ignore_ascii_case(&input_event_slug))
+                        .unwrap_or(false)
+                })
+                .map(|item| item.event_id.clone());
+
+            if matched_event_id.is_some() {
+                target_event_id = matched_event_id;
+            }
+        }
+    }
+
+    let event_id = target_event_id
+        .or_else(|| snapshot.events.first().map(|event| event.event_id.clone()))
+        .ok_or_else(|| "eventスナップショットにイベントが含まれていません。".to_owned())?;
+
+    let target_event_set_count = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .map(|event| event.sets.len())
+        .unwrap_or(0);
+
+    if target_event_set_count == 0 && !fallback_slug.is_empty() {
+        let mut fallback_snapshot = startgg::fetch_tournament_snapshot(&token, &fallback_slug, per_page).await?;
+        fallback_snapshot.slug = fallback_slug.clone();
+        snapshot = fallback_snapshot;
+    }
+
+    let target_event_set_count = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .map(|event| event.sets.len())
+        .unwrap_or(0);
+    if target_event_set_count == 0 {
+        if let Some(reason) = fetch_error_reason {
+            return Err(format!(
+                "対象eventのsetが0件でした。start.gg側のブラケット生成状態と公開状態を確認してください。event slug直接取得の失敗理由: {reason}"
+            ));
+        }
+        return Err("対象eventのsetが0件でした。start.gg側のブラケット生成状態と公開状態を確認してください。".to_owned());
+    }
 
     if !input.tournament_slug.trim().is_empty() {
         snapshot.slug = input.tournament_slug.clone();
     }
-
-    let event_id = snapshot
-        .events
-        .first()
-        .map(|event| event.event_id.clone())
-        .ok_or_else(|| "eventスナップショットにイベントが含まれていません。".to_owned())?;
 
     let event_alias = resolve_event_alias(input.event_alias.clone(), &snapshot, &event_id);
 
@@ -1863,25 +2115,14 @@ async fn refresh_local_event_snapshot_from_remote(
     per_page: Option<u32>,
 ) -> Result<TournamentWorkspace, String> {
     let token = storage::load_token(&app)?;
-    let preview = startgg::fetch_tournament_preview(&token, &slug).await?;
-    let event = preview
-        .events
-        .iter()
-        .find(|item| item.event_id == event_id)
-        .ok_or_else(|| format!("指定eventがtournament内に見つかりません: {event_id}"))?;
-    let event_slug = event
-        .event_slug
-        .clone()
-        .ok_or_else(|| "event slugが取得できませんでした。event一覧を再取得してください。".to_owned())?;
-
-    let mut snapshot = startgg::fetch_event_snapshot_by_slug(
+    let snapshot = fetch_event_snapshot_with_fallback(
+        &app,
         &token,
-        &event_slug,
+        &slug,
+        &event_id,
         per_page.unwrap_or(200),
-        |progress| emit_event_snapshot_progress(&app, progress),
     )
     .await?;
-    snapshot.slug = slug.clone();
 
     let existing_alias = storage::load_local_meta(&app, &slug, &event_id)?
         .events
@@ -1890,7 +2131,7 @@ async fn refresh_local_event_snapshot_from_remote(
         .and_then(|item| item.event_alias);
 
     storage::save_event_snapshot(&app, &snapshot, &event_id, existing_alias)?;
-    let local_meta = storage::prune_pending_set_results_by_snapshot_match(&app, &slug, &event_id)?;
+    let local_meta = storage::clear_pending_set_results(&app, &slug, &event_id)?;
     let snapshot = storage::load_snapshot(&app, &slug)?;
 
     Ok(TournamentWorkspace { snapshot, local_meta })
@@ -1970,31 +2211,69 @@ async fn report_confirmed_sets_from_bracket(
         .cloned()
         .collect::<Vec<_>>();
 
-    pending.sort_by(|left, right| {
-        let left_round = local_event
-            .sets
-            .iter()
-            .find(|set| set.set_id == left.set_id)
-            .map(|set| set.round)
-            .unwrap_or(None);
-        let right_round = local_event
-            .sets
-            .iter()
-            .find(|set| set.set_id == right.set_id)
-            .map(|set| set.round)
-            .unwrap_or(None);
+    let mut removable_pending_set_ids = pending
+        .iter()
+        .filter(|item| item.set_id.starts_with("preview_"))
+        .map(|item| item.set_id.clone())
+        .collect::<Vec<_>>();
+    pending.retain(|item| !item.set_id.starts_with("preview_"));
 
-        round_depth(left_round)
-            .cmp(&round_depth(right_round))
+    let set_order_by_id = local_event
+        .sets
+        .iter()
+        .enumerate()
+        .map(|(index, set)| (set.set_id.as_str(), index))
+        .collect::<std::collections::HashMap<&str, usize>>();
+
+    pending.sort_by(|left, right| {
+        let left_set = local_event
+            .sets
+            .iter()
+            .find(|set| set.set_id == left.set_id);
+        let right_set = local_event
+            .sets
+            .iter()
+            .find(|set| set.set_id == right.set_id);
+
+        let left_is_gf_reset = left_set
+            .as_ref()
+            .map(|set| is_grand_final_reset_text(&set.full_round_text))
+            .unwrap_or(false);
+        let right_is_gf_reset = right_set
+            .as_ref()
+            .map(|set| is_grand_final_reset_text(&set.full_round_text))
+            .unwrap_or(false);
+
+        left_is_gf_reset
+            .cmp(&right_is_gf_reset)
+            .then_with(|| {
+                let left_round = left_set.and_then(|set| set.round);
+                let right_round = right_set.and_then(|set| set.round);
+                round_depth(left_round).cmp(&round_depth(right_round))
+            })
+            .then_with(|| {
+                let left_order = set_order_by_id
+                    .get(left.set_id.as_str())
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                let right_order = set_order_by_id
+                    .get(right.set_id.as_str())
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                left_order.cmp(&right_order)
+            })
             .then_with(|| left.set_id.cmp(&right.set_id))
     });
+
+    let total_count = pending.len();
+    emit_bracket_report_progress(&app, "starting", total_count, 0, 0, 0, None);
 
     let per_page = input.per_page.unwrap_or(200);
     let mut force_overwrite_current_conflict = input.force_overwrite_current_conflict.unwrap_or(false);
     let force_overwrite_remaining_conflicts = input.force_overwrite_remaining_conflicts.unwrap_or(false);
     let mut reported_count = 0_usize;
     let mut skipped_count = 0_usize;
-    let mut processed_set_ids = Vec::new();
+    
     let mut conflict = None;
 
     for item in pending {
@@ -2004,26 +2283,77 @@ async fn report_confirmed_sets_from_bracket(
             Some(set) => set,
             None => {
                 skipped_count += 1;
-                processed_set_ids.push(item.set_id.clone());
+                removable_pending_set_ids.push(item.set_id.clone());
+                emit_bracket_report_progress(
+                    &app,
+                    "processing",
+                    total_count,
+                    reported_count + skipped_count,
+                    reported_count,
+                    skipped_count,
+                    Some(item.set_id.as_str()),
+                );
                 continue;
             }
         };
-
-        if !is_reset_action && local_set.slots.len() < 2 {
-            skipped_count += 1;
-            processed_set_ids.push(item.set_id.clone());
-            continue;
-        }
 
         let remote_set = match startgg::fetch_set_snapshot(&token, &item.set_id).await {
             Ok(set) => set,
             Err(err) => {
                 if err.contains("指定setが見つかりません") {
-                    skipped_count += 1;
-                    processed_set_ids.push(item.set_id.clone());
-                    continue;
+                    if reported_count == 0 {
+                        return Err(err);
+                    }
+
+                    conflict = Some(BracketBatchConflict {
+                        set_id: item.set_id.clone(),
+                        full_round_text: local_set.full_round_text.clone(),
+                        local_winner_id: item.winner_id.clone(),
+                        remote_winner_id: None,
+                        remote_state: 0,
+                        entrant_names: local_set
+                            .slots
+                            .iter()
+                            .map(|slot| slot.entrant_name.clone())
+                            .collect(),
+                    });
+                    emit_bracket_report_progress(
+                        &app,
+                        "conflict",
+                        total_count,
+                        reported_count + skipped_count,
+                        reported_count,
+                        skipped_count,
+                        Some(item.set_id.as_str()),
+                    );
+                    break;
                 }
-                return Err(err);
+                if reported_count == 0 {
+                    return Err(err);
+                }
+
+                conflict = Some(BracketBatchConflict {
+                    set_id: item.set_id.clone(),
+                    full_round_text: local_set.full_round_text.clone(),
+                    local_winner_id: item.winner_id.clone(),
+                    remote_winner_id: None,
+                    remote_state: 0,
+                    entrant_names: local_set
+                        .slots
+                        .iter()
+                        .map(|slot| slot.entrant_name.clone())
+                        .collect(),
+                });
+                emit_bracket_report_progress(
+                    &app,
+                    "conflict",
+                    total_count,
+                    reported_count + skipped_count,
+                    reported_count,
+                    skipped_count,
+                    Some(item.set_id.as_str()),
+                );
+                break;
             }
         };
 
@@ -2031,20 +2361,52 @@ async fn report_confirmed_sets_from_bracket(
             let remote_is_already_reset = remote_set.winner_id.is_none() && (remote_set.state == 1 || remote_set.state == 2);
             if remote_is_already_reset {
                 skipped_count += 1;
-                processed_set_ids.push(item.set_id.clone());
+                removable_pending_set_ids.push(item.set_id.clone());
+                emit_bracket_report_progress(
+                    &app,
+                    "processing",
+                    total_count,
+                    reported_count + skipped_count,
+                    reported_count,
+                    skipped_count,
+                    Some(item.set_id.as_str()),
+                );
                 continue;
             }
 
             startgg::reset_set_result(&token, &item.set_id).await?;
             reported_count += 1;
-            processed_set_ids.push(item.set_id.clone());
+            removable_pending_set_ids.push(item.set_id.clone());
+            emit_bracket_report_progress(
+                &app,
+                "processing",
+                total_count,
+                reported_count + skipped_count,
+                reported_count,
+                skipped_count,
+                Some(item.set_id.as_str()),
+            );
             continue;
         }
 
-        let is_already_synced = remote_set.winner_id.as_ref() == Some(&item.winner_id);
+        let is_already_synced = remote_set.winner_id.as_ref() == Some(&item.winner_id)
+            && derive_score_csv_from_set(&remote_set, &item.winner_id)
+                .map(|remote_score_csv| {
+                    normalize_score_csv(&remote_score_csv) == normalize_score_csv(&item.score_csv)
+                })
+                .unwrap_or(false);
         if is_already_synced {
             skipped_count += 1;
-            processed_set_ids.push(item.set_id.clone());
+            removable_pending_set_ids.push(item.set_id.clone());
+            emit_bracket_report_progress(
+                &app,
+                "processing",
+                total_count,
+                reported_count + skipped_count,
+                reported_count,
+                skipped_count,
+                Some(item.set_id.as_str()),
+            );
             continue;
         }
 
@@ -2068,6 +2430,15 @@ async fn report_confirmed_sets_from_bracket(
                         .map(|slot| slot.entrant_name.clone())
                         .collect(),
                 });
+                emit_bracket_report_progress(
+                    &app,
+                    "conflict",
+                    total_count,
+                    reported_count + skipped_count,
+                    reported_count,
+                    skipped_count,
+                    Some(item.set_id.as_str()),
+                );
                 break;
             }
         } else {
@@ -2077,47 +2448,102 @@ async fn report_confirmed_sets_from_bracket(
         let can_report_by_state = remote_set.state == 1 || remote_set.state == 2 || should_force_overwrite;
         if !can_report_by_state {
             skipped_count += 1;
-            processed_set_ids.push(item.set_id.clone());
+            emit_bracket_report_progress(
+                &app,
+                "processing",
+                total_count,
+                reported_count + skipped_count,
+                reported_count,
+                skipped_count,
+                Some(item.set_id.as_str()),
+            );
             continue;
         }
 
-        let entrant_ids = remote_set
-            .slots
-            .iter()
-            .filter_map(|slot| slot.entrant_id.as_ref().cloned())
-            .collect::<Vec<String>>();
-
-        let is_matchup_ready = entrant_ids.len() >= 2 && entrant_ids.iter().any(|entrant_id| entrant_id == &item.winner_id);
-        if !is_matchup_ready {
-            skipped_count += 1;
-            processed_set_ids.push(item.set_id.clone());
-            continue;
-        }
-
-        startgg::report_set_result(
+        if let Err(err) = startgg::report_set_result(
             &token,
             &item.set_id,
             &item.winner_id,
             &item.score_csv,
             should_force_overwrite,
         )
-        .await?;
+        .await
+        {
+            if reported_count == 0 {
+                return Err(err);
+            }
+
+            conflict = Some(BracketBatchConflict {
+                set_id: item.set_id.clone(),
+                full_round_text: local_set.full_round_text.clone(),
+                local_winner_id: item.winner_id.clone(),
+                remote_winner_id: remote_set.winner_id.clone(),
+                remote_state: remote_set.state,
+                entrant_names: local_set
+                    .slots
+                    .iter()
+                    .map(|slot| slot.entrant_name.clone())
+                    .collect(),
+            });
+            emit_bracket_report_progress(
+                &app,
+                "conflict",
+                total_count,
+                reported_count + skipped_count,
+                reported_count,
+                skipped_count,
+                Some(item.set_id.as_str()),
+            );
+            break;
+        }
 
         reported_count += 1;
-        processed_set_ids.push(item.set_id.clone());
+        removable_pending_set_ids.push(item.set_id.clone());
+        emit_bracket_report_progress(
+            &app,
+            "processing",
+            total_count,
+            reported_count + skipped_count,
+            reported_count,
+            skipped_count,
+            Some(item.set_id.as_str()),
+        );
     }
 
-    if !processed_set_ids.is_empty() {
-        storage::remove_pending_set_results(&app, &input.slug, &input.event_id, &processed_set_ids)?;
+    if !removable_pending_set_ids.is_empty() {
+        storage::remove_pending_set_results(&app, &input.slug, &input.event_id, &removable_pending_set_ids)?;
     }
 
     let workspace = if reported_count > 0 {
-        refresh_workspace_after_remote_report(&app, &token, &input.slug, &input.event_id, per_page).await?
-    } else if !processed_set_ids.is_empty() {
+        emit_bracket_report_progress(
+            &app,
+            "refreshingSnapshot",
+            total_count,
+            reported_count + skipped_count,
+            reported_count,
+            skipped_count,
+            conflict.as_ref().map(|item| item.set_id.as_str()),
+        );
+        match refresh_workspace_after_remote_report(&app, &token, &input.slug, &input.event_id, per_page).await {
+            Ok(workspace) => workspace,
+            Err(_) => storage::load_workspace(&app, &input.slug, &input.event_id)?,
+        }
+    } else if !removable_pending_set_ids.is_empty() {
         storage::load_workspace(&app, &input.slug, &input.event_id)?
     } else {
         workspace
     };
+
+    let final_phase = if conflict.is_none() { "completed" } else { "paused" };
+    emit_bracket_report_progress(
+        &app,
+        final_phase,
+        total_count,
+        reported_count + skipped_count,
+        reported_count,
+        skipped_count,
+        conflict.as_ref().map(|item| item.set_id.as_str()),
+    );
 
     Ok(BracketBatchReportResult {
         workspace,

@@ -68,7 +68,18 @@ type Set {
   phaseGroup: PhaseGroup
   state: Int
   winnerId: GgID
+  entrant1Source: SetEntrantSource
+  entrant2Source: SetEntrantSource
+  winnerProgressionSeed: Seed
+  loserProgressionSeed: Seed
   slots: [SetSlot]
+}
+
+type SetEntrantSource {
+  type: String!
+  typeId: GgID
+  condition: String
+  conditionString: String
 }
 
 type PhaseGroup {

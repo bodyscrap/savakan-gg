@@ -278,7 +278,21 @@ pub struct SetSnapshot {
     pub phase_group_name: Option<String>,
     pub state: i64,
     pub winner_id: Option<String>,
+    pub entrant1_source: Option<SetEntrantSourceSnapshot>,
+    pub entrant2_source: Option<SetEntrantSourceSnapshot>,
+    pub winner_progression_seed_id: Option<String>,
+    pub winner_progression_seed_num: Option<i64>,
+    pub loser_progression_seed_id: Option<String>,
+    pub loser_progression_seed_num: Option<i64>,
     pub slots: Vec<SetSlotSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetEntrantSourceSnapshot {
+    pub type_id: Option<String>,
+    pub condition: Option<String>,
+    pub condition_string: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -10,6 +10,7 @@ query EventSync($slug: String!, $page: Int!, $perPage: Int!) {
     sets(page: $page, perPage: $perPage, sortType: STANDARD) {
       nodes {
         id
+        fullRoundText
         round
         phaseGroup {
           displayIdentifier
@@ -17,6 +18,8 @@ query EventSync($slug: String!, $page: Int!, $perPage: Int!) {
             name
           }
         }
+        state
+        winnerId
       }
     }
   }

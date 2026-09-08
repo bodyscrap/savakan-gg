@@ -1,5 +1,4 @@
 use chrono::Utc;
-use std::collections::BTreeMap;
 use std::time::Duration;
 use graphql_client::{GraphQLQuery, Response};
 use reqwest::StatusCode;
@@ -8,8 +7,8 @@ use serde::Serialize;
 use tokio::time::sleep;
 
 use crate::models::{
-    EventSnapshot, SetSlotSnapshot, SetSnapshot, TournamentEventPreviewItem, TournamentPreview,
-    TournamentSnapshot,
+    EventSnapshot, SetEntrantSourceSnapshot, SetSlotSnapshot, SetSnapshot,
+    TournamentEventPreviewItem, TournamentPreview, TournamentSnapshot,
 };
 
 const START_GG_GQL_ENDPOINT: &str = "https://api.start.gg/gql/alpha";
@@ -17,6 +16,8 @@ const START_GG_RETRY_ATTEMPTS: usize = 8;
 const START_GG_RETRY_BASE_DELAY_MS: u64 = 500;
 const START_GG_RETRY_MAX_DELAY_MS: u64 = 10_000;
 const START_GG_REQUEST_INTERVAL_MS: u64 = 120;
+const START_GG_SET_ENTRANT_RETRY_ATTEMPTS: usize = 6;
+const START_GG_SET_ENTRANT_RETRY_DELAY_MS: u64 = 350;
 
 #[derive(Debug, Clone)]
 pub struct EventSnapshotFetchProgress {
@@ -116,6 +117,10 @@ fn summarize_response_body(raw: &str) -> String {
     }
 }
 
+fn is_preview_set_id(set_id: &str) -> bool {
+    set_id.starts_with("preview_")
+}
+
 fn is_retryable_status(status: StatusCode) -> bool {
     matches!(status, StatusCode::TOO_MANY_REQUESTS | StatusCode::INTERNAL_SERVER_ERROR | StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT)
         || status.as_u16() == 520
@@ -129,7 +134,6 @@ fn parse_retry_after_seconds(response: &reqwest::Response) -> Option<u64> {
         .ok()?
         .trim();
 
-    // start.gg generally returns seconds in Retry-After when rate limited.
     value.parse::<u64>().ok()
 }
 
@@ -143,7 +147,6 @@ fn retry_delay_for_attempt(attempt: usize, retry_after_seconds: Option<u64>) -> 
         wait_ms = wait_ms.max(retry_after_ms.min(START_GG_RETRY_MAX_DELAY_MS));
     }
 
-    // Small deterministic jitter reduces collision when multiple clients retry simultaneously.
     let jitter_ms = ((attempt as u64 + 1) * 137) % 250;
     Duration::from_millis(wait_ms.saturating_add(jitter_ms))
 }
@@ -184,9 +187,7 @@ async fn post_graphql_with_retry<T: Serialize + ?Sized>(
         }
     }
 
-    Err(format!(
-        "{operation_name}リクエストがリトライ上限に達しました。"
-    ))
+    Err(format!("{operation_name}リクエストがリトライ上限に達しました。"))
 }
 
 async fn fetch_set_snapshot_detail(token: &str, set_id: &str) -> Result<SetSnapshot, String> {
@@ -277,11 +278,36 @@ async fn fetch_set_snapshot_detail_with_client(
             .as_ref()
             .and_then(|group| group.display_identifier.clone()),
         state: set.state.unwrap_or_default(),
-        winner_id: set.winner_id.map(|id| id.to_string()),
+        winner_id: set.winner_id.as_ref().map(|id| id.to_string()),
+        entrant1_source: set.entrant1_source.as_ref().map(|source| SetEntrantSourceSnapshot {
+            type_id: source.type_id.as_ref().map(|id| id.to_string()),
+            condition: source.condition.clone(),
+            condition_string: source.condition_string.clone(),
+        }),
+        entrant2_source: set.entrant2_source.as_ref().map(|source| SetEntrantSourceSnapshot {
+            type_id: source.type_id.as_ref().map(|id| id.to_string()),
+            condition: source.condition.clone(),
+            condition_string: source.condition_string.clone(),
+        }),
+        winner_progression_seed_id: set
+            .winner_progression_seed
+            .as_ref()
+            .map(|seed| seed.id.to_string()),
+        winner_progression_seed_num: set
+            .winner_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.seed_num.map(i64::from)),
+        loser_progression_seed_id: set
+            .loser_progression_seed
+            .as_ref()
+            .map(|seed| seed.id.to_string()),
+        loser_progression_seed_num: set
+            .loser_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.seed_num.map(i64::from)),
         slots,
     })
 }
-
 async fn reset_set_if_needed(token: &str, set_id: &str) -> Result<(), String> {
     let variables = reset_set::Variables {
         set_id: set_id.to_owned(),
@@ -422,6 +448,21 @@ async fn fetch_set_entrant_ids(token: &str, set_id: &str) -> Result<Vec<String>,
     Ok(entrant_ids)
 }
 
+async fn fetch_set_entrant_ids_until_ready(token: &str, set_id: &str) -> Result<Vec<String>, String> {
+    for attempt in 0..START_GG_SET_ENTRANT_RETRY_ATTEMPTS {
+        let entrant_ids = fetch_set_entrant_ids(token, set_id).await?;
+        if entrant_ids.len() >= 2 {
+            return Ok(entrant_ids);
+        }
+
+        if attempt + 1 < START_GG_SET_ENTRANT_RETRY_ATTEMPTS {
+            sleep(Duration::from_millis(START_GG_SET_ENTRANT_RETRY_DELAY_MS)).await;
+        }
+    }
+
+    Err("対戦の組み合わせが確定していないsetは報告できません。直前の結果反映待ちの可能性があるため、数秒後に再実行してください。".to_owned())
+}
+
 fn build_game_data(
     entrant_ids: &[String],
     winner_id: &str,
@@ -460,49 +501,59 @@ async fn query_tournament_snapshot(
     slug: &str,
     per_page: u32,
 ) -> Result<TournamentSnapshot, String> {
-    let variables = tournament_sync::Variables {
-        slug: slug.to_owned(),
-        per_page: per_page as i64,
-    };
-    let body = TournamentSync::build_query(variables);
+    let min_chunk_per_page: i64 = 1;
+    let mut chunk_per_page = per_page.clamp(1, 200) as i64;
 
     let client = Client::new();
-    let response = post_graphql_with_retry(&client, token, &body, "start.gg tournament取得").await?;
+    let (data, slug) = loop {
+        let variables = tournament_sync::Variables {
+            slug: slug.to_owned(),
+            per_page: chunk_per_page,
+        };
+        let body = TournamentSync::build_query(variables);
 
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_owned();
-    let raw_body = response
-        .text()
-        .await
-        .map_err(|e| format!("start.ggレスポンス本文の読込に失敗しました: {e}"))?;
+        let response = post_graphql_with_retry(&client, token, &body, "start.gg tournament取得").await?;
 
-    if !status.is_success() {
-        return Err(format!(
-            "start.ggがエラーを返しました: HTTP {status} / content-type={content_type} / body={} ",
-            summarize_response_body(&raw_body)
-        ));
-    }
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown")
+            .to_owned();
+        let raw_body = response
+            .text()
+            .await
+            .map_err(|e| format!("start.ggレスポンス本文の読込に失敗しました: {e}"))?;
 
-    let payload: Response<tournament_sync::ResponseData> = serde_json::from_str(&raw_body)
-        .map_err(|e| {
-            format!(
-                "start.ggレスポンスのJSONパースに失敗しました: {e} / content-type={content_type} / body={} ",
+        if !status.is_success() {
+            return Err(format!(
+                "start.ggがエラーを返しました: HTTP {status} / content-type={content_type} / body={} ",
                 summarize_response_body(&raw_body)
-            )
-        })?;
+            ));
+        }
 
-    if let Some(errors) = payload.errors {
-        return Err(format!("GraphQLエラー: {}", join_graphql_errors(&errors)));
-    }
+        let payload: Response<tournament_sync::ResponseData> = serde_json::from_str(&raw_body)
+            .map_err(|e| {
+                format!(
+                    "start.ggレスポンスのJSONパースに失敗しました: {e} / content-type={content_type} / body={} ",
+                    summarize_response_body(&raw_body)
+                )
+            })?;
 
-    let data = payload
-        .data
-        .ok_or_else(|| "GraphQLレスポンスにdataがありません。".to_owned())?;
+        if let Some(errors) = payload.errors {
+            if is_complexity_too_high(&errors) && chunk_per_page > min_chunk_per_page {
+                chunk_per_page = (chunk_per_page / 2).max(min_chunk_per_page);
+                continue;
+            }
+            return Err(format!("GraphQLエラー: {}", join_graphql_errors(&errors)));
+        }
+
+        let data = payload
+            .data
+            .ok_or_else(|| "GraphQLレスポンスにdataがありません。".to_owned())?;
+        break (data, slug.to_owned());
+    };
     let tournament = data
         .tournament
         .ok_or_else(|| "指定slugのtournamentが見つかりません。".to_owned())?;
@@ -519,7 +570,12 @@ async fn query_tournament_snapshot(
                 .unwrap_or_default()
                 .into_iter()
                 .flatten()
-                .map(|set| {
+                .filter_map(|set| {
+                    let set_id = set.id.to_string();
+                    if is_preview_set_id(&set_id) {
+                        return None;
+                    }
+
                     let slots = set
                         .slots
                         .unwrap_or_default()
@@ -550,8 +606,8 @@ async fn query_tournament_snapshot(
                         })
                         .collect::<Vec<SetSlotSnapshot>>();
 
-                    SetSnapshot {
-                        set_id: set.id.to_string(),
+                    Some(SetSnapshot {
+                        set_id,
                         full_round_text: set.full_round_text.unwrap_or_else(|| "Unknown".to_owned()),
                         round: set.round,
                         phase_name: set
@@ -565,8 +621,32 @@ async fn query_tournament_snapshot(
                             .and_then(|group| group.display_identifier.clone()),
                         state: set.state.unwrap_or_default(),
                         winner_id: set.winner_id.map(|id| id.to_string()),
+                        entrant1_source: set.entrant1_source.map(|source| SetEntrantSourceSnapshot {
+                            type_id: source.type_id.map(|type_id| type_id.to_string()),
+                            condition: source.condition,
+                            condition_string: source.condition_string,
+                        }),
+                        entrant2_source: set.entrant2_source.map(|source| SetEntrantSourceSnapshot {
+                            type_id: source.type_id.map(|type_id| type_id.to_string()),
+                            condition: source.condition,
+                            condition_string: source.condition_string,
+                        }),
+                        winner_progression_seed_id: set
+                            .winner_progression_seed
+                            .as_ref()
+                            .map(|seed| seed.id.to_string()),
+                        winner_progression_seed_num: set
+                            .winner_progression_seed
+                            .and_then(|seed| seed.seed_num.map(i64::from)),
+                        loser_progression_seed_id: set
+                            .loser_progression_seed
+                            .as_ref()
+                            .map(|seed| seed.id.to_string()),
+                        loser_progression_seed_num: set
+                            .loser_progression_seed
+                            .and_then(|seed| seed.seed_num.map(i64::from)),
                         slots,
-                    }
+                    })
                 })
                 .collect::<Vec<SetSnapshot>>();
 
@@ -616,12 +696,10 @@ pub async fn fetch_event_snapshot_by_slug(
     mut progress_cb: impl FnMut(EventSnapshotFetchProgress),
 ) -> Result<TournamentSnapshot, String> {
     let client = Client::new();
-    let min_chunk_per_page: i64 = 10;
-    let mut chunk_per_page = per_page.clamp(10, 200) as i64;
+    let min_chunk_per_page: i64 = 1;
+    let mut chunk_per_page = per_page.clamp(1, 200) as i64;
     let mut page: i64;
-    let mut round_set_ids: BTreeMap<i64, Vec<String>> = BTreeMap::new();
-    let mut no_round_set_ids: Vec<String> = Vec::new();
-    let mut all_sets: Vec<SetSnapshot> = Vec::new();
+    let mut discovered_set_ids: Vec<String> = Vec::new();
 
     let mut tournament_id = String::new();
     let mut tournament_name = String::new();
@@ -641,9 +719,7 @@ pub async fn fetch_event_snapshot_by_slug(
 
     'retry: loop {
         page = 1;
-        round_set_ids.clear();
-        no_round_set_ids.clear();
-        all_sets.clear();
+        discovered_set_ids.clear();
 
         loop {
             if page > 1 {
@@ -729,11 +805,10 @@ pub async fn fetch_event_snapshot_by_slug(
 
             for set in &page_set_nodes {
                 let set_id = set.id.to_string();
-                if let Some(round) = set.round {
-                    round_set_ids.entry(round).or_default().push(set_id);
-                } else {
-                    no_round_set_ids.push(set_id);
+                if is_preview_set_id(&set_id) {
+                    continue;
                 }
+                discovered_set_ids.push(set_id);
             }
 
             let count = page_set_nodes.len();
@@ -748,7 +823,7 @@ pub async fn fetch_event_snapshot_by_slug(
         break;
     }
 
-    let total_set_requests = round_set_ids.values().map(|set_ids| set_ids.len()).sum::<usize>() + no_round_set_ids.len();
+    let total_set_requests = discovered_set_ids.len();
     let total_requests = completed_requests + total_set_requests;
 
     progress_cb(EventSnapshotFetchProgress {
@@ -760,33 +835,17 @@ pub async fn fetch_event_snapshot_by_slug(
         total_planned_set_requests: Some(total_set_requests),
     });
 
-    for set_ids in round_set_ids.values() {
-        for set_id in set_ids {
-            sleep(Duration::from_millis(START_GG_REQUEST_INTERVAL_MS)).await;
-            let set = fetch_set_snapshot_detail_with_client(&client, token, set_id).await?;
-            completed_requests += 1;
-            progress_cb(EventSnapshotFetchProgress {
-                phase: "fetchingSetDetails",
-                completed_requests,
-                total_requests: Some(total_requests),
-                current_page: None,
-                current_set_id: Some(set_id.clone()),
-                total_planned_set_requests: Some(total_set_requests),
-            });
-            all_sets.push(set);
-        }
-    }
-
-    for set_id in &no_round_set_ids {
+    let mut all_sets: Vec<SetSnapshot> = Vec::with_capacity(total_set_requests);
+    for set_id in discovered_set_ids {
         sleep(Duration::from_millis(START_GG_REQUEST_INTERVAL_MS)).await;
-        let set = fetch_set_snapshot_detail_with_client(&client, token, set_id).await?;
+        let set = fetch_set_snapshot_detail_with_client(&client, token, &set_id).await?;
         completed_requests += 1;
         progress_cb(EventSnapshotFetchProgress {
             phase: "fetchingSetDetails",
             completed_requests,
             total_requests: Some(total_requests),
             current_page: None,
-            current_set_id: Some(set_id.clone()),
+            current_set_id: Some(set_id),
             total_planned_set_requests: Some(total_set_requests),
         });
         all_sets.push(set);
@@ -798,7 +857,7 @@ pub async fn fetch_event_snapshot_by_slug(
         total_requests: Some(total_requests),
         current_page: None,
         current_set_id: None,
-        total_planned_set_requests: Some(total_set_requests),
+        total_planned_set_requests: Some(all_sets.len()),
     });
 
     Ok(TournamentSnapshot {
@@ -883,7 +942,7 @@ pub async fn report_set_result(
         reset_set_if_needed(token, set_id).await?;
     }
 
-    let entrant_ids = fetch_set_entrant_ids(token, set_id).await?;
+    let entrant_ids = fetch_set_entrant_ids_until_ready(token, set_id).await?;
     if entrant_ids.len() < 2 {
         return Err("対戦の組み合わせが確定していないsetは報告できません。".to_owned());
     }

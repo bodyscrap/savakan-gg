@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -1052,8 +1052,14 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
         return Err("ローカルスナップショット読込に失敗しました: 保存済みデータが見つかりません。".to_owned());
     };
 
-    serde_json::from_str(&raw)
-        .map_err(|e| format!("ローカルスナップショットのパースに失敗しました: {e}"))
+    let mut snapshot: TournamentSnapshot = serde_json::from_str(&raw)
+        .map_err(|e| format!("ローカルスナップショットのパースに失敗しました: {e}"))?;
+
+    for event in &mut snapshot.events {
+        apply_source_based_tbd_labels(event);
+    }
+
+    Ok(snapshot)
 }
 
 pub fn list_local_snapshot_events(app: &AppHandle) -> Result<Vec<LocalSnapshotEventListItem>, String> {
@@ -1223,6 +1229,17 @@ fn is_losers_set(set: &crate::models::SetSnapshot) -> bool {
     lowered.contains("losers") || lowered.contains("loser") || lowered.contains("敗者")
 }
 
+fn is_grand_final_set(set: &crate::models::SetSnapshot) -> bool {
+    let lowered = set.full_round_text.trim().to_lowercase();
+    if lowered.contains("grand final") || lowered.contains("grand finals") || lowered.contains("グランド") {
+        return true;
+    }
+
+    set.full_round_text
+        .split(|ch: char| !ch.is_alphanumeric())
+        .any(|token| token.eq_ignore_ascii_case("gf"))
+}
+
 fn normalize_group_key(value: Option<&String>) -> String {
     value
         .map(|item| item.trim().to_lowercase())
@@ -1282,6 +1299,657 @@ fn pick_pair_source_indexes(
     vec![left, right]
 }
 
+fn format_alphabet_sequence(index: usize) -> String {
+    let mut n = index as i64;
+    let mut label = String::new();
+
+    loop {
+        let remainder = (n % 26) as u8;
+        label.insert(0, (b'A' + remainder) as char);
+        n = n / 26 - 1;
+        if n < 0 {
+            break;
+        }
+    }
+
+    label
+}
+
+fn build_round_columns_set_ids(event: &EventSnapshot, losers: bool) -> Vec<Vec<String>> {
+    let mut grouped: BTreeMap<i64, Vec<String>> = BTreeMap::new();
+    let mut no_round = Vec::new();
+
+    for set in &event.sets {
+        if is_losers_set(set) != losers {
+            continue;
+        }
+
+        if let Some(round) = set.round {
+            grouped
+                .entry(round.abs())
+                .or_default()
+                .push(set.set_id.clone());
+        } else {
+            no_round.push(set.set_id.clone());
+        }
+    }
+
+    let mut columns = grouped.into_values().collect::<Vec<Vec<String>>>();
+    for column in &mut columns {
+        column.sort();
+    }
+    no_round.sort();
+
+    if !no_round.is_empty() {
+        columns.push(no_round);
+    }
+
+    columns
+}
+
+fn pick_pair_source_ids(previous_set_ids: &[String], current_count: usize, current_index: usize) -> Vec<String> {
+    pick_pair_source_indexes(previous_set_ids.len(), current_count, current_index)
+        .into_iter()
+        .filter_map(|index| previous_set_ids.get(index).cloned())
+        .collect()
+}
+
+fn normalize_source_text(kind: &str, set_code: &str) -> String {
+    format!("{kind} of {set_code}")
+}
+
+fn build_set_display_code_by_id(event: &EventSnapshot) -> HashMap<String, String> {
+    let winners_columns = build_round_columns_set_ids(event, false);
+    let losers_columns = build_round_columns_set_ids(event, true);
+
+    let mut ordered_ids = winners_columns
+        .into_iter()
+        .flat_map(|column| column.into_iter())
+        .collect::<Vec<String>>();
+    ordered_ids.extend(losers_columns.into_iter().flat_map(|column| column.into_iter()));
+
+    let mut seen_ids = ordered_ids.iter().cloned().collect::<HashSet<String>>();
+    let mut leftovers = event
+        .sets
+        .iter()
+        .map(|set| set.set_id.clone())
+        .filter(|set_id| !seen_ids.contains(set_id))
+        .collect::<Vec<String>>();
+    leftovers.sort();
+    for set_id in leftovers {
+        seen_ids.insert(set_id.clone());
+        ordered_ids.push(set_id);
+    }
+
+    let mut map = HashMap::new();
+    let mut used = HashSet::new();
+    let mut fallback_index = 0_usize;
+
+    for set_id in ordered_ids {
+        if map.contains_key(&set_id) {
+            continue;
+        }
+
+        let mut code = format_alphabet_sequence(fallback_index);
+        while used.contains(&code) {
+            fallback_index += 1;
+            code = format_alphabet_sequence(fallback_index);
+        }
+
+        map.insert(set_id, code.clone());
+        used.insert(code);
+        fallback_index += 1;
+    }
+
+    map
+}
+
+fn build_inferred_tbd_source_labels(event: &EventSnapshot) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let set_display_code_by_id = build_set_display_code_by_id(event);
+
+    let winners_columns = build_round_columns_set_ids(event, false);
+    let losers_columns = build_round_columns_set_ids(event, true);
+
+    let winners_round_one_ids = winners_columns.first().cloned().unwrap_or_default();
+    let losers_round_one = losers_columns.first().cloned().unwrap_or_default();
+    if !losers_round_one.is_empty() && !winners_round_one_ids.is_empty() {
+        for (current_index, set_id) in losers_round_one.iter().enumerate() {
+            let sources = pick_pair_source_ids(&winners_round_one_ids, losers_round_one.len(), current_index);
+            for (source_index, source_set_id) in sources.iter().enumerate() {
+                if let Some(code) = set_display_code_by_id.get(source_set_id) {
+                    map.insert(
+                        format!("{set_id}:{source_index}"),
+                        normalize_source_text("loser", code),
+                    );
+                }
+            }
+        }
+    }
+
+    for column_index in 1..winners_columns.len() {
+        let previous_ids = &winners_columns[column_index - 1];
+        let current_ids = &winners_columns[column_index];
+        for (current_index, set_id) in current_ids.iter().enumerate() {
+            let sources = pick_pair_source_ids(previous_ids, current_ids.len(), current_index);
+            for (source_index, source_set_id) in sources.iter().enumerate() {
+                if let Some(code) = set_display_code_by_id.get(source_set_id) {
+                    map.insert(
+                        format!("{set_id}:{source_index}"),
+                        normalize_source_text("winner", code),
+                    );
+                }
+            }
+        }
+    }
+
+    let mut winners_columns_by_count: HashMap<usize, Vec<Vec<String>>> = HashMap::new();
+    for ids in &winners_columns {
+        if ids.is_empty() {
+            continue;
+        }
+        winners_columns_by_count
+            .entry(ids.len())
+            .or_default()
+            .push(ids.clone());
+    }
+    let mut winners_count_use_cursor: HashMap<usize, usize> = HashMap::new();
+
+    for column_index in 1..losers_columns.len() {
+        let previous_ids = &losers_columns[column_index - 1];
+        let current_ids = &losers_columns[column_index];
+        let current_count = current_ids.len();
+
+        if current_count == 0 {
+            continue;
+        }
+
+        if previous_ids.len() == current_count {
+            let candidate_winners_columns = winners_columns_by_count
+                .get(&current_count)
+                .cloned()
+                .unwrap_or_default();
+            let winner_cursor = *winners_count_use_cursor.get(&current_count).unwrap_or(&0_usize);
+            let winners_source_ids = candidate_winners_columns
+                .get(winner_cursor)
+                .cloned()
+                .unwrap_or_default();
+
+            if candidate_winners_columns.len() > winner_cursor {
+                winners_count_use_cursor.insert(current_count, winner_cursor + 1);
+            }
+
+            for (current_index, set_id) in current_ids.iter().enumerate() {
+                if let Some(losers_set_id) = previous_ids.get(current_index) {
+                    if let Some(losers_code) = set_display_code_by_id.get(losers_set_id) {
+                        map.insert(
+                            format!("{set_id}:0"),
+                            normalize_source_text("winner", losers_code),
+                        );
+                    }
+                }
+
+                if let Some(winners_source_id) = winners_source_ids.get(current_index) {
+                    if let Some(winners_code) = set_display_code_by_id.get(winners_source_id) {
+                        map.insert(
+                            format!("{set_id}:1"),
+                            normalize_source_text("loser", winners_code),
+                        );
+                    }
+                }
+            }
+            continue;
+        }
+
+        for (current_index, set_id) in current_ids.iter().enumerate() {
+            let sources = pick_pair_source_ids(previous_ids, current_count, current_index);
+            for (source_index, source_set_id) in sources.iter().enumerate() {
+                if let Some(code) = set_display_code_by_id.get(source_set_id) {
+                    map.insert(
+                        format!("{set_id}:{source_index}"),
+                        normalize_source_text("winner", code),
+                    );
+                }
+            }
+        }
+    }
+
+    map
+}
+
+fn normalize_reference_text(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+}
+
+fn normalized_reference_tokens(value: &str) -> Vec<String> {
+    let mut tokens = value
+        .split(|ch: char| !ch.is_alphanumeric())
+        .map(normalize_reference_text)
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<String>>();
+    tokens.sort();
+    tokens.dedup();
+    tokens
+}
+
+fn source_reference_markers(full_round_text: &str) -> Vec<String> {
+    let mut markers = Vec::new();
+    let normalized = normalize_reference_text(full_round_text);
+    if !normalized.is_empty() {
+        markers.push(normalized);
+    }
+
+    let tail = full_round_text
+        .split(|ch: char| ch == '-' || ch == ':' || ch == '/' || ch == '|')
+        .last()
+        .map(str::trim)
+        .unwrap_or_default();
+    let normalized_tail = normalize_reference_text(tail);
+    if !normalized_tail.is_empty() {
+        markers.push(normalized_tail);
+    }
+
+    let compact_tokens = full_round_text
+        .split(|ch: char| !ch.is_alphanumeric())
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .filter(|token| token.len() <= 4)
+        .map(normalize_reference_text)
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<String>>();
+    markers.extend(compact_tokens);
+
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+    for marker in markers {
+        if seen.insert(marker.clone()) {
+            deduped.push(marker);
+        }
+    }
+
+    deduped
+}
+
+fn entrant_source_for_slot(
+    set: &crate::models::SetSnapshot,
+    slot_index: usize,
+) -> Option<&crate::models::SetEntrantSourceSnapshot> {
+    match slot_index {
+        0 => set.entrant1_source.as_ref(),
+        1 => set.entrant2_source.as_ref(),
+        _ => None,
+    }
+}
+
+fn normalize_source_condition(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|ch| *ch != '_' && *ch != '-' && !ch.is_whitespace())
+        .collect::<String>()
+}
+
+fn source_kind_from_api_source(source: &crate::models::SetEntrantSourceSnapshot) -> Option<&'static str> {
+    let merged = format!(
+        "{} {}",
+        source.condition.as_deref().unwrap_or_default(),
+        source.condition_string.as_deref().unwrap_or_default()
+    );
+    let normalized = normalize_source_condition(&merged);
+    if normalized.contains("loser") {
+        return Some("loser");
+    }
+    if normalized.contains("winner") {
+        return Some("winner");
+    }
+    None
+}
+
+fn source_set_code_from_api_source(
+    source: &crate::models::SetEntrantSourceSnapshot,
+    set_display_code_by_id: &HashMap<String, String>,
+) -> Option<String> {
+    if let Some(type_id) = source.type_id.as_deref() {
+        let trimmed = type_id.trim();
+        if !trimmed.is_empty() {
+            if let Some(code) = set_display_code_by_id.get(trimmed) {
+                return Some(code.clone());
+            }
+        }
+    }
+
+    let condition_tokens = source
+        .condition_string
+        .as_deref()
+        .map(normalized_reference_tokens)
+        .unwrap_or_default();
+    if condition_tokens.is_empty() {
+        return None;
+    }
+
+    let mut best_match: Option<(usize, String)> = None;
+    for code in set_display_code_by_id.values() {
+        let normalized_code = normalize_reference_text(code);
+        if normalized_code.is_empty() {
+            continue;
+        }
+
+        let is_match = condition_tokens
+            .iter()
+            .any(|token| token == &normalized_code);
+        if !is_match {
+            continue;
+        }
+
+        let rank = normalized_code.len();
+        match &best_match {
+            None => best_match = Some((rank, code.clone())),
+            Some((best_rank, best_code)) => {
+                if rank > *best_rank || (rank == *best_rank && code < best_code) {
+                    best_match = Some((rank, code.clone()));
+                }
+            }
+        }
+    }
+
+    best_match.map(|(_, code)| code)
+}
+
+fn source_set_id_and_code_from_api_source(
+    source: &crate::models::SetEntrantSourceSnapshot,
+    set_display_code_by_id: &HashMap<String, String>,
+) -> Option<(String, String)> {
+    if let Some(type_id) = source.type_id.as_deref() {
+        let trimmed = type_id.trim();
+        if !trimmed.is_empty() {
+            if let Some(code) = set_display_code_by_id.get(trimmed) {
+                return Some((trimmed.to_owned(), code.clone()));
+            }
+        }
+    }
+
+    let source_code = source_set_code_from_api_source(source, set_display_code_by_id)?;
+    let normalized_source_code = normalize_reference_text(&source_code);
+    let source_set_id = set_display_code_by_id
+        .iter()
+        .find_map(|(set_id, code)| {
+            if normalize_reference_text(code) == normalized_source_code {
+                Some(set_id.clone())
+            } else {
+                None
+            }
+        })?;
+
+    Some((source_set_id, source_code))
+}
+
+fn build_api_tbd_source_labels(event: &EventSnapshot) -> HashMap<String, String> {
+    let set_display_code_by_id = build_set_display_code_by_id(event);
+    let source_is_losers_by_set_id = event
+        .sets
+        .iter()
+        .map(|set| (set.set_id.clone(), is_losers_set(set)))
+        .collect::<HashMap<String, bool>>();
+    let mut labels = HashMap::new();
+
+    for set in &event.sets {
+        let target_is_losers = is_losers_set(set);
+        for slot_index in 0..set.slots.len() {
+            let Some(slot) = set.slots.get(slot_index) else {
+                continue;
+            };
+            if !is_slot_empty(slot) {
+                continue;
+            }
+
+            let Some(source) = entrant_source_for_slot(set, slot_index) else {
+                continue;
+            };
+            let Some((source_set_id, source_set_code)) =
+                source_set_id_and_code_from_api_source(source, &set_display_code_by_id)
+            else {
+                continue;
+            };
+
+            let kind = if target_is_losers {
+                // Losers側は「Winners由来なら loser of / Losers由来なら winner of」を優先する。
+                let source_is_losers = source_is_losers_by_set_id
+                    .get(&source_set_id)
+                    .copied()
+                    .unwrap_or(false);
+                if source_is_losers { "winner" } else { "loser" }
+            } else {
+                source_kind_from_api_source(source).unwrap_or("winner")
+            };
+
+            labels.insert(
+                format!("{}:{}", set.set_id, slot_index),
+                normalize_source_text(kind, &source_set_code),
+            );
+        }
+    }
+
+    labels
+}
+
+fn apply_source_based_tbd_labels(event: &mut EventSnapshot) {
+    let labels = build_api_tbd_source_labels(event);
+    if labels.is_empty() {
+        return;
+    }
+
+    for set in &mut event.sets {
+        for slot_index in 0..set.slots.len() {
+            let key = format!("{}:{}", set.set_id, slot_index);
+            let Some(label) = labels.get(&key) else {
+                continue;
+            };
+
+            let Some(slot) = set.slots.get_mut(slot_index) else {
+                continue;
+            };
+            if !is_slot_empty(slot) {
+                continue;
+            }
+
+            slot.entrant_name = label.clone();
+        }
+    }
+}
+
+fn api_source_reference_rank(
+    set: &crate::models::SetSnapshot,
+    slot_index: usize,
+    source_set_id: &str,
+    source_markers: &[String],
+    source_set_code: Option<&str>,
+    prefer_loser_reference: bool,
+) -> Option<i64> {
+    let source = entrant_source_for_slot(set, slot_index)?;
+    let type_id = source.type_id.as_deref().map(str::trim).unwrap_or_default();
+
+    let condition = source
+        .condition
+        .as_deref()
+        .map(normalize_source_condition)
+        .unwrap_or_default();
+
+    let normalized_condition_string = source
+        .condition_string
+        .as_deref()
+        .map(normalize_reference_text)
+        .unwrap_or_default();
+    let condition_tokens = source
+        .condition_string
+        .as_deref()
+        .map(normalized_reference_tokens)
+        .unwrap_or_default();
+
+    let mut reference_markers = source_markers
+        .iter()
+        .filter(|marker| !marker.is_empty())
+        .cloned()
+        .collect::<Vec<String>>();
+    if let Some(code) = source_set_code {
+        let marker = normalize_reference_text(code);
+        if !marker.is_empty() {
+            reference_markers.push(marker);
+        }
+    }
+    reference_markers.sort();
+    reference_markers.dedup();
+
+    let id_matches = !type_id.is_empty() && type_id == source_set_id;
+    let marker_matches = (!normalized_condition_string.is_empty() || !condition_tokens.is_empty())
+        && reference_markers.iter().any(|marker| {
+            normalized_condition_string == *marker
+                || condition_tokens.iter().any(|token| token == marker)
+        });
+    let related_to_source = id_matches || marker_matches;
+    if !related_to_source {
+        return None;
+    }
+
+    let expected = if prefer_loser_reference {
+        "loser"
+    } else {
+        "winner"
+    };
+    let reversed = if prefer_loser_reference {
+        "winner"
+    } else {
+        "loser"
+    };
+
+    if condition.contains(expected) {
+        return Some(if id_matches { 0 } else { 1 });
+    }
+    if condition.contains(reversed) {
+        return Some(if id_matches { 4 } else { 5 });
+    }
+    if condition.is_empty() {
+        return Some(if id_matches { 1 } else { 2 });
+    }
+    Some(2)
+}
+
+fn unresolved_slot_reference_rank(
+    slot: &crate::models::SetSlotSnapshot,
+    source_markers: &[String],
+    prefer_loser_reference: bool,
+) -> Option<i64> {
+    if !is_slot_empty(slot) {
+        return None;
+    }
+
+    let normalized = normalize_reference_text(&slot.entrant_name);
+    if normalized.is_empty() || normalized == "tbd" || normalized == "tba" || normalized == "unknown" {
+        return None;
+    }
+
+    let mentions_source = source_markers
+        .iter()
+        .any(|marker| !marker.is_empty() && normalized.contains(marker));
+    if !mentions_source {
+        return None;
+    }
+
+    let mentions_loser = normalized.contains("loserof") || normalized.contains("敗者");
+    let mentions_winner = normalized.contains("winnerof") || normalized.contains("勝者");
+
+    if prefer_loser_reference {
+        if mentions_loser {
+            return Some(0);
+        }
+        if mentions_winner {
+            return Some(2);
+        }
+        return Some(1);
+    }
+
+    if mentions_winner {
+        return Some(0);
+    }
+    if mentions_loser {
+        return Some(2);
+    }
+    Some(1)
+}
+
+fn inferred_slot_reference_rank(
+    set: &crate::models::SetSnapshot,
+    slot_index: usize,
+    inferred_labels: &HashMap<String, String>,
+    source_set_code: Option<&str>,
+    prefer_loser_reference: bool,
+) -> Option<i64> {
+    let slot = set.slots.get(slot_index)?;
+    if !is_slot_empty(slot) {
+        return None;
+    }
+
+    let source_code = source_set_code?;
+    let key = format!("{}:{}", set.set_id, slot_index);
+    let label = inferred_labels.get(&key)?;
+    let normalized = normalize_reference_text(label);
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let expected = normalize_reference_text(&normalize_source_text(
+        if prefer_loser_reference { "loser" } else { "winner" },
+        source_code,
+    ));
+    if normalized == expected {
+        return Some(0);
+    }
+
+    let reversed = normalize_reference_text(&normalize_source_text(
+        if prefer_loser_reference { "winner" } else { "loser" },
+        source_code,
+    ));
+    if normalized == reversed {
+        return Some(3);
+    }
+
+    if normalized.contains(&expected) {
+        return Some(1);
+    }
+
+    Some(2)
+}
+
+fn preferred_slot_by_unresolved_reference(
+    target: &crate::models::SetSnapshot,
+    source_markers: &[String],
+    prefer_loser_reference: bool,
+) -> Option<(usize, i64)> {
+    let mut best: Option<(usize, i64)> = None;
+
+    for (slot_index, slot) in target.slots.iter().enumerate() {
+        let Some(rank) = unresolved_slot_reference_rank(slot, source_markers, prefer_loser_reference) else {
+            continue;
+        };
+
+        match best {
+            None => best = Some((slot_index, rank)),
+            Some((best_slot, best_rank)) => {
+                if rank < best_rank || (rank == best_rank && slot_index < best_slot) {
+                    best = Some((slot_index, rank));
+                }
+            }
+        }
+    }
+
+    best
+}
+
 fn infer_preferred_slot_index_for_winner(
     event: &EventSnapshot,
     source_set_id: &str,
@@ -1309,7 +1977,7 @@ fn infer_preferred_slot_index_for_winner(
         return None;
     }
 
-    let mut previous_round_set_ids = event
+    let previous_round_set_ids = event
         .sets
         .iter()
         .filter(|set| {
@@ -1320,9 +1988,8 @@ fn infer_preferred_slot_index_for_winner(
         })
         .map(|set| set.set_id.clone())
         .collect::<Vec<String>>();
-    previous_round_set_ids.sort();
 
-    let mut current_round_set_ids = event
+    let current_round_set_ids = event
         .sets
         .iter()
         .filter(|set| {
@@ -1333,7 +2000,6 @@ fn infer_preferred_slot_index_for_winner(
         })
         .map(|set| set.set_id.clone())
         .collect::<Vec<String>>();
-    current_round_set_ids.sort();
 
     let current_index = current_round_set_ids
         .iter()
@@ -1429,6 +2095,9 @@ fn place_entrant_to_set(
 fn advance_winner_within_lane(
     event: &mut EventSnapshot,
     source_set_id: &str,
+    source_full_round_text: &str,
+    inferred_labels: &HashMap<String, String>,
+    source_set_code: Option<&str>,
     source_round: Option<i64>,
     source_is_losers: bool,
     source_phase_name: Option<&String>,
@@ -1438,6 +2107,7 @@ fn advance_winner_within_lane(
 ) -> bool {
     let src_phase = normalize_group_key(source_phase_name);
     let src_group = normalize_group_key(source_phase_group_name);
+    let source_markers = source_reference_markers(source_full_round_text);
 
     // Winners/Losersともに、phase/pool構造が完全一致しないケースに備えて段階的に緩和する。
     let mut candidates = event
@@ -1493,7 +2163,21 @@ fn advance_winner_within_lane(
                 _ => i64::MAX / 2,
             };
 
-            let preferred_slot_index = infer_preferred_slot_index_for_winner(
+            let api_reference_match = (0..target.slots.len())
+                .filter_map(|slot_index| {
+                    api_source_reference_rank(
+                        target,
+                        slot_index,
+                        source_set_id,
+                        &source_markers,
+                        source_set_code,
+                        false,
+                    )
+                        .map(|rank| (slot_index, rank))
+                })
+                .min_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+
+            let structural_preferred_slot = infer_preferred_slot_index_for_winner(
                 event,
                 source_set_id,
                 source_round,
@@ -1502,20 +2186,65 @@ fn advance_winner_within_lane(
                 source_phase_group_name,
                 target,
             );
+            let unresolved_reference_match =
+                preferred_slot_by_unresolved_reference(target, &source_markers, false);
+            let inferred_reference_match = (0..target.slots.len())
+                .filter_map(|slot_index| {
+                    inferred_slot_reference_rank(
+                        target,
+                        slot_index,
+                        inferred_labels,
+                        source_set_code,
+                        false,
+                    )
+                    .map(|rank| (slot_index, rank))
+                })
+                .min_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
 
-            Some((index, strictness_rank, round_gap, empty_count, preferred_slot_index))
+            let preferred_slot_index = api_reference_match
+                .as_ref()
+                .map(|(index, _)| *index)
+                .or(inferred_reference_match.as_ref().map(|(index, _)| *index))
+                .or(unresolved_reference_match.as_ref().map(|(index, _)| *index))
+                .or(structural_preferred_slot);
+            let api_reference_rank = api_reference_match
+                .as_ref()
+                .map(|(_, rank)| *rank)
+                .unwrap_or(4_i64);
+            let unresolved_reference_rank = inferred_reference_match
+                .as_ref()
+                .map(|(_, rank)| *rank)
+                .unwrap_or_else(|| {
+                    unresolved_reference_match
+                        .as_ref()
+                        .map(|(_, rank)| *rank)
+                        .unwrap_or(3_i64)
+                });
+
+            Some((
+                index,
+                api_reference_rank,
+                unresolved_reference_rank,
+                strictness_rank,
+                round_gap,
+                empty_count,
+                preferred_slot_index,
+            ))
         })
-        .collect::<Vec<(usize, i64, i64, usize, Option<usize>)>>();
+        .collect::<Vec<(usize, i64, i64, i64, i64, usize, Option<usize>)>>();
 
     candidates.sort_by(|left, right| {
         left.1
             .cmp(&right.1)
             .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.6.is_none().cmp(&right.6.is_none()))
             .then_with(|| left.3.cmp(&right.3))
+            .then_with(|| left.4.cmp(&right.4))
+            .then_with(|| left.5.cmp(&right.5))
             .then_with(|| left.0.cmp(&right.0))
     });
 
-    for (index, _, _, _, preferred_slot_index) in candidates {
+    for (index, _, _, _, _, _, preferred_slot_index) in candidates {
         if let Some(target) = event.sets.get_mut(index) {
             if place_entrant_to_set(target, winner_id, winner_name, preferred_slot_index) {
                 return true;
@@ -1529,6 +2258,9 @@ fn advance_winner_within_lane(
 fn drop_loser_to_losers_lane(
     event: &mut EventSnapshot,
     source_set_id: &str,
+    source_full_round_text: &str,
+    inferred_labels: &HashMap<String, String>,
+    source_set_code: Option<&str>,
     source_round: Option<i64>,
     source_phase_name: Option<&String>,
     source_phase_group_name: Option<&String>,
@@ -1537,6 +2269,7 @@ fn drop_loser_to_losers_lane(
 ) -> bool {
     let src_phase = normalize_group_key(source_phase_name);
     let src_group = normalize_group_key(source_phase_group_name);
+    let source_markers = source_reference_markers(source_full_round_text);
 
     // start.gg側のpool分割とLosers配置が一致しない場合があるため、段階的に緩和して候補を探す。
     let mut candidates = event
@@ -1583,22 +2316,222 @@ fn drop_loser_to_losers_lane(
                 (Some(src), Some(dst)) => (dst + src).abs(),
                 _ => i64::MAX / 2,
             };
+            let api_reference_match = (0..target.slots.len())
+                .filter_map(|slot_index| {
+                    api_source_reference_rank(
+                        target,
+                        slot_index,
+                        source_set_id,
+                        &source_markers,
+                        source_set_code,
+                        true,
+                    )
+                        .map(|rank| (slot_index, rank))
+                })
+                .min_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+            let unresolved_reference_match =
+                preferred_slot_by_unresolved_reference(target, &source_markers, true);
+            let inferred_reference_match = (0..target.slots.len())
+                .filter_map(|slot_index| {
+                    inferred_slot_reference_rank(
+                        target,
+                        slot_index,
+                        inferred_labels,
+                        source_set_code,
+                        true,
+                    )
+                    .map(|rank| (slot_index, rank))
+                })
+                .min_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+            let preferred_slot_index = api_reference_match
+                .as_ref()
+                .map(|(index, _)| *index)
+                .or(unresolved_reference_match
+                .as_ref()
+                .map(|(index, _)| *index))
+                .or(inferred_reference_match
+                .as_ref()
+                .map(|(index, _)| *index));
+            let preferred_slot_index = inferred_reference_match
+                .as_ref()
+                .map(|(index, _)| *index)
+                .or(preferred_slot_index);
+            let preferred_slot_index = api_reference_match
+                .as_ref()
+                .map(|(index, _)| *index)
+                .or(preferred_slot_index);
+            let api_reference_rank = api_reference_match
+                .as_ref()
+                .map(|(_, rank)| *rank)
+                .unwrap_or(4_i64);
+            let unresolved_reference_rank = inferred_reference_match
+                .as_ref()
+                .map(|(_, rank)| *rank)
+                .unwrap_or_else(|| {
+                    unresolved_reference_match
+                .as_ref()
+                .map(|(_, rank)| *rank)
+                .unwrap_or(3_i64)
+                });
 
-            Some((index, strictness_rank, round_distance, empty_count))
+            Some((
+                index,
+                api_reference_rank,
+                unresolved_reference_rank,
+                strictness_rank,
+                round_distance,
+                empty_count,
+                preferred_slot_index,
+            ))
         })
-        .collect::<Vec<(usize, i64, i64, usize)>>();
+        .collect::<Vec<(usize, i64, i64, i64, i64, usize, Option<usize>)>>();
 
     candidates.sort_by(|left, right| {
         left.1
             .cmp(&right.1)
             .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.6.is_none().cmp(&right.6.is_none()))
             .then_with(|| left.3.cmp(&right.3))
+            .then_with(|| left.4.cmp(&right.4))
+            .then_with(|| left.5.cmp(&right.5))
             .then_with(|| left.0.cmp(&right.0))
     });
 
-    for (index, _, _, _) in candidates {
+    for (index, _, _, _, _, _, preferred_slot_index) in candidates {
         if let Some(target) = event.sets.get_mut(index) {
-            if place_entrant_to_set(target, loser_id, loser_name, None) {
+            if place_entrant_to_set(target, loser_id, loser_name, preferred_slot_index) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn advance_losers_winner_to_grand_final(
+    event: &mut EventSnapshot,
+    source_set_id: &str,
+    source_full_round_text: &str,
+    inferred_labels: &HashMap<String, String>,
+    source_set_code: Option<&str>,
+    source_phase_name: Option<&String>,
+    source_phase_group_name: Option<&String>,
+    winner_id: &str,
+    winner_name: &str,
+) -> bool {
+    let src_phase = normalize_group_key(source_phase_name);
+    let src_group = normalize_group_key(source_phase_group_name);
+    let source_markers = source_reference_markers(source_full_round_text);
+
+    let mut candidates = event
+        .sets
+        .iter()
+        .enumerate()
+        .filter_map(|(index, target)| {
+            if target.set_id == source_set_id {
+                return None;
+            }
+            if is_losers_set(target) {
+                return None;
+            }
+            if !is_grand_final_set(target) {
+                return None;
+            }
+
+            if target
+                .slots
+                .iter()
+                .any(|slot| slot.entrant_id.as_deref() == Some(winner_id))
+            {
+                return None;
+            }
+
+            let empty_count = empty_slot_count(target);
+            if empty_count == 0 {
+                return None;
+            }
+
+            let target_phase = normalize_group_key(target.phase_name.as_ref());
+            let target_group = normalize_group_key(target.phase_group_name.as_ref());
+            let strictness_rank = if target_phase == src_phase && target_group == src_group {
+                0_i64
+            } else if target_phase == src_phase {
+                1_i64
+            } else {
+                2_i64
+            };
+
+            let api_reference_match = (0..target.slots.len())
+                .filter_map(|slot_index| {
+                    api_source_reference_rank(
+                        target,
+                        slot_index,
+                        source_set_id,
+                        &source_markers,
+                        source_set_code,
+                        false,
+                    )
+                    .map(|rank| (slot_index, rank))
+                })
+                .min_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+            let unresolved_reference_match =
+                preferred_slot_by_unresolved_reference(target, &source_markers, false);
+            let inferred_reference_match = (0..target.slots.len())
+                .filter_map(|slot_index| {
+                    inferred_slot_reference_rank(
+                        target,
+                        slot_index,
+                        inferred_labels,
+                        source_set_code,
+                        false,
+                    )
+                    .map(|rank| (slot_index, rank))
+                })
+                .min_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+
+            let preferred_slot_index = api_reference_match
+                .as_ref()
+                .map(|(index, _)| *index)
+                .or(inferred_reference_match.as_ref().map(|(index, _)| *index))
+                .or(unresolved_reference_match.as_ref().map(|(index, _)| *index));
+            let api_reference_rank = api_reference_match
+                .as_ref()
+                .map(|(_, rank)| *rank)
+                .unwrap_or(4_i64);
+            let unresolved_reference_rank = inferred_reference_match
+                .as_ref()
+                .map(|(_, rank)| *rank)
+                .unwrap_or_else(|| {
+                    unresolved_reference_match
+                        .as_ref()
+                        .map(|(_, rank)| *rank)
+                        .unwrap_or(3_i64)
+                });
+
+            Some((
+                index,
+                api_reference_rank,
+                unresolved_reference_rank,
+                strictness_rank,
+                empty_count,
+                preferred_slot_index,
+            ))
+        })
+        .collect::<Vec<(usize, i64, i64, i64, usize, Option<usize>)>>();
+
+    candidates.sort_by(|left, right| {
+        left.1
+            .cmp(&right.1)
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.5.is_none().cmp(&right.5.is_none()))
+            .then_with(|| left.3.cmp(&right.3))
+            .then_with(|| left.4.cmp(&right.4))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    for (index, _, _, _, _, preferred_slot_index) in candidates {
+        if let Some(target) = event.sets.get_mut(index) {
+            if place_entrant_to_set(target, winner_id, winner_name, preferred_slot_index) {
                 return true;
             }
         }
@@ -1639,9 +2572,17 @@ fn apply_local_progression(
         .find(|slot| slot.entrant_id.as_deref().is_some() && slot.entrant_id.as_deref() != Some(winner_id));
 
     let source_is_losers = is_losers_set(&source_set);
-    let _ = advance_winner_within_lane(
+    let inferred_labels = build_inferred_tbd_source_labels(event);
+    let source_set_code = build_set_display_code_by_id(event)
+        .get(source_set_id)
+        .cloned();
+
+    let advanced_within_lane = advance_winner_within_lane(
         event,
         source_set_id,
+        &source_set.full_round_text,
+        &inferred_labels,
+        source_set_code.as_deref(),
         source_set.round,
         source_is_losers,
         source_set.phase_name.as_ref(),
@@ -1650,12 +2591,29 @@ fn apply_local_progression(
         &winner_name,
     );
 
+    if source_is_losers && !advanced_within_lane {
+        let _ = advance_losers_winner_to_grand_final(
+            event,
+            source_set_id,
+            &source_set.full_round_text,
+            &inferred_labels,
+            source_set_code.as_deref(),
+            source_set.phase_name.as_ref(),
+            source_set.phase_group_name.as_ref(),
+            winner_id,
+            &winner_name,
+        );
+    }
+
     if !source_is_losers {
         if let Some(loser) = loser_slot {
             if let Some(loser_id) = loser.entrant_id.as_ref() {
                 let _ = drop_loser_to_losers_lane(
                     event,
                     source_set_id,
+                    &source_set.full_round_text,
+                    &inferred_labels,
+                    source_set_code.as_deref(),
                     source_set.round,
                     source_set.phase_name.as_ref(),
                     source_set.phase_group_name.as_ref(),
@@ -1665,6 +2623,8 @@ fn apply_local_progression(
             }
         }
     }
+
+    apply_source_based_tbd_labels(event);
 }
 
 fn round_depth_for_sort(round: Option<i64>) -> i64 {
@@ -1867,6 +2827,8 @@ pub fn reset_local_set_result_with_dependencies(
 
             clear_invalid_entrants_from_set(set, &invalid_entrant_ids);
         }
+
+        apply_source_based_tbd_labels(event);
     }
 
     local_meta
@@ -1979,7 +2941,10 @@ pub fn save_event_snapshot(
         .find(|event| event.event_id == event_id)
     {
         *existing = event_snapshot;
+        apply_source_based_tbd_labels(existing);
     } else {
+        let mut event_snapshot = event_snapshot;
+        apply_source_based_tbd_labels(&mut event_snapshot);
         merged_snapshot.events.push(event_snapshot);
     }
 
@@ -2141,6 +3106,10 @@ pub fn upsert_local_set_result(
     app: &AppHandle,
     input: LocalSetResultInput,
 ) -> Result<TournamentWorkspace, String> {
+    if input.set_id.starts_with("preview_") {
+        return Err("preview setは結果報告できません。スナップショットを更新して実setを取得してください。".to_owned());
+    }
+
     let mut snapshot = load_snapshot(app, &input.slug)?;
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
 
@@ -2278,6 +3247,20 @@ pub fn remove_pending_set_results(
     local_meta
         .pending_set_results
         .retain(|item| !remove_ids.contains(&item.set_id));
+    local_meta.updated_at = Utc::now();
+    save_local_meta(app, event_id, &local_meta)?;
+    Ok(local_meta)
+}
+
+pub fn clear_pending_set_results(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentLocalMeta, String> {
+    let mut local_meta = load_local_meta(app, slug, event_id)?;
+    local_meta
+        .pending_set_results
+        .retain(|item| item.event_id != event_id);
     local_meta.updated_at = Utc::now();
     save_local_meta(app, event_id, &local_meta)?;
     Ok(local_meta)
