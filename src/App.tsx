@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
@@ -2112,8 +2112,25 @@ async function deriveEncryptedPlayerId(tournamentId: string, eventId: string, en
 }
 
 function sanitizeFileSegment(value: string): string {
-  const normalized = value.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-");
+  const normalized = value
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/[.]+$/g, "")
+    .replace(/^-+|-+$/g, "");
   return normalized === "" ? "untitled" : normalized;
+}
+
+function buildPlayerCardFileName(player: UserCardPlayer): string {
+  const eventAlias = sanitizeFileSegment(player.eventAlias?.trim() || player.eventName || "event");
+  const entrantName = sanitizeFileSegment(player.entrantName || "player");
+  return `${eventAlias}_${entrantName}.png`;
+}
+
+function buildPrintedPlayerCardPageFileName(eventAlias: string, pageNumber: number, totalPages: number): string {
+  const safeEventAlias = sanitizeFileSegment(eventAlias || "event");
+  return `${safeEventAlias}_${pageNumber}of${totalPages}.png`;
 }
 
 function triggerBlobDownload(blob: Blob, fileName: string): void {
@@ -2567,6 +2584,7 @@ function App() {
   const [totalItemMaxCount, setTotalItemMaxCount] = useState(3);
   const [selectedTournamentEntrantId, setSelectedTournamentEntrantId] = useState("");
   const [userCardPlayers, setUserCardPlayers] = useState<UserCardPlayer[]>([]);
+  const [selectedUserCardPlayerIds, setSelectedUserCardPlayerIds] = useState<string[]>([]);
   const [selectedUserCardPlayerId, setSelectedUserCardPlayerId] = useState("");
   const [selectedUserCardPreviewUrl, setSelectedUserCardPreviewUrl] = useState("");
   const [userCardBusy, setUserCardBusy] = useState(false);
@@ -3836,6 +3854,34 @@ function App() {
 
     return userCardPlayers.find((player) => player.playerId === selectedUserCardPlayerId) ?? userCardPlayers[0] ?? null;
   }, [selectedUserCardPlayerId, userCardPlayers]);
+
+  const handleUserCardPlayerSelect = useCallback((player: UserCardPlayer, multiSelect: boolean) => {
+    const selectedId = player.playerId;
+    setSelectedUserCardPlayerId(selectedId);
+
+    if (!multiSelect) {
+      setSelectedUserCardPlayerIds([selectedId]);
+      return;
+    }
+
+    setSelectedUserCardPlayerIds((current) => {
+      if (current.includes(selectedId)) {
+        const next = current.filter((id) => id !== selectedId);
+        return next.length > 0 ? next : [selectedId];
+      }
+      return [...current, selectedId];
+    });
+  }, []);
+
+  const selectAllUserCardPlayers = useCallback(() => {
+    if (userCardPlayers.length === 0) {
+      return;
+    }
+
+    const selectedIds = userCardPlayers.map((player) => player.playerId);
+    setSelectedUserCardPlayerIds(selectedIds);
+    setSelectedUserCardPlayerId(selectedIds[selectedIds.length - 1]);
+  }, [userCardPlayers]);
 
   const mailboxThreadSummaries = useMemo(() => {
     const roots = scopedGenericMessages.filter((item) => item.parentMessageId === null);
@@ -5355,6 +5401,13 @@ function App() {
         }
 
         setUserCardPlayers(rows);
+        setSelectedUserCardPlayerIds((current) => {
+          const validIds = current.filter((id) => rows.some((row) => row.playerId === id));
+          if (validIds.length > 0) {
+            return validIds;
+          }
+          return rows.length > 0 ? [rows[0].playerId] : [];
+        });
         setSelectedUserCardPlayerId((current) => {
           if (current !== "" && rows.some((row) => row.playerId === current)) {
             return current;
@@ -5421,8 +5474,21 @@ function App() {
       return;
     }
 
-    if (!selectedUserCardPlayer) {
+    const selectedIds = selectedUserCardPlayerIds.length > 0
+      ? selectedUserCardPlayerIds
+      : selectedUserCardPlayer
+        ? [selectedUserCardPlayer.playerId]
+        : [];
+
+    if (selectedIds.length === 0) {
       setError("保存するプレイヤーカードがありません。");
+      return;
+    }
+
+    const selectedPlayers = userCardPlayers.filter((player) => selectedIds.includes(player.playerId));
+
+    if (selectedPlayers.length === 0) {
+      setError("保存対象のプレイヤーカードが見つかりませんでした。");
       return;
     }
 
@@ -5431,11 +5497,13 @@ function App() {
     setMessage("");
 
     try {
-      const canvas = await renderPlayerCardCanvas(selectedUserCardPlayer);
-      const blob = await canvasToBlob(canvas);
-      const fileName = `${sanitizeFileSegment(selectedUserCardPlayer.eventName)}-${sanitizeFileSegment(selectedUserCardPlayer.entrantName)}-${selectedUserCardPlayer.playerId}.png`;
-      triggerBlobDownload(blob, fileName);
-      setMessage(`プレイヤーカードを保存しました: ${selectedUserCardPlayer.entrantName}`);
+      for (const player of selectedPlayers) {
+        const canvas = await renderPlayerCardCanvas(player);
+        const blob = await canvasToBlob(canvas);
+        const fileName = buildPlayerCardFileName(player);
+        triggerBlobDownload(blob, fileName);
+      }
+      setMessage(`${selectedPlayers.length} 枚のプレイヤーカードを保存しました。`);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -5443,14 +5511,21 @@ function App() {
     }
   }
 
-  async function exportAllPlayerCardsAsA4Pages() {
+  async function exportSelectedPlayerCardsAsA4Sheet() {
     if (disableLocalCommunication) {
       setError("ローカル通信を行わない設定のため、プレイヤーリスト機能は無効です。設定タブで解除してください。");
       return;
     }
 
-    if (userCardPlayers.length === 0) {
-      setError("出力対象のプレイヤーがいません。");
+    const selectedIds = selectedUserCardPlayerIds.length > 0
+      ? selectedUserCardPlayerIds
+      : selectedUserCardPlayer
+        ? [selectedUserCardPlayer.playerId]
+        : [];
+    const selectedPlayers = userCardPlayers.filter((player) => selectedIds.includes(player.playerId));
+
+    if (selectedPlayers.length === 0) {
+      setError("出力対象の選択カードがありません。");
       return;
     }
 
@@ -5469,10 +5544,10 @@ function App() {
       const rows = 5;
       const cardWidth = Math.floor((pageWidth - marginX * 2 - colGap) / cols);
       const cardHeight = Math.floor((pageHeight - marginY * 2 - rowGap * (rows - 1)) / rows);
-      const totalPages = Math.ceil(userCardPlayers.length / USER_CARD_PAGE_SIZE);
+      const totalPages = Math.ceil(selectedPlayers.length / USER_CARD_PAGE_SIZE);
 
       for (let page = 0; page < totalPages; page += 1) {
-        const pagePlayers = userCardPlayers.slice(page * USER_CARD_PAGE_SIZE, (page + 1) * USER_CARD_PAGE_SIZE);
+        const pagePlayers = selectedPlayers.slice(page * USER_CARD_PAGE_SIZE, (page + 1) * USER_CARD_PAGE_SIZE);
         const canvas = document.createElement("canvas");
         canvas.width = pageWidth;
         canvas.height = pageHeight;
@@ -5505,11 +5580,12 @@ function App() {
         }
 
         const blob = await canvasToBlob(canvas);
-        const fileName = `${sanitizeFileSegment(selectedEvent?.name ?? "event")}-player-cards-a4-${String(page + 1).padStart(2, "0")}.png`;
+        const eventAlias = selectedEventMeta?.eventAlias?.trim() || selectedEvent?.name || "event";
+        const fileName = buildPrintedPlayerCardPageFileName(eventAlias, page + 1, totalPages);
         triggerBlobDownload(blob, fileName);
       }
 
-      setMessage(`A4画像を出力しました。全 ${totalPages} ページ / 1ページ最大 ${USER_CARD_PAGE_SIZE} 人です。`);
+      setMessage(`選択中のカードを A4 シートにまとめて出力しました。${selectedPlayers.length} 枚 / ${totalPages} ページ`);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -10073,9 +10149,17 @@ function App() {
                     type="button"
                     className="ghost"
                     disabled={disableLocalCommunication || userCardBusy || userCardPlayers.length === 0}
-                    onClick={() => void exportAllPlayerCardsAsA4Pages()}
+                    onClick={selectAllUserCardPlayers}
                   >
-                    全カードをA4画像で出力
+                    全選択
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={disableLocalCommunication || userCardBusy || userCardPlayers.length === 0}
+                    onClick={() => void exportSelectedPlayerCardsAsA4Sheet()}
+                  >
+                    A4シートを作成
                   </button>
                 </div>
               </>
@@ -10091,18 +10175,20 @@ function App() {
                 ) : (
                   <div className="event-list player-list-scroll enabled">
                     {userCardPlayers.map((player) => {
-                      const selected = selectedUserCardPlayer?.playerId === player.playerId;
+                      const selected = selectedUserCardPlayerIds.includes(player.playerId);
                       return (
                         <article
                           key={`${player.eventId}-${player.entrantId}`}
                           className={`event-list-item user-card-entry ${selected ? "selected" : ""}`}
                           role="button"
                           tabIndex={0}
-                          onClick={() => setSelectedUserCardPlayerId(player.playerId)}
+                          onClick={(event) => {
+                            handleUserCardPlayerSelect(player, event.ctrlKey || event.metaKey);
+                          }}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
                               e.preventDefault();
-                              setSelectedUserCardPlayerId(player.playerId);
+                              handleUserCardPlayerSelect(player, false);
                             }
                           }}
                         >
@@ -10141,7 +10227,7 @@ function App() {
           <section className="panel">
             <h2>使用方法</h2>
             <p className="meta">試合setのカードをクリックすると詳細ダイアログが開き、各種入力が可能です。</p>
-            <p className="meta">カードを Ctrl+クリックで配信画面のON/OFF(最大1set)。Ctrl+Shift+クリックで完全停止します。</p>
+            <p className="meta">カードを Ctrl+クリックで配信画面のON/OFF(最大1set)。Alt+左クリックで完全停止します。</p>
             <div className="panel-toolbar compact">
               <p className="meta">
                 下書き: {draftSetResults.length} / 確定済み: {confirmedSetResults.length}
@@ -10310,7 +10396,7 @@ function App() {
                                       role="button"
                                       tabIndex={0}
                                       onClick={(event) => {
-                                        if (event.ctrlKey && event.shiftKey) {
+                                        if (event.altKey && event.button === 0) {
                                           event.preventDefault();
                                           if (busy || obsOverlayBusy) {
                                             return;
@@ -10471,9 +10557,6 @@ function App() {
                     const entrantId = slot.entrantId;
                     const dialogTbdLabel = resolveTbdSourceLabel(activeMatch, idx, slot);
                     const dialogEntrantName = dialogTbdLabel ? dialogTbdLabel : slot.entrantName;
-                    const entrantMeta = entrantId
-                      ? selectedEventMeta?.entrants.find((entrant) => entrant.entrantId === entrantId)
-                      : null;
                     const currentSide = entrantId
                       ? (activeMatchSideDrafts[entrantId] ?? getSetSlotSide(activeMatch.setId, entrantId))
                       : "";
@@ -10585,7 +10668,6 @@ function App() {
                             >
                               {callingEntrantId === entrantId ? "送信中..." : "呼び出し"}
                             </button>
-                            <p className="meta">authCode: {entrantMeta?.authCode ?? "-"}</p>
                           </>
                         )}
                       </article>
