@@ -89,3 +89,53 @@ bracketの作成ルールについて実装されている。
 start.ggの形式に近づけようとしているようなので参考になるはず。  
 
 https://github.com/Drarig29/brackets-manager.js/
+
+## 7. start.gg とローカルスナップショットの整合を取るための実践知見
+
+### 7.1. 取得戦略と複雑度制限
+
+- start.gg の GraphQL は小規模トーナメントでも complexity 上限(1000)に到達することがある。
+- event / tournament を一度に深く取得せず、次の順で分割取得する。
+  - まず軽量クエリで set ID 群のみを収集する。
+  - 次に set ごとの詳細クエリを順次実行して slots / source / score を取得する。
+- complexity エラーが返った場合は perPage を段階的に縮小して再試行する。
+- HTTP 429 / 5xx は retry + backoff + jitter で吸収し、Retry-After ヘッダがあれば尊重する。
+
+### 7.2. スキーマとスカラー型の注意点
+
+- start.gg の ID は文字列・整数が混在するため、スキーマ上の型を厳密に文字列固定すると JSON パースが失敗する。
+- SetEntrantSource.typeId のような値は GgID (独自スカラー) で受け、Rust 側で必要に応じて String に正規化する。
+- GraphQL レスポンスの Value 直パースに逃げず、schema.graphql と .graphql ドキュメントを更新して型で解決する。
+
+### 7.3. Set 間接続の解決ルール
+
+- 未確定スロット(TBD)の表示は推定を主とせず、Set.entrant1Source / entrant2Source の接続情報を優先する。
+- Losers 側の表示ルールは次を基準にする。
+  - 接続元が Winners の set なら loser of XX
+  - 接続元が Losers の set なら winner of XX
+- condition_string から set 記号を解決する際、contains の部分一致は誤マッチを生む。
+  - 例: 1文字コード(E など)が無関係文字列に吸着する。
+  - 英数字トークンの完全一致で照合する。
+- typeId が set_id と一致しないケースがあるため、typeId 一致のみで接続元を判定しない。
+  - condition / condition_string と set 記号の照合を併用する。
+
+### 7.4. ローカル進行時の整合維持
+
+- 片側だけ entrant が確定した中間状態では、カード座標を entrant 充足状況に依存させると表示がジャンプする。
+- レーン座標は構造ベース(ラウンド列・接続構造)を優先し、1ソース判明時でも同一 set の表示位置が変わらないようにする。
+- Losers Final 勝者の GF 編入は同一レーン探索だけでは取りこぼすことがある。
+  - same-lane で編入先が見つからない場合、Grand Final へのクロスレーン編入フォールバックを持つ。
+
+### 7.5. Grand Final Reset の表示運用
+
+- データ構造上は GF Reset を最初から保持してよい。
+- ただし表示は start.gg に合わせ、Reset 発生前は GF Reset 列を非表示にする。
+- Reset 発生時にのみ Grand Final の右側に Grand Final Reset 列を表示する。
+- GF と GF Reset は同一 round 値でも別ラウンドとして扱えるよう、列キーは round 値だけでなく round title も含めて分割する。
+
+### 7.6. 検証観点
+
+- 8人、12人(round2編入)、16人以上で以下を重点確認する。
+  - Winners から Losers への落下時に loser of / winner of 表示が正しいか。
+  - Losers 内の勝ち上がり接続が start.gg と一致するか。
+  - GF Reset 後の逆転シナリオで、ローカル進行と start.gg 反映が破綻しないか。
