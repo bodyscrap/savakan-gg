@@ -45,6 +45,7 @@ type PositionedRoundColumn = {
   round: number | null;
   positionedSets: PositionedSet[];
   height: number;
+  hidden: boolean;
 };
 
 type BracketSectionForView = {
@@ -391,7 +392,19 @@ function buildPositionedRoundColumns(
 
   for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {
     const column = columns[columnIndex];
-    if (!column || column.sets.length === 0) {
+    if (!column) {
+      continue;
+    }
+
+    if (column.sets.length === 0) {
+      positionedColumns[columnIndex] = {
+        key: column.key,
+        title: column.title,
+        round: column.round,
+        positionedSets: [],
+        height: BRACKET_TOP_PADDING + BRACKET_SET_CARD_HEIGHT + BRACKET_BOTTOM_PADDING,
+        hidden: false,
+      };
       continue;
     }
 
@@ -413,6 +426,7 @@ function buildPositionedRoundColumns(
       round: column.round,
       positionedSets,
       height,
+      hidden: false,
     };
   }
 
@@ -492,9 +506,29 @@ function isGrandFinalResetSet(set: SetSnapshot): boolean {
   return isGrandFinalText(set.fullRoundText) && isGrandFinalResetText(set.fullRoundText);
 }
 
-function shouldShowGrandFinalResetColumn(column: RoundColumn): boolean {
+function isVirtualGrandFinalResetSet(set: SetSnapshot): boolean {
+  return set.setId.startsWith("virtual_gf_reset_");
+}
+
+function shouldShowGrandFinalResetColumn(
+  column: RoundColumn,
+  allColumns: RoundColumn[],
+  hasPendingGrandFinalReset: boolean,
+): boolean {
   const hasResetSet = column.sets.some((set) => isGrandFinalResetSet(set));
   if (!hasResetSet) {
+    return true;
+  }
+
+  const hasCompletedGrandFinal = allColumns
+    .flatMap((item) => item.sets)
+    .some((set) => isGrandFinalText(set.fullRoundText) && !isGrandFinalResetSet(set) && isCompletedSet(set));
+  if (!hasCompletedGrandFinal) {
+    return false;
+  }
+
+  const hasVirtualResetSet = column.sets.some((set) => isVirtualGrandFinalResetSet(set));
+  if (hasVirtualResetSet || hasPendingGrandFinalReset) {
     return true;
   }
 
@@ -641,6 +675,17 @@ type LocalSetResultMeta = {
   recordedAt: string;
 };
 
+type LocalGrandFinalResetResultMeta = {
+  eventId: string;
+  eventName: string;
+  sourceGrandFinalSetId: string;
+  winnerId: string;
+  scoreCsv: string;
+  confirmed?: boolean;
+  slotScores?: Array<{ entrantId: string; score: number }>;
+  recordedAt: string;
+};
+
 type SetScoreDraft = Record<string, string>;
 
 type SetResultDraftState = {
@@ -659,6 +704,7 @@ type TournamentLocalMeta = {
   events: EventLocalMeta[];
   setPlaySides?: SetPlaySideMeta[];
   pendingSetResults: LocalSetResultMeta[];
+  pendingGrandFinalResetResults?: LocalGrandFinalResetResultMeta[];
   updatedAt: string;
 };
 
@@ -740,6 +786,11 @@ type BracketReportProgressEvent = {
   reportedCount: number;
   skippedCount: number;
   currentSetId: string | null;
+};
+
+type WorkspaceUpdatedEvent = {
+  slug: string;
+  eventId: string;
 };
 
 type ResetSetResultCascadeResult = {
@@ -848,6 +899,8 @@ type ObsOverlaySetInput = {
 
 const EVENT_SNAPSHOT_PROGRESS_EVENT = "event_snapshot_progress";
 const BRACKET_REPORT_PROGRESS_EVENT = "bracket_report_progress";
+const WORKSPACE_UPDATED_EVENT = "workspace_updated";
+const OBS_OVERLAY_STATE_CHANGED_EVENT = "obs_overlay_state_changed";
 
 type PlayerMetaDraft = {
   playSide: PlaySide | "";
@@ -868,8 +921,63 @@ type LocalNetworkSettingsCandidate = {
   interfaceName: string;
 };
 
+type MobileInputPortalInfo = {
+  url: string;
+  accessUrls: string[];
+  token: string;
+};
+
 function localNetworkCandidateKey(candidate: LocalNetworkSettingsCandidate): string {
   return `${candidate.bindIp.trim()}::${candidate.broadcastSubnetMask.trim()}::${candidate.interfaceName.trim()}`;
+}
+
+function mobileUrlDisplayIp(url: string): string {
+  const trimmed = url.trim();
+  if (trimmed === "") {
+    return "-";
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.hostname || trimmed;
+  } catch {
+    const normalized = trimmed.replace(/^https?:\/\//i, "");
+    const slashIndex = normalized.indexOf("/");
+    const hostWithPort = slashIndex >= 0 ? normalized.slice(0, slashIndex) : normalized;
+    const colonIndex = hostWithPort.lastIndexOf(":");
+    if (colonIndex > 0) {
+      return hostWithPort.slice(0, colonIndex);
+    }
+    return hostWithPort;
+  }
+}
+
+function mobileInputUrlHostKey(url: string): string {
+  const trimmed = url.trim();
+  if (trimmed === "") {
+    return "";
+  }
+
+  try {
+    return new URL(trimmed).hostname.trim();
+  } catch {
+    return mobileUrlDisplayIp(trimmed).trim();
+  }
+}
+
+function withMobileInputPollMsParam(url: string, pollMs: number): string {
+  const trimmed = url.trim();
+  if (trimmed === "") {
+    return trimmed;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    parsed.searchParams.set("pollMs", String(normalizeMobileInputPollingMs(pollMs)));
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
 }
 
 type GenericMessage = {
@@ -952,6 +1060,9 @@ const CALL_LIST_COLOR_SECONDS_MIN = 30;
 const CALL_LIST_COLOR_SECONDS_MAX = 3600;
 const CALL_LIST_COLOR_SECONDS_DEFAULT = 600;
 const STARTGG_FETCH_PER_PAGE_DEFAULT = 50;
+const MOBILE_INPUT_POLLING_MS_MIN = 500;
+const MOBILE_INPUT_POLLING_MS_MAX = 10000;
+const MOBILE_INPUT_POLLING_MS_DEFAULT = 1500;
 
 function normalizeSlugForSettingKey(rawSlug: string): string {
   const trimmed = rawSlug.trim();
@@ -1018,6 +1129,23 @@ function normalizeStartggFetchPerPage(rawValue: unknown, fallback = STARTGG_FETC
   const rounded = Math.trunc(numeric);
   if (rounded < 1) {
     return 1;
+  }
+
+  return rounded;
+}
+
+function normalizeMobileInputPollingMs(rawValue: unknown, fallback = MOBILE_INPUT_POLLING_MS_DEFAULT): number {
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  const rounded = Math.trunc(numeric);
+  if (rounded < MOBILE_INPUT_POLLING_MS_MIN) {
+    return MOBILE_INPUT_POLLING_MS_MIN;
+  }
+  if (rounded > MOBILE_INPUT_POLLING_MS_MAX) {
+    return MOBILE_INPUT_POLLING_MS_MAX;
   }
 
   return rounded;
@@ -1777,6 +1905,7 @@ const CALL_LIST_COLOR_SECONDS_STORAGE_KEY = "savakan-gg.call-list-color-seconds.
 const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
 const BRACKET_ZOOM_LEVEL_STORAGE_KEY = "savakan-gg.bracket-zoom-level.v1";
 const STARTGG_FETCH_PER_PAGE_STORAGE_KEY = "savakan-gg.startgg-fetch-per-page.v1";
+const MOBILE_INPUT_POLLING_MS_STORAGE_KEY = "savakan-gg.mobile-input-polling-ms.v1";
 const LOCAL_COMMUNICATION_DISABLED_STORAGE_KEY = "savakan-gg.local-communication-disabled.v1";
 
 const BRACKET_ZOOM_LEVELS = [1, 0.7, 0.5] as const;
@@ -1839,16 +1968,34 @@ function sameSnapshotEventKey(
     && leftEventId.trim() === rightEventId.trim();
 }
 
+function isResolvedEntrantName(name: string): boolean {
+  const raw = String(name ?? "").trim();
+  if (raw === "") {
+    return false;
+  }
+
+  const normalized = raw.toUpperCase();
+  if (normalized === "TBD" || normalized === "TBA" || normalized === "UNKNOWN") {
+    return false;
+  }
+
+  const unresolvedLabel = raw.toLowerCase();
+  if (unresolvedLabel.startsWith("winner of ") || unresolvedLabel.startsWith("loser of ")) {
+    return false;
+  }
+  if (raw.startsWith("勝者") || raw.startsWith("敗者")) {
+    return false;
+  }
+
+  return true;
+}
+
 function isMatchupReady(set: SetSnapshot): boolean {
   if (set.slots.length < 2) {
     return false;
   }
 
-  return set.slots.every((slot) => slot.entrantId !== null && slot.entrantName !== "TBD");
-}
-
-function isStandbySet(set: SetSnapshot): boolean {
-  return set.state === 1;
+  return set.slots.every((slot) => slot.entrantId !== null && isResolvedEntrantName(slot.entrantName));
 }
 
 function isCompletedSet(set: SetSnapshot): boolean {
@@ -2002,7 +2149,7 @@ function isDqScoreCsvText(rawScoreCsv: string): boolean {
   return normalized === "dq" || /^\d+-dq$/.test(normalized);
 }
 
-function isConfirmedSetResult(result: LocalSetResultMeta): boolean {
+function isConfirmedSetResult(result: { confirmed?: boolean }): boolean {
   return result.confirmed !== false;
 }
 
@@ -2576,6 +2723,7 @@ function App() {
   const [callListFocusOwnUnresolved, setCallListFocusOwnUnresolved] = useState(false);
   const [displayBracketPlayersBySide, setDisplayBracketPlayersBySide] = useState(true);
   const [bracketZoomLevel, setBracketZoomLevel] = useState<number>(Number(BRACKET_ZOOM_LEVELS[0]));
+  const [mobileInputPollingMs, setMobileInputPollingMs] = useState<number>(MOBILE_INPUT_POLLING_MS_DEFAULT);
   const [overlaySwitchConfirm, setOverlaySwitchConfirm] = useState<{ targetSetId: string; targetSetLabel: string } | null>(null);
   const [callListPageSwitchedAtMs, setCallListPageSwitchedAtMs] = useState(() => Date.now());
   const [callListProgressNowMs, setCallListProgressNowMs] = useState(() => Date.now());
@@ -2600,6 +2748,12 @@ function App() {
   const [testOverlayRedWins, setTestOverlayRedWins] = useState(0);
   const [testOverlayBlueWins, setTestOverlayBlueWins] = useState(0);
   const [isTestOverlayActive, setIsTestOverlayActive] = useState(false);
+  const [mobileInputPortalBusy, setMobileInputPortalBusy] = useState(false);
+  const [mobileInputPortalOpen, setMobileInputPortalOpen] = useState(false);
+  const [mobileInputPortalDialog, setMobileInputPortalDialog] = useState<MobileInputPortalInfo | null>(null);
+  const [mobileInputPortalCandidates, setMobileInputPortalCandidates] = useState<LocalNetworkSettingsCandidate[]>([]);
+  const [mobileInputIssuedUrl, setMobileInputIssuedUrl] = useState("");
+  const [mobileInputPortalQrUrl, setMobileInputPortalQrUrl] = useState("");
   const [categorySlotListIds, setCategorySlotListIds] = useState<string[]>(["", "", ""]);
   const [categorySlotMinCounts, setCategorySlotMinCounts] = useState<number[]>([0, 0, 0]);
   const [categorySlotMaxCounts, setCategorySlotMaxCounts] = useState<number[]>([1, 1, 1]);
@@ -2616,7 +2770,7 @@ function App() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const autoAssigningSidesRef = useRef(false);
-  const standbyReadinessRef = useRef<Record<string, boolean>>({});
+  const standbyReadinessRef = useRef<Record<string, string>>({});
   const startupSavedSlugRef = useRef("");
   const startupSavedEventIdRef = useRef("");
   const startupRestoreReadyRef = useRef(false);
@@ -2640,6 +2794,50 @@ function App() {
   } | null>(null);
   const overlayPreviewWrapRef = useRef<HTMLDivElement | null>(null);
   const overlayPreviewIframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  useEffect(() => {
+    setMobileInputPortalOpen(false);
+    setMobileInputPortalDialog(null);
+    setMobileInputPortalCandidates([]);
+    setMobileInputIssuedUrl("");
+    setMobileInputPortalQrUrl("");
+  }, [slug, selectedEventId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!mobileInputPortalDialog || mobileInputIssuedUrl.trim() === "") {
+      setMobileInputPortalQrUrl("");
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    (async () => {
+      try {
+        const dataUrl = await QRCode.toDataURL(mobileInputIssuedUrl, {
+          errorCorrectionLevel: "M",
+          margin: 1,
+          width: 320,
+          color: {
+            dark: "#0f172a",
+            light: "#ffffff",
+          },
+        });
+        if (!cancelled) {
+          setMobileInputPortalQrUrl(dataUrl);
+        }
+      } catch {
+        if (!cancelled) {
+          setMobileInputPortalQrUrl("");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mobileInputPortalDialog, mobileInputIssuedUrl]);
 
   useEffect(() => {
     let alive = true;
@@ -2671,6 +2869,77 @@ function App() {
             return;
           }
           setCreateSnapshotProgress(event.payload);
+        });
+        unlisten = off;
+      } catch {
+        // ignore listener setup failure in non-Tauri environments
+      }
+    })();
+
+    return () => {
+      alive = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        const off = await listen<WorkspaceUpdatedEvent>(WORKSPACE_UPDATED_EVENT, (event) => {
+          if (!alive) {
+            return;
+          }
+
+          if (toApiSlug(event.payload.slug) !== toApiSlug(slug) || event.payload.eventId !== selectedEventId) {
+            return;
+          }
+
+          void (async () => {
+            try {
+              const result = await invoke<TournamentWorkspace>("load_local_tournament_workspace", {
+                slug: toApiSlug(slug),
+                eventId: selectedEventId,
+              });
+              if (alive) {
+                setWorkspace(result);
+              }
+            } catch {
+              // ignore refresh errors from mobile-triggered updates
+            }
+          })();
+        });
+        unlisten = off;
+      } catch {
+        // ignore listener setup failure in non-Tauri environments
+      }
+    })();
+
+    return () => {
+      alive = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [selectedEventId, slug]);
+
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | null = null;
+
+    void (async () => {
+      try {
+        const off = await listen<ObsOverlayState>(OBS_OVERLAY_STATE_CHANGED_EVENT, (event) => {
+          if (!alive) {
+            return;
+          }
+
+          setObsOverlayState(event.payload);
+          setIsTestOverlayActive(event.payload.active && event.payload.currentSetId === "__test__");
         });
         unlisten = off;
       } catch {
@@ -2888,6 +3157,15 @@ function App() {
     } catch {
       // ignore
     }
+
+    try {
+      const rawMobileInputPollingMs = window.localStorage.getItem(MOBILE_INPUT_POLLING_MS_STORAGE_KEY);
+      if (rawMobileInputPollingMs !== null) {
+        setMobileInputPollingMs(normalizeMobileInputPollingMs(rawMobileInputPollingMs));
+      }
+    } catch {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
@@ -2955,6 +3233,17 @@ function App() {
       // ignore
     }
   }, [disableLocalCommunication]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        MOBILE_INPUT_POLLING_MS_STORAGE_KEY,
+        String(normalizeMobileInputPollingMs(mobileInputPollingMs)),
+      );
+    } catch {
+      // ignore
+    }
+  }, [mobileInputPollingMs]);
 
   useEffect(() => {
     let alive = true;
@@ -3284,6 +3573,52 @@ function App() {
   }, [activeTab]);
 
   useEffect(() => {
+    if (activeTab !== "bracket") {
+      return;
+    }
+
+    const normalizedSlug = toApiSlug(slug);
+    if (normalizedSlug === "" || selectedEventId.trim() === "") {
+      return;
+    }
+
+    const pollingMs = normalizeMobileInputPollingMs(mobileInputPollingMs);
+
+    let disposed = false;
+    const refreshWorkspace = () => {
+      if (disposed || busy || createBusy || loadingLocalSnapshotEvents) {
+        return;
+      }
+
+      void invoke<TournamentWorkspace>("load_local_tournament_workspace", {
+        slug: normalizedSlug,
+        eventId: selectedEventId,
+      })
+        .then((result) => {
+          if (disposed) {
+            return;
+          }
+          setWorkspace(result);
+        })
+        .catch(() => {
+          // ignore polling errors
+        });
+    };
+
+    // タブ遷移直後に最新workspaceを反映し、GF/GF Reset列の表示判定を即時更新する。
+    refreshWorkspace();
+
+    const timer = window.setInterval(() => {
+      refreshWorkspace();
+    }, pollingMs);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [activeTab, busy, createBusy, loadingLocalSnapshotEvents, mobileInputPollingMs, selectedEventId, slug]);
+
+  useEffect(() => {
     if (startupAutoRestoreDoneRef.current) {
       return;
     }
@@ -3386,8 +3721,13 @@ function App() {
   const localMeta = workspace?.localMeta ?? null;
   const setPlaySides = localMeta?.setPlaySides ?? [];
   const pendingSetResults = localMeta?.pendingSetResults ?? [];
+  const pendingGrandFinalResetResults = localMeta?.pendingGrandFinalResetResults ?? [];
   const confirmedSetResults = pendingSetResults.filter((result) => isConfirmedSetResult(result));
   const draftSetResults = pendingSetResults.filter((result) => !isConfirmedSetResult(result));
+  const confirmedGrandFinalResetResults = pendingGrandFinalResetResults.filter((result) => isConfirmedSetResult(result));
+  const draftGrandFinalResetResults = pendingGrandFinalResetResults.filter((result) => !isConfirmedSetResult(result));
+  const confirmedReportableCount = confirmedSetResults.length + confirmedGrandFinalResetResults.length;
+  const draftPendingCount = draftSetResults.length + draftGrandFinalResetResults.length;
 
   const setPlaySideMap = useMemo(() => {
     const map = new Map<string, PlaySide>();
@@ -6008,36 +6348,50 @@ function App() {
     }
 
     const prevReadiness = standbyReadinessRef.current;
-    const nextReadiness: Record<string, boolean> = {};
-    const updates: Array<{ setSnapshot: SetSnapshot; entrantId: string; side: PlaySide }> = [];
+    const nextReadiness: Record<string, string> = {};
+    const updates: Array<{ setSnapshot: SetSnapshot; upperEntrantId: string; upperSide: PlaySide }> = [];
 
     for (const set of selectedEvent.sets) {
-      const isReadyStandby = isStandbySet(set) && isMatchupReady(set);
-      nextReadiness[set.setId] = isReadyStandby;
+      const isReadyForAutoAssign = !isCompletedSet(set) && isMatchupReady(set);
+      const slots = set.slots.filter((slot) => slot.entrantId !== null);
+      const upperId = slots[0]?.entrantId ?? "";
+      const lowerId = slots[1]?.entrantId ?? "";
+      const readinessKey = isReadyForAutoAssign && upperId !== "" && lowerId !== ""
+        ? `${upperId}:${lowerId}`
+        : "";
+      nextReadiness[set.setId] = readinessKey;
 
-      const wasReadyStandby = prevReadiness[set.setId] ?? false;
-      if (!isReadyStandby || wasReadyStandby) {
+      const previousReadinessKey = prevReadiness[set.setId] ?? "";
+      if (!isReadyForAutoAssign || readinessKey === "") {
         continue;
       }
 
-      const slots = set.slots.filter((slot) => slot.entrantId !== null);
       if (slots.length < 2) {
         continue;
       }
-
-      const upperId = slots[0].entrantId;
-      const lowerId = slots[1].entrantId;
       if (!upperId || !lowerId) {
         continue;
       }
 
       const upperCurrent = getSetSlotSide(set.setId, upperId);
       const lowerCurrent = getSetSlotSide(set.setId, lowerId);
+      const hasInvalidPair = (upperCurrent === "") !== (lowerCurrent === "")
+        || (upperCurrent !== "" && lowerCurrent !== "" && upperCurrent === lowerCurrent);
+      if (previousReadinessKey === readinessKey && !hasInvalidPair) {
+        continue;
+      }
+
       let upperSide = upperCurrent;
       let lowerSide = lowerCurrent;
 
       if (upperSide !== "" && lowerSide !== "") {
-        continue;
+        if (upperSide !== lowerSide) {
+          continue;
+        }
+
+        const decided = resolveSidesByDecisionMethod(set, getConfiguredSideDecisionMethod());
+        upperSide = decided.upperSide;
+        lowerSide = decided.lowerSide;
       }
 
       if (upperSide !== "" && lowerSide === "") {
@@ -6059,11 +6413,8 @@ function App() {
         }
       }
 
-      if (upperCurrent !== upperSide) {
-        updates.push({ setSnapshot: set, entrantId: upperId, side: upperSide });
-      }
-      if (lowerCurrent !== lowerSide) {
-        updates.push({ setSnapshot: set, entrantId: lowerId, side: lowerSide });
+      if (upperCurrent !== upperSide || lowerCurrent !== lowerSide) {
+        updates.push({ setSnapshot: set, upperEntrantId: upperId, upperSide });
       }
     }
 
@@ -6077,7 +6428,7 @@ function App() {
     void (async () => {
       try {
         for (const update of updates) {
-          await saveSetPlaySide(selectedEvent, update.setSnapshot, update.entrantId, update.side, {
+          await saveSetPlaySide(selectedEvent, update.setSnapshot, update.upperEntrantId, update.upperSide, {
             silent: true,
             manageBusy: false,
           });
@@ -6219,7 +6570,7 @@ function App() {
 
     try {
       const method = getConfiguredSideDecisionMethod();
-      const updates: Array<{ setSnapshot: SetSnapshot; entrantId: string; side: PlaySide }> = [];
+      const updates: Array<{ setSnapshot: SetSnapshot; upperEntrantId: string; upperSide: PlaySide }> = [];
 
       for (const set of selectedEvent.sets) {
         if (isCompletedSet(set) || !isMatchupReady(set)) {
@@ -6241,11 +6592,8 @@ function App() {
         const upperCurrent = getSetSlotSide(set.setId, upperId);
         const lowerCurrent = getSetSlotSide(set.setId, lowerId);
 
-        if (upperCurrent !== decided.upperSide) {
-          updates.push({ setSnapshot: set, entrantId: upperId, side: decided.upperSide });
-        }
-        if (lowerCurrent !== decided.lowerSide) {
-          updates.push({ setSnapshot: set, entrantId: lowerId, side: decided.lowerSide });
+        if (upperCurrent !== decided.upperSide || lowerCurrent !== decided.lowerSide) {
+          updates.push({ setSnapshot: set, upperEntrantId: upperId, upperSide: decided.upperSide });
         }
       }
 
@@ -6257,7 +6605,7 @@ function App() {
       autoAssigningSidesRef.current = true;
       try {
         for (const update of updates) {
-          await saveSetPlaySide(selectedEvent, update.setSnapshot, update.entrantId, update.side, {
+          await saveSetPlaySide(selectedEvent, update.setSnapshot, update.upperEntrantId, update.upperSide, {
             silent: true,
             manageBusy: false,
           });
@@ -6747,7 +7095,7 @@ function App() {
     const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === set.setId;
     const displayCode = setDisplayCodeById.get(set.setId);
     const nextRoundLabel = abbreviateOverlayRoundText(set.fullRoundText);
-    const nextRoundText = `${nextRoundLabel}\nset ${displayCode ?? set.setId}`;
+    const nextRoundText = `${nextRoundLabel}\nSet ${displayCode ?? "-"}`;
     const overlaySides = resolveOverlaySidesForSet(set);
 
     await toggleObsOverlaySet({
@@ -6886,7 +7234,7 @@ function App() {
       enabled: true,
       setId: set.setId,
       eventName: selectedEvent?.name ?? "",
-      roundText: `${nextRoundLabel}\nset ${displayCode ?? set.setId}`,
+      roundText: `${nextRoundLabel}\nSet ${displayCode ?? "-"}`,
       redPlayerName: overlaySides.redPlayerName,
       bluePlayerName: overlaySides.bluePlayerName,
       redSetWins: overlaySides.redSetWins,
@@ -7040,14 +7388,52 @@ function App() {
 
   const selectedBracketSectionsForView = useMemo(() => {
     return selectedBracketSections.map((section) => {
-      const visibleColumns = section.columns.filter((column) => shouldShowGrandFinalResetColumn(column));
-      const visualColumns = section.key === "losers" ? [...visibleColumns].reverse() : visibleColumns;
+      const preparedColumns = section.columns.map((column) => ({
+        column,
+        hidden: !shouldShowGrandFinalResetColumn(
+          column,
+          section.columns,
+          pendingGrandFinalResetResults.length > 0,
+        ),
+      }));
+
+      const hasResetColumn = preparedColumns.some((item) => item.column.sets.some((set) => isGrandFinalResetSet(set)));
+      if (!hasResetColumn) {
+        const grandFinalColumnIndex = preparedColumns.findIndex((item) =>
+          item.column.sets.some((set) => isGrandFinalText(set.fullRoundText) && !isGrandFinalResetSet(set)),
+        );
+
+        if (grandFinalColumnIndex >= 0) {
+          const grandFinalColumn = preparedColumns[grandFinalColumnIndex].column;
+          preparedColumns.splice(grandFinalColumnIndex + 1, 0, {
+            column: {
+              key: `placeholder-gf-reset-${grandFinalColumn.key}`,
+              title: "Grand Final Reset",
+              round: grandFinalColumn.round,
+              seq: grandFinalColumn.seq + 1,
+              sets: [],
+            },
+            hidden: true,
+          });
+        }
+      }
+
+      const visualColumns = section.key === "losers" ? [...preparedColumns].reverse() : preparedColumns;
+      const hiddenByKey = new Map(visualColumns.map((item) => [item.column.key, item.hidden] as const));
+      const positionedColumns = buildPositionedRoundColumns(
+        visualColumns.map((item) => item.column),
+        section.key,
+      ).map((column) => ({
+        ...column,
+        hidden: hiddenByKey.get(column.key) ?? false,
+      }));
+
       return {
         ...section,
-        columns: buildPositionedRoundColumns(visualColumns, section.key),
+        columns: positionedColumns,
       };
     });
-  }, [selectedBracketSections]) as BracketSectionForView[];
+  }, [pendingGrandFinalResetResults.length, selectedBracketSections]) as BracketSectionForView[];
 
   const bracketScaleStyle = useMemo(() => ({
     ["--bracket-scale" as string]: String(bracketZoomLevel),
@@ -7113,9 +7499,21 @@ function App() {
     }
 
     let fallbackIndex = 0;
+    let gfSeen = false;
+    let reservedAfterGf = false;
     for (const set of orderedSets) {
       if (map.has(set.setId)) {
         continue;
+      }
+
+      const currentIsLosers = isLosersBracketSet(set);
+      const currentIsGf = isGrandFinalText(set.fullRoundText);
+      const currentIsReset = isGrandFinalResetSet(set);
+
+      if (currentIsLosers && gfSeen && reservedAfterGf && !currentIsReset) {
+        // GF直後の潜在GF Reset枠を1つ予約する。
+        fallbackIndex += 1;
+        reservedAfterGf = false;
       }
 
       let code = formatAlphabetSequence(fallbackIndex);
@@ -7127,6 +7525,15 @@ function App() {
       map.set(set.setId, code);
       used.add(code);
       fallbackIndex += 1;
+
+      if (currentIsGf) {
+        gfSeen = true;
+        reservedAfterGf = true;
+      }
+
+      if (currentIsReset) {
+        reservedAfterGf = false;
+      }
     }
 
     return map;
@@ -7671,6 +8078,11 @@ function App() {
       return "-";
     }
 
+    // 対戦カードが未確定の間は、保存済みサイドが残っていても表示しない。
+    if (!options?.finishedSet && !options?.matchupReady) {
+      return "-";
+    }
+
     const side = getSetSlotSide(setId, entrantId);
     if (side !== "") {
       return side;
@@ -8010,6 +8422,168 @@ function App() {
     setMatchSideRandomNotice(null);
   }
 
+  function closeMobileInputPortalDialog() {
+    setMobileInputPortalOpen(false);
+  }
+
+  async function refreshMobileInputPortalDialog() {
+    if (!selectedEvent) {
+      setError("先にイベントを選択してください。");
+      return;
+    }
+
+    const normalizedSlug = toApiSlug(slug);
+    if (normalizedSlug === "") {
+      setError("大会IDを入力してください。");
+      return;
+    }
+
+    const activeHost = mobileInputUrlHostKey(mobileInputIssuedUrl);
+    if (activeHost === "") {
+      setError("先にURLを発行してください。");
+      return;
+    }
+
+    setMobileInputPortalBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const portalInfo = await invoke<MobileInputPortalInfo>("get_mobile_input_portal_info", {
+        slug: normalizedSlug,
+        eventId: selectedEvent.eventId,
+      });
+      const pollingMs = normalizeMobileInputPollingMs(mobileInputPollingMs);
+      const patchedUrl = withMobileInputPollMsParam(portalInfo.url, pollingMs);
+      const patchedAccessUrls = Array.from(new Set(
+        portalInfo.accessUrls
+          .map((item) => withMobileInputPollMsParam(item, pollingMs))
+          .filter((item) => item.trim() !== ""),
+      ));
+      const nextPortalInfo: MobileInputPortalInfo = {
+        ...portalInfo,
+        url: patchedUrl,
+        accessUrls: patchedAccessUrls.length > 0 ? patchedAccessUrls : [patchedUrl],
+      };
+
+      const refreshedUrl = nextPortalInfo.accessUrls.find((item) => mobileInputUrlHostKey(item) === activeHost) ?? nextPortalInfo.url;
+
+      setMobileInputPortalDialog(nextPortalInfo);
+      setMobileInputIssuedUrl(refreshedUrl);
+      setMessage("スマートフォン向けURLを更新しました。新しい2次元コードを共有してください。");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setMobileInputPortalBusy(false);
+    }
+  }
+
+  async function issueMobileInputPortalUrl(bindIp: string) {
+    if (!selectedEvent) {
+      setError("先にイベントを選択してください。");
+      return;
+    }
+
+    const normalizedSlug = toApiSlug(slug);
+    if (normalizedSlug === "") {
+      setError("大会IDを入力してください。");
+      return;
+    }
+
+    const selectedHost = bindIp.trim();
+    if (selectedHost === "") {
+      setError("IPを選択してください。");
+      return;
+    }
+
+    setMobileInputPortalBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const portalInfo = await invoke<MobileInputPortalInfo>("get_mobile_input_portal_info", {
+        slug: normalizedSlug,
+        eventId: selectedEvent.eventId,
+      });
+      const pollingMs = normalizeMobileInputPollingMs(mobileInputPollingMs);
+      const patchedUrl = withMobileInputPollMsParam(portalInfo.url, pollingMs);
+      const patchedAccessUrls = Array.from(new Set(
+        portalInfo.accessUrls
+          .map((item) => withMobileInputPollMsParam(item, pollingMs))
+          .filter((item) => item.trim() !== ""),
+      ));
+      const nextPortalInfo: MobileInputPortalInfo = {
+        ...portalInfo,
+        url: patchedUrl,
+        accessUrls: patchedAccessUrls.length > 0 ? patchedAccessUrls : [patchedUrl],
+      };
+      const selectedUrl = nextPortalInfo.accessUrls.find((item) => mobileInputUrlHostKey(item) === selectedHost) ?? nextPortalInfo.url;
+
+      setMobileInputPortalDialog(nextPortalInfo);
+      setMobileInputIssuedUrl(selectedUrl);
+      setMessage("スマートフォン向けURLを発行しました。必要に応じてURLを更新できます。");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setMobileInputPortalBusy(false);
+    }
+  }
+
+  async function openMobileInputPortalDialog() {
+    if (!selectedEvent) {
+      setError("先にイベントを選択してください。");
+      return;
+    }
+
+    const normalizedSlug = toApiSlug(slug);
+    if (normalizedSlug === "") {
+      setError("大会IDを入力してください。");
+      return;
+    }
+
+    setMobileInputPortalOpen(true);
+    setError("");
+    setMessage("");
+
+    if (mobileInputPortalDialog && mobileInputIssuedUrl.trim() !== "") {
+      setMessage("発行中のURLを表示しています。必要に応じてURL更新で再発行できます。");
+      return;
+    }
+
+    try {
+      const listed = await invoke<LocalNetworkSettingsCandidate[]>("list_local_network_settings");
+      const candidates = Array.isArray(listed) ? listed : [];
+      setMobileInputPortalCandidates(candidates);
+
+      if (candidates.length === 0) {
+        setError("利用可能なIP候補が見つかりませんでした。");
+        return;
+      }
+
+      setMessage("IP候補を表示しました。URL発行を押すと結果を共有できます。");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setMobileInputPortalBusy(false);
+    }
+  }
+
+  async function copyMobileInputUrl(value: string) {
+    if (value.trim() === "") {
+      return;
+    }
+
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.writeText) {
+        throw new Error("この環境ではクリップボードAPIが使用できません。");
+      }
+      await navigator.clipboard.writeText(value);
+      setMessage("スマホ入力URLをクリップボードへコピーしました。");
+    } catch {
+      setError("URLコピーに失敗しました。URLを手動で共有してください。");
+    }
+  }
+
   async function saveLocalResultForMatch(confirmed: boolean) {
     if (!selectedEvent) {
       setError("イベントが選択されていません。");
@@ -8243,7 +8817,7 @@ function App() {
     setCreateSnapshotProgress(null);
     setBracketReportProgress({
       phase: "starting",
-      totalCount: confirmedSetResults.length,
+      totalCount: confirmedReportableCount,
       processedCount: 0,
       reportedCount: 0,
       skippedCount: 0,
@@ -8255,7 +8829,7 @@ function App() {
     try {
       await runBracketBatchReport(
         {
-          totalCount: confirmedSetResults.length,
+          totalCount: confirmedReportableCount,
           reportedCount: 0,
           skippedCount: 0,
         },
@@ -8484,28 +9058,48 @@ function App() {
     set: SetSnapshot,
     sideDrafts: Record<string, PlaySide | "">,
   ) {
-    const slots = set.slots.filter((slot) => slot.entrantId !== null);
-    for (const slot of slots) {
-      const entrantId = slot.entrantId;
-      if (!entrantId) {
-        continue;
-      }
-
-      const side = sideDrafts[entrantId] ?? getSetSlotSide(set.setId, entrantId);
-      if (side === "") {
-        continue;
-      }
-
-      const current = getSetSlotSide(set.setId, entrantId);
-      if (current === side) {
-        continue;
-      }
-
-      await saveSetPlaySide(eventSnapshot, set, entrantId, side, {
-        silent: true,
-        manageBusy: false,
-      });
+    if (!isMatchupReady(set)) {
+      return;
     }
+
+    const slots = set.slots.filter((slot) => slot.entrantId !== null);
+    if (slots.length < 2) {
+      return;
+    }
+
+    const upperId = slots[0].entrantId;
+    const lowerId = slots[1].entrantId;
+    if (!upperId || !lowerId) {
+      return;
+    }
+
+    const currentUpper = getSetSlotSide(set.setId, upperId);
+    const currentLower = getSetSlotSide(set.setId, lowerId);
+    const draftUpper = sideDrafts[upperId] ?? currentUpper;
+    const draftLower = sideDrafts[lowerId] ?? currentLower;
+
+    let resolvedUpper: PlaySide | "" = "";
+    if (draftUpper !== "" && draftLower !== "") {
+      resolvedUpper = draftUpper;
+    } else if (draftUpper !== "") {
+      resolvedUpper = draftUpper;
+    } else if (draftLower !== "") {
+      resolvedUpper = oppositePlaySide(draftLower);
+    }
+
+    if (resolvedUpper === "") {
+      return;
+    }
+
+    const resolvedLower = oppositePlaySide(resolvedUpper);
+    if (currentUpper === resolvedUpper && currentLower === resolvedLower) {
+      return;
+    }
+
+    await saveSetPlaySide(eventSnapshot, set, upperId, resolvedUpper, {
+      silent: true,
+      manageBusy: false,
+    });
   }
 
   return (
@@ -10208,6 +10802,38 @@ function App() {
           </section>
 
           <section className="panel">
+            <h2>スマホ入力同期設定</h2>
+            <p className="meta">スマホ入力画面とブラケット画面の自動更新間隔をミリ秒で設定します。</p>
+
+            <div className="form" style={{ marginTop: "0.6rem" }}>
+              <label htmlFor="mobile-input-polling-ms-input" style={{ display: "grid", gap: "0.3rem" }}>
+                <span className="meta">ポーリング周期 (ms / 500-10000 / 既定値: 1500)</span>
+                <input
+                  id="mobile-input-polling-ms-input"
+                  type="number"
+                  min={MOBILE_INPUT_POLLING_MS_MIN}
+                  max={MOBILE_INPUT_POLLING_MS_MAX}
+                  step={100}
+                  value={mobileInputPollingMs}
+                  onChange={(e) => {
+                    const next = normalizeMobileInputPollingMs(e.currentTarget.value, mobileInputPollingMs);
+                    setMobileInputPollingMs(next);
+                  }}
+                  onBlur={(e) => {
+                    const normalized = normalizeMobileInputPollingMs(e.currentTarget.value);
+                    if (normalized !== mobileInputPollingMs) {
+                      setMobileInputPollingMs(normalized);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+
+            <p className="meta">現在値: {normalizeMobileInputPollingMs(mobileInputPollingMs)} ms</p>
+            <p className="meta">次回URL発行時にスマホ側へ同じ周期を配布します。</p>
+          </section>
+
+          <section className="panel">
             <h2>呼び出しリスト表示設定</h2>
             <p className="meta">呼び出しリストのページ切替間隔と、カード色が赤になるまでの時間を秒単位で設定します。</p>
 
@@ -10413,7 +11039,7 @@ function App() {
             <p className="meta">カードを Ctrl+クリックで配信画面のON/OFF(最大1set)。Alt+左クリックで完全停止します。</p>
             <div className="panel-toolbar compact">
               <p className="meta">
-                下書き: {draftSetResults.length} / 確定済み: {confirmedSetResults.length}
+                下書き: {draftPendingCount} / 確定済み: {confirmedReportableCount}
               </p>
             </div>
             {(busy || bracketReportProgress) && (
@@ -10522,12 +11148,22 @@ function App() {
                 </div>
 
                 <div style={{ display: "flex", gap: "0.5rem" }}>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy || mobileInputPortalBusy || toApiSlug(slug) === "" || !selectedEvent}
+                    onClick={() => {
+                      void openMobileInputPortalDialog();
+                    }}
+                  >
+                    スマートフォンでアクセス
+                  </button>
                   <button type="button" className="ghost" disabled={busy || toApiSlug(slug) === ""} onClick={updateSnapshot}>
                     スナップショット更新
                   </button>
                   <button
                     type="button"
-                    disabled={busy || toApiSlug(slug) === "" || confirmedSetResults.length === 0}
+                    disabled={busy || toApiSlug(slug) === "" || confirmedReportableCount === 0}
                     onClick={reportConfirmedSetsFromBracket}
                   >
                     確定済みを一括報告
@@ -10548,7 +11184,11 @@ function App() {
                           <p className="meta">sets: {section.setCount}</p>
                           <div className="bracket-board">
                             {section.columns.map((column) => (
-                              <section className="bracket-column" key={`${selectedPhasePoolGroup.key}-${section.key}-${column.key}`}>
+                              <section
+                                className={`bracket-column ${column.hidden ? "bracket-column-hidden" : ""}`}
+                                key={`${selectedPhasePoolGroup.key}-${section.key}-${column.key}`}
+                                aria-hidden={column.hidden}
+                              >
                                 <h4>{column.title}</h4>
                                 {column.round !== null && <p className="meta">round: {column.round}</p>}
 
@@ -10985,6 +11625,92 @@ function App() {
                   >
                     強制切り替え
                   </button>
+                </div>
+              </section>
+            </div>
+          )}
+          {mobileInputPortalOpen && (
+            <div
+              className="dialog-backdrop"
+              onClick={() => {
+                closeMobileInputPortalDialog();
+              }}
+            >
+              <section
+                className="dialog-panel mobile-input-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-label="スマホ入力URL"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="dialog-head">
+                  <div>
+                    <h3>スマートフォンでアクセス</h3>
+                    <p className="meta">同一LAN内の端末に共有してください。</p>
+                  </div>
+                  <button type="button" className="ghost" onClick={closeMobileInputPortalDialog}>閉じる</button>
+                </div>
+
+                <div className="dialog-body">
+                  <div className="dialog-summary-box">
+                    <p className="dialog-summary-title">アクセス候補</p>
+                    <div className="mobile-url-list">
+                      {mobileInputPortalCandidates.map((item) => (
+                        <article className="mobile-url-item" key={`${item.bindIp}::${item.interfaceName}`}>
+                          <span className="mobile-url-text">{item.bindIp}</span>
+                          <button
+                            type="button"
+                            className="ghost tiny"
+                            onClick={() => {
+                              void issueMobileInputPortalUrl(item.bindIp);
+                            }}
+                          >
+                            URL発行
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+
+                  {mobileInputIssuedUrl.trim() !== "" && mobileInputPortalDialog && (
+                    <>
+                      <div className="mobile-input-qr-wrap">
+                        {mobileInputPortalQrUrl === "" ? (
+                          <p className="meta">2次元コードを生成中です...</p>
+                        ) : (
+                          <img className="mobile-input-qr" src={mobileInputPortalQrUrl} alt="スマホ入力URLの2次元コード" />
+                        )}
+                      </div>
+
+                      <div className="dialog-summary-box">
+                        <p className="dialog-summary-title">発行中のURL</p>
+                        <p className="dialog-summary-value mobile-url-text">{mobileUrlDisplayIp(mobileInputIssuedUrl)}</p>
+                        <p className="meta mobile-url-full">{mobileInputIssuedUrl}</p>
+                        <div className="mobile-url-actions">
+                          <button
+                            type="button"
+                            className="ghost"
+                            disabled={mobileInputPortalBusy || mobileInputIssuedUrl.trim() === ""}
+                            onClick={() => {
+                              void copyMobileInputUrl(mobileInputIssuedUrl);
+                            }}
+                          >
+                            URLをコピー
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            disabled={mobileInputPortalBusy}
+                            onClick={() => {
+                              void refreshMobileInputPortalDialog();
+                            }}
+                          >
+                            {mobileInputPortalBusy ? "更新中..." : "URLを更新"}
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </section>
             </div>

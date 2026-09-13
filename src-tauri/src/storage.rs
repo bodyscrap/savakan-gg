@@ -9,9 +9,11 @@ use tauri::{AppHandle, Manager};
 
 use crate::models::{
     EventEntrantMeta, EventLocalMeta, EventManagementMeta, EventSnapshot, GenericMessage,
+    LocalGrandFinalResetResultMeta,
     ItemListConfig, LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput,
     LocalSetScoreUpdateInput,
-    LocalSetResultMeta, LocalSetScoreMeta, LocalSnapshotEventListItem,
+    LocalSetResultMeta, LocalSetScoreMeta, LocalSnapshotEventListItem, MobileResultRequestInput,
+    MobileResultRequestItem,
     SaveEventManagementMetaInput, SenderProfile, SetPlaySideMeta, TournamentLocalMeta,
     TournamentSnapshot, TournamentWorkspace,
 };
@@ -23,6 +25,7 @@ const ITEM_LISTS_FILE: &str = "item-lists.json";
 const EVENT_MGMT_FILE: &str = "event-mgmt-settings.json";
 const SENDER_PROFILE_FILE: &str = "sender-profile.json";
 const GENERIC_MESSAGES_FILE: &str = "generic-messages.json";
+const MOBILE_RESULT_REQUESTS_FILE: &str = "mobile-result-requests.json";
 const LAST_SNAPSHOT_SELECTION_FILE: &str = "last-snapshot-selection.json";
 const TEMP_TOKEN_FILE: &str = "token.txt";
 const EVENT_SETTING_CATEGORY_SLOT_COUNT: usize = 3;
@@ -155,6 +158,10 @@ fn last_snapshot_selection_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(storage_dir(app)?.join(LAST_SNAPSHOT_SELECTION_FILE))
 }
 
+fn mobile_result_requests_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(storage_dir(app)?.join(MOBILE_RESULT_REQUESTS_FILE))
+}
+
 fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
     TournamentLocalMeta {
         tournament_id: String::new(),
@@ -170,6 +177,7 @@ fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
         }],
         set_play_sides: Vec::new(),
         pending_set_results: Vec::new(),
+        pending_grand_final_reset_results: Vec::new(),
         updated_at: Utc::now(),
     }
 }
@@ -457,12 +465,15 @@ fn merge_snapshot_into_meta(
 
     for set in &event.sets {
         let set_id = set.set_id.clone();
+        let keep_side_for_set = is_set_matchup_ready(set);
         for slot in &set.slots {
             let Some(entrant_id) = &slot.entrant_id else {
                 continue;
             };
 
-            valid_set_slot_keys.insert(format!("{}:{}", set_id, entrant_id));
+            if keep_side_for_set {
+                valid_set_slot_keys.insert(format!("{}:{}", set_id, entrant_id));
+            }
 
             if !seen_entrant_ids.insert(entrant_id.clone()) {
                 continue;
@@ -488,9 +499,61 @@ fn merge_snapshot_into_meta(
         }
     }
 
-    meta
-        .set_play_sides
-        .retain(|item| valid_set_slot_keys.contains(&format!("{}:{}", item.set_id, item.entrant_id)));
+    let mut side_by_set_and_entrant = HashMap::new();
+    for item in &meta.set_play_sides {
+        if !valid_set_slot_keys.contains(&format!("{}:{}", item.set_id, item.entrant_id)) {
+            continue;
+        }
+        side_by_set_and_entrant.insert((item.set_id.clone(), item.entrant_id.clone()), item.play_side.clone());
+    }
+
+    let mut normalized_set_play_sides = Vec::new();
+    for set in &event.sets {
+        if !is_set_matchup_ready(set) {
+            continue;
+        }
+
+        if set.slots.len() < 2 {
+            continue;
+        }
+
+        let Some(upper_id) = set.slots.get(0).and_then(|slot| slot.entrant_id.clone()) else {
+            continue;
+        };
+        let Some(lower_id) = set.slots.get(1).and_then(|slot| slot.entrant_id.clone()) else {
+            continue;
+        };
+
+        let upper_side = side_by_set_and_entrant
+            .get(&(set.set_id.clone(), upper_id.clone()))
+            .cloned();
+        let lower_side = side_by_set_and_entrant
+            .get(&(set.set_id.clone(), lower_id.clone()))
+            .cloned();
+
+        let resolved_upper = match (upper_side, lower_side) {
+            (Some(upper), Some(lower)) if upper == opposite_side(lower.clone()) => Some(upper),
+            (Some(upper), Some(_)) => Some(upper),
+            (Some(upper), None) => Some(upper),
+            (None, Some(lower)) => Some(opposite_side(lower)),
+            (None, None) => None,
+        };
+
+        if let Some(upper) = resolved_upper {
+            let lower = opposite_side(upper.clone());
+            normalized_set_play_sides.push(SetPlaySideMeta {
+                set_id: set.set_id.clone(),
+                entrant_id: upper_id,
+                play_side: upper,
+            });
+            normalized_set_play_sides.push(SetPlaySideMeta {
+                set_id: set.set_id.clone(),
+                entrant_id: lower_id,
+                play_side: lower,
+            });
+        }
+    }
+    meta.set_play_sides = normalized_set_play_sides;
 
     meta.updated_at = Utc::now();
     meta
@@ -972,6 +1035,101 @@ pub fn load_generic_messages(app: &AppHandle) -> Result<Option<Vec<GenericMessag
     Ok(Some(messages))
 }
 
+pub fn load_mobile_result_requests(app: &AppHandle) -> Result<Vec<MobileResultRequestItem>, String> {
+    let path = mobile_result_requests_path(app)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("結果入力依頼キューの読込に失敗しました: {e}"))?;
+
+    let mut items = serde_json::from_str::<Vec<MobileResultRequestItem>>(&raw)
+        .map_err(|e| format!("結果入力依頼キューのパースに失敗しました: {e}"))?;
+
+    items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    Ok(items)
+}
+
+pub fn save_mobile_result_requests(
+    app: &AppHandle,
+    items: &[MobileResultRequestItem],
+) -> Result<(), String> {
+    let path = mobile_result_requests_path(app)?;
+    let json = serde_json::to_string_pretty(items)
+        .map_err(|e| format!("結果入力依頼キューのJSON変換に失敗しました: {e}"))?;
+    fs::write(path, json).map_err(|e| format!("結果入力依頼キューの保存に失敗しました: {e}"))
+}
+
+pub fn append_mobile_result_request(
+    app: &AppHandle,
+    input: MobileResultRequestInput,
+) -> Result<MobileResultRequestItem, String> {
+    let slug = input.slug.trim().to_owned();
+    let event_id = input.event_id.trim().to_owned();
+    let set_id = input.set_id.trim().to_owned();
+
+    if slug.is_empty() || event_id.is_empty() || set_id.is_empty() {
+        return Err("slug, eventId, setId は必須です。".to_owned());
+    }
+
+    let winner_id = input
+        .winner_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+
+    let requested_by = input
+        .requested_by
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+
+    let note = input
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+
+    let slot_scores = input
+        .slot_scores
+        .iter()
+        .map(|item| LocalSetScoreMeta {
+            entrant_id: item.entrant_id.trim().to_owned(),
+            score: item.score,
+        })
+        .filter(|item| !item.entrant_id.is_empty())
+        .collect::<Vec<LocalSetScoreMeta>>();
+
+    let mut items = load_mobile_result_requests(app)?;
+    let timestamp = Utc::now();
+    let request_id = format!(
+        "req-{}-{}",
+        timestamp.timestamp_millis(),
+        items.len().saturating_add(1)
+    );
+
+    let next_item = MobileResultRequestItem {
+        request_id,
+        slug,
+        event_id,
+        set_id,
+        winner_id,
+        slot_scores,
+        requested_by,
+        note,
+        status: "pending".to_owned(),
+        created_at: timestamp,
+    };
+
+    items.push(next_item.clone());
+    save_mobile_result_requests(app, &items)?;
+    Ok(next_item)
+}
+
 pub fn load_token(app: &AppHandle) -> Result<String, String> {
     let mut candidate_paths = Vec::new();
     candidate_paths.push(token_path(app)?);
@@ -1240,6 +1398,35 @@ fn is_grand_final_set(set: &crate::models::SetSnapshot) -> bool {
         .any(|token| token.eq_ignore_ascii_case("gf"))
 }
 
+fn is_resolved_entrant_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let normalized = trimmed.to_ascii_uppercase();
+    if normalized == "TBD" || normalized == "TBA" || normalized == "UNKNOWN" {
+        return false;
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    if lowered.starts_with("winner of ") || lowered.starts_with("loser of ") {
+        return false;
+    }
+
+    !(trimmed.starts_with("勝者") || trimmed.starts_with("敗者"))
+}
+
+fn is_set_matchup_ready(set: &crate::models::SetSnapshot) -> bool {
+    if set.slots.len() < 2 {
+        return false;
+    }
+
+    set.slots
+        .iter()
+        .all(|slot| slot.entrant_id.is_some() && is_resolved_entrant_name(&slot.entrant_name))
+}
+
 fn normalize_group_key(value: Option<&String>) -> String {
     value
         .map(|item| item.trim().to_lowercase())
@@ -1358,47 +1545,301 @@ fn normalize_source_text(kind: &str, set_code: &str) -> String {
     format!("{kind} of {set_code}")
 }
 
-fn build_set_display_code_by_id(event: &EventSnapshot) -> HashMap<String, String> {
-    let winners_columns = build_round_columns_set_ids(event, false);
-    let losers_columns = build_round_columns_set_ids(event, true);
+fn is_grand_final_reset_set(set: &crate::models::SetSnapshot) -> bool {
+    is_grand_final_set(set) && set.full_round_text.to_lowercase().contains("reset")
+}
 
-    let mut ordered_ids = winners_columns
-        .into_iter()
-        .flat_map(|column| column.into_iter())
-        .collect::<Vec<String>>();
-    ordered_ids.extend(losers_columns.into_iter().flat_map(|column| column.into_iter()));
+const VIRTUAL_GF_RESET_SET_ID_PREFIX: &str = "virtual_gf_reset_";
 
-    let mut seen_ids = ordered_ids.iter().cloned().collect::<HashSet<String>>();
-    let mut leftovers = event
-        .sets
-        .iter()
-        .map(|set| set.set_id.clone())
-        .filter(|set_id| !seen_ids.contains(set_id))
-        .collect::<Vec<String>>();
-    leftovers.sort();
-    for set_id in leftovers {
-        seen_ids.insert(set_id.clone());
-        ordered_ids.push(set_id);
+fn virtual_grand_final_reset_set_id(grand_final_set_id: &str) -> String {
+    format!("{VIRTUAL_GF_RESET_SET_ID_PREFIX}{grand_final_set_id}")
+}
+
+fn source_grand_final_set_id_from_virtual_reset_set_id(set_id: &str) -> Option<String> {
+    let source = set_id.strip_prefix(VIRTUAL_GF_RESET_SET_ID_PREFIX)?;
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+fn source_targets_losers_side(
+    event: &EventSnapshot,
+    source: &crate::models::SetEntrantSourceSnapshot,
+) -> Option<bool> {
+    if let Some(type_id) = source.type_id.as_deref() {
+        let normalized = type_id.trim();
+        if !normalized.is_empty() {
+            if let Some(source_set) = event.sets.iter().find(|set| set.set_id == normalized) {
+                return Some(is_losers_set(source_set));
+            }
+        }
     }
 
-    let mut map = HashMap::new();
-    let mut used = HashSet::new();
-    let mut fallback_index = 0_usize;
+    let condition_tokens = source
+        .condition_string
+        .as_deref()
+        .map(normalized_reference_tokens)
+        .unwrap_or_default();
+    if condition_tokens.is_empty() {
+        return None;
+    }
 
-    for set_id in ordered_ids {
-        if map.contains_key(&set_id) {
+    let set_display_code_by_id = build_set_display_code_by_id(event);
+    let mut best_match: Option<(usize, bool)> = None;
+
+    for (set_id, code) in &set_display_code_by_id {
+        let normalized_code = normalize_reference_text(code);
+        if normalized_code.is_empty() {
             continue;
         }
 
-        let mut code = format_alphabet_sequence(fallback_index);
-        while used.contains(&code) {
-            fallback_index += 1;
-            code = format_alphabet_sequence(fallback_index);
+        if !condition_tokens.iter().any(|token| token == &normalized_code) {
+            continue;
         }
 
-        map.insert(set_id, code.clone());
+        let Some(source_set) = event.sets.iter().find(|set| set.set_id == *set_id) else {
+            continue;
+        };
+
+        let rank = normalized_code.len();
+        let is_losers = is_losers_set(source_set);
+        match best_match {
+            None => best_match = Some((rank, is_losers)),
+            Some((best_rank, _)) if rank > best_rank => best_match = Some((rank, is_losers)),
+            _ => {}
+        }
+    }
+
+    best_match.map(|(_, is_losers)| is_losers)
+}
+
+fn same_phase_pool(left: &crate::models::SetSnapshot, right: &crate::models::SetSnapshot) -> bool {
+    normalize_group_key(left.phase_name.as_ref()) == normalize_group_key(right.phase_name.as_ref())
+        && normalize_group_key(left.phase_group_name.as_ref()) == normalize_group_key(right.phase_group_name.as_ref())
+}
+
+fn winner_is_from_losers_side(
+    event: &EventSnapshot,
+    grand_final_set: &crate::models::SetSnapshot,
+    winner_id: &str,
+) -> bool {
+    let mut inferred_from_source = None;
+
+    let winner_slot_index = grand_final_set
+        .slots
+        .iter()
+        .position(|slot| slot.entrant_id.as_deref() == Some(winner_id));
+    if let Some(slot_index) = winner_slot_index {
+        if let Some(source) = entrant_source_for_slot(grand_final_set, slot_index) {
+            inferred_from_source = source_targets_losers_side(event, source);
+
+            if inferred_from_source.is_none() {
+                if let Some(kind) = source_kind_from_api_source(source) {
+                    inferred_from_source = Some(kind == "loser");
+                }
+            }
+        }
+    }
+
+    let found_in_losers_lane = event
+        .sets
+        .iter()
+        .any(|set| {
+            if !is_losers_set(set) {
+                return false;
+            }
+
+            if set.winner_id.as_deref() == Some(winner_id) {
+                return true;
+            }
+
+            // Losers側の試合に一度でも出場していれば、GFではLosers側由来として扱う。
+            // winner_id が未確定の中間進行でも GF Reset 生成を取りこぼさないため。
+            set.slots
+                .iter()
+                .any(|slot| slot.entrant_id.as_deref() == Some(winner_id))
+        });
+
+    if found_in_losers_lane {
+        return true;
+    }
+
+    inferred_from_source.unwrap_or(false)
+}
+
+fn ensure_virtual_grand_final_reset_set(event: &mut EventSnapshot, grand_final_set: &crate::models::SetSnapshot) {
+    if event
+        .sets
+        .iter()
+        .any(|set| is_grand_final_reset_set(set) && same_phase_pool(set, grand_final_set))
+    {
+        return;
+    }
+
+    let virtual_set_id = virtual_grand_final_reset_set_id(&grand_final_set.set_id);
+    if event.sets.iter().any(|set| set.set_id == virtual_set_id) {
+        return;
+    }
+
+    let slots = grand_final_set
+        .slots
+        .iter()
+        .map(|slot| crate::models::SetSlotSnapshot {
+            entrant_id: slot.entrant_id.clone(),
+            entrant_name: slot.entrant_name.clone(),
+            seed_id: slot.seed_id.clone(),
+            seed_num: slot.seed_num,
+            score: None,
+        })
+        .collect::<Vec<crate::models::SetSlotSnapshot>>();
+    let has_empty = slots
+        .iter()
+        .any(|slot| slot.entrant_id.is_none() || slot.entrant_name.trim().eq_ignore_ascii_case("tbd"));
+
+    event.sets.push(crate::models::SetSnapshot {
+        set_id: virtual_set_id,
+        full_round_text: "Grand Final Reset".to_owned(),
+        round: grand_final_set.round,
+        phase_name: grand_final_set.phase_name.clone(),
+        phase_group_name: grand_final_set.phase_group_name.clone(),
+        state: if has_empty { 1 } else { 2 },
+        winner_id: None,
+        entrant1_source: None,
+        entrant2_source: None,
+        winner_progression_seed_id: None,
+        winner_progression_seed_num: None,
+        loser_progression_seed_id: None,
+        loser_progression_seed_num: None,
+        slots,
+    });
+}
+
+fn hydrate_existing_grand_final_reset_sets(
+    event: &mut EventSnapshot,
+    grand_final_set: &crate::models::SetSnapshot,
+) -> bool {
+    let mut found = false;
+
+    for reset_set in &mut event.sets {
+        if !is_grand_final_reset_set(reset_set) || !same_phase_pool(reset_set, grand_final_set) {
+            continue;
+        }
+
+        found = true;
+        if reset_set.winner_id.is_some() {
+            continue;
+        }
+
+        while reset_set.slots.len() < grand_final_set.slots.len() {
+            reset_set.slots.push(crate::models::SetSlotSnapshot {
+                entrant_id: None,
+                entrant_name: "TBD".to_owned(),
+                seed_id: None,
+                seed_num: None,
+                score: None,
+            });
+        }
+
+        let mut changed = false;
+        for (slot_index, gf_slot) in grand_final_set.slots.iter().enumerate() {
+            let Some(reset_slot) = reset_set.slots.get_mut(slot_index) else {
+                break;
+            };
+
+            if reset_slot.entrant_id.is_some() || gf_slot.entrant_id.is_none() {
+                continue;
+            }
+
+            reset_slot.entrant_id = gf_slot.entrant_id.clone();
+            reset_slot.entrant_name = gf_slot.entrant_name.clone();
+            reset_slot.seed_id = gf_slot.seed_id.clone();
+            reset_slot.seed_num = gf_slot.seed_num;
+            reset_slot.score = None;
+            changed = true;
+        }
+
+        if changed {
+            reset_set.state = if empty_slot_count(reset_set) == 0 { 2 } else { 1 };
+        }
+    }
+
+    found
+}
+
+fn build_set_display_code_by_id(event: &EventSnapshot) -> HashMap<String, String> {
+    let mut ordered_sets = event.sets.iter().cloned().collect::<Vec<_>>();
+    ordered_sets.sort_by(|left, right| {
+        let left_is_losers = is_losers_set(left);
+        let right_is_losers = is_losers_set(right);
+        if left_is_losers != right_is_losers {
+            return left_is_losers.cmp(&right_is_losers);
+        }
+
+        let left_is_gf = is_grand_final_set(left);
+        let right_is_gf = is_grand_final_set(right);
+        if left_is_gf != right_is_gf {
+            return left_is_gf.cmp(&right_is_gf);
+        }
+
+        let left_is_reset = is_grand_final_reset_set(left);
+        let right_is_reset = is_grand_final_reset_set(right);
+        if left_is_reset != right_is_reset {
+            return left_is_reset.cmp(&right_is_reset);
+        }
+
+        let left_round = left.round.unwrap_or(0).abs();
+        let right_round = right.round.unwrap_or(0).abs();
+        if left_round != right_round {
+            return left_round.cmp(&right_round);
+        }
+
+        left.set_id.cmp(&right.set_id)
+    });
+
+    let ordered_ids = ordered_sets
+        .into_iter()
+        .map(|set| set.set_id.clone())
+        .collect::<Vec<String>>();
+
+    let mut map = HashMap::new();
+    let mut used = HashSet::new();
+    let mut next_code_index = 0_usize;
+    let mut gf_seen = false;
+    let mut reserved_after_gf = false;
+
+    for set_id in ordered_ids {
+        let current_set = event.sets.iter().find(|set| set.set_id == set_id).cloned();
+        let current_is_losers = current_set.as_ref().is_some_and(is_losers_set);
+        let current_is_gf = current_set.as_ref().is_some_and(is_grand_final_set);
+        let current_is_reset = current_set.as_ref().is_some_and(is_grand_final_reset_set);
+
+        if current_is_losers && gf_seen && reserved_after_gf && !current_is_reset {
+            // Grand Final の次にあり得る GF Reset の枠を一つ飛ばし、
+            // Losers はその次のコードから割り当てる。
+            next_code_index += 1;
+            reserved_after_gf = false;
+        }
+
+        let mut code = format_alphabet_sequence(next_code_index);
+        while used.contains(&code) {
+            next_code_index += 1;
+            code = format_alphabet_sequence(next_code_index);
+        }
+
+        map.insert(set_id.clone(), code.clone());
         used.insert(code);
-        fallback_index += 1;
+        next_code_index += 1;
+
+        if current_is_gf {
+            gf_seen = true;
+            reserved_after_gf = true;
+        }
+
+        if current_is_reset {
+            reserved_after_gf = false;
+        }
     }
 
     map
@@ -2572,10 +3013,22 @@ fn apply_local_progression(
         .find(|slot| slot.entrant_id.as_deref().is_some() && slot.entrant_id.as_deref() != Some(winner_id));
 
     let source_is_losers = is_losers_set(&source_set);
+    let source_is_grand_final = is_grand_final_set(&source_set);
+    let source_is_grand_final_reset = is_grand_final_reset_set(&source_set);
     let inferred_labels = build_inferred_tbd_source_labels(event);
     let source_set_code = build_set_display_code_by_id(event)
         .get(source_set_id)
         .cloned();
+
+    if source_is_grand_final
+        && !source_is_grand_final_reset
+        && winner_is_from_losers_side(event, &source_set, winner_id)
+    {
+        let has_existing_reset = hydrate_existing_grand_final_reset_sets(event, &source_set);
+        if !has_existing_reset {
+            ensure_virtual_grand_final_reset_set(event, &source_set);
+        }
+    }
 
     let advanced_within_lane = advance_winner_within_lane(
         event,
@@ -2980,6 +3433,9 @@ pub fn save_local_meta(
     normalized
         .pending_set_results
         .retain(|pending| pending.event_id == event_id);
+    normalized
+        .pending_grand_final_reset_results
+        .retain(|pending| pending.event_id == event_id);
 
     let path = meta_path(app, &normalized.slug, event_id)?;
     let json = serde_json::to_string_pretty(&normalized)
@@ -3044,6 +3500,36 @@ pub fn load_local_meta(app: &AppHandle, slug: &str, event_id: &str) -> Result<To
     }
     parsed
         .pending_set_results
+        .retain(|pending| pending.event_id == event_id);
+
+    // 後方互換: 旧実装で virtual_gf_reset_* に紐づけていたpendingを
+    // set_id非依存のGF Reset専用pendingへ移す。
+    let mut migrated = Vec::new();
+    parsed.pending_set_results.retain(|pending| {
+        let Some(source_set_id) = source_grand_final_set_id_from_virtual_reset_set_id(&pending.set_id) else {
+            return true;
+        };
+
+        migrated.push(LocalGrandFinalResetResultMeta {
+            event_id: pending.event_id.clone(),
+            event_name: pending.event_name.clone(),
+            source_grand_final_set_id: source_set_id,
+            winner_id: pending.winner_id.clone(),
+            score_csv: pending.score_csv.clone(),
+            confirmed: pending.confirmed,
+            slot_scores: pending.slot_scores.clone(),
+            recorded_at: pending.recorded_at.clone(),
+        });
+        false
+    });
+
+    if !migrated.is_empty() {
+        parsed.pending_grand_final_reset_results.retain(|item| item.event_id == event_id);
+        parsed.pending_grand_final_reset_results.extend(migrated);
+    }
+
+    parsed
+        .pending_grand_final_reset_results
         .retain(|pending| pending.event_id == event_id);
     Ok(parsed)
 }
@@ -3149,27 +3635,49 @@ pub fn upsert_local_set_result(
     };
 
     let score_csv = derive_score_csv_from_slot_scores(&input.slot_scores, &input.winner_id)?;
+    let source_grand_final_set_id = source_grand_final_set_id_from_virtual_reset_set_id(&input.set_id);
 
-    local_meta
-        .pending_set_results
-        .retain(|item| item.set_id != input.set_id);
-    local_meta.pending_set_results.push(LocalSetResultMeta {
-        event_id: applied_event_id.clone(),
-        event_name: event_name.clone(),
-        set_id: input.set_id.clone(),
-        winner_id: input.winner_id,
-        score_csv,
-        confirmed: input.confirmed,
-        slot_scores: input
-            .slot_scores
-            .into_iter()
-            .map(|slot| LocalSetScoreMeta {
-                entrant_id: slot.entrant_id,
-                score: slot.score,
-            })
-            .collect(),
-        recorded_at: Utc::now(),
-    });
+    let slot_scores = input
+        .slot_scores
+        .into_iter()
+        .map(|slot| LocalSetScoreMeta {
+            entrant_id: slot.entrant_id,
+            score: slot.score,
+        })
+        .collect::<Vec<LocalSetScoreMeta>>();
+
+    if let Some(source_grand_final_set_id) = source_grand_final_set_id {
+        local_meta
+            .pending_grand_final_reset_results
+            .retain(|item| {
+                !(item.event_id == applied_event_id
+                    && item.source_grand_final_set_id == source_grand_final_set_id)
+            });
+        local_meta.pending_grand_final_reset_results.push(LocalGrandFinalResetResultMeta {
+            event_id: applied_event_id.clone(),
+            event_name: event_name.clone(),
+            source_grand_final_set_id,
+            winner_id: input.winner_id,
+            score_csv,
+            confirmed: input.confirmed,
+            slot_scores,
+            recorded_at: Utc::now(),
+        });
+    } else {
+        local_meta
+            .pending_set_results
+            .retain(|item| item.set_id != input.set_id);
+        local_meta.pending_set_results.push(LocalSetResultMeta {
+            event_id: applied_event_id.clone(),
+            event_name: event_name.clone(),
+            set_id: input.set_id.clone(),
+            winner_id: input.winner_id,
+            score_csv,
+            confirmed: input.confirmed,
+            slot_scores,
+            recorded_at: Utc::now(),
+        });
+    }
 
     local_meta.slug = input.slug;
     local_meta.tournament_id = snapshot.tournament_id.clone();
@@ -3222,6 +3730,14 @@ pub fn upsert_local_set_scores(
     local_meta
         .pending_set_results
         .retain(|item| item.set_id != input.set_id);
+    if let Some(source_grand_final_set_id) = source_grand_final_set_id_from_virtual_reset_set_id(&input.set_id) {
+        local_meta
+            .pending_grand_final_reset_results
+            .retain(|item| {
+                !(item.event_id == applied_event_id
+                    && item.source_grand_final_set_id == source_grand_final_set_id)
+            });
+    }
 
     local_meta.slug = input.slug;
     local_meta.tournament_id = snapshot.tournament_id.clone();
@@ -3261,6 +3777,27 @@ pub fn clear_pending_set_results(
     local_meta
         .pending_set_results
         .retain(|item| item.event_id != event_id);
+    local_meta
+        .pending_grand_final_reset_results
+        .retain(|item| item.event_id != event_id);
+    local_meta.updated_at = Utc::now();
+    save_local_meta(app, event_id, &local_meta)?;
+    Ok(local_meta)
+}
+
+pub fn remove_pending_grand_final_reset_results(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+    source_grand_final_set_ids: &[String],
+) -> Result<TournamentLocalMeta, String> {
+    let mut local_meta = load_local_meta(app, slug, event_id)?;
+    let remove_ids = source_grand_final_set_ids
+        .iter()
+        .collect::<HashSet<&String>>();
+    local_meta
+        .pending_grand_final_reset_results
+        .retain(|item| !remove_ids.contains(&item.source_grand_final_set_id));
     local_meta.updated_at = Utc::now();
     save_local_meta(app, event_id, &local_meta)?;
     Ok(local_meta)
@@ -3364,6 +3901,10 @@ pub fn upsert_local_set_play_side(
         .find(|event| event.event_id == input.event_id)
         .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
         .ok_or_else(|| "サイド保存対象のsetが見つかりません。".to_owned())?;
+
+    if !is_set_matchup_ready(set_snapshot) {
+        return Err("対戦カードが確定していないsetはサイド設定できません。".to_owned());
+    }
 
     let entrant_ids = set_snapshot
         .slots

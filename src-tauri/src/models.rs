@@ -97,6 +97,8 @@ pub struct TournamentLocalMeta {
     pub set_play_sides: Vec<SetPlaySideMeta>,
     #[serde(default)]
     pub pending_set_results: Vec<LocalSetResultMeta>,
+    #[serde(default)]
+    pub pending_grand_final_reset_results: Vec<LocalGrandFinalResetResultMeta>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -208,6 +210,21 @@ pub struct LocalSetResultMeta {
     pub event_id: String,
     pub event_name: String,
     pub set_id: String,
+    pub winner_id: String,
+    pub score_csv: String,
+    #[serde(default = "default_confirmed")]
+    pub confirmed: bool,
+    #[serde(default)]
+    pub slot_scores: Vec<LocalSetScoreMeta>,
+    pub recorded_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalGrandFinalResetResultMeta {
+    pub event_id: String,
+    pub event_name: String,
+    pub source_grand_final_set_id: String,
     pub winner_id: String,
     pub score_csv: String,
     #[serde(default = "default_confirmed")]
@@ -387,5 +404,40 @@ pub struct LocalSnapshotEventListItem {
     #[serde(default)]
     pub last_selected_phase_group_name: Option<String>,
     pub set_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileResultRequestInput {
+    pub slug: String,
+    pub event_id: String,
+    pub set_id: String,
+    #[serde(default)]
+    pub winner_id: Option<String>,
+    #[serde(default)]
+    pub slot_scores: Vec<LocalSetScoreInput>,
+    #[serde(default)]
+    pub requested_by: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileResultRequestItem {
+    pub request_id: String,
+    pub slug: String,
+    pub event_id: String,
+    pub set_id: String,
+    #[serde(default)]
+    pub winner_id: Option<String>,
+    #[serde(default)]
+    pub slot_scores: Vec<LocalSetScoreMeta>,
+    #[serde(default)]
+    pub requested_by: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
 }
 
