@@ -1944,6 +1944,22 @@ fn load_generic_messages(app: tauri::AppHandle) -> Result<Option<Vec<GenericMess
 }
 
 #[tauri::command]
+fn save_event_alias(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+    event_alias: Option<String>,
+) -> Result<TournamentWorkspace, String> {
+    let local_meta = storage::set_event_alias(&app, &slug, &event_id, event_alias)?;
+    let snapshot = storage::load_snapshot(&app, &slug)?;
+
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
+}
+
+#[tauri::command]
 fn save_event_management_meta(
     app: tauri::AppHandle,
     input: SaveEventManagementMetaInput,
@@ -2730,6 +2746,7 @@ pub fn run() {
             start_udp_mailbox_service,
             stop_udp_mailbox_service,
             send_mailbox_message,
+            save_event_alias,
             save_event_management_meta,
             load_local_tournament,
             load_local_tournament_workspace,

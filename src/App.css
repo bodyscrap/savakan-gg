@@ -678,6 +678,21 @@ button:disabled {
   padding: 0.75rem;
 }
 
+.users-player-list-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.55rem;
+}
+
+.users-player-list-head h3 {
+  margin: 0;
+}
+
+.users-player-list-head button {
+  padding: 0.32rem 0.55rem;
+}
+
 .user-card-entry {
   cursor: pointer;
 }
@@ -793,6 +808,43 @@ button:disabled {
   margin-top: 0.7rem;
   display: grid;
   gap: 0.6rem;
+}
+
+.item-list-compact-list {
+  gap: 0.5rem;
+}
+
+.item-list-compact-card {
+  padding: 0.7rem 0.8rem;
+}
+
+.item-list-preview {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  line-height: 1.6;
+  color: var(--ink);
+  max-height: 2.7rem;
+  overflow: hidden;
+}
+
+.item-list-preview-item {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-list-preview-item:not(:last-child)::after {
+  content: ",";
+  margin-left: 0.15rem;
+}
+
+.item-list-preview-more {
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .owned-tournament-list {
@@ -1167,8 +1219,22 @@ button:disabled {
   gap: 0.8rem;
 }
 
-.dialog-head h3 {
+.dialog-head-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.dialog-head-summary h3 {
   margin: 0;
+}
+
+.dialog-set-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
 }
 
 .dialog-players {
