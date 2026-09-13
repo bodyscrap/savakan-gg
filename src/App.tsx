@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
@@ -1775,8 +1775,28 @@ const MAILBOX_READ_IDS_STORAGE_KEY = "savakan-gg.mailbox-read-ids.v1";
 const CALL_LIST_ROTATE_SECONDS_STORAGE_KEY = "savakan-gg.call-list-rotate-seconds.v1";
 const CALL_LIST_COLOR_SECONDS_STORAGE_KEY = "savakan-gg.call-list-color-seconds.v1";
 const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
+const BRACKET_ZOOM_LEVEL_STORAGE_KEY = "savakan-gg.bracket-zoom-level.v1";
 const STARTGG_FETCH_PER_PAGE_STORAGE_KEY = "savakan-gg.startgg-fetch-per-page.v1";
 const LOCAL_COMMUNICATION_DISABLED_STORAGE_KEY = "savakan-gg.local-communication-disabled.v1";
+
+const BRACKET_ZOOM_LEVELS = [1, 0.7, 0.5] as const;
+
+function normalizeBracketZoomLevel(value: unknown): number {
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = typeof value === "string" ? Number.parseFloat(value) : Number(value);
+    if (Number.isFinite(parsed)) {
+      let nearest: number = Number(BRACKET_ZOOM_LEVELS[0]);
+      for (const candidate of BRACKET_ZOOM_LEVELS) {
+        if (Math.abs(Number(candidate) - parsed) < Math.abs(nearest - parsed)) {
+          nearest = Number(candidate);
+        }
+      }
+      return nearest;
+    }
+  }
+
+  return Number(BRACKET_ZOOM_LEVELS[0]);
+}
 
 const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: boolean }> = [
   { id: "create", label: "新規作成", icon: "➕", implemented: true },
@@ -2555,6 +2575,7 @@ function App() {
   const [callListEventSortStrategy, setCallListEventSortStrategy] = useState<CallListEventSortStrategy>("alias");
   const [callListFocusOwnUnresolved, setCallListFocusOwnUnresolved] = useState(false);
   const [displayBracketPlayersBySide, setDisplayBracketPlayersBySide] = useState(true);
+  const [bracketZoomLevel, setBracketZoomLevel] = useState<number>(Number(BRACKET_ZOOM_LEVELS[0]));
   const [overlaySwitchConfirm, setOverlaySwitchConfirm] = useState<{ targetSetId: string; targetSetLabel: string } | null>(null);
   const [callListPageSwitchedAtMs, setCallListPageSwitchedAtMs] = useState(() => Date.now());
   const [callListProgressNowMs, setCallListProgressNowMs] = useState(() => Date.now());
@@ -2842,6 +2863,15 @@ function App() {
     }
 
     try {
+      const rawBracketZoomLevel = window.localStorage.getItem(BRACKET_ZOOM_LEVEL_STORAGE_KEY);
+      if (rawBracketZoomLevel !== null) {
+        setBracketZoomLevel(normalizeBracketZoomLevel(rawBracketZoomLevel));
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
       const rawStartggFetchPerPage = window.localStorage.getItem(STARTGG_FETCH_PER_PAGE_STORAGE_KEY);
       if (rawStartggFetchPerPage !== null) {
         setStartggFetchPerPage(normalizeStartggFetchPerPage(rawStartggFetchPerPage));
@@ -2892,6 +2922,17 @@ function App() {
       // ignore
     }
   }, [displayBracketPlayersBySide]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        BRACKET_ZOOM_LEVEL_STORAGE_KEY,
+        String(bracketZoomLevel),
+      );
+    } catch {
+      // ignore
+    }
+  }, [bracketZoomLevel]);
 
   useEffect(() => {
     try {
@@ -7008,6 +7049,34 @@ function App() {
     });
   }, [selectedBracketSections]) as BracketSectionForView[];
 
+  const bracketScaleStyle = useMemo(() => ({
+    ["--bracket-scale" as string]: String(bracketZoomLevel),
+  } satisfies CSSProperties), [bracketZoomLevel]);
+
+  const bracketVerticalLayoutScale = useMemo(() => {
+    if (bracketZoomLevel >= 0.9) {
+      return 1;
+    }
+    if (bracketZoomLevel >= 0.6) {
+      return 0.72;
+    }
+    return 0.58;
+  }, [bracketZoomLevel]);
+
+  const renderedBracketSectionsForView = useMemo(() => {
+    return selectedBracketSectionsForView.map((section) => ({
+      ...section,
+      columns: section.columns.map((column) => ({
+        ...column,
+        height: column.height * bracketVerticalLayoutScale,
+        positionedSets: column.positionedSets.map((item) => ({
+          ...item,
+          y: item.y * bracketVerticalLayoutScale,
+        })),
+      })),
+    }));
+  }, [bracketVerticalLayoutScale, selectedBracketSectionsForView]);
+
   const setDisplayCodeById = useMemo(() => {
     const map = new Map<string, string>();
     const used = new Set<string>();
@@ -10435,6 +10504,23 @@ function App() {
                   )}
                 </select>
 
+                <div className="bracket-view-tools" style={bracketScaleStyle}>
+                  <label htmlFor="bracket-zoom-select">
+                    表示倍率
+                    <select
+                      id="bracket-zoom-select"
+                      value={String(bracketZoomLevel)}
+                      onChange={(event) => setBracketZoomLevel(normalizeBracketZoomLevel(event.currentTarget.value))}
+                    >
+                      {BRACKET_ZOOM_LEVELS.map((level) => (
+                        <option key={level} value={String(level)}>
+                          {level.toFixed(2)}x
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                   <button type="button" className="ghost" disabled={busy || toApiSlug(slug) === ""} onClick={updateSnapshot}>
                     スナップショット更新
@@ -10455,8 +10541,8 @@ function App() {
                   <section className="phase-group" key={selectedPhasePoolGroup.key}>
                     <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
 
-                    <div className="bracket-split-stack">
-                      {selectedBracketSectionsForView.map((section) => (
+                    <div className="bracket-split-stack" style={bracketScaleStyle}>
+                      {renderedBracketSectionsForView.map((section) => (
                         <section className="bracket-subgroup" key={`${selectedPhasePoolGroup.key}-${section.key}`}>
                           <h4>{section.title}</h4>
                           <p className="meta">sets: {section.setCount}</p>
