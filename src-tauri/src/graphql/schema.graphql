@@ -16,7 +16,7 @@ type Query {
 
 type Mutation {
   reportBracketSet(setId: ID!, winnerId: ID!, gameData: [BracketSetGameDataInput]): [Set]
-  resetSet(setId: ID!): Set
+  resetSet(setId: ID!, resetDependentSets: Boolean): Set
 }
 
 input BracketSetGameDataInput {

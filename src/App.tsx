@@ -2004,7 +2004,7 @@ function isMatchupReady(set: SetSnapshot): boolean {
 }
 
 function isCompletedSet(set: SetSnapshot): boolean {
-  return set.state === 3 || set.winnerId !== null;
+  return set.state === 3;
 }
 
 function isLosersBracketSet(set: SetSnapshot): boolean {
@@ -2494,9 +2494,11 @@ function buildScoreDraftsFromResult(set: SetSnapshot, result: LocalSetResultMeta
   const slotScores = result.slotScores ?? [];
 
   if (slotScores.length > 0) {
-    const drafts: SetScoreDraft = {};
+    const drafts = buildScoreDraftsFromSet(set);
     for (const slot of slotScores) {
-      drafts[slot.entrantId] = slot.score < 0 ? "-" : formatDraftScoreValue(slot.score);
+      if (!(slot.entrantId in drafts)) {
+        drafts[slot.entrantId] = slot.score < 0 ? "-" : formatDraftScoreValue(slot.score);
+      }
     }
     return drafts;
   }
@@ -2913,6 +2915,22 @@ function App() {
               });
               if (alive) {
                 setWorkspace(result);
+                setSetResultDrafts({});
+                setInterimScoreDraftsBySetId({});
+
+                const refreshedSet = result.snapshot.events
+                  .find((event) => event.eventId === selectedEventId)
+                  ?.sets.find((set) => set.setId === activeMatchSetId);
+                if (refreshedSet) {
+                  setScoreDrafts(buildScoreDraftsFromSet(refreshedSet));
+                  const refreshedSideDrafts: Record<string, PlaySide | ""> = {};
+                  for (const slot of refreshedSet.slots) {
+                    if (slot.entrantId) {
+                      refreshedSideDrafts[slot.entrantId] = getSetSlotSide(refreshedSet.setId, slot.entrantId);
+                    }
+                  }
+                  setActiveMatchSideDrafts(refreshedSideDrafts);
+                }
               }
             } catch {
               // ignore refresh errors from mobile-triggered updates
@@ -2931,7 +2949,7 @@ function App() {
         unlisten();
       }
     };
-  }, [selectedEventId, slug]);
+  }, [activeMatchSetId, selectedEventId, slug]);
 
   useEffect(() => {
     let alive = true;
@@ -8312,7 +8330,7 @@ function App() {
       return "inprogress";
     }
 
-    if (set.winnerId || isCompletedSet(set)) {
+    if (isCompletedSet(set)) {
       return "confirmed";
     }
 
@@ -8341,12 +8359,6 @@ function App() {
       return;
     }
 
-    const cached = setResultDrafts[set.setId];
-    if (cached) {
-      setScoreDrafts(cached.scoreDrafts);
-      return;
-    }
-
     const pending = pendingResultBySetId.get(set.setId);
     if (pending) {
       const draftState = buildDraftStateFromPending(set, pending);
@@ -8355,6 +8367,12 @@ function App() {
         ...current,
         [set.setId]: draftState,
       }));
+      return;
+    }
+
+    const cached = setResultDrafts[set.setId];
+    if (cached) {
+      setScoreDrafts(cached.scoreDrafts);
       return;
     }
 

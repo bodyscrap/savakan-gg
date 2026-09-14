@@ -325,6 +325,7 @@ async fn fetch_set_snapshot_detail_with_client(
 async fn reset_set_if_needed(token: &str, set_id: &str) -> Result<(), String> {
     let variables = reset_set::Variables {
         set_id: set_id.to_owned(),
+        reset_dependent_sets: true,
     };
     let body = ResetSet::build_query(variables);
 

@@ -1942,7 +1942,7 @@ fn mobile_input_html() -> &'static str {
         }
 
         function isCompletedSet(detail) {
-            return Number(detail?.state || 0) === 3 || Boolean(detail?.winnerId);
+            return Number(detail?.state || 0) === 3;
         }
 
         function isResolvedEntrantName(name) {
@@ -1974,9 +1974,8 @@ fn mobile_input_html() -> &'static str {
         }
 
         function isListItemInputtable(set) {
-            const hasWinner = Boolean(set?.winnerId);
             const isCompleted = Number(set?.state || 0) === 3;
-            return isListItemMatchupReady(set) && !hasWinner && !isCompleted;
+            return isListItemMatchupReady(set) && !isCompleted;
         }
 
         function getDisplaySetLabel(detail) {
@@ -3466,7 +3465,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             return;
         };
 
-        if target_set.state == 3 || target_set.winner_id.is_some() {
+        if target_set.state == 3 {
             respond_json(
                 request,
                 400,
@@ -5848,7 +5847,9 @@ async fn refresh_local_event_snapshot_from_remote(
         .and_then(|item| item.event_alias);
 
     storage::save_event_snapshot(&app, &snapshot, &event_id, existing_alias)?;
-    let local_meta = storage::clear_pending_set_results(&app, &slug, &event_id)?;
+    let local_meta = storage::discard_pending_set_results_for_snapshot_refresh(
+        &app, &slug, &event_id,
+    )?;
     let snapshot = storage::load_snapshot(&app, &slug)?;
 
     Ok(TournamentWorkspace {

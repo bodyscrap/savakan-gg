@@ -3248,19 +3248,12 @@ fn collect_affected_set_ids_for_reset(
     event: &EventSnapshot,
     source_set_id: &str,
 ) -> Result<Vec<String>, String> {
-    let source_set = event
-        .sets
-        .iter()
-        .find(|set| set.set_id == source_set_id)
-        .ok_or_else(|| format!("取り消し対象setが見つかりません: {source_set_id}"))?;
+    if !event.sets.iter().any(|set| set.set_id == source_set_id) {
+        return Err(format!("取り消し対象setが見つかりません: {source_set_id}"));
+    }
 
-    let source_depth = round_depth_for_sort(source_set.round);
-    let mut invalid_entrant_ids = source_set
-        .slots
-        .iter()
-        .filter_map(|slot| slot.entrant_id.clone())
-        .collect::<HashSet<String>>();
     let mut affected_ids = HashSet::from([source_set_id.to_owned()]);
+    let set_display_code_by_id = build_set_display_code_by_id(event);
 
     let mut changed = true;
     while changed {
@@ -3271,25 +3264,16 @@ fn collect_affected_set_ids_for_reset(
                 continue;
             }
 
-            if round_depth_for_sort(set.round) < source_depth {
-                continue;
-            }
-
-            let intersects = set.slots.iter().any(|slot| {
-                slot.entrant_id
-                    .as_ref()
-                    .map(|entrant_id| invalid_entrant_ids.contains(entrant_id))
+            let references_affected_set = (0..set.slots.len()).any(|slot_index| {
+                entrant_source_for_slot(set, slot_index)
+                    .and_then(|source| {
+                        source_set_id_and_code_from_api_source(source, &set_display_code_by_id)
+                    })
+                    .map(|(source_set_id, _)| affected_ids.contains(&source_set_id))
                     .unwrap_or(false)
             });
-            if !intersects {
+            if !references_affected_set {
                 continue;
-            }
-
-            for entrant_id in set.slots.iter().filter_map(|slot| slot.entrant_id.clone()) {
-                invalid_entrant_ids.insert(entrant_id);
-            }
-            if let Some(winner_id) = set.winner_id.as_ref() {
-                invalid_entrant_ids.insert(winner_id.clone());
             }
 
             affected_ids.insert(set.set_id.clone());
@@ -4076,6 +4060,23 @@ pub fn clear_pending_set_results(
     local_meta.updated_at = Utc::now();
 
     save_snapshot(app, &snapshot)?;
+    save_local_meta(app, event_id, &local_meta)?;
+    Ok(local_meta)
+}
+
+pub fn discard_pending_set_results_for_snapshot_refresh(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentLocalMeta, String> {
+    let mut local_meta = load_local_meta(app, slug, event_id)?;
+    local_meta
+        .pending_set_results
+        .retain(|item| item.event_id != event_id);
+    local_meta
+        .pending_grand_final_reset_results
+        .retain(|item| item.event_id != event_id);
+    local_meta.updated_at = Utc::now();
     save_local_meta(app, event_id, &local_meta)?;
     Ok(local_meta)
 }

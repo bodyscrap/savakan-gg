@@ -1,5 +1,5 @@
-mutation ResetSet($setId: ID!) {
-  resetSet(setId: $setId) {
+mutation ResetSet($setId: ID!, $resetDependentSets: Boolean!) {
+  resetSet(setId: $setId, resetDependentSets: $resetDependentSets) {
     id
   }
 }
