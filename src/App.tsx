@@ -8696,6 +8696,111 @@ function App() {
     }
   }
 
+  async function discardLocalResultDraftsForBracket() {
+    if (!selectedEvent) {
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const normalizedSlug = toApiSlug(slug);
+      const result = await invoke<TournamentWorkspace>("clear_local_set_result_drafts", {
+        slug: normalizedSlug,
+        eventId: selectedEvent.eventId,
+      });
+
+      setWorkspace(result);
+      setSetResultDrafts({});
+      setInterimScoreDraftsBySetId({});
+      closeMatchDialog();
+      await refreshLocalSnapshotEvents();
+      setMessage("全下書きを破棄しました。スナップショットの内容に戻しました。");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function discardLocalResultDraftForMatch() {
+    if (!selectedEvent) {
+      setError("先にイベントを選択してください。");
+      return;
+    }
+
+    if (!activeMatch) {
+      setError("試合が選択されていません。");
+      return;
+    }
+
+    const targetSetId = activeMatch.setId;
+
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const normalizedSlug = toApiSlug(slug);
+      const result = await invoke<TournamentWorkspace>("clear_local_set_result_draft_for_set", {
+        input: {
+          slug: normalizedSlug,
+          eventId: selectedEvent.eventId,
+          setId: targetSetId,
+        },
+      });
+
+      setWorkspace(result);
+      setSetResultDrafts((current) => {
+        if (!(targetSetId in current)) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[targetSetId];
+        return next;
+      });
+      setInterimScoreDraftsBySetId((current) => {
+        if (!(targetSetId in current)) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[targetSetId];
+        return next;
+      });
+
+      const restoredSet = result.snapshot.events
+        .find((event) => event.eventId === selectedEvent.eventId)
+        ?.sets.find((set) => set.setId === targetSetId);
+
+      if (!restoredSet) {
+        closeMatchDialog();
+      } else {
+        setScoreDrafts(buildScoreDraftsFromSet(restoredSet));
+
+        const sideMap = new Map(
+          (result.localMeta.setPlaySides ?? []).map((item) => [`${item.setId}:${item.entrantId}`, item.playSide] as const),
+        );
+        const sideDrafts: Record<string, PlaySide | ""> = {};
+        for (const slot of restoredSet.slots) {
+          if (!slot.entrantId) {
+            continue;
+          }
+          sideDrafts[slot.entrantId] = sideMap.get(`${restoredSet.setId}:${slot.entrantId}`) ?? "";
+        }
+        setActiveMatchSideDrafts(sideDrafts);
+      }
+
+      await refreshLocalSnapshotEvents();
+      setMessage("このsetの下書きを破棄しました。保存用スナップショットの内容に戻しました。");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function resetSetResultCascadeForMatch() {
     if (!selectedEvent) {
       setError("先にイベントを選択してください。");
@@ -11163,6 +11268,16 @@ function App() {
                   </button>
                   <button
                     type="button"
+                    className="ghost"
+                    disabled={busy || toApiSlug(slug) === "" || !selectedEvent}
+                    onClick={() => {
+                      void discardLocalResultDraftsForBracket();
+                    }}
+                  >
+                    全下書きを破棄
+                  </button>
+                  <button
+                    type="button"
                     disabled={busy || toApiSlug(slug) === "" || confirmedReportableCount === 0}
                     onClick={reportConfirmedSetsFromBracket}
                   >
@@ -11527,6 +11642,16 @@ function App() {
                       }}
                     >
                       更新
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={busy}
+                      onClick={() => {
+                        void discardLocalResultDraftForMatch();
+                      }}
+                    >
+                      このsetを破棄
                     </button>
                     <button
                       type="button"

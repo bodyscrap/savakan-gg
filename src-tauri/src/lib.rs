@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use if_addrs::get_if_addrs;
 use models::{
     BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult,
+    ClearLocalSetResultDraftInput,
     CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, GenericMessage, ItemListConfig,
     LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetScoreInput,
     LocalSetScoreUpdateInput, PlaySide,
@@ -885,6 +886,54 @@ fn build_overlay_html() -> &'static str {
             return Math.min(99, Math.max(0, Math.trunc(n)));
     }
 
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getRenderedLineCount(element) {
+            if (!element) {
+                return 0;
+            }
+
+            const computedStyle = window.getComputedStyle(element);
+            const lineHeight = Number.parseFloat(computedStyle.lineHeight);
+            if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+                return 1;
+            }
+
+            return Math.max(1, Math.round(element.scrollHeight / lineHeight));
+        }
+
+        function alignSlotPlayerNameLines() {
+            const nameElements = Array.from(slotRows.querySelectorAll('.slot-player-name'));
+            if (nameElements.length < 2) {
+                return;
+            }
+
+            const lineCounts = nameElements.map((element) => getRenderedLineCount(element));
+            const maxLines = Math.max(...lineCounts);
+            if (maxLines <= 1 || lineCounts.every((count) => count === maxLines)) {
+                return;
+            }
+
+            nameElements.forEach((element, index) => {
+                const rawName = String(element.getAttribute('data-slot-player-name') || '');
+                const missingLines = maxLines - lineCounts[index];
+                if (missingLines <= 0) {
+                    element.innerHTML = escapeHtml(rawName);
+                    return;
+                }
+
+                const blankLines = '<br><span class="slot-player-name-pad" aria-hidden="true">&nbsp;</span>'.repeat(missingLines);
+                element.innerHTML = `${escapeHtml(rawName)}${blankLines}`;
+            });
+        }
+
         function fitNameToPlate(element, text, mode) {
             element.textContent = text;
             element.style.fontSize = '';
@@ -910,6 +959,63 @@ fn build_overlay_html() -> &'static str {
 
             // CJK glyph metrics can leave the final character clipped at exact-fit sizes.
             // Apply a small post-fit reduction until the measured width is safely within bounds.
+            let guard = 0;
+            while (element.scrollWidth > targetWidth && nextSize > minSize && guard < 10) {
+                nextSize = Math.max(minSize, nextSize - 0.35);
+                element.style.fontSize = `${nextSize}px`;
+                guard += 1;
+            }
+        }
+
+        function abbreviateSetInfoText(value) {
+            return String(value)
+                .replace(/\bWinners\b/gi, 'W')
+                .replace(/\bWinner\b/gi, 'W')
+                .replace(/\bLosers\b/gi, 'L')
+                .replace(/\bLoser\b/gi, 'L')
+                .trim();
+        }
+
+        function fitSetInfoToPlate(element, text) {
+            const baseText = String(text || '').trim();
+            const abbreviatedText = abbreviateSetInfoText(baseText);
+
+            element.textContent = baseText;
+            element.style.fontSize = '';
+
+            if (baseText === '') {
+                return;
+            }
+
+            const baseSize = Number.parseFloat(window.getComputedStyle(element).fontSize);
+            const available = element.clientWidth;
+            const needed = element.scrollWidth;
+            if (!Number.isFinite(baseSize) || baseSize <= 0 || available <= 0 || needed <= 0) {
+                return;
+            }
+
+            if (needed <= available) {
+                return;
+            }
+
+            if (abbreviatedText !== baseText) {
+                element.textContent = abbreviatedText;
+                element.style.fontSize = '';
+
+                const abbreviatedNeeded = element.scrollWidth;
+                if (abbreviatedNeeded <= available) {
+                    return;
+                }
+            }
+
+            const minScale = 0.76;
+            const minSize = baseSize * minScale;
+            const safetyPixels = 3;
+            const targetWidth = Math.max(1, available - safetyPixels);
+            const ratio = targetWidth / element.scrollWidth;
+            let nextSize = Math.max(minSize, baseSize * ratio);
+            element.style.fontSize = `${nextSize}px`;
+
             let guard = 0;
             while (element.scrollWidth > targetWidth && nextSize > minSize && guard < 10) {
                 nextSize = Math.max(minSize, nextSize - 0.35);
@@ -957,7 +1063,7 @@ fn build_overlay_html() -> &'static str {
             fitNameToPlate(blueNameEl, blueName, nameFitMode);
                 document.getElementById('redCount').textContent = redWins;
                 document.getElementById('blueCount').textContent = blueWins;
-                document.getElementById('setMain').textContent = setMain;
+                                fitSetInfoToPlate(document.getElementById('setMain'), setMain);
                 document.getElementById('setSub').textContent = setSub;
       } catch (_err) {
         // ignore and retry.
@@ -1276,11 +1382,21 @@ fn mobile_input_html() -> &'static str {
         .side-actions button {
             flex: 1;
         }
+        .overlay-button-row {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: nowrap;
+        }
+        .overlay-button-row button {
+            flex: 1 1 0;
+            min-width: 0;
+        }
         .slot-row {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 8px;
             margin-top: 8px;
+            align-items: stretch;
         }
         .player-card {
             display: flex;
@@ -1290,6 +1406,9 @@ fn mobile_input_html() -> &'static str {
             border: 1px solid rgba(148, 163, 184, 0.7);
             border-radius: 10px;
             background: rgba(15, 23, 42, 0.02);
+            min-width: 0;
+            width: 100%;
+            box-sizing: border-box;
         }
         .player-card.side-1p {
             border-color: #fca5a5;
@@ -1313,16 +1432,19 @@ fn mobile_input_html() -> &'static str {
         .player-top {
             display: flex;
             flex-direction: column;
-            align-items: flex-start;
+            align-items: stretch;
             gap: 4px;
             min-height: 2rem;
+            width: 100%;
+            min-width: 0;
         }
         .player-top-head {
             width: 100%;
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: space-between;
             gap: 8px;
+            min-width: 0;
         }
         .slot-side-label {
             font-size: 0.68rem;
@@ -1330,14 +1452,24 @@ fn mobile_input_html() -> &'static str {
             color: var(--muted);
             letter-spacing: 0.04em;
             text-transform: uppercase;
+            flex-shrink: 0;
         }
         .slot-player-name {
-            font-weight: 700;
-            flex: 1;
+            display: block;
+            width: 100%;
             min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            max-width: 100%;
+            font-weight: 700;
+            line-height: 1.25;
+            font-size: clamp(0.62rem, 3.2vw, 0.9rem);
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            white-space: normal;
+            text-wrap: pretty;
+        }
+        .slot-player-name-pad {
+            display: inline-block;
+            width: 0;
         }
         .slot-side-picker {
             display: none;
@@ -1440,13 +1572,20 @@ fn mobile_input_html() -> &'static str {
             </div>
 
             <div class="detail-head-actions-row">
-                <button id="refreshDetailBtn" class="detail-close" type="button">情報更新</button>
+                <button id="refreshDetailBtn" class="detail-close" type="button">情報取得</button>
+                <button id="discardBtn" type="button" class="detail-close">下書きを破棄</button>
+            </div>
+
+            <div class="detail-head-actions-row">
                 <button id="closeDetailBtn" class="detail-close" type="button">一覧へ戻る</button>
             </div>
 
             <div id="overlayBox" class="row" hidden>
                 <p id="overlayStatus" class="meta"></p>
-                <button id="overlayToggleBtn" type="button">配信開始</button>
+                <div class="overlay-button-row">
+                    <button id="overlayToggleBtn" type="button">配信開始</button>
+                    <button id="overlayStopBtn" type="button" style="background: #e2e8f0; color: #0f172a; border-color: #cbd5e1;">完全停止</button>
+                </div>
             </div>
 
             <div id="slotRows"></div>
@@ -1482,6 +1621,54 @@ fn mobile_input_html() -> &'static str {
             return rounded;
         }
 
+        function escapeHtml(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getRenderedLineCount(element) {
+            if (!element) {
+                return 0;
+            }
+
+            const computedStyle = window.getComputedStyle(element);
+            const lineHeight = Number.parseFloat(computedStyle.lineHeight);
+            if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+                return 1;
+            }
+
+            return Math.max(1, Math.round(element.scrollHeight / lineHeight));
+        }
+
+        function alignSlotPlayerNameLines() {
+            const nameElements = Array.from(slotRows.querySelectorAll('.slot-player-name'));
+            if (nameElements.length < 2) {
+                return;
+            }
+
+            const lineCounts = nameElements.map((element) => getRenderedLineCount(element));
+            const maxLines = Math.max(...lineCounts);
+            if (maxLines <= 1 || lineCounts.every((count) => count === maxLines)) {
+                return;
+            }
+
+            nameElements.forEach((element, index) => {
+                const rawName = String(element.getAttribute('data-slot-player-name') || '');
+                const missingLines = maxLines - lineCounts[index];
+                if (missingLines <= 0) {
+                    element.innerHTML = escapeHtml(rawName);
+                    return;
+                }
+
+                const blankLines = '<br><span class="slot-player-name-pad" aria-hidden="true">&nbsp;</span>'.repeat(missingLines);
+                element.innerHTML = `${escapeHtml(rawName)}${blankLines}`;
+            });
+        }
+
         const autoRefreshMs = normalizePollMs(pollMsRaw);
         const pageTitle = document.getElementById('pageTitle');
         const scopeLabel = document.getElementById('scopeLabel');
@@ -1502,7 +1689,9 @@ fn mobile_input_html() -> &'static str {
         const overlayBox = document.getElementById('overlayBox');
         const overlayStatus = document.getElementById('overlayStatus');
         const overlayToggleBtn = document.getElementById('overlayToggleBtn');
+        const overlayStopBtn = document.getElementById('overlayStopBtn');
         const slotRows = document.getElementById('slotRows');
+        const discardBtn = document.getElementById('discardBtn');
         const updateBtn = document.getElementById('updateBtn');
         const confirmBtn = document.getElementById('confirmBtn');
         const submitStatus = document.getElementById('submitStatus');
@@ -1511,6 +1700,7 @@ fn mobile_input_html() -> &'static str {
         let overlayState = null;
         let displayOnePOnTop = true;
         let mobileSideDrafts = {};
+        let shouldRefreshSetListOnReturn = false;
 
         function updateHeaderInfo(info) {
             const eventAlias = (info && info.eventAlias && info.eventAlias.trim()) || 'スマホ結果入力依頼';
@@ -1540,6 +1730,9 @@ fn mobile_input_html() -> &'static str {
         }
 
         function showSearchView() {
+            const shouldRefresh = shouldRefreshSetListOnReturn;
+            shouldRefreshSetListOnReturn = false;
+
             if (searchView) {
                 searchView.hidden = false;
             }
@@ -1550,6 +1743,10 @@ fn mobile_input_html() -> &'static str {
                 overlayBox.hidden = true;
             }
             submitStatus.textContent = '';
+
+            if (shouldRefresh) {
+                void fetchSets();
+            }
         }
 
         function showDetailView() {
@@ -1562,6 +1759,35 @@ fn mobile_input_html() -> &'static str {
             if (overlayBox) {
                 overlayBox.hidden = false;
             }
+        }
+
+        async function discardMobileDrafts() {
+            if (!selectedSet) {
+                return;
+            }
+
+            submitStatus.textContent = '下書きを破棄しています...';
+
+            const url = `/mobile/api/sets/${encodeURIComponent(selectedSet.setId)}/discard?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&token=${encodeURIComponent(token)}`;
+            const res = await fetch(url, {
+                method: 'POST',
+            });
+
+            if (!res.ok) {
+                const text = await res.text();
+                submitStatus.textContent = `下書き破棄に失敗しました: ${text}`;
+                return;
+            }
+
+            const detail = await res.json();
+            selectedSet = detail;
+            detailMeta.textContent = '';
+            detailSetId.textContent = getDisplaySetLabel(detail);
+            mobileSideDrafts = buildMobileSideDraftsFromDetail(detail);
+            renderDetailSlots(detail);
+            await syncOverlayFromDetailIfNeeded();
+            shouldRefreshSetListOnReturn = true;
+            submitStatus.textContent = '下書きを破棄しました。情報取得で復元済みデータを確認できます。';
         }
 
         function normalizeScoreValue(score) {
@@ -1913,32 +2139,35 @@ fn mobile_input_html() -> &'static str {
                     }
                     return displayOnePOnTop ? (index === 0 ? '1P' : '2P') : (index === 0 ? '2P' : '1P');
                 })();
-                const scoreControls = matchupReady && hasEntrant
+                const scoreControls = hasEntrant
                     ? `<div class="player-controls">
                         <input class="set-score-input ${isHigher ? 'score-high' : ''}" data-score-entrant-id="${entrantId}" type="text" inputmode="numeric" pattern="-?[0-9]*" min="-1" step="1" value="${formatScoreInputValue(score)}" />
                         <div class="score-step-row">
                             <button class="score-step-btn" type="button" data-score-adjust="1" data-score-entrant-id="${entrantId}">+</button>
                             <button class="score-step-btn" type="button" data-score-adjust="-1" data-score-entrant-id="${entrantId}">−</button>
                         </div>
+                        ${matchupReady ? '' : '<span class="slot-lock-note">対戦カード未確定</span>'}
                     </div>`
                     : `<div class="player-controls"><span class="slot-lock-note">対戦カード未確定</span></div>`;
                 const dqButton = matchupReady && hasEntrant
                     ? `<button class="dq-btn" type="button" data-dq-entrant-id="${entrantId}">DQ</button>`
                     : '';
                 const sideClass = sideLabel === '1P' ? 'side-1p' : (sideLabel === '2P' ? 'side-2p' : '');
+                const escapedEntrantName = escapeHtml(slot?.entrantName || 'TBD');
                 return `<div class="player-card ${sideClass} ${isHigher ? 'score-high' : ''}" data-slot-order="${index}" data-side-entrant-id="${entrantId}">
                     <div class="player-top">
                         <div class="player-top-head">
                             <span class="slot-side-label">${sideLabel}</span>
                             ${dqButton}
                         </div>
-                        <span class="slot-player-name">${slot?.entrantName || 'TBD'}</span>
+                        <span class="slot-player-name" data-slot-player-name="${escapedEntrantName}">${escapedEntrantName}</span>
                     </div>
                     ${scoreControls}
                 </div>`;
             }).join('');
 
             slotRows.innerHTML = `<div class="slot-row">${playerCards}</div>`;
+            alignSlotPlayerNameLines();
 
             for (const input of slotRows.querySelectorAll('[data-score-entrant-id]')) {
                 input.addEventListener('input', () => {
@@ -2109,9 +2338,12 @@ fn mobile_input_html() -> &'static str {
             }
 
             if (!active) {
-                overlayStatus.textContent = '配信は停止中です。';
+                overlayStatus.textContent = overlayState && overlayState.fullyStopped ? '配信は完全停止中です。' : '配信は停止中です。';
                 overlayToggleBtn.textContent = '配信開始';
                 overlayToggleBtn.disabled = !selectedSet;
+                if (overlayStopBtn) {
+                    overlayStopBtn.disabled = Boolean(overlayState && overlayState.fullyStopped);
+                }
                 return;
             }
 
@@ -2119,12 +2351,34 @@ fn mobile_input_html() -> &'static str {
                 overlayStatus.textContent = `現在このsetが配信中です: ${getOverlaySetLabelFromState(overlayState)}`;
                 overlayToggleBtn.textContent = '配信停止';
                 overlayToggleBtn.disabled = false;
+                if (overlayStopBtn) {
+                    overlayStopBtn.disabled = false;
+                }
                 return;
             }
 
             overlayStatus.textContent = `別のsetが配信中です: ${getOverlaySetLabelFromState(overlayState)}`;
             overlayToggleBtn.textContent = '強制切り替え';
             overlayToggleBtn.disabled = !selectedSet;
+            if (overlayStopBtn) {
+                overlayStopBtn.disabled = false;
+            }
+        }
+
+        async function stopOverlayCompletely() {
+            const response = await fetch('/mobile/api/overlay-stop?slug=' + encodeURIComponent(slug) + '&eventId=' + encodeURIComponent(eventId) + '&token=' + encodeURIComponent(token), {
+                method: 'POST',
+            });
+
+            if (!response.ok) {
+                const text = await response.text();
+                submitStatus.textContent = `配信の完全停止に失敗しました: ${text}`;
+                return;
+            }
+
+            overlayState = await response.json();
+            await refreshOverlayState();
+            submitStatus.textContent = '配信を完全停止しました。';
         }
 
         async function toggleOverlayFromDetail() {
@@ -2247,10 +2501,18 @@ fn mobile_input_html() -> &'static str {
             const url = `/mobile/api/sets/${encodeURIComponent(setId)}?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&token=${encodeURIComponent(token)}`;
             const res = await fetch(url, { cache: 'no-store' });
             if (!res.ok) {
-                if (!silent) {
-                    submitStatus.textContent = '詳細取得に失敗しました。';
+                let errorBody = '';
+                try {
+                    errorBody = (await res.text()).trim();
+                } catch (_) {
+                    errorBody = '';
                 }
-                return;
+                if (!silent) {
+                    submitStatus.textContent = errorBody
+                        ? `詳細取得に失敗しました: ${errorBody}`
+                        : `詳細取得に失敗しました: HTTP ${res.status}`;
+                }
+                throw new Error(errorBody || `HTTP ${res.status}`);
             }
 
             const detail = await res.json();
@@ -2377,6 +2639,10 @@ fn mobile_input_html() -> &'static str {
 
             await syncOverlayFromDetailIfNeeded();
 
+            if (confirmed) {
+                shouldRefreshSetListOnReturn = true;
+            }
+
             submitStatus.textContent = confirmed
                 ? '結果を確定しました。'
                 : '結果を更新しました。';
@@ -2390,6 +2656,11 @@ fn mobile_input_html() -> &'static str {
         closeDetailBtn.addEventListener('click', () => {
             showSearchView();
         });
+        if (discardBtn) {
+            discardBtn.addEventListener('click', () => {
+                discardMobileDrafts();
+            });
+        }
         refreshDetailBtn.addEventListener('click', () => {
             if (!selectedSet || !selectedSet.setId) {
                 return;
@@ -2399,8 +2670,11 @@ fn mobile_input_html() -> &'static str {
                 .then(() => {
                     submitStatus.textContent = '最新情報へ更新しました。';
                 })
-                .catch(() => {
-                    submitStatus.textContent = '詳細取得に失敗しました。';
+                .catch((error) => {
+                    const message = error && error.message ? String(error.message).trim() : '';
+                    submitStatus.textContent = message
+                        ? `詳細取得に失敗しました: ${message}`
+                        : '詳細取得に失敗しました。';
                 });
         });
         searchBox.addEventListener('keydown', (event) => {
@@ -2414,6 +2688,12 @@ fn mobile_input_html() -> &'static str {
         overlayToggleBtn.addEventListener('click', () => {
             void toggleOverlayFromDetail();
         });
+
+        if (overlayStopBtn) {
+            overlayStopBtn.addEventListener('click', () => {
+                void stopOverlayCompletely();
+            });
+        }
 
         if (swapSideBtn) {
             swapSideBtn.addEventListener('click', () => {
@@ -2485,7 +2765,6 @@ fn build_mobile_set_detail_from_workspace(
         .find(|item| item.event_id == event_id)?;
     let set = event.sets.iter().find(|item| item.set_id == set_id)?;
     let set_display_code_by_id = build_set_display_code_by_id(&event.sets);
-
     let mut side_by_key = std::collections::HashMap::<String, String>::new();
     for item in &workspace.local_meta.set_play_sides {
         if item.set_id != set.set_id {
@@ -2497,12 +2776,23 @@ fn build_mobile_set_detail_from_workspace(
         );
     }
 
+    build_mobile_set_detail_from_set_snapshot(
+        set,
+        set_display_code_by_id.get(&set.set_id).cloned(),
+        side_by_key,
+    )
+}
+
+fn build_mobile_set_detail_from_set_snapshot(
+    set: &SetSnapshot,
+    set_code: Option<String>,
+    side_by_key: std::collections::HashMap<String, String>,
+) -> Option<MobileSetDetailItem> {
+    let set_code = set_code.unwrap_or_else(|| set.set_id.clone());
+
     Some(MobileSetDetailItem {
         set_id: set.set_id.clone(),
-        set_code: set_display_code_by_id
-            .get(&set.set_id)
-            .cloned()
-            .unwrap_or_else(|| set.set_id.clone()),
+        set_code,
         full_round_text: set.full_round_text.clone(),
         round: set.round,
         phase_name: set.phase_name.clone(),
@@ -2523,6 +2813,249 @@ fn build_mobile_set_detail_from_workspace(
             })
             .collect::<Vec<MobileSetSlotItem>>(),
     })
+}
+
+fn hydrate_mobile_detail_with_local_meta(
+    mut detail: MobileSetDetailItem,
+    workspace: &TournamentWorkspace,
+    event_id: &str,
+    set_id: &str,
+) -> MobileSetDetailItem {
+    let entrant_name_by_id = workspace
+        .local_meta
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .map(|event| {
+            event
+                .entrants
+                .iter()
+                .map(|entrant| (entrant.entrant_id.clone(), entrant.entrant_name.clone()))
+                .collect::<HashMap<String, String>>()
+        })
+        .unwrap_or_default();
+    let entrant_id_by_name = entrant_name_by_id
+        .iter()
+        .map(|(entrant_id, entrant_name)| (entrant_name.trim().to_lowercase(), entrant_id.clone()))
+        .collect::<HashMap<String, String>>();
+
+    let pending = workspace
+        .local_meta
+        .pending_set_results
+        .iter()
+        .rev()
+        .find(|item| item.event_id == event_id && item.set_id == set_id);
+
+    let mut side_by_id = HashMap::<String, String>::new();
+    for item in &workspace.local_meta.set_play_sides {
+        if item.set_id != set_id {
+            continue;
+        }
+        side_by_id.insert(item.entrant_id.clone(), play_side_label(item.play_side.clone()));
+    }
+
+    let mut score_by_id = HashMap::<String, f64>::new();
+    if let Some(pending) = pending {
+        for slot in &pending.slot_scores {
+            score_by_id.insert(slot.entrant_id.clone(), slot.score as f64);
+        }
+    }
+
+    let mut candidate_ids = Vec::<String>::new();
+    let mut seen = HashSet::<String>::new();
+    let mut push_candidate = |candidate: &str| {
+        let trimmed = candidate.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if seen.insert(trimmed.to_owned()) {
+            candidate_ids.push(trimmed.to_owned());
+        }
+    };
+
+    for slot in &detail.slots {
+        if let Some(entrant_id) = slot.entrant_id.as_deref() {
+            push_candidate(entrant_id);
+        } else {
+            let key = slot.entrant_name.trim().to_lowercase();
+            if let Some(entrant_id) = entrant_id_by_name.get(&key) {
+                push_candidate(entrant_id);
+            }
+        }
+    }
+    for item in &workspace.local_meta.set_play_sides {
+        if item.set_id == set_id {
+            push_candidate(&item.entrant_id);
+        }
+    }
+    if let Some(pending) = pending {
+        for slot in &pending.slot_scores {
+            push_candidate(&slot.entrant_id);
+        }
+        push_candidate(&pending.winner_id);
+    }
+
+    let mut slot_by_id = HashMap::<String, MobileSetSlotItem>::new();
+    for slot in detail.slots.iter().cloned() {
+        if let Some(entrant_id) = slot.entrant_id.clone() {
+            slot_by_id.insert(entrant_id, slot);
+        } else {
+            let key = slot.entrant_name.trim().to_lowercase();
+            if let Some(entrant_id) = entrant_id_by_name.get(&key) {
+                let mut next_slot = slot.clone();
+                next_slot.entrant_id = Some(entrant_id.clone());
+                slot_by_id.insert(entrant_id.clone(), next_slot);
+            }
+        }
+    }
+
+    if candidate_ids.len() >= 2 {
+        detail.slots = candidate_ids
+            .into_iter()
+            .take(2)
+            .map(|entrant_id| {
+                let mut slot = slot_by_id.remove(&entrant_id).unwrap_or(MobileSetSlotItem {
+                    entrant_id: Some(entrant_id.clone()),
+                    entrant_name: entrant_name_by_id
+                        .get(&entrant_id)
+                        .cloned()
+                        .unwrap_or_else(|| "TBD".to_owned()),
+                    score: None,
+                    play_side: None,
+                });
+
+                slot.entrant_id = Some(entrant_id.clone());
+                if slot.entrant_name.trim().is_empty() || slot.entrant_name.eq_ignore_ascii_case("TBD") {
+                    if let Some(name) = entrant_name_by_id.get(&entrant_id) {
+                        slot.entrant_name = name.clone();
+                    }
+                }
+                if slot.score.is_none() {
+                    slot.score = score_by_id.get(&entrant_id).cloned();
+                }
+                if slot.play_side.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                    slot.play_side = side_by_id.get(&entrant_id).cloned();
+                }
+
+                slot
+            })
+            .collect::<Vec<MobileSetSlotItem>>();
+    }
+
+    if detail.full_round_text.trim().is_empty() {
+        detail.full_round_text = format!("Set {}", detail.set_code);
+    }
+    if detail.winner_id.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        if let Some(pending) = pending {
+            if !pending.winner_id.trim().is_empty() {
+                detail.winner_id = Some(pending.winner_id.clone());
+            }
+        }
+    }
+
+    detail
+}
+
+fn build_mobile_set_detail_local_only(
+    workspace: &TournamentWorkspace,
+    event_id: &str,
+    set_id: &str,
+) -> Option<MobileSetDetailItem> {
+    if let Some(base) = build_mobile_set_detail_from_workspace(workspace, event_id, set_id) {
+        return Some(hydrate_mobile_detail_with_local_meta(base, workspace, event_id, set_id));
+    }
+
+    let pending = workspace
+        .local_meta
+        .pending_set_results
+        .iter()
+        .rev()
+        .find(|item| item.event_id == event_id && item.set_id == set_id)?;
+
+    let entrant_name_by_id = workspace
+        .local_meta
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .map(|event| {
+            event
+                .entrants
+                .iter()
+                .map(|entrant| (entrant.entrant_id.clone(), entrant.entrant_name.clone()))
+                .collect::<HashMap<String, String>>()
+        })
+        .unwrap_or_default();
+
+    let mut side_by_id = HashMap::<String, String>::new();
+    for item in &workspace.local_meta.set_play_sides {
+        if item.set_id == set_id {
+            side_by_id.insert(item.entrant_id.clone(), play_side_label(item.play_side.clone()));
+        }
+    }
+
+    let mut slots = pending
+        .slot_scores
+        .iter()
+        .take(2)
+        .map(|slot| MobileSetSlotItem {
+            entrant_id: Some(slot.entrant_id.clone()),
+            entrant_name: entrant_name_by_id
+                .get(&slot.entrant_id)
+                .cloned()
+                .unwrap_or_else(|| "TBD".to_owned()),
+            score: Some(slot.score as f64),
+            play_side: side_by_id.get(&slot.entrant_id).cloned(),
+        })
+        .collect::<Vec<MobileSetSlotItem>>();
+
+    for item in &workspace.local_meta.set_play_sides {
+        if item.set_id != set_id {
+            continue;
+        }
+        if slots
+            .iter()
+            .any(|slot| slot.entrant_id.as_deref() == Some(item.entrant_id.as_str()))
+        {
+            continue;
+        }
+        slots.push(MobileSetSlotItem {
+            entrant_id: Some(item.entrant_id.clone()),
+            entrant_name: entrant_name_by_id
+                .get(&item.entrant_id)
+                .cloned()
+                .unwrap_or_else(|| "TBD".to_owned()),
+            score: None,
+            play_side: Some(play_side_label(item.play_side.clone())),
+        });
+        if slots.len() >= 2 {
+            break;
+        }
+    }
+
+    Some(MobileSetDetailItem {
+        set_id: set_id.to_owned(),
+        set_code: set_id.to_owned(),
+        full_round_text: format!("Set {set_id}"),
+        round: None,
+        phase_name: None,
+        phase_group_name: None,
+        state: if pending.confirmed { 3 } else { 2 },
+        winner_id: if pending.winner_id.trim().is_empty() {
+            None
+        } else {
+            Some(pending.winner_id.clone())
+        },
+        slots,
+    })
+}
+
+fn mobile_detail_has_entrant_ids(detail: &MobileSetDetailItem) -> bool {
+    detail
+        .slots
+        .iter()
+        .filter(|slot| slot.entrant_id.is_some())
+        .count()
+        >= 2
 }
 
 fn load_target_event_sets(
@@ -2749,19 +3282,22 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
 
                 let workspace = match load_target_workspace(app, &slug, &event_id) {
                     Ok(value) => value,
-                        Err(err) => {
-                                respond_json(
-                                        request,
-                                        500,
-                                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
-                                );
-                                return;
-                        }
+                    Err(err) => {
+                        respond_json(
+                            request,
+                            500,
+                            format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                        );
+                        return;
+                    }
                 };
 
-                let Some(detail) = build_mobile_set_detail_from_workspace(&workspace, &event_id, &set_id) else {
+                let detail = match build_mobile_set_detail_local_only(&workspace, &event_id, &set_id) {
+                    Some(detail) => detail,
+                    None => {
                         respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
                         return;
+                    }
                 };
 
                 let payload = serde_json::to_string(&detail).unwrap_or_else(|_| "{}".to_owned());
@@ -2970,7 +3506,9 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     }
                 };
 
-                let Some(detail) = build_mobile_set_detail_from_workspace(&workspace_after, &event_id, &set_id) else {
+                let detail = build_mobile_set_detail_local_only(&workspace_after, &event_id, &set_id);
+
+                let Some(detail) = detail else {
                     respond_json(
                         request,
                         500,
@@ -2983,6 +3521,51 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
 
                 let result = serde_json::to_string(&detail).unwrap_or_else(|_| "{}".to_owned());
                 respond_json(request, 200, result);
+                return;
+            }
+
+            if path.starts_with("/mobile/api/sets/") && path.ends_with("/discard") && request.method() == &tiny_http::Method::Post {
+                let slug = query_param_from_url(&url, "slug").unwrap_or_default();
+                let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
+                let set_id = percent_decode(
+                    path.trim_start_matches("/mobile/api/sets/")
+                        .trim_end_matches("/discard")
+                        .trim_end_matches('/'),
+                );
+
+                if slug.trim().is_empty() || event_id.trim().is_empty() || set_id.trim().is_empty() {
+                    respond_json(
+                        request,
+                        400,
+                        "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
+                    );
+                    return;
+                }
+
+                let workspace_after = match storage::clear_pending_set_result_for_set(app, &slug, &event_id, &set_id) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        respond_json(
+                            request,
+                            400,
+                            format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                        );
+                        return;
+                    }
+                };
+
+                let detail = match build_mobile_set_detail_local_only(&workspace_after, &event_id, &set_id) {
+                    Some(detail) => detail,
+                    None => {
+                        respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
+                        return;
+                    }
+                };
+
+                emit_workspace_updated(app, &slug, &event_id);
+
+                let payload = serde_json::to_string(&detail).unwrap_or_else(|_| "{}".to_owned());
+                respond_json(request, 200, payload);
                 return;
             }
 
@@ -3080,6 +3663,43 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                             respond_json(request, 500, format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")));
                             return;
                         }
+                    }
+                };
+
+                emit_obs_overlay_state_changed(app);
+                let result = serde_json::to_string(&state).unwrap_or_else(|_| "{}".to_owned());
+                respond_json(request, 200, result);
+                return;
+            }
+
+            if path == "/mobile/api/overlay-stop" && request.method() == &tiny_http::Method::Post {
+                let query_slug = query_param_from_url(request.url(), "slug").unwrap_or_default();
+                let query_event_id = query_param_from_url(request.url(), "eventId").unwrap_or_default();
+                let query_token = query_param_from_url(request.url(), "token").unwrap_or_default();
+
+                if query_slug.trim().is_empty() || query_event_id.trim().is_empty() || query_token.trim().is_empty() {
+                    respond_json(request, 400, "{\"error\":\"slug, eventId and token are required\"}".to_owned());
+                    return;
+                }
+
+                let token = match current_mobile_input_token() {
+                    Ok(value) => value,
+                    Err(err) => {
+                        respond_json(request, 500, format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")));
+                        return;
+                    }
+                };
+
+                if query_token != token {
+                    respond_json(request, 401, "{\"error\":\"invalid token\"}".to_owned());
+                    return;
+                }
+
+                let state = match set_obs_overlay_fully_stopped(true) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        respond_json(request, 500, format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")));
+                        return;
                     }
                 };
 
@@ -5006,6 +5626,25 @@ async fn refresh_local_event_snapshot_from_remote(
 }
 
 #[tauri::command]
+async fn clear_local_set_result_drafts(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+) -> Result<TournamentWorkspace, String> {
+    let local_meta = storage::clear_pending_set_results(&app, &slug, &event_id)?;
+    let snapshot = storage::load_snapshot(&app, &slug)?;
+    Ok(TournamentWorkspace { snapshot, local_meta })
+}
+
+#[tauri::command]
+async fn clear_local_set_result_draft_for_set(
+    app: tauri::AppHandle,
+    input: ClearLocalSetResultDraftInput,
+) -> Result<TournamentWorkspace, String> {
+    storage::clear_pending_set_result_for_set(&app, &input.slug, &input.event_id, &input.set_id)
+}
+
+#[tauri::command]
 fn list_local_snapshot_events(app: tauri::AppHandle) -> Result<Vec<LocalSnapshotEventListItem>, String> {
     storage::list_local_snapshot_events(&app)
 }
@@ -5812,6 +6451,8 @@ pub fn run() {
             create_event_snapshot,
             create_event_snapshot_by_slug,
             refresh_local_event_snapshot_from_remote,
+            clear_local_set_result_drafts,
+            clear_local_set_result_draft_for_set,
             save_local_player_meta,
             save_local_set_play_side,
             save_local_set_result,

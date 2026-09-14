@@ -344,6 +344,14 @@ pub struct ResetSetResultCascadeInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ClearLocalSetResultDraftInput {
+    pub slug: String,
+    pub event_id: String,
+    pub set_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResetSetResultCascadeResult {
     pub workspace: TournamentWorkspace,
     pub affected_set_ids: Vec<String>,

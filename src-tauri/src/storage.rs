@@ -28,6 +28,7 @@ const GENERIC_MESSAGES_FILE: &str = "generic-messages.json";
 const MOBILE_RESULT_REQUESTS_FILE: &str = "mobile-result-requests.json";
 const LAST_SNAPSHOT_SELECTION_FILE: &str = "last-snapshot-selection.json";
 const TEMP_TOKEN_FILE: &str = "token.txt";
+const PRISTINE_SNAPSHOT_FILE_PREFIX: &str = "pristine-tournament-";
 const EVENT_SETTING_CATEGORY_SLOT_COUNT: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +101,11 @@ fn snapshot_path_with_slug_key(app: &AppHandle, slug_key: &str) -> Result<PathBu
     Ok(storage_dir(app)?.join(file_name))
 }
 
+fn pristine_snapshot_path_with_slug_key(app: &AppHandle, slug_key: &str) -> Result<PathBuf, String> {
+    let file_name = format!("{PRISTINE_SNAPSHOT_FILE_PREFIX}{}.json", sanitize_slug(slug_key));
+    Ok(storage_dir(app)?.join(file_name))
+}
+
 fn meta_path_with_slug_key(app: &AppHandle, slug_key: &str, event_id: &str) -> Result<PathBuf, String> {
     let file_name = format!(
         "tournament-meta-{}-{}.json",
@@ -127,6 +133,11 @@ fn token_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn snapshot_path(app: &AppHandle, slug: &str) -> Result<PathBuf, String> {
     let normalized = normalize_slug_for_storage(slug);
     snapshot_path_with_slug_key(app, &normalized)
+}
+
+fn pristine_snapshot_path(app: &AppHandle, slug: &str) -> Result<PathBuf, String> {
+    let normalized = normalize_slug_for_storage(slug);
+    pristine_snapshot_path_with_slug_key(app, &normalized)
 }
 
 fn meta_path(app: &AppHandle, slug: &str, event_id: &str) -> Result<PathBuf, String> {
@@ -1178,6 +1189,22 @@ pub fn save_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(
     Ok(())
 }
 
+fn save_pristine_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(), String> {
+    let path = pristine_snapshot_path(app, &snapshot.slug)?;
+    let json = serde_json::to_string_pretty(snapshot)
+        .map_err(|e| format!("原本スナップショットのJSON変換に失敗しました: {e}"))?;
+    fs::write(&path, json).map_err(|e| format!("原本スナップショット保存に失敗しました: {e}"))?;
+
+    if let Some(legacy_slug) = alternate_slug_for_legacy_path(&snapshot.slug) {
+        let legacy_path = pristine_snapshot_path_with_slug_key(app, &legacy_slug)?;
+        if legacy_path != path && legacy_path.exists() {
+            let _ = fs::remove_file(legacy_path);
+        }
+    }
+
+    Ok(())
+}
+
 pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, String> {
     let mut candidate_paths = vec![snapshot_path(app, slug)?];
     if let Some(legacy_slug) = alternate_slug_for_legacy_path(slug) {
@@ -1212,6 +1239,48 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
 
     let mut snapshot: TournamentSnapshot = serde_json::from_str(&raw)
         .map_err(|e| format!("ローカルスナップショットのパースに失敗しました: {e}"))?;
+
+    for event in &mut snapshot.events {
+        apply_source_based_tbd_labels(event);
+    }
+
+    Ok(snapshot)
+}
+
+fn load_pristine_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, String> {
+    let mut candidate_paths = vec![pristine_snapshot_path(app, slug)?];
+    if let Some(legacy_slug) = alternate_slug_for_legacy_path(slug) {
+        candidate_paths.push(pristine_snapshot_path_with_slug_key(app, &legacy_slug)?);
+    }
+
+    let mut last_error = None;
+    let mut loaded_raw = None;
+    for path in candidate_paths {
+        if !path.exists() {
+            continue;
+        }
+
+        match fs::read_to_string(&path) {
+            Ok(raw) => {
+                loaded_raw = Some(raw);
+                break;
+            }
+            Err(error) => {
+                last_error = Some(error);
+            }
+        }
+    }
+
+    let raw = if let Some(raw) = loaded_raw {
+        raw
+    } else if let Some(error) = last_error {
+        return Err(format!("原本スナップショット読込に失敗しました: {error}"));
+    } else {
+        return Err("原本スナップショット読込に失敗しました: 保存済みデータが見つかりません。".to_owned());
+    };
+
+    let mut snapshot: TournamentSnapshot = serde_json::from_str(&raw)
+        .map_err(|e| format!("原本スナップショットのパースに失敗しました: {e}"))?;
 
     for event in &mut snapshot.events {
         apply_source_based_tbd_labels(event);
@@ -3393,15 +3462,45 @@ pub fn save_event_snapshot(
         .iter_mut()
         .find(|event| event.event_id == event_id)
     {
-        *existing = event_snapshot;
+        *existing = event_snapshot.clone();
         apply_source_based_tbd_labels(existing);
     } else {
-        let mut event_snapshot = event_snapshot;
-        apply_source_based_tbd_labels(&mut event_snapshot);
-        merged_snapshot.events.push(event_snapshot);
+        let mut next_event_snapshot = event_snapshot.clone();
+        apply_source_based_tbd_labels(&mut next_event_snapshot);
+        merged_snapshot.events.push(next_event_snapshot);
     }
 
     save_snapshot(app, &merged_snapshot)?;
+
+    // オフラインでも下書き破棄で戻せるよう、原本スナップショットを別保存する。
+    let mut pristine_snapshot = load_pristine_snapshot(app, &snapshot.slug).unwrap_or_else(|_| TournamentSnapshot {
+        tournament_id: snapshot.tournament_id.clone(),
+        slug: snapshot.slug.clone(),
+        name: snapshot.name.clone(),
+        events: Vec::new(),
+        updated_at: snapshot.updated_at,
+    });
+
+    pristine_snapshot.tournament_id = snapshot.tournament_id.clone();
+    pristine_snapshot.slug = snapshot.slug.clone();
+    pristine_snapshot.name = snapshot.name.clone();
+    pristine_snapshot.updated_at = snapshot.updated_at;
+
+    if let Some(existing) = pristine_snapshot
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == event_id)
+    {
+        *existing = event_snapshot.clone();
+        apply_source_based_tbd_labels(existing);
+    } else {
+        let mut next_event_snapshot = event_snapshot;
+        apply_source_based_tbd_labels(&mut next_event_snapshot);
+        pristine_snapshot.events.push(next_event_snapshot);
+    }
+
+    save_pristine_snapshot(app, &pristine_snapshot)?;
+
     let mut local_meta = sync_local_meta_from_snapshot(app, &merged_snapshot, event_id)?;
     if let Some(event_meta) = local_meta.events.iter_mut().find(|event| event.event_id == event_id) {
         event_meta.event_alias = event_alias;
@@ -3773,7 +3872,57 @@ pub fn clear_pending_set_results(
     slug: &str,
     event_id: &str,
 ) -> Result<TournamentLocalMeta, String> {
+    let mut snapshot = load_snapshot(app, slug)?;
+    let pristine_snapshot = load_pristine_snapshot(app, slug)
+        .or_else(|_| load_snapshot(app, slug))?;
+
     let mut local_meta = load_local_meta(app, slug, event_id)?;
+    let pending_set_ids = local_meta
+        .pending_set_results
+        .iter()
+        .filter(|item| item.event_id == event_id)
+        .map(|item| item.set_id.clone())
+        .collect::<HashSet<String>>();
+    let pending_gf_reset_source_set_ids = local_meta
+        .pending_grand_final_reset_results
+        .iter()
+        .filter(|item| item.event_id == event_id)
+        .map(|item| item.source_grand_final_set_id.clone())
+        .collect::<HashSet<String>>();
+
+    let mut restored_from_pristine = false;
+
+    if let Some(pristine_event) = pristine_snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .cloned()
+    {
+        if let Some(existing_event) = snapshot
+            .events
+            .iter_mut()
+            .find(|event| event.event_id == event_id)
+        {
+            *existing_event = pristine_event;
+        } else {
+            snapshot.events.push(pristine_event);
+        }
+        restored_from_pristine = true;
+    }
+
+    if !restored_from_pristine {
+        if let Some(event) = snapshot.events.iter_mut().find(|event| event.event_id == event_id) {
+            for set in &mut event.sets {
+                if pending_set_ids.contains(&set.set_id)
+                    || pending_gf_reset_source_set_ids.contains(&set.set_id)
+                {
+                    clear_set_result_state(set);
+                }
+            }
+            apply_source_based_tbd_labels(event);
+        }
+    }
+
     local_meta
         .pending_set_results
         .retain(|item| item.event_id != event_id);
@@ -3781,8 +3930,83 @@ pub fn clear_pending_set_results(
         .pending_grand_final_reset_results
         .retain(|item| item.event_id != event_id);
     local_meta.updated_at = Utc::now();
+
+    save_snapshot(app, &snapshot)?;
     save_local_meta(app, event_id, &local_meta)?;
     Ok(local_meta)
+}
+
+pub fn clear_pending_set_result_for_set(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+    set_id: &str,
+) -> Result<TournamentWorkspace, String> {
+    let mut snapshot = load_snapshot(app, slug)?;
+    let pristine_snapshot = load_pristine_snapshot(app, slug).ok();
+
+    {
+        let event = snapshot
+            .events
+            .iter_mut()
+            .find(|event| event.event_id == event_id)
+            .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
+
+        let mut restored_from_pristine = false;
+
+        if let Some(pristine_event) = pristine_snapshot
+            .as_ref()
+            .and_then(|item| item.events.iter().find(|event| event.event_id == event_id))
+        {
+            if let Some(pristine_set) = pristine_event
+                .sets
+                .iter()
+                .find(|set| set.set_id == set_id)
+                .cloned()
+            {
+                if let Some(existing_set) = event.sets.iter_mut().find(|set| set.set_id == set_id) {
+                    *existing_set = pristine_set;
+                    restored_from_pristine = true;
+                }
+            }
+        }
+
+        if !restored_from_pristine {
+            let target_set = event
+                .sets
+                .iter_mut()
+                .find(|set| set.set_id == set_id)
+                .ok_or_else(|| format!("下書き破棄対象setが見つかりません: {set_id}"))?;
+            clear_set_result_state(target_set);
+        }
+
+        apply_source_based_tbd_labels(event);
+    }
+
+    let mut local_meta = load_local_meta(app, slug, event_id)?;
+    local_meta.pending_set_results.retain(|item| {
+        !(item.event_id == event_id && item.set_id == set_id)
+    });
+
+    if let Some(source_grand_final_set_id) = source_grand_final_set_id_from_virtual_reset_set_id(set_id) {
+        local_meta.pending_grand_final_reset_results.retain(|item| {
+            !(item.event_id == event_id && item.source_grand_final_set_id == source_grand_final_set_id)
+        });
+    } else {
+        local_meta.pending_grand_final_reset_results.retain(|item| {
+            !(item.event_id == event_id && item.source_grand_final_set_id == set_id)
+        });
+    }
+
+    local_meta.updated_at = Utc::now();
+
+    save_snapshot(app, &snapshot)?;
+    save_local_meta(app, event_id, &local_meta)?;
+
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
 }
 
 pub fn remove_pending_grand_final_reset_results(
