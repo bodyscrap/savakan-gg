@@ -1,9 +1,9 @@
 use chrono::Utc;
-use std::time::Duration;
 use graphql_client::{GraphQLQuery, Response};
-use reqwest::StatusCode;
 use reqwest::Client;
+use reqwest::StatusCode;
 use serde::Serialize;
+use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::models::{
@@ -122,8 +122,14 @@ fn is_preview_set_id(set_id: &str) -> bool {
 }
 
 fn is_retryable_status(status: StatusCode) -> bool {
-    matches!(status, StatusCode::TOO_MANY_REQUESTS | StatusCode::INTERNAL_SERVER_ERROR | StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT)
-        || status.as_u16() == 520
+    matches!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    ) || status.as_u16() == 520
 }
 
 fn parse_retry_after_seconds(response: &reqwest::Response) -> Option<u64> {
@@ -187,7 +193,9 @@ async fn post_graphql_with_retry<T: Serialize + ?Sized>(
         }
     }
 
-    Err(format!("{operation_name}リクエストがリトライ上限に達しました。"))
+    Err(format!(
+        "{operation_name}リクエストがリトライ上限に達しました。"
+    ))
 }
 
 async fn fetch_set_snapshot_detail(token: &str, set_id: &str) -> Result<SetSnapshot, String> {
@@ -279,16 +287,22 @@ async fn fetch_set_snapshot_detail_with_client(
             .and_then(|group| group.display_identifier.clone()),
         state: set.state.unwrap_or_default(),
         winner_id: set.winner_id.as_ref().map(|id| id.to_string()),
-        entrant1_source: set.entrant1_source.as_ref().map(|source| SetEntrantSourceSnapshot {
-            type_id: source.type_id.as_ref().map(|id| id.to_string()),
-            condition: source.condition.clone(),
-            condition_string: source.condition_string.clone(),
-        }),
-        entrant2_source: set.entrant2_source.as_ref().map(|source| SetEntrantSourceSnapshot {
-            type_id: source.type_id.as_ref().map(|id| id.to_string()),
-            condition: source.condition.clone(),
-            condition_string: source.condition_string.clone(),
-        }),
+        entrant1_source: set
+            .entrant1_source
+            .as_ref()
+            .map(|source| SetEntrantSourceSnapshot {
+                type_id: source.type_id.as_ref().map(|id| id.to_string()),
+                condition: source.condition.clone(),
+                condition_string: source.condition_string.clone(),
+            }),
+        entrant2_source: set
+            .entrant2_source
+            .as_ref()
+            .map(|source| SetEntrantSourceSnapshot {
+                type_id: source.type_id.as_ref().map(|id| id.to_string()),
+                condition: source.condition.clone(),
+                condition_string: source.condition_string.clone(),
+            }),
         winner_progression_seed_id: set
             .winner_progression_seed
             .as_ref()
@@ -377,12 +391,18 @@ fn parse_score_csv(score_csv: &str) -> Result<Option<(u32, u32)>, String> {
         return Err("scoreCsvの形式が不正です。例: 2-1".to_owned());
     }
 
-    let winner_wins = parts[0]
-        .parse::<u32>()
-        .map_err(|_| format!("scoreCsvの勝者側スコアを数値として解釈できません: {}", parts[0]))?;
-    let loser_wins = parts[1]
-        .parse::<u32>()
-        .map_err(|_| format!("scoreCsvの敗者側スコアを数値として解釈できません: {}", parts[1]))?;
+    let winner_wins = parts[0].parse::<u32>().map_err(|_| {
+        format!(
+            "scoreCsvの勝者側スコアを数値として解釈できません: {}",
+            parts[0]
+        )
+    })?;
+    let loser_wins = parts[1].parse::<u32>().map_err(|_| {
+        format!(
+            "scoreCsvの敗者側スコアを数値として解釈できません: {}",
+            parts[1]
+        )
+    })?;
 
     if winner_wins == 0 && loser_wins == 0 {
         return Err("scoreCsvは 0-0 以外を指定してください。".to_owned());
@@ -448,7 +468,10 @@ async fn fetch_set_entrant_ids(token: &str, set_id: &str) -> Result<Vec<String>,
     Ok(entrant_ids)
 }
 
-async fn fetch_set_entrant_ids_until_ready(token: &str, set_id: &str) -> Result<Vec<String>, String> {
+async fn fetch_set_entrant_ids_until_ready(
+    token: &str,
+    set_id: &str,
+) -> Result<Vec<String>, String> {
     for attempt in 0..START_GG_SET_ENTRANT_RETRY_ATTEMPTS {
         let entrant_ids = fetch_set_entrant_ids(token, set_id).await?;
         if entrant_ids.len() >= 2 {
@@ -512,7 +535,8 @@ async fn query_tournament_snapshot(
         };
         let body = TournamentSync::build_query(variables);
 
-        let response = post_graphql_with_retry(&client, token, &body, "start.gg tournament取得").await?;
+        let response =
+            post_graphql_with_retry(&client, token, &body, "start.gg tournament取得").await?;
 
         let status = response.status();
         let content_type = response
@@ -608,7 +632,9 @@ async fn query_tournament_snapshot(
 
                     Some(SetSnapshot {
                         set_id,
-                        full_round_text: set.full_round_text.unwrap_or_else(|| "Unknown".to_owned()),
+                        full_round_text: set
+                            .full_round_text
+                            .unwrap_or_else(|| "Unknown".to_owned()),
                         round: set.round,
                         phase_name: set
                             .phase_group
@@ -621,15 +647,19 @@ async fn query_tournament_snapshot(
                             .and_then(|group| group.display_identifier.clone()),
                         state: set.state.unwrap_or_default(),
                         winner_id: set.winner_id.map(|id| id.to_string()),
-                        entrant1_source: set.entrant1_source.map(|source| SetEntrantSourceSnapshot {
-                            type_id: source.type_id.map(|type_id| type_id.to_string()),
-                            condition: source.condition,
-                            condition_string: source.condition_string,
+                        entrant1_source: set.entrant1_source.map(|source| {
+                            SetEntrantSourceSnapshot {
+                                type_id: source.type_id.map(|type_id| type_id.to_string()),
+                                condition: source.condition,
+                                condition_string: source.condition_string,
+                            }
                         }),
-                        entrant2_source: set.entrant2_source.map(|source| SetEntrantSourceSnapshot {
-                            type_id: source.type_id.map(|type_id| type_id.to_string()),
-                            condition: source.condition,
-                            condition_string: source.condition_string,
+                        entrant2_source: set.entrant2_source.map(|source| {
+                            SetEntrantSourceSnapshot {
+                                type_id: source.type_id.map(|type_id| type_id.to_string()),
+                                condition: source.condition,
+                                condition_string: source.condition_string,
+                            }
                         }),
                         winner_progression_seed_id: set
                             .winner_progression_seed
@@ -771,9 +801,9 @@ pub async fn fetch_event_snapshot_by_slug(
             let data = payload
                 .data
                 .ok_or_else(|| "event取得レスポンスにdataがありません。".to_owned())?;
-            let event = data
-                .event
-                .ok_or_else(|| "指定eventが見つかりません。event slugを確認してください。".to_owned())?;
+            let event = data.event.ok_or_else(|| {
+                "指定eventが見つかりません。event slugを確認してください。".to_owned()
+            })?;
 
             let tournament = event
                 .tournament
@@ -873,14 +903,18 @@ pub async fn fetch_event_snapshot_by_slug(
     })
 }
 
-pub async fn fetch_tournament_preview(token: &str, slug: &str) -> Result<TournamentPreview, String> {
+pub async fn fetch_tournament_preview(
+    token: &str,
+    slug: &str,
+) -> Result<TournamentPreview, String> {
     let variables = tournament_preview_query::Variables {
         slug: slug.to_owned(),
     };
     let body = TournamentPreviewQuery::build_query(variables);
 
     let client = Client::new();
-    let response = post_graphql_with_retry(&client, token, &body, "tournamentプレビュー取得").await?;
+    let response =
+        post_graphql_with_retry(&client, token, &body, "tournamentプレビュー取得").await?;
 
     let status = response.status();
     let raw_body = response
@@ -896,7 +930,9 @@ pub async fn fetch_tournament_preview(token: &str, slug: &str) -> Result<Tournam
     }
 
     let payload: Response<tournament_preview_query::ResponseData> = serde_json::from_str(&raw_body)
-        .map_err(|e| format!("tournamentプレビュー取得レスポンスのJSONパースに失敗しました: {e}"))?;
+        .map_err(|e| {
+            format!("tournamentプレビュー取得レスポンスのJSONパースに失敗しました: {e}")
+        })?;
 
     if let Some(errors) = payload.errors {
         return Err(format!("GraphQLエラー: {}", join_graphql_errors(&errors)));
@@ -925,7 +961,9 @@ pub async fn fetch_tournament_preview(token: &str, slug: &str) -> Result<Tournam
     Ok(TournamentPreview {
         tournament_id: tournament.id.to_string(),
         slug: tournament.slug.unwrap_or_else(|| slug.to_owned()),
-        name: tournament.name.unwrap_or_else(|| "Unnamed tournament".to_owned()),
+        name: tournament
+            .name
+            .unwrap_or_else(|| "Unnamed tournament".to_owned()),
         updated_at: Utc::now(),
         events,
     })
@@ -1025,4 +1063,3 @@ pub async fn report_set_result(
 pub async fn reset_set_result(token: &str, set_id: &str) -> Result<(), String> {
     reset_set_if_needed(token, set_id).await
 }
-

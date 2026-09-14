@@ -448,4 +448,3 @@ pub struct MobileResultRequestItem {
     pub status: String,
     pub created_at: DateTime<Utc>,
 }
-

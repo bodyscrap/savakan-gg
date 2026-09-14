@@ -9,11 +9,9 @@ use tauri::{AppHandle, Manager};
 
 use crate::models::{
     EventEntrantMeta, EventLocalMeta, EventManagementMeta, EventSnapshot, GenericMessage,
-    LocalGrandFinalResetResultMeta,
-    ItemListConfig, LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput,
-    LocalSetScoreUpdateInput,
-    LocalSetResultMeta, LocalSetScoreMeta, LocalSnapshotEventListItem, MobileResultRequestInput,
-    MobileResultRequestItem,
+    ItemListConfig, LocalGrandFinalResetResultMeta, LocalPlayerMetaInput, LocalSetPlaySideInput,
+    LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta, LocalSetScoreUpdateInput,
+    LocalSnapshotEventListItem, MobileResultRequestInput, MobileResultRequestItem,
     SaveEventManagementMetaInput, SenderProfile, SetPlaySideMeta, TournamentLocalMeta,
     TournamentSnapshot, TournamentWorkspace,
 };
@@ -101,12 +99,22 @@ fn snapshot_path_with_slug_key(app: &AppHandle, slug_key: &str) -> Result<PathBu
     Ok(storage_dir(app)?.join(file_name))
 }
 
-fn pristine_snapshot_path_with_slug_key(app: &AppHandle, slug_key: &str) -> Result<PathBuf, String> {
-    let file_name = format!("{PRISTINE_SNAPSHOT_FILE_PREFIX}{}.json", sanitize_slug(slug_key));
+fn pristine_snapshot_path_with_slug_key(
+    app: &AppHandle,
+    slug_key: &str,
+) -> Result<PathBuf, String> {
+    let file_name = format!(
+        "{PRISTINE_SNAPSHOT_FILE_PREFIX}{}.json",
+        sanitize_slug(slug_key)
+    );
     Ok(storage_dir(app)?.join(file_name))
 }
 
-fn meta_path_with_slug_key(app: &AppHandle, slug_key: &str, event_id: &str) -> Result<PathBuf, String> {
+fn meta_path_with_slug_key(
+    app: &AppHandle,
+    slug_key: &str,
+    event_id: &str,
+) -> Result<PathBuf, String> {
     let file_name = format!(
         "tournament-meta-{}-{}.json",
         sanitize_slug(slug_key),
@@ -122,7 +130,8 @@ fn storage_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("app_data_dirの取得に失敗しました: {e}"))?
         .join(STORAGE_DIR_NAME);
 
-    fs::create_dir_all(&path).map_err(|e| format!("保存先ディレクトリの作成に失敗しました: {e}"))?;
+    fs::create_dir_all(&path)
+        .map_err(|e| format!("保存先ディレクトリの作成に失敗しました: {e}"))?;
     Ok(path)
 }
 
@@ -290,7 +299,8 @@ fn normalize_event_management_meta(setting: EventManagementMeta) -> EventManagem
 
     let mut category_min_counts = normalize_count_array(&setting.category_min_counts, 0);
     let mut category_max_counts = normalize_count_array(&setting.category_max_counts, 1);
-    let mut category_allow_duplicates = normalize_allow_duplicates_array(&setting.category_allow_duplicates);
+    let mut category_allow_duplicates =
+        normalize_allow_duplicates_array(&setting.category_allow_duplicates);
 
     for index in 0..EVENT_SETTING_CATEGORY_SLOT_COUNT {
         if item_list_snapshots[index].id.is_empty() {
@@ -388,10 +398,9 @@ fn derive_score_csv_from_snapshot_set(
         .slots
         .iter()
         .find(|slot| slot.entrant_id.as_deref() == Some(winner_id))?;
-    let loser_slot = set
-        .slots
-        .iter()
-        .find(|slot| slot.entrant_id.as_deref().is_some() && slot.entrant_id.as_deref() != Some(winner_id))?;
+    let loser_slot = set.slots.iter().find(|slot| {
+        slot.entrant_id.as_deref().is_some() && slot.entrant_id.as_deref() != Some(winner_id)
+    })?;
 
     let winner_score = integer_score(winner_slot.score)?;
     let loser_score = integer_score(loser_slot.score)?;
@@ -450,7 +459,11 @@ fn merge_snapshot_into_meta(
             sets: Vec::new(),
         });
 
-    let event_index = if let Some(index) = meta.events.iter().position(|item| item.event_id == event.event_id) {
+    let event_index = if let Some(index) = meta
+        .events
+        .iter()
+        .position(|item| item.event_id == event.event_id)
+    {
         index
     } else {
         meta.events.push(EventLocalMeta {
@@ -515,7 +528,10 @@ fn merge_snapshot_into_meta(
         if !valid_set_slot_keys.contains(&format!("{}:{}", item.set_id, item.entrant_id)) {
             continue;
         }
-        side_by_set_and_entrant.insert((item.set_id.clone(), item.entrant_id.clone()), item.play_side.clone());
+        side_by_set_and_entrant.insert(
+            (item.set_id.clone(), item.entrant_id.clone()),
+            item.play_side.clone(),
+        );
     }
 
     let mut normalized_set_play_sides = Vec::new();
@@ -601,7 +617,8 @@ pub fn load_saved_token(app: &AppHandle) -> Result<Option<String>, String> {
         return Ok(None);
     }
 
-    let raw = fs::read_to_string(path).map_err(|e| format!("保存済みトークン読込に失敗しました: {e}"))?;
+    let raw =
+        fs::read_to_string(path).map_err(|e| format!("保存済みトークン読込に失敗しました: {e}"))?;
     let trimmed = raw.trim().to_owned();
     if trimmed.is_empty() {
         Ok(None)
@@ -690,8 +707,8 @@ pub fn load_event_mgmt_settings(app: &AppHandle) -> Result<Option<serde_json::Va
         return Ok(None);
     }
 
-    let raw = fs::read_to_string(path)
-        .map_err(|e| format!("保存済み大会設定読込に失敗しました: {e}"))?;
+    let raw =
+        fs::read_to_string(path).map_err(|e| format!("保存済み大会設定読込に失敗しました: {e}"))?;
     let settings = serde_json::from_str::<serde_json::Value>(&raw)
         .map_err(|e| format!("保存済み大会設定のパースに失敗しました: {e}"))?;
     Ok(Some(settings))
@@ -716,7 +733,10 @@ pub fn save_sender_profile(app: &AppHandle, profile: &SenderProfile) -> Result<(
 
     let broadcast_subnet_mask = profile.broadcast_subnet_mask.trim();
     if broadcast_subnet_mask.parse::<std::net::Ipv4Addr>().is_err() {
-        return Err("ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0".to_owned());
+        return Err(
+            "ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0"
+                .to_owned(),
+        );
     }
 
     let normalized = SenderProfile {
@@ -737,8 +757,7 @@ pub fn load_sender_profile(app: &AppHandle) -> Result<Option<SenderProfile>, Str
         return Ok(None);
     }
 
-    let raw = fs::read_to_string(path)
-        .map_err(|e| format!("送信者設定読込に失敗しました: {e}"))?;
+    let raw = fs::read_to_string(path).map_err(|e| format!("送信者設定読込に失敗しました: {e}"))?;
     let profile = serde_json::from_str::<SenderProfile>(&raw)
         .map_err(|e| format!("送信者設定のパースに失敗しました: {e}"))?;
     Ok(Some(profile))
@@ -816,7 +835,8 @@ fn call_message_identity(message: &GenericMessage) -> Option<CallMessageIdentity
         }
     };
 
-    if tournament_id.is_empty() || event_id.is_empty() || set_id.is_empty() || entrant_id.is_empty() {
+    if tournament_id.is_empty() || event_id.is_empty() || set_id.is_empty() || entrant_id.is_empty()
+    {
         return None;
     }
 
@@ -833,14 +853,18 @@ fn call_message_identity(message: &GenericMessage) -> Option<CallMessageIdentity
 fn call_identity_matches(left: &CallMessageIdentity, right: &CallMessageIdentity) -> bool {
     left.tournament_id == right.tournament_id
         && left.event_id == right.event_id
-    && left.phase_name == right.phase_name
-    && left.phase_group_name == right.phase_group_name
+        && left.phase_name == right.phase_name
+        && left.phase_group_name == right.phase_group_name
         && left.set_id == right.set_id
         && left.entrant_id == right.entrant_id
 }
 
 fn build_forced_resolve_message(root: &GenericMessage) -> GenericMessage {
-    let message_id = format!("{}-forced-resolve-{}", root.message_id, Utc::now().timestamp_millis());
+    let message_id = format!(
+        "{}-forced-resolve-{}",
+        root.message_id,
+        Utc::now().timestamp_millis()
+    );
 
     GenericMessage {
         message_id,
@@ -890,7 +914,9 @@ pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Resu
                     item.parent_message_id.is_none()
                         && item.method == "call_player"
                         && call_message_identity(item)
-                            .map(|item_identity| call_identity_matches(&item_identity, &call_identity))
+                            .map(|item_identity| {
+                                call_identity_matches(&item_identity, &call_identity)
+                            })
                             .unwrap_or(false)
                 })
                 .cloned()
@@ -1003,7 +1029,11 @@ pub fn load_generic_messages(app: &AppHandle) -> Result<Option<Vec<GenericMessag
             .trim()
             .to_owned();
 
-        if sender_name.is_empty() || sender_user_id.is_empty() || body.is_empty() || created_at.is_empty() {
+        if sender_name.is_empty()
+            || sender_user_id.is_empty()
+            || body.is_empty()
+            || created_at.is_empty()
+        {
             continue;
         }
 
@@ -1046,7 +1076,9 @@ pub fn load_generic_messages(app: &AppHandle) -> Result<Option<Vec<GenericMessag
     Ok(Some(messages))
 }
 
-pub fn load_mobile_result_requests(app: &AppHandle) -> Result<Vec<MobileResultRequestItem>, String> {
+pub fn load_mobile_result_requests(
+    app: &AppHandle,
+) -> Result<Vec<MobileResultRequestItem>, String> {
     let path = mobile_result_requests_path(app)?;
     if !path.exists() {
         return Ok(Vec::new());
@@ -1169,8 +1201,10 @@ pub fn load_token(app: &AppHandle) -> Result<String, String> {
         }
     }
 
-    Err("トークンの読込に失敗しました。保存済みトークン、またはtoken.txtを確認してください。"
-        .to_owned())
+    Err(
+        "トークンの読込に失敗しました。保存済みトークン、またはtoken.txtを確認してください。"
+            .to_owned(),
+    )
 }
 
 pub fn save_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(), String> {
@@ -1232,9 +1266,14 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
     let raw = if let Some(raw) = loaded_raw {
         raw
     } else if let Some(error) = last_error {
-        return Err(format!("ローカルスナップショット読込に失敗しました: {error}"));
+        return Err(format!(
+            "ローカルスナップショット読込に失敗しました: {error}"
+        ));
     } else {
-        return Err("ローカルスナップショット読込に失敗しました: 保存済みデータが見つかりません。".to_owned());
+        return Err(
+            "ローカルスナップショット読込に失敗しました: 保存済みデータが見つかりません。"
+                .to_owned(),
+        );
     };
 
     let mut snapshot: TournamentSnapshot = serde_json::from_str(&raw)
@@ -1276,7 +1315,9 @@ fn load_pristine_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnaps
     } else if let Some(error) = last_error {
         return Err(format!("原本スナップショット読込に失敗しました: {error}"));
     } else {
-        return Err("原本スナップショット読込に失敗しました: 保存済みデータが見つかりません。".to_owned());
+        return Err(
+            "原本スナップショット読込に失敗しました: 保存済みデータが見つかりません。".to_owned(),
+        );
     };
 
     let mut snapshot: TournamentSnapshot = serde_json::from_str(&raw)
@@ -1289,9 +1330,12 @@ fn load_pristine_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnaps
     Ok(snapshot)
 }
 
-pub fn list_local_snapshot_events(app: &AppHandle) -> Result<Vec<LocalSnapshotEventListItem>, String> {
+pub fn list_local_snapshot_events(
+    app: &AppHandle,
+) -> Result<Vec<LocalSnapshotEventListItem>, String> {
     let dir = storage_dir(app)?;
-    let entries = fs::read_dir(&dir).map_err(|e| format!("保存済みスナップショット一覧の取得に失敗しました: {e}"))?;
+    let entries = fs::read_dir(&dir)
+        .map_err(|e| format!("保存済みスナップショット一覧の取得に失敗しました: {e}"))?;
     let mut items = Vec::new();
 
     for entry in entries {
@@ -1326,21 +1370,22 @@ pub fn list_local_snapshot_events(app: &AppHandle) -> Result<Vec<LocalSnapshotEv
         };
 
         for event in snapshot.events {
-            let (event_alias, last_selected_phase_name, last_selected_phase_group_name) = load_local_meta(app, &snapshot.slug, &event.event_id)
-                .ok()
-                .and_then(|meta| {
-                    meta.events
-                        .into_iter()
-                        .find(|item| item.event_id == event.event_id)
-                        .map(|item| {
-                            (
-                                item.event_alias,
-                                item.last_selected_phase_name,
-                                item.last_selected_phase_group_name,
-                            )
-                        })
-                })
-                .unwrap_or((None, None, None));
+            let (event_alias, last_selected_phase_name, last_selected_phase_group_name) =
+                load_local_meta(app, &snapshot.slug, &event.event_id)
+                    .ok()
+                    .and_then(|meta| {
+                        meta.events
+                            .into_iter()
+                            .find(|item| item.event_id == event.event_id)
+                            .map(|item| {
+                                (
+                                    item.event_alias,
+                                    item.last_selected_phase_name,
+                                    item.last_selected_phase_group_name,
+                                )
+                            })
+                    })
+                    .unwrap_or((None, None, None));
 
             items.push(LocalSnapshotEventListItem {
                 tournament_id: snapshot.tournament_id.clone(),
@@ -1368,7 +1413,11 @@ pub fn list_local_snapshot_events(app: &AppHandle) -> Result<Vec<LocalSnapshotEv
     Ok(items)
 }
 
-pub fn delete_local_snapshot_event(app: &AppHandle, slug: &str, event_id: &str) -> Result<(), String> {
+pub fn delete_local_snapshot_event(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<(), String> {
     let mut snapshot = load_snapshot(app, slug)?;
     let before_len = snapshot.events.len();
     snapshot.events.retain(|event| event.event_id != event_id);
@@ -1392,8 +1441,8 @@ pub fn delete_local_snapshot_event(app: &AppHandle, slug: &str, event_id: &str) 
 
         let dir = storage_dir(app)?;
         let meta_prefix = format!("tournament-meta-{}-", sanitize_slug(slug));
-        let entries = fs::read_dir(&dir)
-            .map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?;
+        let entries =
+            fs::read_dir(&dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?;
         for entry in entries {
             let entry = match entry {
                 Ok(value) => value,
@@ -1458,7 +1507,10 @@ fn is_losers_set(set: &crate::models::SetSnapshot) -> bool {
 
 fn is_grand_final_set(set: &crate::models::SetSnapshot) -> bool {
     let lowered = set.full_round_text.trim().to_lowercase();
-    if lowered.contains("grand final") || lowered.contains("grand finals") || lowered.contains("グランド") {
+    if lowered.contains("grand final")
+        || lowered.contains("grand finals")
+        || lowered.contains("グランド")
+    {
         return true;
     }
 
@@ -1512,9 +1564,9 @@ fn empty_slot_count(set: &crate::models::SetSnapshot) -> usize {
 }
 
 fn first_empty_slot_index(set: &crate::models::SetSnapshot) -> Option<usize> {
-    set.slots
-        .iter()
-        .position(|slot| slot.entrant_id.is_none() || slot.entrant_name.trim().eq_ignore_ascii_case("tbd"))
+    set.slots.iter().position(|slot| {
+        slot.entrant_id.is_none() || slot.entrant_name.trim().eq_ignore_ascii_case("tbd")
+    })
 }
 
 fn is_slot_empty(slot: &crate::models::SetSlotSnapshot) -> bool {
@@ -1544,7 +1596,8 @@ fn pick_pair_source_indexes(
             .collect();
     }
 
-    let mapped = ((current_index as f64 + 0.5) * previous_count as f64) / current_count as f64 - 0.5;
+    let mapped =
+        ((current_index as f64 + 0.5) * previous_count as f64) / current_count as f64 - 0.5;
     let left = mapped.floor().max(0.0) as usize;
     let right = mapped.ceil().min((previous_count.saturating_sub(1)) as f64) as usize;
 
@@ -1603,7 +1656,11 @@ fn build_round_columns_set_ids(event: &EventSnapshot, losers: bool) -> Vec<Vec<S
     columns
 }
 
-fn pick_pair_source_ids(previous_set_ids: &[String], current_count: usize, current_index: usize) -> Vec<String> {
+fn pick_pair_source_ids(
+    previous_set_ids: &[String],
+    current_count: usize,
+    current_index: usize,
+) -> Vec<String> {
     pick_pair_source_indexes(previous_set_ids.len(), current_count, current_index)
         .into_iter()
         .filter_map(|index| previous_set_ids.get(index).cloned())
@@ -1664,7 +1721,10 @@ fn source_targets_losers_side(
             continue;
         }
 
-        if !condition_tokens.iter().any(|token| token == &normalized_code) {
+        if !condition_tokens
+            .iter()
+            .any(|token| token == &normalized_code)
+        {
             continue;
         }
 
@@ -1686,7 +1746,8 @@ fn source_targets_losers_side(
 
 fn same_phase_pool(left: &crate::models::SetSnapshot, right: &crate::models::SetSnapshot) -> bool {
     normalize_group_key(left.phase_name.as_ref()) == normalize_group_key(right.phase_name.as_ref())
-        && normalize_group_key(left.phase_group_name.as_ref()) == normalize_group_key(right.phase_group_name.as_ref())
+        && normalize_group_key(left.phase_group_name.as_ref())
+            == normalize_group_key(right.phase_group_name.as_ref())
 }
 
 fn winner_is_from_losers_side(
@@ -1712,24 +1773,21 @@ fn winner_is_from_losers_side(
         }
     }
 
-    let found_in_losers_lane = event
-        .sets
-        .iter()
-        .any(|set| {
-            if !is_losers_set(set) {
-                return false;
-            }
+    let found_in_losers_lane = event.sets.iter().any(|set| {
+        if !is_losers_set(set) {
+            return false;
+        }
 
-            if set.winner_id.as_deref() == Some(winner_id) {
-                return true;
-            }
+        if set.winner_id.as_deref() == Some(winner_id) {
+            return true;
+        }
 
-            // Losers側の試合に一度でも出場していれば、GFではLosers側由来として扱う。
-            // winner_id が未確定の中間進行でも GF Reset 生成を取りこぼさないため。
-            set.slots
-                .iter()
-                .any(|slot| slot.entrant_id.as_deref() == Some(winner_id))
-        });
+        // Losers側の試合に一度でも出場していれば、GFではLosers側由来として扱う。
+        // winner_id が未確定の中間進行でも GF Reset 生成を取りこぼさないため。
+        set.slots
+            .iter()
+            .any(|slot| slot.entrant_id.as_deref() == Some(winner_id))
+    });
 
     if found_in_losers_lane {
         return true;
@@ -1738,7 +1796,10 @@ fn winner_is_from_losers_side(
     inferred_from_source.unwrap_or(false)
 }
 
-fn ensure_virtual_grand_final_reset_set(event: &mut EventSnapshot, grand_final_set: &crate::models::SetSnapshot) {
+fn ensure_virtual_grand_final_reset_set(
+    event: &mut EventSnapshot,
+    grand_final_set: &crate::models::SetSnapshot,
+) {
     if event
         .sets
         .iter()
@@ -1763,9 +1824,9 @@ fn ensure_virtual_grand_final_reset_set(event: &mut EventSnapshot, grand_final_s
             score: None,
         })
         .collect::<Vec<crate::models::SetSlotSnapshot>>();
-    let has_empty = slots
-        .iter()
-        .any(|slot| slot.entrant_id.is_none() || slot.entrant_name.trim().eq_ignore_ascii_case("tbd"));
+    let has_empty = slots.iter().any(|slot| {
+        slot.entrant_id.is_none() || slot.entrant_name.trim().eq_ignore_ascii_case("tbd")
+    });
 
     event.sets.push(crate::models::SetSnapshot {
         set_id: virtual_set_id,
@@ -1830,7 +1891,11 @@ fn hydrate_existing_grand_final_reset_sets(
         }
 
         if changed {
-            reset_set.state = if empty_slot_count(reset_set) == 0 { 2 } else { 1 };
+            reset_set.state = if empty_slot_count(reset_set) == 0 {
+                2
+            } else {
+                1
+            };
         }
     }
 
@@ -1925,7 +1990,11 @@ fn build_inferred_tbd_source_labels(event: &EventSnapshot) -> HashMap<String, St
     let losers_round_one = losers_columns.first().cloned().unwrap_or_default();
     if !losers_round_one.is_empty() && !winners_round_one_ids.is_empty() {
         for (current_index, set_id) in losers_round_one.iter().enumerate() {
-            let sources = pick_pair_source_ids(&winners_round_one_ids, losers_round_one.len(), current_index);
+            let sources = pick_pair_source_ids(
+                &winners_round_one_ids,
+                losers_round_one.len(),
+                current_index,
+            );
             for (source_index, source_set_id) in sources.iter().enumerate() {
                 if let Some(code) = set_display_code_by_id.get(source_set_id) {
                     map.insert(
@@ -1979,7 +2048,9 @@ fn build_inferred_tbd_source_labels(event: &EventSnapshot) -> HashMap<String, St
                 .get(&current_count)
                 .cloned()
                 .unwrap_or_default();
-            let winner_cursor = *winners_count_use_cursor.get(&current_count).unwrap_or(&0_usize);
+            let winner_cursor = *winners_count_use_cursor
+                .get(&current_count)
+                .unwrap_or(&0_usize);
             let winners_source_ids = candidate_winners_columns
                 .get(winner_cursor)
                 .cloned()
@@ -2105,7 +2176,9 @@ fn normalize_source_condition(value: &str) -> String {
         .collect::<String>()
 }
 
-fn source_kind_from_api_source(source: &crate::models::SetEntrantSourceSnapshot) -> Option<&'static str> {
+fn source_kind_from_api_source(
+    source: &crate::models::SetEntrantSourceSnapshot,
+) -> Option<&'static str> {
     let merged = format!(
         "{} {}",
         source.condition.as_deref().unwrap_or_default(),
@@ -2186,15 +2259,13 @@ fn source_set_id_and_code_from_api_source(
 
     let source_code = source_set_code_from_api_source(source, set_display_code_by_id)?;
     let normalized_source_code = normalize_reference_text(&source_code);
-    let source_set_id = set_display_code_by_id
-        .iter()
-        .find_map(|(set_id, code)| {
-            if normalize_reference_text(code) == normalized_source_code {
-                Some(set_id.clone())
-            } else {
-                None
-            }
-        })?;
+    let source_set_id = set_display_code_by_id.iter().find_map(|(set_id, code)| {
+        if normalize_reference_text(code) == normalized_source_code {
+            Some(set_id.clone())
+        } else {
+            None
+        }
+    })?;
 
     Some((source_set_id, source_code))
 }
@@ -2233,7 +2304,11 @@ fn build_api_tbd_source_labels(event: &EventSnapshot) -> HashMap<String, String>
                     .get(&source_set_id)
                     .copied()
                     .unwrap_or(false);
-                if source_is_losers { "winner" } else { "loser" }
+                if source_is_losers {
+                    "winner"
+                } else {
+                    "loser"
+                }
             } else {
                 source_kind_from_api_source(source).unwrap_or("winner")
             };
@@ -2359,7 +2434,11 @@ fn unresolved_slot_reference_rank(
     }
 
     let normalized = normalize_reference_text(&slot.entrant_name);
-    if normalized.is_empty() || normalized == "tbd" || normalized == "tba" || normalized == "unknown" {
+    if normalized.is_empty()
+        || normalized == "tbd"
+        || normalized == "tba"
+        || normalized == "unknown"
+    {
         return None;
     }
 
@@ -2413,7 +2492,11 @@ fn inferred_slot_reference_rank(
     }
 
     let expected = normalize_reference_text(&normalize_source_text(
-        if prefer_loser_reference { "loser" } else { "winner" },
+        if prefer_loser_reference {
+            "loser"
+        } else {
+            "winner"
+        },
         source_code,
     ));
     if normalized == expected {
@@ -2421,7 +2504,11 @@ fn inferred_slot_reference_rank(
     }
 
     let reversed = normalize_reference_text(&normalize_source_text(
-        if prefer_loser_reference { "winner" } else { "loser" },
+        if prefer_loser_reference {
+            "winner"
+        } else {
+            "loser"
+        },
         source_code,
     ));
     if normalized == reversed {
@@ -2443,7 +2530,9 @@ fn preferred_slot_by_unresolved_reference(
     let mut best: Option<(usize, i64)> = None;
 
     for (slot_index, slot) in target.slots.iter().enumerate() {
-        let Some(rank) = unresolved_slot_reference_rank(slot, source_markers, prefer_loser_reference) else {
+        let Some(rank) =
+            unresolved_slot_reference_rank(slot, source_markers, prefer_loser_reference)
+        else {
             continue;
         };
 
@@ -2521,7 +2610,10 @@ fn infer_preferred_slot_index_for_winner(
     );
 
     for (slot_index, source_index) in source_indexes.into_iter().enumerate() {
-        if previous_round_set_ids.get(source_index).is_some_and(|set_id| set_id == source_set_id) {
+        if previous_round_set_ids
+            .get(source_index)
+            .is_some_and(|set_id| set_id == source_set_id)
+        {
             return Some(slot_index);
         }
     }
@@ -2683,7 +2775,7 @@ fn advance_winner_within_lane(
                         source_set_code,
                         false,
                     )
-                        .map(|rank| (slot_index, rank))
+                    .map(|rank| (slot_index, rank))
                 })
                 .min_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
 
@@ -2836,7 +2928,7 @@ fn drop_loser_to_losers_lane(
                         source_set_code,
                         true,
                     )
-                        .map(|rank| (slot_index, rank))
+                    .map(|rank| (slot_index, rank))
                 })
                 .min_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
             let unresolved_reference_match =
@@ -2856,12 +2948,8 @@ fn drop_loser_to_losers_lane(
             let preferred_slot_index = api_reference_match
                 .as_ref()
                 .map(|(index, _)| *index)
-                .or(unresolved_reference_match
-                .as_ref()
-                .map(|(index, _)| *index))
-                .or(inferred_reference_match
-                .as_ref()
-                .map(|(index, _)| *index));
+                .or(unresolved_reference_match.as_ref().map(|(index, _)| *index))
+                .or(inferred_reference_match.as_ref().map(|(index, _)| *index));
             let preferred_slot_index = inferred_reference_match
                 .as_ref()
                 .map(|(index, _)| *index)
@@ -2879,9 +2967,9 @@ fn drop_loser_to_losers_lane(
                 .map(|(_, rank)| *rank)
                 .unwrap_or_else(|| {
                     unresolved_reference_match
-                .as_ref()
-                .map(|(_, rank)| *rank)
-                .unwrap_or(3_i64)
+                        .as_ref()
+                        .map(|(_, rank)| *rank)
+                        .unwrap_or(3_i64)
                 });
 
             Some((
@@ -3056,7 +3144,11 @@ fn apply_local_progression(
     source_set_id: &str,
     winner_id: &str,
 ) {
-    let Some(event) = snapshot.events.iter_mut().find(|event| event.event_id == event_id) else {
+    let Some(event) = snapshot
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == event_id)
+    else {
         return;
     };
 
@@ -3076,10 +3168,9 @@ fn apply_local_progression(
         .map(|slot| slot.entrant_name.clone())
         .unwrap_or_else(|| "TBD".to_owned());
 
-    let loser_slot = source_set
-        .slots
-        .iter()
-        .find(|slot| slot.entrant_id.as_deref().is_some() && slot.entrant_id.as_deref() != Some(winner_id));
+    let loser_slot = source_set.slots.iter().find(|slot| {
+        slot.entrant_id.as_deref().is_some() && slot.entrant_id.as_deref() != Some(winner_id)
+    });
 
     let source_is_losers = is_losers_set(&source_set);
     let source_is_grand_final = is_grand_final_set(&source_set);
@@ -3331,7 +3422,11 @@ pub fn reset_local_set_result_with_dependencies(
             .collect::<HashSet<String>>();
 
         for target_set_id in &affected_set_ids {
-            let Some(set) = event.sets.iter_mut().find(|set| set.set_id == *target_set_id) else {
+            let Some(set) = event
+                .sets
+                .iter_mut()
+                .find(|set| set.set_id == *target_set_id)
+            else {
                 continue;
             };
 
@@ -3444,13 +3539,14 @@ pub fn save_event_snapshot(
         .ok_or_else(|| format!("指定イベントが見つかりません: {event_id}"))?;
 
     // 同一slugの既存スナップショットを保持しつつ、対象eventのみ差し替える。
-    let mut merged_snapshot = load_snapshot(app, &snapshot.slug).unwrap_or_else(|_| TournamentSnapshot {
-        tournament_id: snapshot.tournament_id.clone(),
-        slug: snapshot.slug.clone(),
-        name: snapshot.name.clone(),
-        events: Vec::new(),
-        updated_at: snapshot.updated_at,
-    });
+    let mut merged_snapshot =
+        load_snapshot(app, &snapshot.slug).unwrap_or_else(|_| TournamentSnapshot {
+            tournament_id: snapshot.tournament_id.clone(),
+            slug: snapshot.slug.clone(),
+            name: snapshot.name.clone(),
+            events: Vec::new(),
+            updated_at: snapshot.updated_at,
+        });
 
     merged_snapshot.tournament_id = snapshot.tournament_id.clone();
     merged_snapshot.slug = snapshot.slug.clone();
@@ -3473,13 +3569,14 @@ pub fn save_event_snapshot(
     save_snapshot(app, &merged_snapshot)?;
 
     // オフラインでも下書き破棄で戻せるよう、原本スナップショットを別保存する。
-    let mut pristine_snapshot = load_pristine_snapshot(app, &snapshot.slug).unwrap_or_else(|_| TournamentSnapshot {
-        tournament_id: snapshot.tournament_id.clone(),
-        slug: snapshot.slug.clone(),
-        name: snapshot.name.clone(),
-        events: Vec::new(),
-        updated_at: snapshot.updated_at,
-    });
+    let mut pristine_snapshot =
+        load_pristine_snapshot(app, &snapshot.slug).unwrap_or_else(|_| TournamentSnapshot {
+            tournament_id: snapshot.tournament_id.clone(),
+            slug: snapshot.slug.clone(),
+            name: snapshot.name.clone(),
+            events: Vec::new(),
+            updated_at: snapshot.updated_at,
+        });
 
     pristine_snapshot.tournament_id = snapshot.tournament_id.clone();
     pristine_snapshot.slug = snapshot.slug.clone();
@@ -3502,7 +3599,11 @@ pub fn save_event_snapshot(
     save_pristine_snapshot(app, &pristine_snapshot)?;
 
     let mut local_meta = sync_local_meta_from_snapshot(app, &merged_snapshot, event_id)?;
-    if let Some(event_meta) = local_meta.events.iter_mut().find(|event| event.event_id == event_id) {
+    if let Some(event_meta) = local_meta
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == event_id)
+    {
         event_meta.event_alias = event_alias;
     }
     local_meta.updated_at = Utc::now();
@@ -3551,7 +3652,11 @@ pub fn save_local_meta(
     Ok(())
 }
 
-pub fn load_local_meta(app: &AppHandle, slug: &str, event_id: &str) -> Result<TournamentLocalMeta, String> {
+pub fn load_local_meta(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentLocalMeta, String> {
     let mut candidate_paths = vec![meta_path(app, slug, event_id)?];
     if let Some(legacy_slug) = alternate_slug_for_legacy_path(slug) {
         candidate_paths.push(meta_path_with_slug_key(app, &legacy_slug, event_id)?);
@@ -3582,8 +3687,8 @@ pub fn load_local_meta(app: &AppHandle, slug: &str, event_id: &str) -> Result<To
         return Ok(build_empty_meta(slug, event_id));
     };
 
-    let mut parsed: TournamentLocalMeta =
-        serde_json::from_str(&raw).map_err(|e| format!("ローカルメタのパースに失敗しました: {e}"))?;
+    let mut parsed: TournamentLocalMeta = serde_json::from_str(&raw)
+        .map_err(|e| format!("ローカルメタのパースに失敗しました: {e}"))?;
     parsed.slug = slug.to_owned();
     parsed.events.retain(|event| event.event_id == event_id);
     if parsed.events.is_empty() {
@@ -3605,7 +3710,9 @@ pub fn load_local_meta(app: &AppHandle, slug: &str, event_id: &str) -> Result<To
     // set_id非依存のGF Reset専用pendingへ移す。
     let mut migrated = Vec::new();
     parsed.pending_set_results.retain(|pending| {
-        let Some(source_set_id) = source_grand_final_set_id_from_virtual_reset_set_id(&pending.set_id) else {
+        let Some(source_set_id) =
+            source_grand_final_set_id_from_virtual_reset_set_id(&pending.set_id)
+        else {
             return true;
         };
 
@@ -3623,7 +3730,9 @@ pub fn load_local_meta(app: &AppHandle, slug: &str, event_id: &str) -> Result<To
     });
 
     if !migrated.is_empty() {
-        parsed.pending_grand_final_reset_results.retain(|item| item.event_id == event_id);
+        parsed
+            .pending_grand_final_reset_results
+            .retain(|item| item.event_id == event_id);
         parsed.pending_grand_final_reset_results.extend(migrated);
     }
 
@@ -3677,9 +3786,14 @@ pub fn prune_pending_set_results_by_snapshot_match(
     Ok(local_meta)
 }
 
-pub fn load_workspace(app: &AppHandle, slug: &str, event_id: &str) -> Result<TournamentWorkspace, String> {
+pub fn load_workspace(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentWorkspace, String> {
     let snapshot = load_snapshot(app, slug)?;
-    let local_meta = merge_snapshot_into_meta(&snapshot, event_id, load_local_meta(app, slug, event_id)?);
+    let local_meta =
+        merge_snapshot_into_meta(&snapshot, event_id, load_local_meta(app, slug, event_id)?);
 
     Ok(TournamentWorkspace {
         snapshot,
@@ -3692,7 +3806,10 @@ pub fn upsert_local_set_result(
     input: LocalSetResultInput,
 ) -> Result<TournamentWorkspace, String> {
     if input.set_id.starts_with("preview_") {
-        return Err("preview setは結果報告できません。スナップショットを更新して実setを取得してください。".to_owned());
+        return Err(
+            "preview setは結果報告できません。スナップショットを更新して実setを取得してください。"
+                .to_owned(),
+        );
     }
 
     let mut snapshot = load_snapshot(app, &input.slug)?;
@@ -3713,7 +3830,9 @@ pub fn upsert_local_set_result(
     let winner_id_for_progress = input.winner_id.clone();
     let (applied_event_id, should_advance) = {
         let (event_id, set_snapshot) = find_set_in_snapshot_mut(&mut snapshot, &input.set_id)
-            .ok_or_else(|| "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned())?;
+            .ok_or_else(|| {
+                "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned()
+            })?;
 
         set_snapshot.winner_id = Some(input.winner_id.clone());
         set_snapshot.state = if input.confirmed { 3 } else { 2 };
@@ -3734,7 +3853,8 @@ pub fn upsert_local_set_result(
     };
 
     let score_csv = derive_score_csv_from_slot_scores(&input.slot_scores, &input.winner_id)?;
-    let source_grand_final_set_id = source_grand_final_set_id_from_virtual_reset_set_id(&input.set_id);
+    let source_grand_final_set_id =
+        source_grand_final_set_id_from_virtual_reset_set_id(&input.set_id);
 
     let slot_scores = input
         .slot_scores
@@ -3746,22 +3866,22 @@ pub fn upsert_local_set_result(
         .collect::<Vec<LocalSetScoreMeta>>();
 
     if let Some(source_grand_final_set_id) = source_grand_final_set_id {
+        local_meta.pending_grand_final_reset_results.retain(|item| {
+            !(item.event_id == applied_event_id
+                && item.source_grand_final_set_id == source_grand_final_set_id)
+        });
         local_meta
             .pending_grand_final_reset_results
-            .retain(|item| {
-                !(item.event_id == applied_event_id
-                    && item.source_grand_final_set_id == source_grand_final_set_id)
+            .push(LocalGrandFinalResetResultMeta {
+                event_id: applied_event_id.clone(),
+                event_name: event_name.clone(),
+                source_grand_final_set_id,
+                winner_id: input.winner_id,
+                score_csv,
+                confirmed: input.confirmed,
+                slot_scores,
+                recorded_at: Utc::now(),
             });
-        local_meta.pending_grand_final_reset_results.push(LocalGrandFinalResetResultMeta {
-            event_id: applied_event_id.clone(),
-            event_name: event_name.clone(),
-            source_grand_final_set_id,
-            winner_id: input.winner_id,
-            score_csv,
-            confirmed: input.confirmed,
-            slot_scores,
-            recorded_at: Utc::now(),
-        });
     } else {
         local_meta
             .pending_set_results
@@ -3783,7 +3903,12 @@ pub fn upsert_local_set_result(
     local_meta.updated_at = Utc::now();
 
     if should_advance {
-        apply_local_progression(&mut snapshot, &applied_event_id, &input.set_id, &winner_id_for_progress);
+        apply_local_progression(
+            &mut snapshot,
+            &applied_event_id,
+            &input.set_id,
+            &winner_id_for_progress,
+        );
     }
 
     save_snapshot(app, &snapshot)?;
@@ -3829,13 +3954,13 @@ pub fn upsert_local_set_scores(
     local_meta
         .pending_set_results
         .retain(|item| item.set_id != input.set_id);
-    if let Some(source_grand_final_set_id) = source_grand_final_set_id_from_virtual_reset_set_id(&input.set_id) {
-        local_meta
-            .pending_grand_final_reset_results
-            .retain(|item| {
-                !(item.event_id == applied_event_id
-                    && item.source_grand_final_set_id == source_grand_final_set_id)
-            });
+    if let Some(source_grand_final_set_id) =
+        source_grand_final_set_id_from_virtual_reset_set_id(&input.set_id)
+    {
+        local_meta.pending_grand_final_reset_results.retain(|item| {
+            !(item.event_id == applied_event_id
+                && item.source_grand_final_set_id == source_grand_final_set_id)
+        });
     }
 
     local_meta.slug = input.slug;
@@ -3872,11 +3997,26 @@ pub fn clear_pending_set_results(
     slug: &str,
     event_id: &str,
 ) -> Result<TournamentLocalMeta, String> {
-    let mut snapshot = load_snapshot(app, slug)?;
-    let pristine_snapshot = load_pristine_snapshot(app, slug)
-        .or_else(|_| load_snapshot(app, slug))?;
-
     let mut local_meta = load_local_meta(app, slug, event_id)?;
+    if local_meta
+        .pending_set_results
+        .iter()
+        .any(|item| item.event_id == event_id && item.confirmed)
+        || local_meta
+            .pending_grand_final_reset_results
+            .iter()
+            .any(|item| item.event_id == event_id && item.confirmed)
+    {
+        return Err(
+            "確定済み結果を下書き破棄で削除することはできません。影響setを取消してください。"
+                .to_owned(),
+        );
+    }
+
+    let mut snapshot = load_snapshot(app, slug)?;
+    let pristine_snapshot =
+        load_pristine_snapshot(app, slug).or_else(|_| load_snapshot(app, slug))?;
+
     let pending_set_ids = local_meta
         .pending_set_results
         .iter()
@@ -3911,7 +4051,11 @@ pub fn clear_pending_set_results(
     }
 
     if !restored_from_pristine {
-        if let Some(event) = snapshot.events.iter_mut().find(|event| event.event_id == event_id) {
+        if let Some(event) = snapshot
+            .events
+            .iter_mut()
+            .find(|event| event.event_id == event_id)
+        {
             for set in &mut event.sets {
                 if pending_set_ids.contains(&set.set_id)
                     || pending_gf_reset_source_set_ids.contains(&set.set_id)
@@ -3942,6 +4086,18 @@ pub fn clear_pending_set_result_for_set(
     event_id: &str,
     set_id: &str,
 ) -> Result<TournamentWorkspace, String> {
+    let local_meta = load_local_meta(app, slug, event_id)?;
+    if local_meta
+        .pending_set_results
+        .iter()
+        .any(|item| item.event_id == event_id && item.set_id == set_id && item.confirmed)
+    {
+        return Err(
+            "確定済み結果を下書き破棄で削除することはできません。影響setを取消してください。"
+                .to_owned(),
+        );
+    }
+
     let mut snapshot = load_snapshot(app, slug)?;
     let pristine_snapshot = load_pristine_snapshot(app, slug).ok();
 
@@ -3983,14 +4139,17 @@ pub fn clear_pending_set_result_for_set(
         apply_source_based_tbd_labels(event);
     }
 
-    let mut local_meta = load_local_meta(app, slug, event_id)?;
-    local_meta.pending_set_results.retain(|item| {
-        !(item.event_id == event_id && item.set_id == set_id)
-    });
+    let mut local_meta = local_meta;
+    local_meta
+        .pending_set_results
+        .retain(|item| !(item.event_id == event_id && item.set_id == set_id));
 
-    if let Some(source_grand_final_set_id) = source_grand_final_set_id_from_virtual_reset_set_id(set_id) {
+    if let Some(source_grand_final_set_id) =
+        source_grand_final_set_id_from_virtual_reset_set_id(set_id)
+    {
         local_meta.pending_grand_final_reset_results.retain(|item| {
-            !(item.event_id == event_id && item.source_grand_final_set_id == source_grand_final_set_id)
+            !(item.event_id == event_id
+                && item.source_grand_final_set_id == source_grand_final_set_id)
         });
     } else {
         local_meta.pending_grand_final_reset_results.retain(|item| {
@@ -4046,7 +4205,9 @@ pub fn local_set_snapshot_winner_id(
     set_id: &str,
 ) -> Result<Option<String>, String> {
     let snapshot = load_snapshot(app, slug)?;
-    Ok(find_set_in_snapshot(&snapshot, set_id).map(|(_, set)| set.winner_id.clone()).flatten())
+    Ok(find_set_in_snapshot(&snapshot, set_id)
+        .map(|(_, set)| set.winner_id.clone())
+        .flatten())
 }
 
 pub fn upsert_local_player_meta(

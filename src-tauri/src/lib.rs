@@ -13,14 +13,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use if_addrs::get_if_addrs;
 use models::{
     BracketBatchConflict, BracketBatchReportInput, BracketBatchReportResult,
-    ClearLocalSetResultDraftInput,
-    CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, GenericMessage, ItemListConfig,
-    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetScoreInput,
-    LocalSetScoreUpdateInput, PlaySide,
-    LocalSnapshotEventListItem, MobileResultRequestInput, MobileResultRequestItem, SetSnapshot,
-    ReportSetResultInput, ResetSetResultCascadeInput, ResetSetResultCascadeResult,
-    SaveEventManagementMetaInput, SenderProfile, TournamentPreview, TournamentSnapshot,
-    TournamentWorkspace,
+    ClearLocalSetResultDraftInput, CreateEventSnapshotBySlugInput, CreateEventSnapshotInput,
+    GenericMessage, ItemListConfig, LocalPlayerMetaInput, LocalSetPlaySideInput,
+    LocalSetResultInput, LocalSetScoreInput, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
+    MobileResultRequestInput, MobileResultRequestItem, PlaySide, ReportSetResultInput,
+    ResetSetResultCascadeInput, ResetSetResultCascadeResult, SaveEventManagementMetaInput,
+    SenderProfile, SetSnapshot, TournamentPreview, TournamentSnapshot, TournamentWorkspace,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
@@ -312,7 +310,10 @@ fn build_round_columns_set_ids(sets: &[SetSnapshot], losers: bool) -> Vec<Vec<St
         }
 
         if let Some(round) = set.round {
-            grouped.entry(round.abs()).or_default().push(set.set_id.clone());
+            grouped
+                .entry(round.abs())
+                .or_default()
+                .push(set.set_id.clone());
         } else {
             no_round.push(set.set_id.clone());
         }
@@ -378,9 +379,7 @@ fn build_set_display_code_by_id(sets: &[SetSnapshot]) -> HashMap<String, String>
         }
 
         let current_set = sets.iter().find(|set| set.set_id == set_id);
-        let current_is_losers = current_set
-            .as_ref()
-            .is_some_and(|set| is_losers_set(set));
+        let current_is_losers = current_set.as_ref().is_some_and(|set| is_losers_set(set));
         let current_is_gf = current_set
             .as_ref()
             .is_some_and(|set| is_grand_final_set(set));
@@ -418,7 +417,10 @@ fn build_set_display_code_by_id(sets: &[SetSnapshot]) -> HashMap<String, String>
 
 fn is_grand_final_set(set: &SetSnapshot) -> bool {
     let lowered = set.full_round_text.trim().to_lowercase();
-    if lowered.contains("grand final") || lowered.contains("grand finals") || lowered.contains("グランド") {
+    if lowered.contains("grand final")
+        || lowered.contains("grand finals")
+        || lowered.contains("グランド")
+    {
         return true;
     }
 
@@ -458,7 +460,11 @@ mod tests {
     fn grand_final_keeps_losers_after_the_reserved_slot() {
         let mut sets = Vec::new();
         for index in 0..7 {
-            sets.push(make_set(&format!("W{index}"), "Winners Round 1", Some(index as i64 + 1)));
+            sets.push(make_set(
+                &format!("W{index}"),
+                "Winners Round 1",
+                Some(index as i64 + 1),
+            ));
         }
         sets.push(make_set("GF", "Grand Final", Some(1)));
         sets.push(make_set("LR1", "Losers Round 1", Some(-1)));
@@ -473,7 +479,11 @@ mod tests {
     fn grand_final_reset_takes_the_reserved_slot_before_losers() {
         let mut sets = Vec::new();
         for index in 0..7 {
-            sets.push(make_set(&format!("W{index}"), "Winners Round 1", Some(index as i64 + 1)));
+            sets.push(make_set(
+                &format!("W{index}"),
+                "Winners Round 1",
+                Some(index as i64 + 1),
+            ));
         }
         sets.push(make_set("GF", "Grand Final", Some(1)));
         sets.push(make_set("GFR", "Grand Final Reset", Some(1)));
@@ -1102,7 +1112,9 @@ fn handle_obs_overlay_http_request(request: tiny_http::Request) {
                 let payload = serde_json::to_string(&state)
                     .unwrap_or_else(|_| "{\"active\":false,\"overlayUrl\":\"\"}".to_owned());
                 let mut response = Response::from_string(payload);
-                if let Ok(header) = Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8") {
+                if let Ok(header) =
+                    Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8")
+                {
                     response = response.with_header(header);
                 }
                 if let Some(header) = no_cache_header.clone() {
@@ -1115,7 +1127,9 @@ fn handle_obs_overlay_http_request(request: tiny_http::Request) {
                     "{{\"error\":\"{}\"}}",
                     err.replace('"', "\\\"")
                 ));
-                if let Ok(header) = Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8") {
+                if let Ok(header) =
+                    Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8")
+                {
                     response = response.with_header(header);
                 }
                 if let Some(header) = no_cache_header {
@@ -1152,85 +1166,85 @@ fn start_obs_overlay_server_if_needed() -> Result<(), String> {
 }
 
 fn generate_mobile_input_token() -> String {
-        let seq = message_id_sequence().fetch_add(1, Ordering::SeqCst);
-        let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|value| value.as_millis())
-                .unwrap_or(0);
-        format!("m{}{:x}", now, seq)
+    let seq = message_id_sequence().fetch_add(1, Ordering::SeqCst);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis())
+        .unwrap_or(0);
+    format!("m{}{:x}", now, seq)
 }
 
 fn rotate_mobile_input_token() -> Result<String, String> {
-        let mut guard = mobile_input_auth_token()
-                .lock()
-                .map_err(|_| "スマホ入力トークンのロック取得に失敗しました。".to_owned())?;
-        let token = generate_mobile_input_token();
-        *guard = token.clone();
-        Ok(token)
+    let mut guard = mobile_input_auth_token()
+        .lock()
+        .map_err(|_| "スマホ入力トークンのロック取得に失敗しました。".to_owned())?;
+    let token = generate_mobile_input_token();
+    *guard = token.clone();
+    Ok(token)
 }
 
 fn current_mobile_input_token() -> Result<String, String> {
-        let guard = mobile_input_auth_token()
-                .lock()
-                .map_err(|_| "スマホ入力トークンのロック取得に失敗しました。".to_owned())?;
-        Ok(guard.clone())
+    let guard = mobile_input_auth_token()
+        .lock()
+        .map_err(|_| "スマホ入力トークンのロック取得に失敗しました。".to_owned())?;
+    Ok(guard.clone())
 }
 
 fn percent_decode(value: &str) -> String {
-        let bytes = value.as_bytes();
-        let mut output = Vec::with_capacity(bytes.len());
-        let mut index = 0_usize;
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0_usize;
 
-        while index < bytes.len() {
-                let b = bytes[index];
-                if b == b'+' {
-                        output.push(b' ');
-                        index += 1;
-                        continue;
-                }
-
-                if b == b'%' && index + 2 < bytes.len() {
-                        let hi = bytes[index + 1] as char;
-                        let lo = bytes[index + 2] as char;
-                        if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() {
-                                let text = [hi, lo].iter().collect::<String>();
-                                if let Ok(hex) = u8::from_str_radix(&text, 16) {
-                                        output.push(hex);
-                                        index += 3;
-                                        continue;
-                                }
-                        }
-                }
-
-                output.push(b);
-                index += 1;
+    while index < bytes.len() {
+        let b = bytes[index];
+        if b == b'+' {
+            output.push(b' ');
+            index += 1;
+            continue;
         }
 
-        String::from_utf8_lossy(&output).to_string()
+        if b == b'%' && index + 2 < bytes.len() {
+            let hi = bytes[index + 1] as char;
+            let lo = bytes[index + 2] as char;
+            if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() {
+                let text = [hi, lo].iter().collect::<String>();
+                if let Ok(hex) = u8::from_str_radix(&text, 16) {
+                    output.push(hex);
+                    index += 3;
+                    continue;
+                }
+            }
+        }
+
+        output.push(b);
+        index += 1;
+    }
+
+    String::from_utf8_lossy(&output).to_string()
 }
 
 fn query_param_from_url(url: &str, key: &str) -> Option<String> {
-        let query = url.split('?').nth(1)?;
-        for pair in query.split('&') {
-                if pair.trim().is_empty() {
-                        continue;
-                }
-
-                let mut parts = pair.splitn(2, '=');
-                let raw_key = parts.next().unwrap_or_default();
-                let raw_value = parts.next().unwrap_or_default();
-                let decoded_key = percent_decode(raw_key);
-
-                if decoded_key == key {
-                        return Some(percent_decode(raw_value));
-                }
+    let query = url.split('?').nth(1)?;
+    for pair in query.split('&') {
+        if pair.trim().is_empty() {
+            continue;
         }
 
-        None
+        let mut parts = pair.splitn(2, '=');
+        let raw_key = parts.next().unwrap_or_default();
+        let raw_value = parts.next().unwrap_or_default();
+        let decoded_key = percent_decode(raw_key);
+
+        if decoded_key == key {
+            return Some(percent_decode(raw_value));
+        }
+    }
+
+    None
 }
 
 fn mobile_input_html() -> &'static str {
-        r#"<!doctype html>
+    r#"<!doctype html>
 <html lang="ja">
 <head>
     <meta charset="utf-8" />
@@ -2118,8 +2132,11 @@ fn mobile_input_html() -> &'static str {
             const matchupReady = isMatchupReady(detail);
             const completed = isCompletedSet(detail);
             detailMeta.textContent = completed
-                ? '結果が確定しているため編集できません。修正する場合はsetを削除して再入力してください。'
+                ? '結果が確定しているため編集できません。修正する場合は「影響setを取消」からやり直してください。'
                 : '';
+            if (discardBtn) {
+                discardBtn.disabled = completed;
+            }
             const visibleSlots = slots.slice(0, 2);
             const numericScores = matchupReady
                 ? visibleSlots.map((slot) => normalizeScoreValue(slot?.score)).filter((value) => value !== null)
@@ -2706,7 +2723,27 @@ fn mobile_input_html() -> &'static str {
             }
         });
         updateBtn.addEventListener('click', () => { void saveSetFromDetail(false); });
-        confirmBtn.addEventListener('click', () => { void saveSetFromDetail(true); });
+        confirmBtn.addEventListener('click', () => {
+            if (!selectedSet) {
+                return;
+            }
+
+            const scores = collectSlotScores();
+            const scoreSummary = (selectedSet.slots || [])
+                .filter((slot) => slot && slot.entrantId)
+                .map((slot) => {
+                    const score = scores.find((item) => item.entrantId === slot.entrantId);
+                    return `${slot.entrantName || 'TBD'}: ${score ? score.score : '未入力'}`;
+                })
+                .join('\n');
+            const setLabel = selectedSet.fullRoundText || getDisplaySetLabel(selectedSet);
+            const ok = window.confirm(
+                `結果を確定しますか？\n\n${setLabel}\n${scoreSummary || '対戦者未確定'}\n\n確定後は通常の下書き破棄では取り消せません。内容を確認してください。`,
+            );
+            if (ok) {
+                void saveSetFromDetail(true);
+            }
+        });
         overlayToggleBtn.addEventListener('click', () => {
             void toggleOverlayFromDetail();
         });
@@ -2742,37 +2779,39 @@ fn mobile_input_html() -> &'static str {
 }
 
 fn is_mobile_authorized(url: &str) -> bool {
-        let supplied = query_param_from_url(url, "token").unwrap_or_default();
-        if supplied.is_empty() {
-                return false;
-        }
+    let supplied = query_param_from_url(url, "token").unwrap_or_default();
+    if supplied.is_empty() {
+        return false;
+    }
 
-        match current_mobile_input_token() {
-                Ok(expected) => !expected.is_empty() && supplied == expected,
-                Err(_) => false,
-        }
+    match current_mobile_input_token() {
+        Ok(expected) => !expected.is_empty() && supplied == expected,
+        Err(_) => false,
+    }
 }
 
 fn respond_json(request: tiny_http::Request, status: i32, payload: String) {
-        let mut response = Response::from_string(payload).with_status_code(status);
-        if let Ok(content_type) = Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8") {
-                response = response.with_header(content_type);
-        }
-        if let Ok(no_cache) = Header::from_bytes(
-                b"Cache-Control",
-                b"no-store, no-cache, must-revalidate, max-age=0",
-        ) {
-                response = response.with_header(no_cache);
-        }
+    let mut response = Response::from_string(payload).with_status_code(status);
+    if let Ok(content_type) =
+        Header::from_bytes(b"Content-Type", b"application/json; charset=utf-8")
+    {
+        response = response.with_header(content_type);
+    }
+    if let Ok(no_cache) = Header::from_bytes(
+        b"Cache-Control",
+        b"no-store, no-cache, must-revalidate, max-age=0",
+    ) {
+        response = response.with_header(no_cache);
+    }
 
-        let _ = request.respond(response);
+    let _ = request.respond(response);
 }
 
 fn parse_limit(url: &str) -> usize {
-        query_param_from_url(url, "limit")
-                .and_then(|value| value.parse::<usize>().ok())
-                .map(|value| value.clamp(1, 200))
-                .unwrap_or(80)
+    query_param_from_url(url, "limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(1, 200))
+        .unwrap_or(80)
 }
 
 fn build_mobile_set_detail_from_workspace(
@@ -2873,7 +2912,10 @@ fn hydrate_mobile_detail_with_local_meta(
         if item.set_id != set_id {
             continue;
         }
-        side_by_id.insert(item.entrant_id.clone(), play_side_label(item.play_side.clone()));
+        side_by_id.insert(
+            item.entrant_id.clone(),
+            play_side_label(item.play_side.clone()),
+        );
     }
 
     let mut score_by_id = HashMap::<String, f64>::new();
@@ -2947,7 +2989,9 @@ fn hydrate_mobile_detail_with_local_meta(
                 });
 
                 slot.entrant_id = Some(entrant_id.clone());
-                if slot.entrant_name.trim().is_empty() || slot.entrant_name.eq_ignore_ascii_case("TBD") {
+                if slot.entrant_name.trim().is_empty()
+                    || slot.entrant_name.eq_ignore_ascii_case("TBD")
+                {
                     if let Some(name) = entrant_name_by_id.get(&entrant_id) {
                         slot.entrant_name = name.clone();
                     }
@@ -2955,7 +2999,13 @@ fn hydrate_mobile_detail_with_local_meta(
                 if slot.score.is_none() {
                     slot.score = score_by_id.get(&entrant_id).cloned();
                 }
-                if slot.play_side.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                if slot
+                    .play_side
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+                {
                     slot.play_side = side_by_id.get(&entrant_id).cloned();
                 }
 
@@ -2967,7 +3017,13 @@ fn hydrate_mobile_detail_with_local_meta(
     if detail.full_round_text.trim().is_empty() {
         detail.full_round_text = format!("Set {}", detail.set_code);
     }
-    if detail.winner_id.as_deref().map(str::trim).unwrap_or("").is_empty() {
+    if detail
+        .winner_id
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
         if let Some(pending) = pending {
             if !pending.winner_id.trim().is_empty() {
                 detail.winner_id = Some(pending.winner_id.clone());
@@ -2984,7 +3040,9 @@ fn build_mobile_set_detail_local_only(
     set_id: &str,
 ) -> Option<MobileSetDetailItem> {
     if let Some(base) = build_mobile_set_detail_from_workspace(workspace, event_id, set_id) {
-        return Some(hydrate_mobile_detail_with_local_meta(base, workspace, event_id, set_id));
+        return Some(hydrate_mobile_detail_with_local_meta(
+            base, workspace, event_id, set_id,
+        ));
     }
 
     let pending = workspace
@@ -3011,7 +3069,10 @@ fn build_mobile_set_detail_local_only(
     let mut side_by_id = HashMap::<String, String>::new();
     for item in &workspace.local_meta.set_play_sides {
         if item.set_id == set_id {
-            side_by_id.insert(item.entrant_id.clone(), play_side_label(item.play_side.clone()));
+            side_by_id.insert(
+                item.entrant_id.clone(),
+                play_side_label(item.play_side.clone()),
+            );
         }
     }
 
@@ -3081,18 +3142,18 @@ fn mobile_detail_has_entrant_ids(detail: &MobileSetDetailItem) -> bool {
 }
 
 fn load_target_event_sets(
-        app: &tauri::AppHandle,
-        slug: &str,
-        event_id: &str,
+    app: &tauri::AppHandle,
+    slug: &str,
+    event_id: &str,
 ) -> Result<Vec<SetSnapshot>, String> {
-        let workspace = storage::load_workspace(app, slug, event_id)?;
-        let event = workspace
-                .snapshot
-                .events
-                .iter()
-                .find(|item| item.event_id == event_id)
-                .ok_or_else(|| format!("指定eventが見つかりません: {event_id}"))?;
-        Ok(event.sets.clone())
+    let workspace = storage::load_workspace(app, slug, event_id)?;
+    let event = workspace
+        .snapshot
+        .events
+        .iter()
+        .find(|item| item.event_id == event_id)
+        .ok_or_else(|| format!("指定eventが見つかりません: {event_id}"))?;
+    Ok(event.sets.clone())
 }
 
 fn load_target_workspace(
@@ -3104,755 +3165,817 @@ fn load_target_workspace(
 }
 
 fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_http::Request) {
-        let url = request.url().to_owned();
-        let path = url.split('?').next().unwrap_or("/");
+    let url = request.url().to_owned();
+    let path = url.split('?').next().unwrap_or("/");
 
-        if !path.starts_with("/mobile") {
-                let _ = request.respond(Response::from_string("Not Found").with_status_code(404));
-                return;
+    if !path.starts_with("/mobile") {
+        let _ = request.respond(Response::from_string("Not Found").with_status_code(404));
+        return;
+    }
+
+    if !is_mobile_authorized(&url) {
+        respond_json(request, 401, "{\"error\":\"unauthorized\"}".to_owned());
+        return;
+    }
+
+    if path == "/mobile" || path == "/mobile/" {
+        let mut response = Response::from_string(mobile_input_html().to_owned());
+        if let Ok(content_type) = Header::from_bytes(b"Content-Type", b"text/html; charset=utf-8") {
+            response = response.with_header(content_type);
+        }
+        if let Ok(no_cache) = Header::from_bytes(
+            b"Cache-Control",
+            b"no-store, no-cache, must-revalidate, max-age=0",
+        ) {
+            response = response.with_header(no_cache);
+        }
+        let _ = request.respond(response);
+        return;
+    }
+
+    if path == "/mobile/api/event-meta" && request.method() == &tiny_http::Method::Get {
+        let slug = query_param_from_url(&url, "slug").unwrap_or_default();
+        let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
+
+        if slug.trim().is_empty() || event_id.trim().is_empty() {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"slug and eventId are required\"}".to_owned(),
+            );
+            return;
         }
 
-        if !is_mobile_authorized(&url) {
-                respond_json(request, 401, "{\"error\":\"unauthorized\"}".to_owned());
-                return;
-        }
-
-        if path == "/mobile" || path == "/mobile/" {
-                let mut response = Response::from_string(mobile_input_html().to_owned());
-                if let Ok(content_type) = Header::from_bytes(b"Content-Type", b"text/html; charset=utf-8") {
-                        response = response.with_header(content_type);
-                }
-                if let Ok(no_cache) = Header::from_bytes(
-                        b"Cache-Control",
-                        b"no-store, no-cache, must-revalidate, max-age=0",
-                ) {
-                        response = response.with_header(no_cache);
-                }
-                let _ = request.respond(response);
-                return;
-        }
-
-        if path == "/mobile/api/event-meta" && request.method() == &tiny_http::Method::Get {
-                let slug = query_param_from_url(&url, "slug").unwrap_or_default();
-                let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
-
-                if slug.trim().is_empty() || event_id.trim().is_empty() {
-                        respond_json(
-                                request,
-                                400,
-                                "{\"error\":\"slug and eventId are required\"}".to_owned(),
-                        );
-                        return;
-                }
-
-                let workspace = match load_target_workspace(app, &slug, &event_id) {
-                        Ok(value) => value,
-                        Err(err) => {
-                                respond_json(
-                                        request,
-                                        500,
-                                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
-                                );
-                                return;
-                        }
-                };
-
-                let event = workspace
-                        .snapshot
-                        .events
-                        .iter()
-                        .find(|item| item.event_id == event_id)
-                        .cloned();
-                let tournament_name = workspace.snapshot.name.trim().to_owned();
-                let event_name = event.map(|item| item.name.trim().to_owned()).unwrap_or_default();
-                let local_meta = match storage::load_local_meta(app, &slug, &event_id) {
-                        Ok(value) => value,
-                        Err(_) => models::TournamentLocalMeta {
-                                tournament_id: workspace.snapshot.tournament_id.clone(),
-                                slug: slug.to_owned(),
-                                events: Vec::new(),
-                                set_play_sides: Vec::new(),
-                                pending_set_results: Vec::new(),
-                            pending_grand_final_reset_results: Vec::new(),
-                                updated_at: chrono::Utc::now(),
-                        },
-                };
-                let event_alias = local_meta
-                        .events
-                        .iter()
-                        .find(|item| item.event_id == event_id)
-                        .and_then(|item| item.event_alias.clone())
-                        .filter(|value| !value.trim().is_empty())
-                        .unwrap_or_else(|| {
-                                if tournament_name.is_empty() && event_name.is_empty() {
-                                        "スマホ結果入力依頼".to_owned()
-                                } else if tournament_name.is_empty() {
-                                        event_name.clone()
-                                } else if event_name.is_empty() {
-                                        tournament_name.clone()
-                                } else {
-                                        format!("{tournament_name} / {event_name}")
-                                }
-                        });
-
-                let payload = serde_json::to_string(&MobileEventInfo {
-                        event_alias,
-                        tournament_name,
-                        event_name,
-                }).unwrap_or_else(|_| "{}".to_owned());
-                respond_json(request, 200, payload);
-                return;
-        }
-
-        if path == "/mobile/api/sets" && request.method() == &tiny_http::Method::Get {
-                let slug = query_param_from_url(&url, "slug").unwrap_or_default();
-                let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
-                let query = query_param_from_url(&url, "q")
-                        .unwrap_or_default()
-                        .trim()
-                        .to_lowercase();
-                let limit = parse_limit(&url);
-
-                if slug.trim().is_empty() || event_id.trim().is_empty() {
-                        respond_json(
-                                request,
-                                400,
-                                "{\"error\":\"slug and eventId are required\"}".to_owned(),
-                        );
-                        return;
-                }
-
-                let sets = match load_target_event_sets(app, &slug, &event_id) {
-                        Ok(value) => value,
-                        Err(err) => {
-                                respond_json(
-                                        request,
-                                        500,
-                                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
-                                );
-                                return;
-                        }
-                };
-
-                let set_display_code_by_id = build_set_display_code_by_id(&sets);
-
-                let mut items = sets
-                        .iter()
-                        .filter(|set| {
-                                if query.is_empty() {
-                                        return true;
-                                }
-
-                                let set_code = set_display_code_by_id
-                                        .get(&set.set_id)
-                                        .cloned()
-                                        .unwrap_or_else(|| set.set_id.clone());
-                                let set_name = format!("Set {}", set_code);
-                                let mut haystacks = vec![
-                                        set_code.to_lowercase(),
-                                        set_name.to_lowercase(),
-                                        set.full_round_text.to_lowercase(),
-                                ];
-                                for slot in &set.slots {
-                                        haystacks.push(slot.entrant_name.to_lowercase());
-                                }
-
-                                haystacks.into_iter().any(|value| value.contains(&query))
-                        })
-                        .map(|set| MobileSetListItem {
-                                set_id: set.set_id.clone(),
-                                set_code: set_display_code_by_id
-                                        .get(&set.set_id)
-                                        .cloned()
-                                        .unwrap_or_else(|| set.set_id.clone()),
-                                full_round_text: set.full_round_text.clone(),
-                                state: set.state,
-                                winner_id: set.winner_id.clone(),
-                                entrant_names: set
-                                        .slots
-                                        .iter()
-                                        .map(|slot| slot.entrant_name.clone())
-                                        .collect::<Vec<String>>(),
-                        })
-                        .collect::<Vec<MobileSetListItem>>();
-
-                items.sort_by(|left, right| {
-                        left.full_round_text
-                                .cmp(&right.full_round_text)
-                                .then_with(|| left.set_id.cmp(&right.set_id))
-                });
-                items.truncate(limit);
-
-                let payload = serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_owned());
-                respond_json(request, 200, payload);
-                return;
-        }
-
-        if path.starts_with("/mobile/api/sets/") && request.method() == &tiny_http::Method::Get {
-                let slug = query_param_from_url(&url, "slug").unwrap_or_default();
-                let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
-                let set_id = percent_decode(path.trim_start_matches("/mobile/api/sets/"));
-
-                if slug.trim().is_empty() || event_id.trim().is_empty() || set_id.trim().is_empty() {
-                        respond_json(
-                                request,
-                                400,
-                                "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
-                        );
-                        return;
-                }
-
-                let workspace = match load_target_workspace(app, &slug, &event_id) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        respond_json(
-                            request,
-                            500,
-                            format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
-                        );
-                        return;
-                    }
-                };
-
-                let detail = match build_mobile_set_detail_local_only(&workspace, &event_id, &set_id) {
-                    Some(detail) => detail,
-                    None => {
-                        respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
-                        return;
-                    }
-                };
-
-                let payload = serde_json::to_string(&detail).unwrap_or_else(|_| "{}".to_owned());
-                respond_json(request, 200, payload);
-                return;
-        }
-
-            if path.starts_with("/mobile/api/sets/") && path.ends_with("/save") && request.method() == &tiny_http::Method::Post {
-                let slug = query_param_from_url(&url, "slug").unwrap_or_default();
-                let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
-                let set_id = percent_decode(
-                    path.trim_start_matches("/mobile/api/sets/")
-                        .trim_end_matches("/save")
-                        .trim_end_matches('/'),
+        let workspace = match load_target_workspace(app, &slug, &event_id) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
                 );
+                return;
+            }
+        };
 
-                if slug.trim().is_empty() || event_id.trim().is_empty() || set_id.trim().is_empty() {
-                    respond_json(
-                        request,
-                        400,
-                        "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
-                    );
-                    return;
+        let event = workspace
+            .snapshot
+            .events
+            .iter()
+            .find(|item| item.event_id == event_id)
+            .cloned();
+        let tournament_name = workspace.snapshot.name.trim().to_owned();
+        let event_name = event
+            .map(|item| item.name.trim().to_owned())
+            .unwrap_or_default();
+        let local_meta = match storage::load_local_meta(app, &slug, &event_id) {
+            Ok(value) => value,
+            Err(_) => models::TournamentLocalMeta {
+                tournament_id: workspace.snapshot.tournament_id.clone(),
+                slug: slug.to_owned(),
+                events: Vec::new(),
+                set_play_sides: Vec::new(),
+                pending_set_results: Vec::new(),
+                pending_grand_final_reset_results: Vec::new(),
+                updated_at: chrono::Utc::now(),
+            },
+        };
+        let event_alias = local_meta
+            .events
+            .iter()
+            .find(|item| item.event_id == event_id)
+            .and_then(|item| item.event_alias.clone())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                if tournament_name.is_empty() && event_name.is_empty() {
+                    "スマホ結果入力依頼".to_owned()
+                } else if tournament_name.is_empty() {
+                    event_name.clone()
+                } else if event_name.is_empty() {
+                    tournament_name.clone()
+                } else {
+                    format!("{tournament_name} / {event_name}")
+                }
+            });
+
+        let payload = serde_json::to_string(&MobileEventInfo {
+            event_alias,
+            tournament_name,
+            event_name,
+        })
+        .unwrap_or_else(|_| "{}".to_owned());
+        respond_json(request, 200, payload);
+        return;
+    }
+
+    if path == "/mobile/api/sets" && request.method() == &tiny_http::Method::Get {
+        let slug = query_param_from_url(&url, "slug").unwrap_or_default();
+        let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
+        let query = query_param_from_url(&url, "q")
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase();
+        let limit = parse_limit(&url);
+
+        if slug.trim().is_empty() || event_id.trim().is_empty() {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"slug and eventId are required\"}".to_owned(),
+            );
+            return;
+        }
+
+        let sets = match load_target_event_sets(app, &slug, &event_id) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+
+        let set_display_code_by_id = build_set_display_code_by_id(&sets);
+
+        let mut items = sets
+            .iter()
+            .filter(|set| {
+                if query.is_empty() {
+                    return true;
                 }
 
-                let mut body = String::new();
-                if let Err(err) = request.as_reader().read_to_string(&mut body) {
-                    respond_json(
-                        request,
-                        400,
-                        format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
-                    );
-                    return;
+                let set_code = set_display_code_by_id
+                    .get(&set.set_id)
+                    .cloned()
+                    .unwrap_or_else(|| set.set_id.clone());
+                let set_name = format!("Set {}", set_code);
+                let mut haystacks = vec![
+                    set_code.to_lowercase(),
+                    set_name.to_lowercase(),
+                    set.full_round_text.to_lowercase(),
+                ];
+                for slot in &set.slots {
+                    haystacks.push(slot.entrant_name.to_lowercase());
                 }
 
-                let payload = match serde_json::from_str::<MobileSetSaveInput>(&body) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        respond_json(
-                            request,
-                            400,
-                            format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
-                        );
-                        return;
-                    }
-                };
-
-                if payload.slug != slug || payload.event_id != event_id {
-                    respond_json(
-                        request,
-                        400,
-                        "{\"error\":\"path/query and payload scope mismatch\"}".to_owned(),
-                    );
-                    return;
-                }
-
-                let workspace_before = match load_target_workspace(app, &slug, &event_id) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        respond_json(
-                            request,
-                            400,
-                            format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
-                        );
-                        return;
-                    }
-                };
-
-                let Some(target_set) = workspace_before
-                    .snapshot
-                    .events
-                    .iter()
-                    .find(|event| event.event_id == event_id)
-                    .and_then(|event| event.sets.iter().find(|set| set.set_id == set_id))
-                else {
-                    respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
-                    return;
-                };
-
-                if target_set.state == 3 || target_set.winner_id.is_some() {
-                    respond_json(
-                        request,
-                        400,
-                        "{\"error\":\"completed set results cannot be changed\"}".to_owned(),
-                    );
-                    return;
-                }
-
-                let known_entrant_ids = target_set
+                haystacks.into_iter().any(|value| value.contains(&query))
+            })
+            .map(|set| MobileSetListItem {
+                set_id: set.set_id.clone(),
+                set_code: set_display_code_by_id
+                    .get(&set.set_id)
+                    .cloned()
+                    .unwrap_or_else(|| set.set_id.clone()),
+                full_round_text: set.full_round_text.clone(),
+                state: set.state,
+                winner_id: set.winner_id.clone(),
+                entrant_names: set
                     .slots
                     .iter()
-                    .filter_map(|slot| slot.entrant_id.clone())
-                    .collect::<Vec<String>>();
+                    .map(|slot| slot.entrant_name.clone())
+                    .collect::<Vec<String>>(),
+            })
+            .collect::<Vec<MobileSetListItem>>();
 
-                for slot in &payload.slot_scores {
-                    if !known_entrant_ids.iter().any(|id| id == &slot.entrant_id) {
-                        respond_json(
-                            request,
-                            400,
-                            "{\"error\":\"slotScores contains unknown entrantId\"}".to_owned(),
-                        );
-                        return;
-                    }
+        items.sort_by(|left, right| {
+            left.full_round_text
+                .cmp(&right.full_round_text)
+                .then_with(|| left.set_id.cmp(&right.set_id))
+        });
+        items.truncate(limit);
+
+        let payload = serde_json::to_string(&items).unwrap_or_else(|_| "[]".to_owned());
+        respond_json(request, 200, payload);
+        return;
+    }
+
+    if path.starts_with("/mobile/api/sets/") && request.method() == &tiny_http::Method::Get {
+        let slug = query_param_from_url(&url, "slug").unwrap_or_default();
+        let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
+        let set_id = percent_decode(path.trim_start_matches("/mobile/api/sets/"));
+
+        if slug.trim().is_empty() || event_id.trim().is_empty() || set_id.trim().is_empty() {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
+            );
+            return;
+        }
+
+        let workspace = match load_target_workspace(app, &slug, &event_id) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+
+        let detail = match build_mobile_set_detail_local_only(&workspace, &event_id, &set_id) {
+            Some(detail) => detail,
+            None => {
+                respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
+                return;
+            }
+        };
+
+        let payload = serde_json::to_string(&detail).unwrap_or_else(|_| "{}".to_owned());
+        respond_json(request, 200, payload);
+        return;
+    }
+
+    if path.starts_with("/mobile/api/sets/")
+        && path.ends_with("/save")
+        && request.method() == &tiny_http::Method::Post
+    {
+        let slug = query_param_from_url(&url, "slug").unwrap_or_default();
+        let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
+        let set_id = percent_decode(
+            path.trim_start_matches("/mobile/api/sets/")
+                .trim_end_matches("/save")
+                .trim_end_matches('/'),
+        );
+
+        if slug.trim().is_empty() || event_id.trim().is_empty() || set_id.trim().is_empty() {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
+            );
+            return;
+        }
+
+        let mut body = String::new();
+        if let Err(err) = request.as_reader().read_to_string(&mut body) {
+            respond_json(
+                request,
+                400,
+                format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
+            );
+            return;
+        }
+
+        let payload = match serde_json::from_str::<MobileSetSaveInput>(&body) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    400,
+                    format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+
+        if payload.slug != slug || payload.event_id != event_id {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"path/query and payload scope mismatch\"}".to_owned(),
+            );
+            return;
+        }
+
+        let workspace_before = match load_target_workspace(app, &slug, &event_id) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    400,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+
+        let Some(target_set) = workspace_before
+            .snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == event_id)
+            .and_then(|event| event.sets.iter().find(|set| set.set_id == set_id))
+        else {
+            respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
+            return;
+        };
+
+        if target_set.state == 3 || target_set.winner_id.is_some() {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"completed set results cannot be changed\"}".to_owned(),
+            );
+            return;
+        }
+
+        let known_entrant_ids = target_set
+            .slots
+            .iter()
+            .filter_map(|slot| slot.entrant_id.clone())
+            .collect::<Vec<String>>();
+
+        for slot in &payload.slot_scores {
+            if !known_entrant_ids.iter().any(|id| id == &slot.entrant_id) {
+                respond_json(
+                    request,
+                    400,
+                    "{\"error\":\"slotScores contains unknown entrantId\"}".to_owned(),
+                );
+                return;
+            }
+        }
+
+        for assignment in &payload.side_assignments {
+            if !known_entrant_ids
+                .iter()
+                .any(|id| id == &assignment.entrant_id)
+            {
+                respond_json(
+                    request,
+                    400,
+                    "{\"error\":\"sideAssignments contains unknown entrantId\"}".to_owned(),
+                );
+                return;
+            }
+            if let Err(err) = parse_play_side_value(assignment.play_side.as_deref()) {
+                respond_json(
+                    request,
+                    400,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        }
+
+        for assignment in &payload.side_assignments {
+            let play_side = parse_play_side_value(assignment.play_side.as_deref())
+                .ok()
+                .flatten();
+            if let Err(err) = storage::upsert_local_set_play_side(
+                app,
+                LocalSetPlaySideInput {
+                    slug: slug.clone(),
+                    event_id: event_id.clone(),
+                    set_id: set_id.clone(),
+                    entrant_id: assignment.entrant_id.clone(),
+                    play_side,
+                },
+            ) {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        }
+
+        let winner_id = payload
+            .winner_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| resolve_winner_id_from_slot_scores(target_set, &payload.slot_scores));
+
+        if let Some(value) = winner_id.as_ref() {
+            if !known_entrant_ids.iter().any(|id| id == value) {
+                respond_json(
+                    request,
+                    400,
+                    "{\"error\":\"winnerId is not in target set\"}".to_owned(),
+                );
+                return;
+            }
+        }
+
+        let workspace_after = if let Some(winner_id) = winner_id {
+            match storage::upsert_local_set_result(
+                app,
+                LocalSetResultInput {
+                    slug: slug.clone(),
+                    event_id: event_id.clone(),
+                    set_id: set_id.clone(),
+                    winner_id,
+                    confirmed: payload.confirmed,
+                    slot_scores: payload.slot_scores.clone(),
+                },
+            ) {
+                Ok(value) => value,
+                Err(err) => {
+                    respond_json(
+                        request,
+                        400,
+                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                    );
+                    return;
                 }
+            }
+        } else {
+            if payload.confirmed {
+                respond_json(
+                    request,
+                    400,
+                    "{\"error\":\"winnerId cannot be resolved for confirmed save\"}".to_owned(),
+                );
+                return;
+            }
 
-                for assignment in &payload.side_assignments {
-                    if !known_entrant_ids.iter().any(|id| id == &assignment.entrant_id) {
-                        respond_json(
-                            request,
-                            400,
-                            "{\"error\":\"sideAssignments contains unknown entrantId\"}".to_owned(),
-                        );
-                        return;
-                    }
-                    if let Err(err) = parse_play_side_value(assignment.play_side.as_deref()) {
-                        respond_json(
-                            request,
-                            400,
-                            format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
-                        );
-                        return;
-                    }
+            match storage::upsert_local_set_scores(
+                app,
+                LocalSetScoreUpdateInput {
+                    slug: slug.clone(),
+                    event_id: event_id.clone(),
+                    set_id: set_id.clone(),
+                    slot_scores: payload.slot_scores.clone(),
+                },
+            ) {
+                Ok(value) => value,
+                Err(err) => {
+                    respond_json(
+                        request,
+                        400,
+                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                    );
+                    return;
                 }
+            }
+        };
 
-                for assignment in &payload.side_assignments {
-                    let play_side = parse_play_side_value(assignment.play_side.as_deref()).ok().flatten();
-                    if let Err(err) = storage::upsert_local_set_play_side(
-                        app,
-                        LocalSetPlaySideInput {
-                            slug: slug.clone(),
-                            event_id: event_id.clone(),
-                            set_id: set_id.clone(),
-                            entrant_id: assignment.entrant_id.clone(),
-                            play_side,
-                        },
-                    ) {
-                        respond_json(
-                            request,
-                            500,
-                            format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
-                        );
-                        return;
-                    }
+        let detail = build_mobile_set_detail_local_only(&workspace_after, &event_id, &set_id);
+
+        let Some(detail) = detail else {
+            respond_json(
+                request,
+                500,
+                "{\"error\":\"saved but failed to reload set detail\"}".to_owned(),
+            );
+            return;
+        };
+
+        emit_workspace_updated(app, &slug, &event_id);
+
+        let result = serde_json::to_string(&detail).unwrap_or_else(|_| "{}".to_owned());
+        respond_json(request, 200, result);
+        return;
+    }
+
+    if path.starts_with("/mobile/api/sets/")
+        && path.ends_with("/discard")
+        && request.method() == &tiny_http::Method::Post
+    {
+        let slug = query_param_from_url(&url, "slug").unwrap_or_default();
+        let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
+        let set_id = percent_decode(
+            path.trim_start_matches("/mobile/api/sets/")
+                .trim_end_matches("/discard")
+                .trim_end_matches('/'),
+        );
+
+        if slug.trim().is_empty() || event_id.trim().is_empty() || set_id.trim().is_empty() {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
+            );
+            return;
+        }
+
+        let workspace_after =
+            match storage::clear_pending_set_result_for_set(app, &slug, &event_id, &set_id) {
+                Ok(value) => value,
+                Err(err) => {
+                    respond_json(
+                        request,
+                        400,
+                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                    );
+                    return;
                 }
+            };
 
-                let winner_id = payload
-                    .winner_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned)
-                    .or_else(|| resolve_winner_id_from_slot_scores(target_set, &payload.slot_scores));
+        let detail = match build_mobile_set_detail_local_only(&workspace_after, &event_id, &set_id)
+        {
+            Some(detail) => detail,
+            None => {
+                respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
+                return;
+            }
+        };
 
-                if let Some(value) = winner_id.as_ref() {
-                    if !known_entrant_ids.iter().any(|id| id == value) {
-                        respond_json(
-                            request,
-                            400,
-                            "{\"error\":\"winnerId is not in target set\"}".to_owned(),
-                        );
-                        return;
-                    }
+        emit_workspace_updated(app, &slug, &event_id);
+
+        let payload = serde_json::to_string(&detail).unwrap_or_else(|_| "{}".to_owned());
+        respond_json(request, 200, payload);
+        return;
+    }
+
+    if path == "/mobile/api/overlay-state" && request.method() == &tiny_http::Method::Get {
+        respond_json(
+            request,
+            200,
+            serde_json::to_string(&snapshot_obs_overlay_state().unwrap_or_else(|_| {
+                ObsOverlayState {
+                    active: false,
+                    fully_stopped: false,
+                    current_set_id: None,
+                    event_name: None,
+                    round_text: None,
+                    red_player_name: String::new(),
+                    blue_player_name: String::new(),
+                    red_set_wins: 0,
+                    blue_set_wins: 0,
+                    font_scale: 1.0,
+                    name_fit_mode: "truncate".to_owned(),
+                    show_set_info: true,
+                    overlay_url: overlay_url(),
                 }
+            }))
+            .unwrap_or_else(|_| "{}".to_owned()),
+        );
+        return;
+    }
 
-                let workspace_after = if let Some(winner_id) = winner_id {
-                    match storage::upsert_local_set_result(
-                        app,
-                        LocalSetResultInput {
-                            slug: slug.clone(),
-                            event_id: event_id.clone(),
-                            set_id: set_id.clone(),
-                            winner_id,
-                            confirmed: payload.confirmed,
-                            slot_scores: payload.slot_scores.clone(),
-                        },
-                    ) {
-                        Ok(value) => value,
-                        Err(err) => {
+    if path == "/mobile/api/overlay-toggle" && request.method() == &tiny_http::Method::Post {
+        let mut body = String::new();
+        if let Err(err) = request.as_reader().read_to_string(&mut body) {
+            respond_json(
+                request,
+                400,
+                format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
+            );
+            return;
+        }
+
+        let payload = match serde_json::from_str::<MobileOverlayToggleInput>(&body) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    400,
+                    format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+
+        if payload.slug.trim().is_empty()
+            || payload.event_id.trim().is_empty()
+            || payload.set_id.trim().is_empty()
+        {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
+            );
+            return;
+        }
+
+        let input = ObsOverlaySetInput {
+            enabled: payload.enabled,
+            set_id: payload.set_id.clone(),
+            event_name: payload.event_name.clone(),
+            round_text: payload.round_text.clone(),
+            red_player_name: payload.red_player_name.clone(),
+            blue_player_name: payload.blue_player_name.clone(),
+            red_set_wins: payload.red_set_wins,
+            blue_set_wins: payload.blue_set_wins,
+            font_scale: payload.font_scale,
+        };
+
+        let state = if payload.enabled {
+            match apply_obs_overlay_toggle(input.clone(), payload.force_switch) {
+                Ok(value) => value,
+                Err(err) if !payload.force_switch => {
+                    if let Ok(current) = snapshot_obs_overlay_state() {
+                        if current.active
+                            && current.current_set_id.as_deref() != Some(payload.set_id.as_str())
+                        {
                             respond_json(
                                 request,
-                                400,
-                                format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                                409,
+                                serde_json::to_string(&current).unwrap_or_else(|_| "{}".to_owned()),
                             );
                             return;
                         }
                     }
-                } else {
-                    if payload.confirmed {
-                        respond_json(
-                            request,
-                            400,
-                            "{\"error\":\"winnerId cannot be resolved for confirmed save\"}".to_owned(),
-                        );
-                        return;
-                    }
-
-                    match storage::upsert_local_set_scores(
-                        app,
-                        LocalSetScoreUpdateInput {
-                            slug: slug.clone(),
-                            event_id: event_id.clone(),
-                            set_id: set_id.clone(),
-                            slot_scores: payload.slot_scores.clone(),
-                        },
-                    ) {
-                        Ok(value) => value,
-                        Err(err) => {
-                            respond_json(
-                                request,
-                                400,
-                                format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
-                            );
-                            return;
-                        }
-                    }
-                };
-
-                let detail = build_mobile_set_detail_local_only(&workspace_after, &event_id, &set_id);
-
-                let Some(detail) = detail else {
                     respond_json(
                         request,
                         500,
-                        "{\"error\":\"saved but failed to reload set detail\"}".to_owned(),
+                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
                     );
                     return;
-                };
-
-                emit_workspace_updated(app, &slug, &event_id);
-
-                let result = serde_json::to_string(&detail).unwrap_or_else(|_| "{}".to_owned());
-                respond_json(request, 200, result);
-                return;
-            }
-
-            if path.starts_with("/mobile/api/sets/") && path.ends_with("/discard") && request.method() == &tiny_http::Method::Post {
-                let slug = query_param_from_url(&url, "slug").unwrap_or_default();
-                let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
-                let set_id = percent_decode(
-                    path.trim_start_matches("/mobile/api/sets/")
-                        .trim_end_matches("/discard")
-                        .trim_end_matches('/'),
-                );
-
-                if slug.trim().is_empty() || event_id.trim().is_empty() || set_id.trim().is_empty() {
+                }
+                Err(err) => {
                     respond_json(
                         request,
-                        400,
-                        "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
+                        500,
+                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
                     );
                     return;
                 }
-
-                let workspace_after = match storage::clear_pending_set_result_for_set(app, &slug, &event_id, &set_id) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        respond_json(
-                            request,
-                            400,
-                            format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
-                        );
-                        return;
-                    }
-                };
-
-                let detail = match build_mobile_set_detail_local_only(&workspace_after, &event_id, &set_id) {
-                    Some(detail) => detail,
-                    None => {
-                        respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
-                        return;
-                    }
-                };
-
-                emit_workspace_updated(app, &slug, &event_id);
-
-                let payload = serde_json::to_string(&detail).unwrap_or_else(|_| "{}".to_owned());
-                respond_json(request, 200, payload);
-                return;
             }
-
-            if path == "/mobile/api/overlay-state" && request.method() == &tiny_http::Method::Get {
-                respond_json(
-                    request,
-                    200,
-                    serde_json::to_string(&snapshot_obs_overlay_state().unwrap_or_else(|_| ObsOverlayState {
-                        active: false,
-                        fully_stopped: false,
-                        current_set_id: None,
-                        event_name: None,
-                        round_text: None,
-                        red_player_name: String::new(),
-                        blue_player_name: String::new(),
-                        red_set_wins: 0,
-                        blue_set_wins: 0,
-                        font_scale: 1.0,
-                        name_fit_mode: "truncate".to_owned(),
-                        show_set_info: true,
-                        overlay_url: overlay_url(),
-                    })).unwrap_or_else(|_| "{}".to_owned()),
-                );
-                return;
-            }
-
-            if path == "/mobile/api/overlay-toggle" && request.method() == &tiny_http::Method::Post {
-                let mut body = String::new();
-                if let Err(err) = request.as_reader().read_to_string(&mut body) {
+        } else {
+            match toggle_obs_overlay_set(input) {
+                Ok(value) => value,
+                Err(err) => {
+                    if let Ok(current) = snapshot_obs_overlay_state() {
+                        if current.active
+                            && current.current_set_id.as_deref() != Some(payload.set_id.as_str())
+                        {
+                            respond_json(
+                                request,
+                                409,
+                                serde_json::to_string(&current).unwrap_or_else(|_| "{}".to_owned()),
+                            );
+                            return;
+                        }
+                    }
                     respond_json(
                         request,
-                        400,
-                        format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
+                        500,
+                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
                     );
                     return;
                 }
-
-                let payload = match serde_json::from_str::<MobileOverlayToggleInput>(&body) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        respond_json(
-                            request,
-                            400,
-                            format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
-                        );
-                        return;
-                    }
-                };
-
-                if payload.slug.trim().is_empty() || payload.event_id.trim().is_empty() || payload.set_id.trim().is_empty() {
-                    respond_json(request, 400, "{\"error\":\"slug, eventId and setId are required\"}".to_owned());
-                    return;
-                }
-
-                let input = ObsOverlaySetInput {
-                    enabled: payload.enabled,
-                    set_id: payload.set_id.clone(),
-                    event_name: payload.event_name.clone(),
-                    round_text: payload.round_text.clone(),
-                    red_player_name: payload.red_player_name.clone(),
-                    blue_player_name: payload.blue_player_name.clone(),
-                    red_set_wins: payload.red_set_wins,
-                    blue_set_wins: payload.blue_set_wins,
-                    font_scale: payload.font_scale,
-                };
-
-                let state = if payload.enabled {
-                    match apply_obs_overlay_toggle(input.clone(), payload.force_switch) {
-                        Ok(value) => value,
-                        Err(err) if !payload.force_switch => {
-                            if let Ok(current) = snapshot_obs_overlay_state() {
-                                if current.active && current.current_set_id.as_deref() != Some(payload.set_id.as_str()) {
-                                    respond_json(request, 409, serde_json::to_string(&current).unwrap_or_else(|_| "{}".to_owned()));
-                                    return;
-                                }
-                            }
-                            respond_json(request, 500, format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")));
-                            return;
-                        }
-                        Err(err) => {
-                            respond_json(request, 500, format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")));
-                            return;
-                        }
-                    }
-                } else {
-                    match toggle_obs_overlay_set(input) {
-                        Ok(value) => value,
-                        Err(err) => {
-                            if let Ok(current) = snapshot_obs_overlay_state() {
-                                if current.active && current.current_set_id.as_deref() != Some(payload.set_id.as_str()) {
-                                    respond_json(request, 409, serde_json::to_string(&current).unwrap_or_else(|_| "{}".to_owned()));
-                                    return;
-                                }
-                            }
-                            respond_json(request, 500, format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")));
-                            return;
-                        }
-                    }
-                };
-
-                emit_obs_overlay_state_changed(app);
-                let result = serde_json::to_string(&state).unwrap_or_else(|_| "{}".to_owned());
-                respond_json(request, 200, result);
-                return;
             }
+        };
 
-            if path == "/mobile/api/overlay-stop" && request.method() == &tiny_http::Method::Post {
-                let query_slug = query_param_from_url(request.url(), "slug").unwrap_or_default();
-                let query_event_id = query_param_from_url(request.url(), "eventId").unwrap_or_default();
-                let query_token = query_param_from_url(request.url(), "token").unwrap_or_default();
+        emit_obs_overlay_state_changed(app);
+        let result = serde_json::to_string(&state).unwrap_or_else(|_| "{}".to_owned());
+        respond_json(request, 200, result);
+        return;
+    }
 
-                if query_slug.trim().is_empty() || query_event_id.trim().is_empty() || query_token.trim().is_empty() {
-                    respond_json(request, 400, "{\"error\":\"slug, eventId and token are required\"}".to_owned());
-                    return;
-                }
+    if path == "/mobile/api/overlay-stop" && request.method() == &tiny_http::Method::Post {
+        let query_slug = query_param_from_url(request.url(), "slug").unwrap_or_default();
+        let query_event_id = query_param_from_url(request.url(), "eventId").unwrap_or_default();
+        let query_token = query_param_from_url(request.url(), "token").unwrap_or_default();
 
-                let token = match current_mobile_input_token() {
-                    Ok(value) => value,
-                    Err(err) => {
-                        respond_json(request, 500, format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")));
-                        return;
-                    }
-                };
-
-                if query_token != token {
-                    respond_json(request, 401, "{\"error\":\"invalid token\"}".to_owned());
-                    return;
-                }
-
-                let state = match set_obs_overlay_fully_stopped(true) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        respond_json(request, 500, format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")));
-                        return;
-                    }
-                };
-
-                emit_obs_overlay_state_changed(app);
-                let result = serde_json::to_string(&state).unwrap_or_else(|_| "{}".to_owned());
-                respond_json(request, 200, result);
-                return;
-            }
-
-        if path == "/mobile/api/result-requests" && request.method() == &tiny_http::Method::Post {
-                let mut body = String::new();
-                if let Err(err) = request.as_reader().read_to_string(&mut body) {
-                        respond_json(
-                                request,
-                                400,
-                                format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
-                        );
-                        return;
-                }
-
-                let payload = match serde_json::from_str::<MobileResultRequestInput>(&body) {
-                        Ok(value) => value,
-                        Err(err) => {
-                                respond_json(
-                                        request,
-                                        400,
-                                        format!(
-                                                "{{\"error\":\"{}\"}}",
-                                                err.to_string().replace('"', "\\\"")
-                                        ),
-                                );
-                                return;
-                        }
-                };
-
-                let sets = match load_target_event_sets(app, &payload.slug, &payload.event_id) {
-                        Ok(value) => value,
-                        Err(err) => {
-                                respond_json(
-                                        request,
-                                        400,
-                                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
-                                );
-                                return;
-                        }
-                };
-
-                let Some(target_set) = sets.iter().find(|set| set.set_id == payload.set_id) else {
-                        respond_json(
-                                request,
-                                400,
-                                "{\"error\":\"target set does not exist\"}".to_owned(),
-                        );
-                        return;
-                };
-
-                let known_entrant_ids = target_set
-                        .slots
-                        .iter()
-                        .filter_map(|slot| slot.entrant_id.clone())
-                        .collect::<Vec<String>>();
-
-                if let Some(winner_id) = payload.winner_id.as_deref() {
-                        if !winner_id.trim().is_empty() && !known_entrant_ids.iter().any(|id| id == winner_id) {
-                                respond_json(
-                                        request,
-                                        400,
-                                        "{\"error\":\"winnerId is not in target set\"}".to_owned(),
-                                );
-                                return;
-                        }
-                }
-
-                for slot in &payload.slot_scores {
-                        if !known_entrant_ids.iter().any(|id| id == &slot.entrant_id) {
-                                respond_json(
-                                        request,
-                                        400,
-                                        "{\"error\":\"slotScores contains unknown entrantId\"}".to_owned(),
-                                );
-                                return;
-                        }
-                }
-
-                let stored = match storage::append_mobile_result_request(app, payload) {
-                        Ok(value) => value,
-                        Err(err) => {
-                                respond_json(
-                                        request,
-                                        500,
-                                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
-                                );
-                                return;
-                        }
-                };
-
-                let response = serde_json::to_string(&stored).unwrap_or_else(|_| "{}".to_owned());
-                respond_json(request, 200, response);
-                return;
+        if query_slug.trim().is_empty()
+            || query_event_id.trim().is_empty()
+            || query_token.trim().is_empty()
+        {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"slug, eventId and token are required\"}".to_owned(),
+            );
+            return;
         }
 
-        let _ = request.respond(Response::from_string("Not Found").with_status_code(404));
+        let token = match current_mobile_input_token() {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+
+        if query_token != token {
+            respond_json(request, 401, "{\"error\":\"invalid token\"}".to_owned());
+            return;
+        }
+
+        let state = match set_obs_overlay_fully_stopped(true) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+
+        emit_obs_overlay_state_changed(app);
+        let result = serde_json::to_string(&state).unwrap_or_else(|_| "{}".to_owned());
+        respond_json(request, 200, result);
+        return;
+    }
+
+    if path == "/mobile/api/result-requests" && request.method() == &tiny_http::Method::Post {
+        let mut body = String::new();
+        if let Err(err) = request.as_reader().read_to_string(&mut body) {
+            respond_json(
+                request,
+                400,
+                format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
+            );
+            return;
+        }
+
+        let payload = match serde_json::from_str::<MobileResultRequestInput>(&body) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    400,
+                    format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+
+        let sets = match load_target_event_sets(app, &payload.slug, &payload.event_id) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    400,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+
+        let Some(target_set) = sets.iter().find(|set| set.set_id == payload.set_id) else {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"target set does not exist\"}".to_owned(),
+            );
+            return;
+        };
+
+        let known_entrant_ids = target_set
+            .slots
+            .iter()
+            .filter_map(|slot| slot.entrant_id.clone())
+            .collect::<Vec<String>>();
+
+        if let Some(winner_id) = payload.winner_id.as_deref() {
+            if !winner_id.trim().is_empty() && !known_entrant_ids.iter().any(|id| id == winner_id) {
+                respond_json(
+                    request,
+                    400,
+                    "{\"error\":\"winnerId is not in target set\"}".to_owned(),
+                );
+                return;
+            }
+        }
+
+        for slot in &payload.slot_scores {
+            if !known_entrant_ids.iter().any(|id| id == &slot.entrant_id) {
+                respond_json(
+                    request,
+                    400,
+                    "{\"error\":\"slotScores contains unknown entrantId\"}".to_owned(),
+                );
+                return;
+            }
+        }
+
+        let stored = match storage::append_mobile_result_request(app, payload) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+
+        let response = serde_json::to_string(&stored).unwrap_or_else(|_| "{}".to_owned());
+        respond_json(request, 200, response);
+        return;
+    }
+
+    let _ = request.respond(Response::from_string("Not Found").with_status_code(404));
 }
 
 fn start_mobile_input_server_if_needed(app: tauri::AppHandle) -> Result<(), String> {
-        if mobile_input_server_running().load(Ordering::SeqCst) {
-                return Ok(());
+    if mobile_input_server_running().load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    let server = Server::http(format!("0.0.0.0:{MOBILE_INPUT_PORT}"))
+        .map_err(|e| format!("スマホ入力Webサーバーの起動に失敗しました: {e}"))?;
+
+    mobile_input_server_running().store(true, Ordering::SeqCst);
+
+    thread::spawn(move || {
+        for request in server.incoming_requests() {
+            handle_mobile_input_http_request(&app, request);
         }
+        mobile_input_server_running().store(false, Ordering::SeqCst);
+    });
 
-        let server = Server::http(format!("0.0.0.0:{MOBILE_INPUT_PORT}"))
-                .map_err(|e| format!("スマホ入力Webサーバーの起動に失敗しました: {e}"))?;
-
-        mobile_input_server_running().store(true, Ordering::SeqCst);
-
-        thread::spawn(move || {
-                for request in server.incoming_requests() {
-                        handle_mobile_input_http_request(&app, request);
-                }
-                mobile_input_server_running().store(false, Ordering::SeqCst);
-        });
-
-        Ok(())
+    Ok(())
 }
 
 #[tauri::command]
@@ -4035,15 +4158,15 @@ fn source_label_for_ipv4(ip: &Ipv4Addr) -> &'static str {
     }
 }
 
-fn detect_local_network_settings_candidates() -> Result<Vec<LocalNetworkSettingsCandidate>, String> {
-    let interfaces = get_if_addrs().map_err(|e| format!("ネットワークIFの取得に失敗しました: {e}"))?;
+fn detect_local_network_settings_candidates() -> Result<Vec<LocalNetworkSettingsCandidate>, String>
+{
+    let interfaces =
+        get_if_addrs().map_err(|e| format!("ネットワークIFの取得に失敗しました: {e}"))?;
 
     let mut candidates = interfaces
         .into_iter()
         .filter_map(|iface| match iface.addr {
-            if_addrs::IfAddr::V4(addr)
-                if !addr.ip.is_loopback() && !addr.ip.is_unspecified() =>
-            {
+            if_addrs::IfAddr::V4(addr) if !addr.ip.is_loopback() && !addr.ip.is_unspecified() => {
                 Some(LocalNetworkSettingsCandidate {
                     bind_ip: addr.ip.to_string(),
                     broadcast_subnet_mask: addr.netmask.to_string(),
@@ -4069,8 +4192,11 @@ fn detect_local_network_settings_candidates() -> Result<Vec<LocalNetworkSettings
     Ok(candidates)
 }
 
-fn detect_local_network_settings_candidate() -> Result<Option<LocalNetworkSettingsCandidate>, String> {
-    Ok(detect_local_network_settings_candidates()?.into_iter().next())
+fn detect_local_network_settings_candidate() -> Result<Option<LocalNetworkSettingsCandidate>, String>
+{
+    Ok(detect_local_network_settings_candidates()?
+        .into_iter()
+        .next())
 }
 
 #[tauri::command]
@@ -4203,15 +4329,32 @@ fn validate_sender_profile(profile: &SenderProfile) -> Result<(), String> {
         return Err("送信者名を入力してください。".to_owned());
     }
     if profile.sender_user_id.trim().len() != 8
-        || !profile.sender_user_id.trim().chars().all(|ch| ch.is_ascii_digit())
+        || !profile
+            .sender_user_id
+            .trim()
+            .chars()
+            .all(|ch| ch.is_ascii_digit())
     {
         return Err("ユーザーIDは8桁の数字で入力してください。".to_owned());
     }
-    if profile.bind_ip.trim().parse::<std::net::Ipv4Addr>().is_err() {
+    if profile
+        .bind_ip
+        .trim()
+        .parse::<std::net::Ipv4Addr>()
+        .is_err()
+    {
         return Err("自分のIPはIPv4形式で入力してください。例: 192.168.1.10".to_owned());
     }
-    if profile.broadcast_subnet_mask.trim().parse::<std::net::Ipv4Addr>().is_err() {
-        return Err("ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0".to_owned());
+    if profile
+        .broadcast_subnet_mask
+        .trim()
+        .parse::<std::net::Ipv4Addr>()
+        .is_err()
+    {
+        return Err(
+            "ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0"
+                .to_owned(),
+        );
     }
     Ok(())
 }
@@ -4221,7 +4364,10 @@ fn normalize_delivery_target_mode(mode: &str) -> String {
 }
 
 fn split_delivery_target_ips(target_ip: Option<&str>) -> Vec<String> {
-    let Some(raw) = target_ip.map(|value| value.trim()).filter(|value| !value.is_empty()) else {
+    let Some(raw) = target_ip
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
         return Vec::new();
     };
 
@@ -4237,10 +4383,10 @@ fn compute_broadcast_ip(bind_ip: &str, subnet_mask: &str) -> Result<String, Stri
         .trim()
         .parse::<Ipv4Addr>()
         .map_err(|_| "自分のIPはIPv4形式で入力してください。例: 192.168.1.10".to_owned())?;
-    let mask = subnet_mask
-        .trim()
-        .parse::<Ipv4Addr>()
-        .map_err(|_| "ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0".to_owned())?;
+    let mask = subnet_mask.trim().parse::<Ipv4Addr>().map_err(|_| {
+        "ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0"
+            .to_owned()
+    })?;
 
     let bind_u32 = u32::from(bind);
     let mask_u32 = u32::from(mask);
@@ -4256,7 +4402,10 @@ fn resolve_delivery_target_ips(
 ) -> Result<Vec<String>, String> {
     let normalized_mode = normalize_delivery_target_mode(mode);
     match normalized_mode.as_str() {
-        "broadcast" => Ok(vec![compute_broadcast_ip(&profile.bind_ip, &profile.broadcast_subnet_mask)?]),
+        "broadcast" => Ok(vec![compute_broadcast_ip(
+            &profile.bind_ip,
+            &profile.broadcast_subnet_mask,
+        )?]),
         "direct" => {
             let ips = split_delivery_target_ips(target_ip);
             if ips.is_empty() {
@@ -4275,7 +4424,11 @@ fn resolve_delivery_target_ips(
     }
 }
 
-fn validate_delivery_target(mode: &str, target_ip: Option<&str>, profile: &SenderProfile) -> Result<(), String> {
+fn validate_delivery_target(
+    mode: &str,
+    target_ip: Option<&str>,
+    profile: &SenderProfile,
+) -> Result<(), String> {
     let _ = resolve_delivery_target_ips(profile, mode, target_ip)?;
     Ok(())
 }
@@ -4299,7 +4452,11 @@ fn create_message_id(profile: &SenderProfile, method: &str, body: &str) -> Strin
 
 fn build_message_from_input(input: &SendMailboxMessageInput) -> Result<GenericMessage, String> {
     validate_sender_profile(&input.profile)?;
-    validate_delivery_target(&input.delivery_target_mode, input.delivery_target_ip.as_deref(), &input.profile)?;
+    validate_delivery_target(
+        &input.delivery_target_mode,
+        input.delivery_target_ip.as_deref(),
+        &input.profile,
+    )?;
 
     let method = input.method.trim().to_ascii_lowercase();
     if method.is_empty() {
@@ -4372,7 +4529,10 @@ fn collect_unresolved_call_roots_for_sender(
         .iter()
         .filter(|item| {
             item.parent_message_id.is_none()
-                && item.method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
+                && item
+                    .method
+                    .trim()
+                    .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
                 && item.sender_user_id.trim() == sender_user_id.trim()
         })
         .filter(|root| {
@@ -4486,8 +4646,7 @@ fn send_udp_mailbox_packet(
     message: &GenericMessage,
 ) -> Result<(), String> {
     let normalized_target_mode = normalize_delivery_target_mode(mode);
-    let target_ips =
-        resolve_delivery_target_ips(profile, &normalized_target_mode, target_ip)?;
+    let target_ips = resolve_delivery_target_ips(profile, &normalized_target_mode, target_ip)?;
 
     let packet = UdpMailboxPacket {
         protocol: MAILBOX_PROTOCOL.to_owned(),
@@ -4524,12 +4683,7 @@ fn send_udp_mailbox_packet(
 }
 
 fn meta_string(meta: Option<&serde_json::Value>, key: &str) -> Option<String> {
-    let value = meta?
-        .as_object()?
-        .get(key)?
-        .as_str()?
-        .trim()
-        .to_owned();
+    let value = meta?.as_object()?.get(key)?.as_str()?.trim().to_owned();
 
     if value.is_empty() {
         None
@@ -4575,19 +4729,27 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
 
                     let my_profile = storage::load_sender_profile(&app).ok().flatten();
                     if let Some(my_profile) = my_profile {
-                        if my_profile.sender_user_id.trim() == packet.message.sender_user_id.trim() {
+                        if my_profile.sender_user_id.trim() == packet.message.sender_user_id.trim()
+                        {
                             continue;
                         }
 
-                        let accept_delivery = match normalize_delivery_target_mode(&packet.delivery_target_mode).as_str() {
-                            "broadcast" => true,
-                            "direct" => packet
-                                .delivery_target_ip
-                                .as_deref()
-                                .map(|value| split_delivery_target_ips(Some(value)).iter().any(|ip| ip.trim() == my_profile.bind_ip.trim()))
-                                .unwrap_or(false),
-                            _ => false,
-                        };
+                        let accept_delivery =
+                            match normalize_delivery_target_mode(&packet.delivery_target_mode)
+                                .as_str()
+                            {
+                                "broadcast" => true,
+                                "direct" => packet
+                                    .delivery_target_ip
+                                    .as_deref()
+                                    .map(|value| {
+                                        split_delivery_target_ips(Some(value))
+                                            .iter()
+                                            .any(|ip| ip.trim() == my_profile.bind_ip.trim())
+                                    })
+                                    .unwrap_or(false),
+                                _ => false,
+                            };
 
                         if !accept_delivery {
                             continue;
@@ -4599,14 +4761,18 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
                                 let phase = call_sync_phase(packet.message.message_meta.as_ref());
 
                                 if phase == CALL_SYNC_PHASE_CHECK_PUBLISHED_STATUS {
-                                    let targets = parse_call_sync_status_targets(packet.message.message_meta.as_ref());
+                                    let targets = parse_call_sync_status_targets(
+                                        packet.message.message_meta.as_ref(),
+                                    );
                                     let messages = storage::load_generic_messages(&app)
                                         .ok()
                                         .flatten()
                                         .unwrap_or_default();
 
                                     for target in targets {
-                                        if target.sender_user_id.trim() != my_profile.sender_user_id.trim() {
+                                        if target.sender_user_id.trim()
+                                            != my_profile.sender_user_id.trim()
+                                        {
                                             continue;
                                         }
 
@@ -4615,22 +4781,23 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
                                             .filter(|item| {
                                                 item.parent_message_id.is_none()
                                                     && item.message_type == "normal"
-                                                    && item
-                                                        .method
-                                                        .trim()
-                                                        .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
+                                                    && item.method.trim().eq_ignore_ascii_case(
+                                                        MAILBOX_METHOD_CALL_PLAYER,
+                                                    )
                                                     && item.sender_user_id.trim()
                                                         == my_profile.sender_user_id.trim()
                                             })
                                             .filter(|root| {
-                                                extract_call_target_identity(root.message_meta.as_ref())
-                                                    .map(|identity| {
-                                                        call_target_identity_matches(
-                                                            &identity,
-                                                            &target.identity,
-                                                        )
-                                                    })
-                                                    .unwrap_or(false)
+                                                extract_call_target_identity(
+                                                    root.message_meta.as_ref(),
+                                                )
+                                                .map(|identity| {
+                                                    call_target_identity_matches(
+                                                        &identity,
+                                                        &target.identity,
+                                                    )
+                                                })
+                                                .unwrap_or(false)
                                             })
                                             .max_by(|left, right| {
                                                 left.created_at.cmp(&right.created_at)
@@ -4670,8 +4837,10 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
                                         );
                                     }
                                 } else {
-                                    let unresolved_calls =
-                                        collect_unresolved_call_roots_for_sender(&app, &my_profile.sender_user_id);
+                                    let unresolved_calls = collect_unresolved_call_roots_for_sender(
+                                        &app,
+                                        &my_profile.sender_user_id,
+                                    );
                                     for unresolved in unresolved_calls {
                                         let _ = send_udp_mailbox_packet(
                                             &my_profile,
@@ -4738,7 +4907,10 @@ fn validate_thread_open_for_reply(app: &tauri::AppHandle, thread_id: &str) -> Re
         .iter()
         .any(|item| item.thread_id == thread_id && item.message_type == "resolve");
     if already_resolved {
-        return Err("解決済みスレッドには返信できません。必要な連絡は汎用メッセージで送信してください。".to_owned());
+        return Err(
+            "解決済みスレッドには返信できません。必要な連絡は汎用メッセージで送信してください。"
+                .to_owned(),
+        );
     }
 
     Ok(())
@@ -4755,10 +4927,9 @@ struct CallTargetIdentity {
 }
 
 fn extract_call_target_identity(meta: Option<&serde_json::Value>) -> Option<CallTargetIdentity> {
-    let tournament_id = meta_string(meta, "scopeTournamentId")
-        .or_else(|| meta_string(meta, "tournamentId"))?;
-    let event_id = meta_string(meta, "scopeEventId")
-        .or_else(|| meta_string(meta, "eventId"))?;
+    let tournament_id =
+        meta_string(meta, "scopeTournamentId").or_else(|| meta_string(meta, "tournamentId"))?;
+    let event_id = meta_string(meta, "scopeEventId").or_else(|| meta_string(meta, "eventId"))?;
     let phase_name = meta_string(meta, "scopePhaseName")
         .or_else(|| meta_string(meta, "phaseName"))
         .unwrap_or_else(|| "Phase 未設定".to_owned());
@@ -4817,10 +4988,14 @@ fn collect_duplicate_unresolved_call_roots(
         .filter(|item| {
             item.parent_message_id.is_none()
                 && item.message_type == "normal"
-                && item.method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
+                && item
+                    .method
+                    .trim()
+                    .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
         })
         .filter(|root| {
-            let Some(root_identity) = extract_call_target_identity(root.message_meta.as_ref()) else {
+            let Some(root_identity) = extract_call_target_identity(root.message_meta.as_ref())
+            else {
                 return false;
             };
             call_target_identity_matches(&root_identity, identity)
@@ -4860,7 +5035,9 @@ fn validate_dq_request_permission(
         .ok_or_else(|| "DQ申請には認証済みPLAYER IDが必要です。".to_owned())?;
 
     if expected_player_id != supplied_player_id {
-        return Err("入力したPLAYER IDが呼び出し対象と一致しないため、DQ申請できません。".to_owned());
+        return Err(
+            "入力したPLAYER IDが呼び出し対象と一致しないため、DQ申請できません。".to_owned(),
+        );
     }
 
     Ok(())
@@ -4892,13 +5069,13 @@ fn send_mailbox_message(
 
     if message.message_type == "normal"
         && message.parent_message_id.is_none()
-        && message.method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
+        && message
+            .method
+            .trim()
+            .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
     {
         if let Some(identity) = extract_call_target_identity(message.message_meta.as_ref()) {
-            let duplicate_roots = collect_duplicate_unresolved_call_roots(
-                &app,
-                &identity,
-            )?;
+            let duplicate_roots = collect_duplicate_unresolved_call_roots(&app, &identity)?;
 
             for root in duplicate_roots {
                 let resolve_message = build_auto_resolve_message(&input.profile, &root);
@@ -4986,7 +5163,11 @@ async fn refresh_workspace_grand_final_reset_only(
     let remote_group = normalize_optional_key(remote_reset_set.phase_group_name.as_ref());
 
     if let Some(source_set_id) = source_grand_final_set_id {
-        let source_set = event.sets.iter().find(|set| set.set_id == source_set_id).cloned();
+        let source_set = event
+            .sets
+            .iter()
+            .find(|set| set.set_id == source_set_id)
+            .cloned();
         let source_phase = source_set
             .as_ref()
             .map(|set| normalize_optional_key(set.phase_name.as_ref()))
@@ -5025,7 +5206,9 @@ async fn refresh_workspace_grand_final_reset_only(
             .position(|set| {
                 let phase = normalize_optional_key(set.phase_name.as_ref());
                 let group = normalize_optional_key(set.phase_group_name.as_ref());
-                phase == remote_phase && group == remote_group && !is_grand_final_reset_text(&set.full_round_text)
+                phase == remote_phase
+                    && group == remote_group
+                    && !is_grand_final_reset_text(&set.full_round_text)
             })
             .map(|index| index + 1)
             .unwrap_or(event.sets.len());
@@ -5087,10 +5270,11 @@ async fn refresh_until_gf_reset_set_available(
     per_page: u32,
     source_grand_final_set_id: &str,
 ) -> Result<(TournamentWorkspace, Option<SetSnapshot>), String> {
-    let mut workspace = match refresh_workspace_after_remote_report(app, token, slug, event_id, per_page).await {
-        Ok(value) => value,
-        Err(_) => storage::load_workspace(app, slug, event_id)?,
-    };
+    let mut workspace =
+        match refresh_workspace_after_remote_report(app, token, slug, event_id, per_page).await {
+            Ok(value) => value,
+            Err(_) => storage::load_workspace(app, slug, event_id)?,
+        };
 
     for attempt in 0..GF_RESET_LINK_RETRY_ATTEMPTS {
         let remote_reset_set = workspace
@@ -5098,7 +5282,9 @@ async fn refresh_until_gf_reset_set_available(
             .events
             .iter()
             .find(|event| event.event_id == event_id)
-            .and_then(|event| find_remote_grand_final_reset_set_for_source(event, source_grand_final_set_id));
+            .and_then(|event| {
+                find_remote_grand_final_reset_set_for_source(event, source_grand_final_set_id)
+            });
 
         if remote_reset_set.is_some() {
             return Ok((workspace, remote_reset_set));
@@ -5109,10 +5295,12 @@ async fn refresh_until_gf_reset_set_available(
         }
 
         sleep(Duration::from_millis(GF_RESET_LINK_RETRY_DELAY_MS)).await;
-        workspace = match refresh_workspace_after_remote_report(app, token, slug, event_id, per_page).await {
-            Ok(value) => value,
-            Err(_) => storage::load_workspace(app, slug, event_id)?,
-        };
+        workspace =
+            match refresh_workspace_after_remote_report(app, token, slug, event_id, per_page).await
+            {
+                Ok(value) => value,
+                Err(_) => storage::load_workspace(app, slug, event_id)?,
+            };
     }
 
     Ok((workspace, None))
@@ -5140,12 +5328,9 @@ async fn fetch_event_snapshot_with_fallback(
     let mut event_snapshot_error: Option<String> = None;
 
     if let Some(event_slug) = event_slug {
-        match startgg::fetch_event_snapshot_by_slug(
-            token,
-            &event_slug,
-            per_page,
-            |progress| emit_event_snapshot_progress(app, progress),
-        )
+        match startgg::fetch_event_snapshot_by_slug(token, &event_slug, per_page, |progress| {
+            emit_event_snapshot_progress(app, progress)
+        })
         .await
         {
             Ok(mut snapshot) => {
@@ -5159,9 +5344,8 @@ async fn fetch_event_snapshot_with_fallback(
                 if set_count > 0 {
                     return Ok(snapshot);
                 }
-                event_snapshot_error = Some(
-                    "event別取得では対象eventのsetが0件でした。".to_owned(),
-                );
+                event_snapshot_error =
+                    Some("event別取得では対象eventのsetが0件でした。".to_owned());
             }
             Err(err) => {
                 event_snapshot_error = Some(err);
@@ -5239,10 +5423,9 @@ fn derive_score_csv_from_set(set: &SetSnapshot, winner_id: &str) -> Option<Strin
         .slots
         .iter()
         .find(|slot| slot.entrant_id.as_deref() == Some(winner_id))?;
-    let loser_slot = set
-        .slots
-        .iter()
-        .find(|slot| slot.entrant_id.as_deref().is_some() && slot.entrant_id.as_deref() != Some(winner_id))?;
+    let loser_slot = set.slots.iter().find(|slot| {
+        slot.entrant_id.as_deref().is_some() && slot.entrant_id.as_deref() != Some(winner_id)
+    })?;
 
     let winner_score = integer_score(winner_slot.score)?;
     let loser_score = integer_score(loser_slot.score)?;
@@ -5284,7 +5467,8 @@ async fn report_set_result_with_matchup_retry(
     let mut last_error = None::<String>;
 
     for attempt in 0..GF_RESET_REPORT_RETRY_ATTEMPTS {
-        match startgg::report_set_result(token, set_id, winner_id, score_csv, force_overwrite).await {
+        match startgg::report_set_result(token, set_id, winner_id, score_csv, force_overwrite).await
+        {
             Ok(_) => return Ok(()),
             Err(err) => {
                 let retryable = is_matchup_not_ready_error(&err)
@@ -5477,7 +5661,10 @@ fn save_event_management_meta(
 }
 
 #[tauri::command]
-fn load_local_tournament(app: tauri::AppHandle, slug: String) -> Result<TournamentSnapshot, String> {
+fn load_local_tournament(
+    app: tauri::AppHandle,
+    slug: String,
+) -> Result<TournamentSnapshot, String> {
     storage::load_snapshot(&app, &slug)
 }
 
@@ -5518,7 +5705,10 @@ async fn create_event_snapshot(
     let local_meta = storage::save_event_snapshot(&app, &snapshot, &input.event_id, event_alias)?;
     let snapshot = storage::load_snapshot(&app, &snapshot.slug)?;
 
-    Ok(TournamentWorkspace { snapshot, local_meta })
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
 }
 
 #[tauri::command]
@@ -5556,7 +5746,8 @@ async fn create_event_snapshot_by_slug(
                 return Err("event slugの取得に失敗し、fallback先tournament slugも特定できませんでした。大会slugを指定して再実行してください。".to_owned());
             }
 
-            let mut fallback_snapshot = startgg::fetch_tournament_snapshot(&token, &fallback_slug, per_page).await?;
+            let mut fallback_snapshot =
+                startgg::fetch_tournament_snapshot(&token, &fallback_slug, per_page).await?;
             fallback_snapshot.slug = fallback_slug.clone();
             fallback_snapshot
         }
@@ -5564,14 +5755,22 @@ async fn create_event_snapshot_by_slug(
 
     if !fallback_slug.is_empty() {
         if let Ok(preview) = startgg::fetch_tournament_preview(&token, &fallback_slug).await {
-            let input_event_slug = input.event_slug.trim().trim_matches('/').to_ascii_lowercase();
+            let input_event_slug = input
+                .event_slug
+                .trim()
+                .trim_matches('/')
+                .to_ascii_lowercase();
             let matched_event_id = preview
                 .events
                 .iter()
                 .find(|item| {
                     item.event_slug
                         .as_deref()
-                        .map(|slug| slug.trim().trim_matches('/').eq_ignore_ascii_case(&input_event_slug))
+                        .map(|slug| {
+                            slug.trim()
+                                .trim_matches('/')
+                                .eq_ignore_ascii_case(&input_event_slug)
+                        })
                         .unwrap_or(false)
                 })
                 .map(|item| item.event_id.clone());
@@ -5594,7 +5793,8 @@ async fn create_event_snapshot_by_slug(
         .unwrap_or(0);
 
     if target_event_set_count == 0 && !fallback_slug.is_empty() {
-        let mut fallback_snapshot = startgg::fetch_tournament_snapshot(&token, &fallback_slug, per_page).await?;
+        let mut fallback_snapshot =
+            startgg::fetch_tournament_snapshot(&token, &fallback_slug, per_page).await?;
         fallback_snapshot.slug = fallback_slug.clone();
         snapshot = fallback_snapshot;
     }
@@ -5623,7 +5823,10 @@ async fn create_event_snapshot_by_slug(
     let local_meta = storage::save_event_snapshot(&app, &snapshot, &event_id, event_alias)?;
     let snapshot = storage::load_snapshot(&app, &snapshot.slug)?;
 
-    Ok(TournamentWorkspace { snapshot, local_meta })
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
 }
 
 #[tauri::command]
@@ -5634,14 +5837,9 @@ async fn refresh_local_event_snapshot_from_remote(
     per_page: Option<u32>,
 ) -> Result<TournamentWorkspace, String> {
     let token = storage::load_token(&app)?;
-    let snapshot = fetch_event_snapshot_with_fallback(
-        &app,
-        &token,
-        &slug,
-        &event_id,
-        per_page.unwrap_or(200),
-    )
-    .await?;
+    let snapshot =
+        fetch_event_snapshot_with_fallback(&app, &token, &slug, &event_id, per_page.unwrap_or(200))
+            .await?;
 
     let existing_alias = storage::load_local_meta(&app, &slug, &event_id)?
         .events
@@ -5653,7 +5851,10 @@ async fn refresh_local_event_snapshot_from_remote(
     let local_meta = storage::clear_pending_set_results(&app, &slug, &event_id)?;
     let snapshot = storage::load_snapshot(&app, &slug)?;
 
-    Ok(TournamentWorkspace { snapshot, local_meta })
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
 }
 
 #[tauri::command]
@@ -5664,7 +5865,10 @@ async fn clear_local_set_result_drafts(
 ) -> Result<TournamentWorkspace, String> {
     let local_meta = storage::clear_pending_set_results(&app, &slug, &event_id)?;
     let snapshot = storage::load_snapshot(&app, &slug)?;
-    Ok(TournamentWorkspace { snapshot, local_meta })
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
 }
 
 #[tauri::command]
@@ -5676,7 +5880,9 @@ async fn clear_local_set_result_draft_for_set(
 }
 
 #[tauri::command]
-fn list_local_snapshot_events(app: tauri::AppHandle) -> Result<Vec<LocalSnapshotEventListItem>, String> {
+fn list_local_snapshot_events(
+    app: tauri::AppHandle,
+) -> Result<Vec<LocalSnapshotEventListItem>, String> {
     storage::list_local_snapshot_events(&app)
 }
 
@@ -5739,7 +5945,12 @@ async fn report_confirmed_sets_from_bracket(
         .events
         .iter()
         .find(|event| event.event_id == input.event_id)
-        .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {}", input.event_id))?;
+        .ok_or_else(|| {
+            format!(
+                "指定イベントがローカルsnapshotに見つかりません: {}",
+                input.event_id
+            )
+        })?;
 
     let mut pending = workspace
         .local_meta
@@ -5788,20 +5999,26 @@ async fn report_confirmed_sets_from_bracket(
     emit_bracket_report_progress(&app, "starting", total_count, 0, 0, 0, None);
 
     let per_page = input.per_page.unwrap_or(200);
-    let mut force_overwrite_current_conflict = input.force_overwrite_current_conflict.unwrap_or(false);
-    let force_overwrite_remaining_conflicts = input.force_overwrite_remaining_conflicts.unwrap_or(false);
+    let mut force_overwrite_current_conflict =
+        input.force_overwrite_current_conflict.unwrap_or(false);
+    let force_overwrite_remaining_conflicts =
+        input.force_overwrite_remaining_conflicts.unwrap_or(false);
     let mut reported_count = 0_usize;
     let mut normal_reported_count = 0_usize;
     let mut skipped_count = 0_usize;
     let mut resolved_remote_gf_reset_set_id = None::<String>;
     let mut resolved_remote_gf_reset_source_set_id = None::<String>;
-    
+
     let mut conflict = None;
 
     for item in pending {
         let is_reset_action = item.winner_id.trim().is_empty();
 
-        let local_set = match local_event.sets.iter().find(|set| set.set_id == item.set_id) {
+        let local_set = match local_event
+            .sets
+            .iter()
+            .find(|set| set.set_id == item.set_id)
+        {
             Some(set) => set,
             None => {
                 skipped_count += 1;
@@ -5880,7 +6097,8 @@ async fn report_confirmed_sets_from_bracket(
         };
 
         if is_reset_action {
-            let remote_is_already_reset = remote_set.winner_id.is_none() && (remote_set.state == 1 || remote_set.state == 2);
+            let remote_is_already_reset =
+                remote_set.winner_id.is_none() && (remote_set.state == 1 || remote_set.state == 2);
             if remote_is_already_reset {
                 skipped_count += 1;
                 removable_pending_set_ids.push(item.set_id.clone());
@@ -5967,7 +6185,8 @@ async fn report_confirmed_sets_from_bracket(
             false
         };
 
-        let can_report_by_state = remote_set.state == 1 || remote_set.state == 2 || should_force_overwrite;
+        let can_report_by_state =
+            remote_set.state == 1 || remote_set.state == 2 || should_force_overwrite;
         if !can_report_by_state {
             skipped_count += 1;
             emit_bracket_report_progress(
@@ -6062,13 +6281,14 @@ async fn report_confirmed_sets_from_bracket(
 
         if let Some(remote_reset_set) = remote_reset_set {
             resolved_remote_gf_reset_set_id = Some(remote_reset_set.set_id.clone());
-            resolved_remote_gf_reset_source_set_id = Some(virtual_item.source_grand_final_set_id.clone());
+            resolved_remote_gf_reset_source_set_id =
+                Some(virtual_item.source_grand_final_set_id.clone());
             let remote_set = startgg::fetch_set_snapshot(&token, &remote_reset_set.set_id).await?;
             let is_reset_action = virtual_item.winner_id.trim().is_empty();
 
             if is_reset_action {
-                let remote_is_already_reset =
-                    remote_set.winner_id.is_none() && (remote_set.state == 1 || remote_set.state == 2);
+                let remote_is_already_reset = remote_set.winner_id.is_none()
+                    && (remote_set.state == 1 || remote_set.state == 2);
                 if remote_is_already_reset {
                     skipped_count += 1;
                     for item in &pending_virtual_gf_reset {
@@ -6093,7 +6313,8 @@ async fn report_confirmed_sets_from_bracket(
                     Some(remote_reset_set.set_id.as_str()),
                 );
             } else {
-                let is_already_synced = remote_set.winner_id.as_ref() == Some(&virtual_item.winner_id)
+                let is_already_synced = remote_set.winner_id.as_ref()
+                    == Some(&virtual_item.winner_id)
                     && derive_score_csv_from_set(&remote_set, &virtual_item.winner_id)
                         .map(|remote_score_csv| {
                             normalize_score_csv(&remote_score_csv)
@@ -6216,7 +6437,12 @@ async fn report_confirmed_sets_from_bracket(
     }
 
     if !removable_pending_set_ids.is_empty() {
-        storage::remove_pending_set_results(&app, &input.slug, &input.event_id, &removable_pending_set_ids)?;
+        storage::remove_pending_set_results(
+            &app,
+            &input.slug,
+            &input.event_id,
+            &removable_pending_set_ids,
+        )?;
     }
     if !removable_pending_gf_reset_source_set_ids.is_empty() {
         storage::remove_pending_grand_final_reset_results(
@@ -6227,7 +6453,8 @@ async fn report_confirmed_sets_from_bracket(
         )?;
     }
 
-    let should_refresh_after_batch = reported_count > 0 || !removable_pending_gf_reset_source_set_ids.is_empty();
+    let should_refresh_after_batch =
+        reported_count > 0 || !removable_pending_gf_reset_source_set_ids.is_empty();
     let can_refresh_gf_reset_only = conflict.is_none()
         && normal_reported_count == 0
         && resolved_remote_gf_reset_set_id.is_some();
@@ -6243,7 +6470,9 @@ async fn report_confirmed_sets_from_bracket(
             conflict.as_ref().map(|item| item.set_id.as_str()),
         );
         if can_refresh_gf_reset_only {
-            let remote_set_id = resolved_remote_gf_reset_set_id.as_deref().unwrap_or_default();
+            let remote_set_id = resolved_remote_gf_reset_set_id
+                .as_deref()
+                .unwrap_or_default();
             match refresh_workspace_grand_final_reset_only(
                 &app,
                 &token,
@@ -6256,25 +6485,47 @@ async fn report_confirmed_sets_from_bracket(
             {
                 Ok(workspace) => workspace,
                 Err(_) => {
-                    match refresh_workspace_after_remote_report(&app, &token, &input.slug, &input.event_id, per_page).await {
+                    match refresh_workspace_after_remote_report(
+                        &app,
+                        &token,
+                        &input.slug,
+                        &input.event_id,
+                        per_page,
+                    )
+                    .await
+                    {
                         Ok(workspace) => workspace,
                         Err(_) => storage::load_workspace(&app, &input.slug, &input.event_id)?,
                     }
                 }
             }
         } else {
-            match refresh_workspace_after_remote_report(&app, &token, &input.slug, &input.event_id, per_page).await {
+            match refresh_workspace_after_remote_report(
+                &app,
+                &token,
+                &input.slug,
+                &input.event_id,
+                per_page,
+            )
+            .await
+            {
                 Ok(workspace) => workspace,
                 Err(_) => storage::load_workspace(&app, &input.slug, &input.event_id)?,
             }
         }
-    } else if !removable_pending_set_ids.is_empty() || !removable_pending_gf_reset_source_set_ids.is_empty() {
+    } else if !removable_pending_set_ids.is_empty()
+        || !removable_pending_gf_reset_source_set_ids.is_empty()
+    {
         storage::load_workspace(&app, &input.slug, &input.event_id)?
     } else {
         workspace
     };
 
-    let final_phase = if conflict.is_none() { "completed" } else { "paused" };
+    let final_phase = if conflict.is_none() {
+        "completed"
+    } else {
+        "paused"
+    };
     emit_bracket_report_progress(
         &app,
         final_phase,
@@ -6376,7 +6627,12 @@ async fn reset_set_result_cascade(
             .events
             .iter()
             .find(|event| event.event_id == input.event_id)
-            .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {}", input.event_id))?;
+            .ok_or_else(|| {
+                format!(
+                    "指定イベントがローカルsnapshotに見つかりません: {}",
+                    input.event_id
+                )
+            })?;
 
         let mut reset_order = affected_set_ids.clone();
         reset_order.sort_by(|left, right| {

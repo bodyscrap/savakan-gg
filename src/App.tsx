@@ -770,6 +770,11 @@ type BatchConflictDialogState = {
   progress: BatchReportProgress;
 };
 
+type ResultConfirmationState = {
+  match: SetSnapshot;
+  scoreDrafts: SetScoreDraft;
+};
+
 type EventSnapshotProgress = {
   phase: string;
   completedRequests: number;
@@ -2725,6 +2730,7 @@ function App() {
   const [bracketZoomLevel, setBracketZoomLevel] = useState<number>(Number(BRACKET_ZOOM_LEVELS[0]));
   const [mobileInputPollingMs, setMobileInputPollingMs] = useState<number>(MOBILE_INPUT_POLLING_MS_DEFAULT);
   const [overlaySwitchConfirm, setOverlaySwitchConfirm] = useState<{ targetSetId: string; targetSetLabel: string } | null>(null);
+  const [resultConfirmation, setResultConfirmation] = useState<ResultConfirmationState | null>(null);
   const [callListPageSwitchedAtMs, setCallListPageSwitchedAtMs] = useState(() => Date.now());
   const [callListProgressNowMs, setCallListProgressNowMs] = useState(() => Date.now());
   const [callListDisplayGroups, setCallListDisplayGroups] = useState<CallListEventGroup[]>([]);
@@ -8362,6 +8368,17 @@ function App() {
     }));
   }
 
+  function requestResultConfirmation(match: SetSnapshot) {
+    if (!isMatchupReady(match)) {
+      return;
+    }
+
+    setResultConfirmation({
+      match,
+      scoreDrafts: { ...scoreDrafts },
+    });
+  }
+
   function resolveDqRequestContext(message: GenericMessage): { setId: string; dqEntrantId: string } | null {
     const directSetId = extractMetaString(message.messageMeta, "dqSetId");
     const directEntrantId = extractMetaString(message.messageMeta, "dqCallEntrantId");
@@ -11668,7 +11685,7 @@ function App() {
                     <button
                       type="button"
                       className="ghost"
-                      disabled={busy}
+                      disabled={busy || activeMatchCompleted}
                       onClick={() => {
                         void discardLocalResultDraftForMatch();
                       }}
@@ -11707,7 +11724,7 @@ function App() {
                       type="button"
                       disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch)}
                       onClick={() => {
-                        void saveLocalResultForMatch(true);
+                        requestResultConfirmation(activeMatch);
                       }}
                     >
                       確定
@@ -11727,6 +11744,50 @@ function App() {
               </div>
             );
           })()}
+          {resultConfirmation && activeMatch && resultConfirmation.match.setId === activeMatch.setId && (
+            <div className="dialog-backdrop" onClick={() => setResultConfirmation(null)}>
+              <section
+                className="dialog-panel"
+                role="dialog"
+                aria-modal="true"
+                aria-label="結果確定確認"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="dialog-head">
+                  <div>
+                    <h3>結果を確定しますか？</h3>
+                    <p className="meta">確定後は通常の下書き破棄では取り消せません。</p>
+                  </div>
+                </div>
+                <div className="dialog-body">
+                  <div className="dialog-summary-box">
+                    <p className="dialog-summary-title">{resultConfirmation.match.fullRoundText}</p>
+                    {resultConfirmation.match.slots
+                      .filter((slot) => slot.entrantId)
+                      .map((slot) => (
+                        <p className="meta" key={`result-confirm-${resultConfirmation.match.setId}-${slot.entrantId}`}>
+                          {slot.entrantName}: {resultConfirmation.scoreDrafts[slot.entrantId ?? ""] || "未入力"}
+                        </p>
+                      ))}
+                  </div>
+                  <p className="meta">内容を確認し、正しければ確定してください。修正する場合はキャンセルしてください。</p>
+                </div>
+                <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
+                  <button type="button" className="ghost" onClick={() => setResultConfirmation(null)}>キャンセル</button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setResultConfirmation(null);
+                      void saveLocalResultForMatch(true);
+                    }}
+                  >
+                    この結果を確定
+                  </button>
+                </div>
+              </section>
+            </div>
+          )}
           {overlaySwitchConfirm && activeMatch && activeObsOverlaySet && (
             <div
               className="dialog-backdrop"
