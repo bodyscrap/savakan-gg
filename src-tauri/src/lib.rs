@@ -1927,6 +1927,10 @@ fn mobile_input_html() -> &'static str {
             return slots.length >= 2 && slots.every((slot) => Boolean(slot.entrantId));
         }
 
+        function isCompletedSet(detail) {
+            return Number(detail?.state || 0) === 3 || Boolean(detail?.winnerId);
+        }
+
         function isResolvedEntrantName(name) {
             const raw = String(name || '').trim();
             if (!raw) {
@@ -2028,7 +2032,7 @@ fn mobile_input_html() -> &'static str {
         }
 
         function swapSides() {
-            if (!selectedSet) {
+            if (!selectedSet || isCompletedSet(selectedSet)) {
                 return;
             }
 
@@ -2054,7 +2058,7 @@ fn mobile_input_html() -> &'static str {
         }
 
         function randomizeSides() {
-            if (!selectedSet) {
+            if (!selectedSet || isCompletedSet(selectedSet)) {
                 return;
             }
 
@@ -2093,7 +2097,7 @@ fn mobile_input_html() -> &'static str {
         }
 
         function setEntrantPlaySide(entrantId, playSide) {
-            if (!selectedSet || !entrantId) {
+            if (!selectedSet || isCompletedSet(selectedSet) || !entrantId) {
                 return;
             }
 
@@ -2112,6 +2116,10 @@ fn mobile_input_html() -> &'static str {
         function renderDetailSlots(detail) {
             const slots = getOrderedSlots(detail);
             const matchupReady = isMatchupReady(detail);
+            const completed = isCompletedSet(detail);
+            detailMeta.textContent = completed
+                ? '結果が確定しているため編集できません。修正する場合はsetを削除して再入力してください。'
+                : '';
             const visibleSlots = slots.slice(0, 2);
             const numericScores = matchupReady
                 ? visibleSlots.map((slot) => normalizeScoreValue(slot?.score)).filter((value) => value !== null)
@@ -2141,16 +2149,16 @@ fn mobile_input_html() -> &'static str {
                 })();
                 const scoreControls = hasEntrant
                     ? `<div class="player-controls">
-                        <input class="set-score-input ${isHigher ? 'score-high' : ''}" data-score-entrant-id="${entrantId}" type="text" inputmode="numeric" pattern="-?[0-9]*" min="-1" step="1" value="${formatScoreInputValue(score)}" />
+                        <input class="set-score-input ${isHigher ? 'score-high' : ''}" data-score-entrant-id="${entrantId}" type="text" inputmode="numeric" pattern="-?[0-9]*" min="-1" step="1" value="${formatScoreInputValue(score)}" ${completed ? 'disabled' : ''} />
                         <div class="score-step-row">
-                            <button class="score-step-btn" type="button" data-score-adjust="1" data-score-entrant-id="${entrantId}">+</button>
-                            <button class="score-step-btn" type="button" data-score-adjust="-1" data-score-entrant-id="${entrantId}">−</button>
+                            <button class="score-step-btn" type="button" data-score-adjust="1" data-score-entrant-id="${entrantId}" ${completed ? 'disabled' : ''}>+</button>
+                            <button class="score-step-btn" type="button" data-score-adjust="-1" data-score-entrant-id="${entrantId}" ${completed ? 'disabled' : ''}>−</button>
                         </div>
-                        ${matchupReady ? '' : '<span class="slot-lock-note">対戦カード未確定</span>'}
+                        ${completed ? '<span class="slot-lock-note">確定済みset</span>' : (matchupReady ? '' : '<span class="slot-lock-note">対戦カード未確定</span>')}
                     </div>`
                     : `<div class="player-controls"><span class="slot-lock-note">対戦カード未確定</span></div>`;
                 const dqButton = matchupReady && hasEntrant
-                    ? `<button class="dq-btn" type="button" data-dq-entrant-id="${entrantId}">DQ</button>`
+                    ? `<button class="dq-btn" type="button" data-dq-entrant-id="${entrantId}" ${completed ? 'disabled' : ''}>DQ</button>`
                     : '';
                 const sideClass = sideLabel === '1P' ? 'side-1p' : (sideLabel === '2P' ? 'side-2p' : '');
                 const escapedEntrantName = escapeHtml(slot?.entrantName || 'TBD');
@@ -2244,7 +2252,16 @@ fn mobile_input_html() -> &'static str {
             }
 
             if (confirmBtn) {
-                confirmBtn.disabled = !matchupReady;
+                confirmBtn.disabled = completed || !matchupReady;
+            }
+            if (updateBtn) {
+                updateBtn.disabled = completed || !matchupReady;
+            }
+            if (swapSideBtn) {
+                swapSideBtn.disabled = completed || !matchupReady;
+            }
+            if (randomSideBtn) {
+                randomSideBtn.disabled = completed || !matchupReady;
             }
 
             updateHigherScoreHighlight();
@@ -2585,6 +2602,11 @@ fn mobile_input_html() -> &'static str {
         async function saveSetFromDetail(confirmed) {
             if (!selectedSet) {
                 submitStatus.textContent = '先にsetを選択してください。';
+                return;
+            }
+
+            if (isCompletedSet(selectedSet)) {
+                submitStatus.textContent = '確定済みsetの結果は変更できません。修正する場合はsetを削除して再入力してください。';
                 return;
             }
 
@@ -3376,6 +3398,15 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
                     return;
                 };
+
+                if target_set.state == 3 || target_set.winner_id.is_some() {
+                    respond_json(
+                        request,
+                        400,
+                        "{\"error\":\"completed set results cannot be changed\"}".to_owned(),
+                    );
+                    return;
+                }
 
                 let known_entrant_ids = target_set
                     .slots

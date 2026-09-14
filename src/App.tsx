@@ -4589,8 +4589,10 @@ function App() {
   }, [bracketReportProgress]);
 
   const shouldShowBracketSnapshotRefreshProgress = useMemo(() => {
-    return bracketReportProgress?.phase === "refreshingSnapshot" && createSnapshotProgress !== null;
-  }, [bracketReportProgress, createSnapshotProgress]);
+    const isReportSnapshotRefresh = bracketReportProgress?.phase === "refreshingSnapshot";
+    const isManualBracketRefresh = activeTab === "bracket" && busy && createSnapshotProgress !== null;
+    return (isReportSnapshotRefresh || isManualBracketRefresh) && createSnapshotProgress !== null;
+  }, [activeTab, bracketReportProgress, busy, createSnapshotProgress]);
 
   const mailboxThreads = useMemo(() => {
     return mailboxThreadSummaries
@@ -8041,6 +8043,14 @@ function App() {
     setBusy(true);
     setError("");
     setMessage("");
+    setCreateSnapshotProgress({
+      phase: "starting",
+      completedRequests: 0,
+      totalRequests: null,
+      currentPage: null,
+      currentSetId: null,
+      totalPlannedSetRequests: null,
+    });
 
     try {
       const result = await invoke<TournamentWorkspace>("refresh_local_event_snapshot_from_remote", {
@@ -8052,6 +8062,7 @@ function App() {
       setSetResultDrafts({});
       setInterimScoreDraftsBySetId({});
       closeMatchDialog();
+      setCreateSnapshotProgress(null);
       await refreshLocalSnapshotEvents();
       setMessage("スナップショットを更新しました。未報告のローカル結果・途中経過は破棄され、start.gg状態に合わせました。");
     } catch (err) {
@@ -8592,6 +8603,11 @@ function App() {
 
     if (!activeMatch) {
       setError("試合が選択されていません。");
+      return;
+    }
+
+    if (isCompletedSet(activeMatch)) {
+      setError("確定済みsetの結果は変更できません。修正する場合は「影響setを取消」からやり直してください。");
       return;
     }
 
@@ -11436,6 +11452,7 @@ function App() {
 
           {activeMatch && selectedEvent && (() => {
             const currentDialogMatch = activeMatch;
+            const activeMatchCompleted = isCompletedSet(currentDialogMatch);
             const dialogSetCode = setDisplayCodeById.get(currentDialogMatch.setId);
             const dialogIsLiveOverlaySet = Boolean(
               obsOverlayState?.active
@@ -11463,6 +11480,9 @@ function App() {
                     <button type="button" className="ghost" onClick={closeMatchDialog}>閉じる</button>
                   </div>
                   <p className="meta">setId: {activeMatch.setId} / state: {activeMatch.state}</p>
+                  {activeMatchCompleted && (
+                    <p className="meta">確定済みsetのスコアは変更できません。修正する場合は「影響setを取消」からやり直してください。</p>
+                  )}
                   {!isMatchupReady(activeMatch) && <p className="meta">対戦カード確定後にプレイヤーサイドを変更できます。</p>}
                   {matchSideRandomNotice && matchSideRandomNotice.setId === activeMatch.setId && (
                     <p className={`meta side-random-notice ${matchSideRandomNotice.changed ? "changed" : "unchanged"}`}>
@@ -11538,7 +11558,7 @@ function App() {
                                     <button
                                       type="button"
                                       className="ghost tiny"
-                                      disabled={busy || !isMatchupReady(activeMatch)}
+                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch)}
                                       onClick={() => {
                                         if (!entrantId) {
                                           return;
@@ -11559,6 +11579,7 @@ function App() {
                                       type="text"
                                       inputMode="numeric"
                                       value={scoreValue}
+                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch)}
                                       onChange={(e) => {
                                         if (!entrantId) {
                                           return;
@@ -11576,7 +11597,7 @@ function App() {
                                     <button
                                       type="button"
                                       className="ghost tiny"
-                                      disabled={busy || !isMatchupReady(activeMatch)}
+                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch)}
                                       onClick={() => {
                                         if (!entrantId) {
                                           return;
@@ -11598,6 +11619,7 @@ function App() {
                                   <button
                                     type="button"
                                     className="ghost tiny"
+                                    disabled={busy || activeMatchCompleted}
                                     onClick={() => {
                                       setScoreDrafts((current) => ({
                                         ...current,
@@ -11636,7 +11658,7 @@ function App() {
                   <div className="dialog-actions">
                     <button
                       type="button"
-                      disabled={busy || !isMatchupReady(activeMatch) || isActiveMatchDqDraft}
+                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch) || isActiveMatchDqDraft}
                       onClick={() => {
                         void saveLocalResultForMatch(false);
                       }}
@@ -11683,7 +11705,7 @@ function App() {
                     </button>
                     <button
                       type="button"
-                      disabled={busy || !isMatchupReady(activeMatch)}
+                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch)}
                       onClick={() => {
                         void saveLocalResultForMatch(true);
                       }}
