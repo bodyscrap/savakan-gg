@@ -144,6 +144,22 @@ body {
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
+.tab-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  margin-left: auto;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #ffffff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .tab-trigger:hover {
   background: #1f2937;
   color: #ffffff;

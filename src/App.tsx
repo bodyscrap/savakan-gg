@@ -4345,6 +4345,13 @@ function App() {
       .sort((left, right) => new Date(right.root.createdAt).getTime() - new Date(left.root.createdAt).getTime());
   }, [mailboxReadMessageIds, scopedGenericMessages, senderProfile.senderUserId]);
 
+  const unreadMessageCount = useMemo(
+    () => mailboxThreadSummaries
+      .filter((summary) => summary.root.method !== "call_player")
+      .reduce((total, summary) => total + summary.unreadCount, 0),
+    [mailboxThreadSummaries],
+  );
+
   const unresolvedCallEventGroupsLatest = useMemo(() => {
     const roots = genericMessages.filter((item) =>
       item.parentMessageId === null
@@ -9302,6 +9309,16 @@ function App() {
             >
               <span aria-hidden="true">{tab.icon}</span>
               <span>{tab.label}</span>
+              {tab.id === "message" && unreadMessageCount > 0 && (
+                <span className="tab-count-badge" aria-label={`未読メッセージ ${unreadMessageCount}件`}>
+                  {unreadMessageCount >= 10 ? "9+" : unreadMessageCount}
+                </span>
+              )}
+              {tab.id === "call-list" && unresolvedCallRootCounts.total > 0 && (
+                <span className="tab-count-badge" aria-label={`未解決の呼び出し ${unresolvedCallRootCounts.total}件`}>
+                  {unresolvedCallRootCounts.total >= 10 ? "9+" : unresolvedCallRootCounts.total}
+                </span>
+              )}
             </button>
           ))}
         </nav>
