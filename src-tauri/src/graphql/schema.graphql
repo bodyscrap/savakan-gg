@@ -105,6 +105,17 @@ type SetSlot {
 type Seed {
   id: GgID!
   seedNum: Int
+  placeholderName: String
+  progressionSource: Progression
+}
+
+type Progression {
+  id: ID!
+  originOrder: Int
+  originPhase: Phase
+  originPhaseGroup: PhaseGroup
+  originPlacement: Int
+  placeholderName: String
 }
 
 type Entrant {

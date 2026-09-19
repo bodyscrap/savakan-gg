@@ -321,17 +321,50 @@ pub struct SetSnapshot {
     pub entrant2_source: Option<SetEntrantSourceSnapshot>,
     pub winner_progression_seed_id: Option<String>,
     pub winner_progression_seed_num: Option<i64>,
+    #[serde(default)]
+    pub winner_progression_seed_placeholder_name: Option<String>,
+    #[serde(default)]
+    pub winner_progression_origin_phase_group_id: Option<String>,
+    #[serde(default)]
+    pub winner_progression_origin_phase_group_display_identifier: Option<String>,
+    #[serde(default)]
+    pub winner_progression_origin_phase_order: Option<i64>,
+    #[serde(default)]
+    pub winner_progression_origin_placement: Option<i64>,
     pub loser_progression_seed_id: Option<String>,
     pub loser_progression_seed_num: Option<i64>,
+    #[serde(default)]
+    pub loser_progression_seed_placeholder_name: Option<String>,
+    #[serde(default)]
+    pub loser_progression_origin_phase_group_id: Option<String>,
+    #[serde(default)]
+    pub loser_progression_origin_phase_group_display_identifier: Option<String>,
+    #[serde(default)]
+    pub loser_progression_origin_phase_order: Option<i64>,
+    #[serde(default)]
+    pub loser_progression_origin_placement: Option<i64>,
     pub slots: Vec<SetSlotSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetEntrantSourceSnapshot {
+    pub source_type: Option<String>,
     pub type_id: Option<String>,
+    #[serde(default)]
+    pub resolved_set_id: Option<String>,
     pub condition: Option<String>,
     pub condition_string: Option<String>,
+    #[serde(default)]
+    pub placeholder_name: Option<String>,
+    #[serde(default)]
+    pub origin_phase_group_id: Option<String>,
+    #[serde(default)]
+    pub origin_phase_group_display_identifier: Option<String>,
+    #[serde(default)]
+    pub origin_phase_order: Option<i64>,
+    #[serde(default)]
+    pub origin_placement: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -341,6 +374,16 @@ pub struct SetSlotSnapshot {
     pub entrant_name: String,
     pub seed_id: Option<String>,
     pub seed_num: Option<i64>,
+    #[serde(default)]
+    pub seed_placeholder_name: Option<String>,
+    #[serde(default)]
+    pub seed_origin_phase_group_id: Option<String>,
+    #[serde(default)]
+    pub seed_origin_phase_group_display_identifier: Option<String>,
+    #[serde(default)]
+    pub seed_origin_phase_order: Option<i64>,
+    #[serde(default)]
+    pub seed_origin_placement: Option<i64>,
     pub score: Option<f64>,
 }
 

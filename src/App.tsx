@@ -24,6 +24,7 @@ type SetSnapshot = {
   phaseOrder: number | null;
   phaseGroupDisplayIdentifier: string | null;
   phaseGroupSetName?: string | null;
+  isIntermediate?: boolean;
   state: number;
   winnerId: string | null;
   entrant1Source: SetEntrantSource | null;
@@ -32,9 +33,12 @@ type SetSnapshot = {
 };
 
 type SetEntrantSource = {
+  sourceType?: string | null;
   typeId: string | null;
+  resolvedSetId?: string | null;
   condition: string | null;
   conditionString: string | null;
+  placeholderName?: string | null;
 };
 
 type RoundColumn = {
@@ -591,7 +595,10 @@ function isSlotTbd(slot: SetSlot): boolean {
 }
 
 function sourceSetIdsForSet(set: SetSnapshot): string[] {
-  return [set.entrant1Source?.typeId, set.entrant2Source?.typeId]
+  return [
+    set.entrant1Source?.resolvedSetId ?? set.entrant1Source?.typeId,
+    set.entrant2Source?.resolvedSetId ?? set.entrant2Source?.typeId,
+  ]
     .filter((setId): setId is string => Boolean(setId && setId.trim() !== ""));
 }
 
@@ -7769,10 +7776,46 @@ function App() {
     }
 
     const source = slotIndex === 0 ? set.entrant1Source : set.entrant2Source;
-    const sourceSetCode = source?.typeId ? setDisplayCodeById.get(source.typeId) : undefined;
-    const sourceCondition = source?.condition?.trim().toLowerCase();
-    if (sourceSetCode && (sourceCondition === "winner" || sourceCondition === "loser")) {
-      return normalizeSourceText(sourceCondition === "winner" ? "winners" : "losers", sourceSetCode);
+    const resolveSource = (
+      currentSource: SetEntrantSource | null | undefined,
+      visited: Set<string>,
+    ): string | null => {
+      if (!currentSource) {
+        return null;
+      }
+      const sourceSetId = currentSource.resolvedSetId ?? currentSource.typeId;
+      const sourceSet = sourceSetId
+        ? selectedEvent?.sets.find((candidate) => candidate.setId === sourceSetId)
+        : undefined;
+      if (currentSource.placeholderName?.trim()) {
+        return currentSource.placeholderName.trim();
+      }
+      if (!sourceSetId || !sourceSet || visited.has(sourceSetId)) {
+        return null;
+      }
+
+      const nextVisited = new Set(visited);
+      nextVisited.add(sourceSetId);
+      if (sourceSet.isIntermediate) {
+        const nested = [sourceSet.entrant1Source, sourceSet.entrant2Source]
+          .map((nestedSource) => resolveSource(nestedSource, nextVisited))
+          .find((label): label is string => Boolean(label));
+        if (nested) {
+          return nested;
+        }
+      }
+
+      const sourceSetCode = setDisplayCodeById.get(sourceSetId);
+      const sourceCondition = currentSource.condition?.trim().toLowerCase();
+      if (sourceSetCode && (sourceCondition === "winner" || sourceCondition === "loser")) {
+        return normalizeSourceText(sourceCondition === "winner" ? "winners" : "losers", sourceSetCode);
+      }
+      return null;
+    };
+
+    const resolvedSourceLabel = resolveSource(source, new Set<string>());
+    if (resolvedSourceLabel) {
+      return resolvedSourceLabel;
     }
 
     const own = tbdSourceLabelBySlotKey.get(`${set.setId}:${slotIndex}`);
@@ -9215,8 +9258,12 @@ function App() {
         setMessage("setサイドを保存しました。");
       }
     } catch (err) {
-      setError(String(err));
-      throw err;
+      const errorMessage = String(err);
+      const isTransientSideAssignmentError = errorMessage.includes("対戦カードが確定していないsetはサイド設定できません");
+      if (!silent || !isTransientSideAssignmentError) {
+        setError(errorMessage);
+        throw err;
+      }
     } finally {
       if (manageBusy) {
         setBusy(false);

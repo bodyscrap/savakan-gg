@@ -14,11 +14,13 @@ query SetSnapshotDetail($setId: ID!) {
     state
     winnerId
     entrant1Source {
+      type
       typeId
       condition
       conditionString
     }
     entrant2Source {
+      type
       typeId
       condition
       conditionString
@@ -26,15 +28,75 @@ query SetSnapshotDetail($setId: ID!) {
     winnerProgressionSeed {
       id
       seedNum
+      placeholderName
+      progressionSource {
+        originOrder
+        originPhase {
+          id
+          name
+          phaseOrder
+        }
+        originPhaseGroup {
+          id
+          displayIdentifier
+          phase {
+            id
+            name
+            phaseOrder
+          }
+        }
+        originPlacement
+        placeholderName
+      }
     }
     loserProgressionSeed {
       id
       seedNum
+      placeholderName
+      progressionSource {
+        originOrder
+        originPhase {
+          id
+          name
+          phaseOrder
+        }
+        originPhaseGroup {
+          id
+          displayIdentifier
+          phase {
+            id
+            name
+            phaseOrder
+          }
+        }
+        originPlacement
+        placeholderName
+      }
     }
     slots {
       seed {
         id
         seedNum
+        placeholderName
+        progressionSource {
+          originOrder
+          originPhase {
+            id
+            name
+            phaseOrder
+          }
+          originPhaseGroup {
+            id
+            displayIdentifier
+            phase {
+              id
+              name
+              phaseOrder
+            }
+          }
+          originPlacement
+          placeholderName
+        }
       }
       entrant {
         id

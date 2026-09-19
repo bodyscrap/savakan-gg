@@ -5714,7 +5714,12 @@ async fn create_event_snapshot(
     .await?;
     let event_alias = resolve_event_alias(input.event_alias.clone(), &snapshot, &input.event_id);
 
-    let local_meta = storage::save_event_snapshot(&app, &snapshot, &input.event_id, event_alias)?;
+    storage::save_event_snapshot(&app, &snapshot, &input.event_id, event_alias)?;
+    let local_meta = storage::discard_pending_set_results_for_snapshot_refresh(
+        &app,
+        &input.slug,
+        &input.event_id,
+    )?;
     let snapshot = storage::load_snapshot(&app, &snapshot.slug)?;
 
     Ok(TournamentWorkspace {
@@ -5832,7 +5837,9 @@ async fn create_event_snapshot_by_slug(
 
     let event_alias = resolve_event_alias(input.event_alias.clone(), &snapshot, &event_id);
 
-    let local_meta = storage::save_event_snapshot(&app, &snapshot, &event_id, event_alias)?;
+    storage::save_event_snapshot(&app, &snapshot, &event_id, event_alias)?;
+    let local_meta =
+        storage::discard_pending_set_results_for_snapshot_refresh(&app, &snapshot.slug, &event_id)?;
     let snapshot = storage::load_snapshot(&app, &snapshot.slug)?;
 
     Ok(TournamentWorkspace {

@@ -31,11 +31,13 @@ query TournamentSync($slug: String!, $perPage: Int!) {
           state
           winnerId
           entrant1Source {
+            type
             typeId
             condition
             conditionString
           }
           entrant2Source {
+            type
             typeId
             condition
             conditionString

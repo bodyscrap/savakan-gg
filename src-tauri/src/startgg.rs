@@ -254,8 +254,10 @@ async fn fetch_set_snapshot_detail_with_client(
                 .as_ref()
                 .and_then(|e| e.name.clone())
                 .unwrap_or_else(|| "TBD".to_owned());
-            let seed_id = slot.seed.as_ref().map(|seed| seed.id.to_string());
-            let seed_num = slot.seed.and_then(|seed| seed.seed_num.map(i64::from));
+            let seed = slot.seed.as_ref();
+            let progression_source = seed.and_then(|seed| seed.progression_source.as_ref());
+            let seed_id = seed.map(|seed| seed.id.to_string());
+            let seed_num = seed.and_then(|seed| seed.seed_num.map(i64::from));
             let score = slot
                 .standing
                 .and_then(|standing| standing.stats)
@@ -267,6 +269,19 @@ async fn fetch_set_snapshot_detail_with_client(
                 entrant_name,
                 seed_id,
                 seed_num,
+                seed_placeholder_name: seed.and_then(|seed| seed.placeholder_name.clone()),
+                seed_origin_phase_group_id: progression_source
+                    .and_then(|source| source.origin_phase_group.as_ref())
+                    .map(|group| group.id.to_string()),
+                seed_origin_phase_group_display_identifier: progression_source
+                    .and_then(|source| source.origin_phase_group.as_ref())
+                    .and_then(|group| group.display_identifier.clone()),
+                seed_origin_phase_order: progression_source
+                    .and_then(|source| source.origin_phase_group.as_ref())
+                    .and_then(|group| group.phase.as_ref())
+                    .and_then(|phase| phase.phase_order),
+                seed_origin_placement: progression_source
+                    .and_then(|source| source.origin_placement),
                 score,
             }
         })
@@ -303,17 +318,31 @@ async fn fetch_set_snapshot_detail_with_client(
             .entrant1_source
             .as_ref()
             .map(|source| SetEntrantSourceSnapshot {
+                source_type: Some(source.type_.clone()),
                 type_id: source.type_id.as_ref().map(|id| id.to_string()),
+                resolved_set_id: None,
                 condition: source.condition.clone(),
                 condition_string: source.condition_string.clone(),
+                placeholder_name: None,
+                origin_phase_group_id: None,
+                origin_phase_group_display_identifier: None,
+                origin_phase_order: None,
+                origin_placement: None,
             }),
         entrant2_source: set
             .entrant2_source
             .as_ref()
             .map(|source| SetEntrantSourceSnapshot {
+                source_type: Some(source.type_.clone()),
                 type_id: source.type_id.as_ref().map(|id| id.to_string()),
+                resolved_set_id: None,
                 condition: source.condition.clone(),
                 condition_string: source.condition_string.clone(),
+                placeholder_name: None,
+                origin_phase_group_id: None,
+                origin_phase_group_display_identifier: None,
+                origin_phase_order: None,
+                origin_placement: None,
             }),
         winner_progression_seed_id: set
             .winner_progression_seed
@@ -323,6 +352,34 @@ async fn fetch_set_snapshot_detail_with_client(
             .winner_progression_seed
             .as_ref()
             .and_then(|seed| seed.seed_num.map(i64::from)),
+        winner_progression_seed_placeholder_name: set
+            .winner_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.placeholder_name.clone()),
+        winner_progression_origin_phase_group_id: set
+            .winner_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.progression_source.as_ref())
+            .and_then(|source| source.origin_phase_group.as_ref())
+            .map(|group| group.id.to_string()),
+        winner_progression_origin_phase_group_display_identifier: set
+            .winner_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.progression_source.as_ref())
+            .and_then(|source| source.origin_phase_group.as_ref())
+            .and_then(|group| group.display_identifier.clone()),
+        winner_progression_origin_phase_order: set
+            .winner_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.progression_source.as_ref())
+            .and_then(|source| source.origin_phase_group.as_ref())
+            .and_then(|group| group.phase.as_ref())
+            .and_then(|phase| phase.phase_order),
+        winner_progression_origin_placement: set
+            .winner_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.progression_source.as_ref())
+            .and_then(|source| source.origin_placement),
         loser_progression_seed_id: set
             .loser_progression_seed
             .as_ref()
@@ -331,6 +388,34 @@ async fn fetch_set_snapshot_detail_with_client(
             .loser_progression_seed
             .as_ref()
             .and_then(|seed| seed.seed_num.map(i64::from)),
+        loser_progression_seed_placeholder_name: set
+            .loser_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.placeholder_name.clone()),
+        loser_progression_origin_phase_group_id: set
+            .loser_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.progression_source.as_ref())
+            .and_then(|source| source.origin_phase_group.as_ref())
+            .map(|group| group.id.to_string()),
+        loser_progression_origin_phase_group_display_identifier: set
+            .loser_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.progression_source.as_ref())
+            .and_then(|source| source.origin_phase_group.as_ref())
+            .and_then(|group| group.display_identifier.clone()),
+        loser_progression_origin_phase_order: set
+            .loser_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.progression_source.as_ref())
+            .and_then(|source| source.origin_phase_group.as_ref())
+            .and_then(|group| group.phase.as_ref())
+            .and_then(|phase| phase.phase_order),
+        loser_progression_origin_placement: set
+            .loser_progression_seed
+            .as_ref()
+            .and_then(|seed| seed.progression_source.as_ref())
+            .and_then(|source| source.origin_placement),
         slots,
     })
 }
@@ -651,6 +736,11 @@ async fn query_tournament_snapshot(
                                 entrant_name,
                                 seed_id,
                                 seed_num,
+                                seed_placeholder_name: None,
+                                seed_origin_phase_group_id: None,
+                                seed_origin_phase_group_display_identifier: None,
+                                seed_origin_phase_order: None,
+                                seed_origin_placement: None,
                                 score,
                             }
                         })
@@ -687,16 +777,30 @@ async fn query_tournament_snapshot(
                         winner_id: set.winner_id.map(|id| id.to_string()),
                         entrant1_source: set.entrant1_source.map(|source| {
                             SetEntrantSourceSnapshot {
+                                source_type: Some(source.type_.clone()),
                                 type_id: source.type_id.map(|type_id| type_id.to_string()),
+                                resolved_set_id: None,
                                 condition: source.condition,
                                 condition_string: source.condition_string,
+                                placeholder_name: None,
+                                origin_phase_group_id: None,
+                                origin_phase_group_display_identifier: None,
+                                origin_phase_order: None,
+                                origin_placement: None,
                             }
                         }),
                         entrant2_source: set.entrant2_source.map(|source| {
                             SetEntrantSourceSnapshot {
+                                source_type: Some(source.type_.clone()),
                                 type_id: source.type_id.map(|type_id| type_id.to_string()),
+                                resolved_set_id: None,
                                 condition: source.condition,
                                 condition_string: source.condition_string,
+                                placeholder_name: None,
+                                origin_phase_group_id: None,
+                                origin_phase_group_display_identifier: None,
+                                origin_phase_order: None,
+                                origin_placement: None,
                             }
                         }),
                         winner_progression_seed_id: set
@@ -706,6 +810,11 @@ async fn query_tournament_snapshot(
                         winner_progression_seed_num: set
                             .winner_progression_seed
                             .and_then(|seed| seed.seed_num.map(i64::from)),
+                        winner_progression_seed_placeholder_name: None,
+                        winner_progression_origin_phase_group_id: None,
+                        winner_progression_origin_phase_group_display_identifier: None,
+                        winner_progression_origin_phase_order: None,
+                        winner_progression_origin_placement: None,
                         loser_progression_seed_id: set
                             .loser_progression_seed
                             .as_ref()
@@ -713,6 +822,11 @@ async fn query_tournament_snapshot(
                         loser_progression_seed_num: set
                             .loser_progression_seed
                             .and_then(|seed| seed.seed_num.map(i64::from)),
+                        loser_progression_seed_placeholder_name: None,
+                        loser_progression_origin_phase_group_id: None,
+                        loser_progression_origin_phase_group_display_identifier: None,
+                        loser_progression_origin_phase_order: None,
+                        loser_progression_origin_placement: None,
                         slots,
                     })
                 })
