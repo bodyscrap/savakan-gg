@@ -1532,6 +1532,25 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.match-dialog-actions {
+  align-items: center;
+}
+
+.dialog-danger-actions,
+.dialog-primary-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.dialog-danger-actions {
+  margin-right: auto;
+}
+
+.dialog-primary-actions {
+  justify-content: flex-end;
+}
+
 .conflict-dialog {
   width: min(620px, 100%);
 }

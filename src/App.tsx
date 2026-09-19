@@ -11838,73 +11838,77 @@ function App() {
                     })()}
                   </div>
 
-                  <div className="dialog-actions">
-                    <button
-                      type="button"
-                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch) || isActiveMatchDqDraft}
-                      onClick={() => {
-                        void saveLocalResultForMatch(false);
-                      }}
-                    >
-                      更新
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={busy || activeMatchCompleted}
-                      onClick={() => {
-                        void discardLocalResultDraftForMatch();
-                      }}
-                    >
-                      このsetを破棄
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={busy || obsOverlayBusy}
-                      onClick={() => {
-                        const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === currentDialogMatch.setId;
-                        const otherSetIsActive = Boolean(
-                          obsOverlayState?.active
-                          && obsOverlayState.currentSetId
-                          && obsOverlayState.currentSetId !== currentDialogMatch.setId
-                          && obsOverlayState.currentSetId !== "__test__",
-                        );
+                  <div className="dialog-actions dialog-actions-split match-dialog-actions">
+                    <div className="dialog-danger-actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={busy || activeMatchCompleted}
+                        onClick={() => {
+                          void discardLocalResultDraftForMatch();
+                        }}
+                      >
+                        下書きの破棄
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={busy}
+                        onClick={() => {
+                          void resetSetResultCascadeForMatch();
+                        }}
+                      >
+                        setの取り消し
+                      </button>
+                    </div>
+                    <div className="dialog-primary-actions">
+                      <button
+                        type="button"
+                        disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch) || isActiveMatchDqDraft}
+                        onClick={() => {
+                          void saveLocalResultForMatch(false);
+                        }}
+                      >
+                        更新
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={busy || obsOverlayBusy}
+                        onClick={() => {
+                          const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === currentDialogMatch.setId;
+                          const otherSetIsActive = Boolean(
+                            obsOverlayState?.active
+                            && obsOverlayState.currentSetId
+                            && obsOverlayState.currentSetId !== currentDialogMatch.setId
+                            && obsOverlayState.currentSetId !== "__test__",
+                          );
 
-                        if (otherSetIsActive && !isSameActive) {
-                          setOverlaySwitchConfirm({
-                            targetSetId: currentDialogMatch.setId,
-                            targetSetLabel: currentDialogMatch.fullRoundText || `Set ${dialogSetCode ?? "-"}`,
-                          });
-                          return;
-                        }
+                          if (otherSetIsActive && !isSameActive) {
+                            setOverlaySwitchConfirm({
+                              targetSetId: currentDialogMatch.setId,
+                              targetSetLabel: currentDialogMatch.fullRoundText || `Set ${dialogSetCode ?? "-"}`,
+                            });
+                            return;
+                          }
 
-                        void toggleActiveMatchOverlay(currentDialogMatch);
-                      }}
-                    >
-                      {obsOverlayState?.active && obsOverlayState.currentSetId === currentDialogMatch.setId && obsOverlayState.currentSetId !== "__test__"
-                        ? "配信停止"
-                        : "配信開始"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch)}
-                      onClick={() => {
-                        requestResultConfirmation(activeMatch);
-                      }}
-                    >
-                      確定
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={busy}
-                      onClick={() => {
-                        void resetSetResultCascadeForMatch();
-                      }}
-                    >
-                      影響setを取消
-                    </button>
+                          void toggleActiveMatchOverlay(currentDialogMatch);
+                        }}
+                      >
+                        {obsOverlayState?.active && obsOverlayState.currentSetId === currentDialogMatch.setId && obsOverlayState.currentSetId !== "__test__"
+                          ? "配信停止"
+                          : "配信開始"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch)}
+                        onClick={() => {
+                          requestResultConfirmation(activeMatch);
+                        }}
+                      >
+                        確定
+                      </button>
+                    </div>
                   </div>
                 </section>
               </div>
