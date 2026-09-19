@@ -917,6 +917,7 @@ type ObsOverlayState = {
   fullyStopped: boolean;
   currentSetId: string | null;
   eventName: string | null;
+  eventAlias: string | null;
   roundText: string | null;
   redPlayerName: string;
   bluePlayerName: string;
@@ -925,6 +926,7 @@ type ObsOverlayState = {
   fontScale: number;
   nameFitMode: "truncate" | "shrink";
   showSetInfo: boolean;
+  showEventAlias: boolean;
   overlayUrl: string;
 };
 
@@ -932,6 +934,7 @@ type ObsOverlaySetInput = {
   enabled: boolean;
   setId: string;
   eventName: string;
+  eventAlias: string;
   roundText: string;
   redPlayerName: string;
   bluePlayerName: string;
@@ -2157,10 +2160,6 @@ function abbreviateOverlayRoundText(value: string): string {
     .replace(/\bGrand\s+Finals?\s+Reset\b/gi, "GF Reset")
     .replace(/\bGF\s+Reset\b/gi, "GF Reset")
     .replace(/\bGrand\s+Finals?\b/gi, "GF")
-    .replace(/\bWinners\b/gi, "W")
-    .replace(/\bWinner\b/gi, "W")
-    .replace(/\bLosers\b/gi, "L")
-    .replace(/\bLoser\b/gi, "L")
     .trim();
 }
 
@@ -6353,7 +6352,8 @@ function App() {
               enabled: true,
               setId: "__test__",
               eventName: "テスト配信",
-              roundText: "Preview\nset T",
+              eventAlias: "テスト大会",
+              roundText: "Preview / Pool A\nPreview\nSet T",
               redPlayerName: testOverlayRedName.trim() || "テストプレイヤー1",
               bluePlayerName: testOverlayBlueName.trim() || "テストプレイヤー2",
               redSetWins: normalizeObsSetWins(testOverlayRedWins),
@@ -7098,6 +7098,21 @@ function App() {
     }
   }
 
+  async function updateObsOverlayShowEventAlias(showEventAlias: boolean) {
+    setObsOverlayBusy(true);
+    try {
+      const next = await invoke<ObsOverlayState>("set_obs_overlay_show_event_alias", {
+        showEventAlias,
+      });
+      setObsOverlayState(next);
+      setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setObsOverlayBusy(false);
+    }
+  }
+
   async function setObsOverlayFullyStopped(fullyStopped: boolean) {
     setObsOverlayBusy(true);
     try {
@@ -7142,7 +7157,8 @@ function App() {
       enabled: true,
       setId: "__test__",
       eventName: "テスト配信",
-      roundText: "Preview\nset T",
+      eventAlias: "テスト大会",
+      roundText: "Preview / Pool A\nPreview\nSet T",
       redPlayerName: testOverlayRedName.trim() || "テストプレイヤー1",
       bluePlayerName: testOverlayBlueName.trim() || "テストプレイヤー2",
       redSetWins: testOverlayRedWins,
@@ -7160,6 +7176,7 @@ function App() {
       enabled: false,
       setId: "__test__",
       eventName: "",
+      eventAlias: "",
       roundText: "",
       redPlayerName: "",
       bluePlayerName: "",
@@ -7173,13 +7190,16 @@ function App() {
     const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === set.setId;
     const displayCode = setDisplayCodeById.get(set.setId);
     const nextRoundLabel = abbreviateOverlayRoundText(set.fullRoundText);
-    const nextRoundText = `${nextRoundLabel}\nSet ${displayCode ?? "-"}`;
+    const phasePoolLabel = `${set.phaseName?.trim() || "-"} / Pool ${set.phaseGroupDisplayIdentifier?.trim() || "-"}`;
+    const setName = set.phaseGroupSetName?.trim() || displayCode || "-";
+    const nextRoundText = `${phasePoolLabel} / Set ${setName}\n${nextRoundLabel}`;
     const overlaySides = resolveOverlaySidesForSet(set);
 
     await toggleObsOverlaySet({
       enabled: !isSameActive,
       setId: set.setId,
       eventName: selectedEvent?.name ?? "",
+      eventAlias: selectedEventMeta?.eventAlias?.trim() ?? "",
       roundText: nextRoundText,
       redPlayerName: overlaySides.redPlayerName,
       bluePlayerName: overlaySides.bluePlayerName,
@@ -7200,6 +7220,7 @@ function App() {
         enabled: false,
         setId: currentSetId,
         eventName: "",
+        eventAlias: "",
         roundText: "",
         redPlayerName: "",
         bluePlayerName: "",
@@ -7306,13 +7327,16 @@ function App() {
 
     const displayCode = setDisplayCodeById.get(set.setId);
     const nextRoundLabel = abbreviateOverlayRoundText(set.fullRoundText);
+    const phasePoolLabel = `${set.phaseName?.trim() || "-"} / Pool ${set.phaseGroupDisplayIdentifier?.trim() || "-"}`;
+    const setName = set.phaseGroupSetName?.trim() || displayCode || "-";
     const overlaySides = resolveOverlaySidesForSet(set, scoreByEntrantId);
 
     await toggleObsOverlaySet({
       enabled: true,
       setId: set.setId,
       eventName: selectedEvent?.name ?? "",
-      roundText: `${nextRoundLabel}\nSet ${displayCode ?? "-"}`,
+      eventAlias: selectedEventMeta?.eventAlias?.trim() ?? "",
+      roundText: `${phasePoolLabel} / Set ${setName}\n${nextRoundLabel}`,
       redPlayerName: overlaySides.redPlayerName,
       bluePlayerName: overlaySides.bluePlayerName,
       redSetWins: overlaySides.redSetWins,
@@ -10877,7 +10901,7 @@ function App() {
                   )}
 
                   <div className="obs-overlay-grid">
-                    <label className="checkbox-row" style={{ alignItems: "center", gap: "0.5rem" }}>
+                    <label className="checkbox-row">
                       <input
                         type="checkbox"
                         checked={obsOverlayState.nameFitMode === "shrink"}
@@ -10888,7 +10912,7 @@ function App() {
                       />
                       プレイヤー名を縮小表示
                     </label>
-                    <label className="checkbox-row" style={{ alignItems: "center", gap: "0.5rem" }}>
+                    <label className="checkbox-row">
                       <input
                         type="checkbox"
                         checked={obsOverlayState.showSetInfo}
@@ -10898,6 +10922,17 @@ function App() {
                         disabled={obsOverlayBusy}
                       />
                       中央のセット情報を表示
+                    </label>
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={obsOverlayState.showEventAlias}
+                        onChange={(e) => {
+                          void updateObsOverlayShowEventAlias(e.currentTarget.checked);
+                        }}
+                        disabled={obsOverlayBusy}
+                      />
+                      下部中央にイベントエイリアスを表示
                     </label>
                   </div>
 

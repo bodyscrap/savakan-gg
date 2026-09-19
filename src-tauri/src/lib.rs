@@ -82,6 +82,8 @@ struct MobileOverlayToggleInput {
     enabled: bool,
     force_switch: bool,
     event_name: String,
+    #[serde(default)]
+    event_alias: String,
     round_text: String,
     red_player_name: String,
     blue_player_name: String,
@@ -168,6 +170,7 @@ fn obs_overlay_state() -> &'static Mutex<ObsOverlayRuntimeState> {
             preview_font_scale: 1.0,
             name_fit_mode: "truncate".to_owned(),
             show_set_info: true,
+            show_event_alias: true,
             fully_stopped: false,
         })
     })
@@ -590,6 +593,7 @@ struct ObsOverlaySetInput {
     enabled: bool,
     set_id: String,
     event_name: String,
+    event_alias: String,
     round_text: String,
     red_player_name: String,
     blue_player_name: String,
@@ -605,6 +609,7 @@ struct ObsOverlayState {
     fully_stopped: bool,
     current_set_id: Option<String>,
     event_name: Option<String>,
+    event_alias: Option<String>,
     round_text: Option<String>,
     red_player_name: String,
     blue_player_name: String,
@@ -613,6 +618,7 @@ struct ObsOverlayState {
     font_scale: f64,
     name_fit_mode: String,
     show_set_info: bool,
+    show_event_alias: bool,
     overlay_url: String,
 }
 
@@ -620,6 +626,7 @@ struct ObsOverlayState {
 struct ObsOverlayActiveSet {
     set_id: String,
     event_name: String,
+    event_alias: String,
     round_text: String,
     red_player_name: String,
     blue_player_name: String,
@@ -634,6 +641,7 @@ struct ObsOverlayRuntimeState {
     preview_font_scale: f64,
     name_fit_mode: String,
     show_set_info: bool,
+    show_event_alias: bool,
     fully_stopped: bool,
 }
 
@@ -667,6 +675,7 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
             fully_stopped: false,
             current_set_id: Some(active.set_id.clone()),
             event_name: Some(active.event_name.clone()),
+            event_alias: Some(active.event_alias.clone()),
             round_text: Some(active.round_text.clone()),
             red_player_name: active.red_player_name.clone(),
             blue_player_name: active.blue_player_name.clone(),
@@ -675,6 +684,7 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
             font_scale: active.font_scale,
             name_fit_mode: guard.name_fit_mode.clone(),
             show_set_info: guard.show_set_info,
+            show_event_alias: guard.show_event_alias,
             overlay_url: overlay_url(),
         });
     }
@@ -686,6 +696,7 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
         fully_stopped: guard.fully_stopped,
         current_set_id: None,
         event_name: None,
+        event_alias: None,
         round_text: None,
         red_player_name: String::new(),
         blue_player_name: String::new(),
@@ -694,6 +705,7 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
         font_scale: preview_font_scale,
         name_fit_mode: guard.name_fit_mode.clone(),
         show_set_info: guard.show_set_info,
+        show_event_alias: guard.show_event_alias,
         overlay_url: overlay_url(),
     })
 }
@@ -759,8 +771,8 @@ fn build_overlay_html() -> &'static str {
             --scale: 1;
             --name-size: calc(56px * var(--scale) * var(--container-scale));
             --count-size: calc(54px * var(--scale) * var(--container-scale));
-            --set-main-size: calc(34px * var(--container-scale));
-            --set-sub-size: calc(30px * var(--container-scale));
+            --set-main-size: calc(32px * var(--container-scale));
+            --set-sub-size: calc(28px * var(--container-scale));
         }
         html, body {
             margin: 0;
@@ -881,6 +893,33 @@ fn build_overlay_html() -> &'static str {
             font-variant-numeric: tabular-nums;
             font-feature-settings: "tnum" 1;
         }
+        .event-alias {
+            position: absolute;
+            left: 33.3333%;
+            bottom: calc(12px * var(--container-scale));
+            width: 33.3333%;
+            box-sizing: border-box;
+            padding: calc(7px * var(--container-scale)) calc(14px * var(--container-scale));
+            border: calc(2px * var(--container-scale)) solid rgba(255, 255, 255, 0.92);
+            border-radius: 0;
+            background: rgba(0, 0, 0, 0.88);
+            color: #fff;
+            font-size: calc(28px * var(--scale) * var(--container-scale));
+            font-weight: 800;
+            line-height: 1.1;
+            text-align: center;
+            text-shadow:
+                calc(-2px * var(--container-scale)) calc(-2px * var(--container-scale)) 0 rgba(0, 0, 0, 0.76),
+                calc(2px * var(--container-scale)) calc(2px * var(--container-scale)) 0 rgba(0, 0, 0, 0.76),
+                0 0 calc(14px * var(--container-scale)) rgba(0, 0, 0, 0.5);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        body.hide-event-alias .event-alias {
+            visibility: hidden;
+            opacity: 0;
+        }
     </style>
 </head>
 <body>
@@ -914,6 +953,7 @@ fn build_overlay_html() -> &'static str {
       </section>
     </div>
   </div>
+    <div id="eventAlias" class="event-alias"></div>
   <script>
         function toSafeWins(value) {
       const n = Number(value);
@@ -1080,6 +1120,7 @@ fn build_overlay_html() -> &'static str {
                     : 'truncate';
                 document.body.classList.toggle('fit-shrink', nameFitMode === 'shrink');
                 document.body.classList.toggle('full-stop', isFullyStopped);
+                document.body.classList.toggle('hide-event-alias', !Boolean(state.showEventAlias));
                 const showSetInfo = Boolean(state.showSetInfo);
                 const redName = isActive ? String(state.redPlayerName || '').trim() : '';
                 const blueName = isActive ? String(state.bluePlayerName || '').trim() : '';
@@ -1101,7 +1142,8 @@ fn build_overlay_html() -> &'static str {
                 document.getElementById('redCount').textContent = redWins;
                 document.getElementById('blueCount').textContent = blueWins;
                                 fitSetInfoToPlate(document.getElementById('setMain'), setMain);
-                document.getElementById('setSub').textContent = setSub;
+                fitSetInfoToPlate(document.getElementById('setSub'), setSub);
+                document.getElementById('eventAlias').textContent = isActive ? String(state.eventAlias || '').trim() : '';
       } catch (_err) {
         // ignore and retry.
       }
@@ -3756,6 +3798,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     fully_stopped: false,
                     current_set_id: None,
                     event_name: None,
+                    event_alias: None,
                     round_text: None,
                     red_player_name: String::new(),
                     blue_player_name: String::new(),
@@ -3764,6 +3807,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     font_scale: 1.0,
                     name_fit_mode: "truncate".to_owned(),
                     show_set_info: true,
+                    show_event_alias: true,
                     overlay_url: overlay_url(),
                 }
             }))
@@ -3811,6 +3855,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             enabled: payload.enabled,
             set_id: payload.set_id.clone(),
             event_name: payload.event_name.clone(),
+            event_alias: payload.event_alias.clone(),
             round_text: payload.round_text.clone(),
             red_player_name: payload.red_player_name.clone(),
             blue_player_name: payload.blue_player_name.clone(),
@@ -4098,6 +4143,19 @@ fn set_obs_overlay_show_set_info(show_set_info: bool) -> Result<ObsOverlayState,
 }
 
 #[tauri::command]
+fn set_obs_overlay_show_event_alias(show_event_alias: bool) -> Result<ObsOverlayState, String> {
+    start_obs_overlay_server_if_needed()?;
+
+    let mut guard = obs_overlay_state()
+        .lock()
+        .map_err(|_| "オーバーレイ状態のロック取得に失敗しました。".to_owned())?;
+
+    guard.show_event_alias = show_event_alias;
+    drop(guard);
+    snapshot_obs_overlay_state()
+}
+
+#[tauri::command]
 fn set_obs_overlay_fully_stopped(fully_stopped: bool) -> Result<ObsOverlayState, String> {
     start_obs_overlay_server_if_needed()?;
 
@@ -4164,6 +4222,7 @@ fn apply_obs_overlay_toggle(
         guard.active_set = Some(ObsOverlayActiveSet {
             set_id,
             event_name: input.event_name.trim().to_owned(),
+            event_alias: input.event_alias.trim().to_owned(),
             round_text: input.round_text.trim().to_owned(),
             red_player_name: red_name,
             blue_player_name: blue_name,
@@ -6804,6 +6863,7 @@ pub fn run() {
             set_obs_overlay_font_scale,
             set_obs_overlay_name_fit_mode,
             set_obs_overlay_show_set_info,
+            set_obs_overlay_show_event_alias,
             set_obs_overlay_fully_stopped,
             toggle_obs_overlay_set,
             save_sender_profile,

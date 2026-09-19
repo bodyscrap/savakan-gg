@@ -1432,6 +1432,12 @@ button:disabled {
   color: var(--muted);
 }
 
+.obs-overlay-grid label.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .obs-overlay-actions {
   display: flex;
   justify-content: flex-end;
