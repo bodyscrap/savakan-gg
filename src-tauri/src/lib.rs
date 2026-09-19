@@ -440,10 +440,15 @@ mod tests {
     fn make_set(set_id: &str, full_round_text: &str, round: Option<i64>) -> SetSnapshot {
         SetSnapshot {
             set_id: set_id.to_owned(),
+            identifier: None,
             full_round_text: full_round_text.to_owned(),
             round,
             phase_name: None,
             phase_group_name: None,
+            phase_order: None,
+            phase_group_display_identifier: None,
+            phase_group_set_name: None,
+            is_hidden_intermediate: false,
             state: 0,
             winner_id: None,
             entrant1_source: None,

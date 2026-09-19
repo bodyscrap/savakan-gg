@@ -282,17 +282,39 @@ pub struct BracketBatchConflict {
 pub struct EventSnapshot {
     pub event_id: String,
     pub name: String,
+    #[serde(default)]
+    pub phase_groups: Vec<PhaseGroupSnapshot>,
     pub sets: Vec<SetSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhaseGroupSnapshot {
+    pub phase_group_id: String,
+    pub phase_id: Option<String>,
+    pub phase_name: Option<String>,
+    pub phase_order: Option<i64>,
+    pub display_identifier: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetSnapshot {
     pub set_id: String,
+    #[serde(default)]
+    pub identifier: Option<String>,
     pub full_round_text: String,
     pub round: Option<i64>,
     pub phase_name: Option<String>,
     pub phase_group_name: Option<String>,
+    #[serde(default)]
+    pub phase_order: Option<i64>,
+    #[serde(default)]
+    pub phase_group_display_identifier: Option<String>,
+    #[serde(default)]
+    pub phase_group_set_name: Option<String>,
+    #[serde(default)]
+    pub is_hidden_intermediate: bool,
     pub state: i64,
     pub winner_id: Option<String>,
     pub entrant1_source: Option<SetEntrantSourceSnapshot>,
@@ -320,6 +342,27 @@ pub struct SetSlotSnapshot {
     pub seed_id: Option<String>,
     pub seed_num: Option<i64>,
     pub score: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BracketGraphSnapshot {
+    pub schema_version: u32,
+    pub tournament_id: String,
+    pub slug: String,
+    pub tournament_name: String,
+    pub event: EventSnapshot,
+    pub edges: Vec<BracketGraphEdge>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BracketGraphEdge {
+    pub from_set_id: String,
+    pub to_set_id: String,
+    pub target_slot_index: usize,
+    pub relation: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

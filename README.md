@@ -8,11 +8,6 @@ start.gg で運用する大会を、イベント単位でローカルにミラ�
 
 主な目的は次のとおりです。
 
-- start.gg の大会情報を slug + event で取り込み、ローカルスナップショットとして保持する
-- 1 イベントごとの進行状態をローカルで管理し、複数イベントを切り替えて運用する
-- 試合ごとの 1P/2P 配置・スコア・勝者をローカルに保存し、途中保存と確定済みの分離を行う
-- 確定済みの結果をまとめて start.gg に反映し、winner 競合時は local / remote を選択して継続する
-  - ネットワークに接続できない場合でもローカルでもある程度の進行が可能
 - OBS 向けのライブオーバーレイを組み込み、現在の試合情報と勝ち数を表示する  
   - 対戦カードをオーバーレイ表示する際のプレイヤー名入力等の煩雑さを軽減
 - アイテムリスト・プレイヤー情報・配信者向けメッセージと呼び出し管理を同一イベント内で扱う
@@ -140,8 +135,9 @@ Tauri の app_data_dir 配下に `settings` と `snapshots` のフォルダを�
 
 `snapshots`:
 
-- <tournamentIdを安全化した文字列>-<slugを安全化した文字列>-<eventIdを安全化した文字列>-<event名slug>-snapshot.json
+- <tournamentIdを安全化した文字列>-<slugを安全化した文字列>-<eventIdを安全化した文字列>-<event名slug>-snapshot.json (start.gg取得時点の復元用原本)
 - <tournamentIdを安全化した文字列>-<slugを安全化した文字列>-<eventIdを安全化した文字列>-<event名slug>-pristine.json
+- <tournamentIdを安全化した文字列>-<slugを安全化した文字列>-<eventIdを安全化した文字列>-<event名slug>-graph.json (Bracketの作業用グラフ)
 - <tournamentIdを安全化した文字列>-<slugを安全化した文字列>-<eventIdを安全化した文字列>-<event名slug>-meta.json
 
 補足:

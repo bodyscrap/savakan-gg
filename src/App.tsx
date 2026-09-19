@@ -21,9 +21,20 @@ type SetSnapshot = {
   round: number | null;
   phaseName: string | null;
   phaseGroupName: string | null;
+  phaseOrder: number | null;
+  phaseGroupDisplayIdentifier: string | null;
+  phaseGroupSetName?: string | null;
   state: number;
   winnerId: string | null;
+  entrant1Source: SetEntrantSource | null;
+  entrant2Source: SetEntrantSource | null;
   slots: SetSlot[];
+};
+
+type SetEntrantSource = {
+  typeId: string | null;
+  condition: string | null;
+  conditionString: string | null;
 };
 
 type RoundColumn = {
@@ -59,6 +70,8 @@ type PhasePoolGroup = {
   key: string;
   phaseName: string;
   phaseGroupName: string;
+  phaseOrder: number | null;
+  phaseGroupDisplayIdentifier: string | null;
   sets: SetSnapshot[];
   columns: RoundColumn[];
 };
@@ -120,7 +133,9 @@ function buildLosersRoundPositions(
       : interpolateLanePositions(previousPositions, currentCount);
 
   const previousSetIndexByEntrantId = new Map<string, number>();
+  const previousSetIndexBySetId = new Map<string, number>();
   previousColumnSets.forEach((set, setIndex) => {
+    previousSetIndexBySetId.set(set.setId, setIndex);
     set.slots.forEach((slot) => {
       if (!slot.entrantId) {
         return;
@@ -132,11 +147,12 @@ function buildLosersRoundPositions(
   });
 
   return currentColumnSets.map((set, currentIndex) => {
-    const sourceIndexes = Array.from(new Set(
-      set.slots
-        .map((slot) => (slot.entrantId ? previousSetIndexByEntrantId.get(slot.entrantId) : undefined))
-        .filter((value): value is number => value !== undefined),
-    )).sort((left, right) => left - right);
+    const sourceIndexes = Array.from(new Set([
+      ...sourceSetIdsForSet(set).map((sourceSetId) => previousSetIndexBySetId.get(sourceSetId)),
+      ...set.slots.map((slot) => (
+        slot.entrantId ? previousSetIndexByEntrantId.get(slot.entrantId) : undefined
+      )),
+    ].filter((value): value is number => value !== undefined))).sort((left, right) => left - right);
 
     if (sourceIndexes.length >= 2) {
       const first = sourceIndexes[0];
@@ -195,8 +211,10 @@ function buildWinnersExpandedRoundPositions(
   };
 
   const previousSetIndexByEntrantId = new Map<string, number>();
+  const previousSetIndexBySetId = new Map<string, number>();
 
   previousColumnSets.forEach((set, setIndex) => {
+    previousSetIndexBySetId.set(set.setId, setIndex);
     set.slots.forEach((slot) => {
       if (!slot.entrantId) {
         return;
@@ -218,11 +236,12 @@ function buildWinnersExpandedRoundPositions(
       mappedRight = mappedLeft < previousCount - 1 ? mappedLeft + 1 : mappedLeft - 1;
     }
 
-    const sourceIndexes = Array.from(new Set(
-      set.slots
-        .map((slot) => (slot.entrantId ? previousSetIndexByEntrantId.get(slot.entrantId) : undefined))
-        .filter((value): value is number => value !== undefined),
-    )).sort((left, right) => left - right);
+    const sourceIndexes = Array.from(new Set([
+      ...sourceSetIdsForSet(set).map((sourceSetId) => previousSetIndexBySetId.get(sourceSetId)),
+      ...set.slots.map((slot) => (
+        slot.entrantId ? previousSetIndexByEntrantId.get(slot.entrantId) : undefined
+      )),
+    ].filter((value): value is number => value !== undefined))).sort((left, right) => left - right);
 
     const unresolvedSlotCount = set.slots.filter((slot) => slot.entrantId === null).length;
 
@@ -562,6 +581,11 @@ function isSlotTbd(slot: SetSlot): boolean {
   }
 
   return normalized === "TBD" || normalized === "TBA" || normalized === "UNKNOWN";
+}
+
+function sourceSetIdsForSet(set: SetSnapshot): string[] {
+  return [set.entrant1Source?.typeId, set.entrant2Source?.typeId]
+    .filter((setId): setId is string => Boolean(setId && setId.trim() !== ""));
 }
 
 function compareSetsForStableLane(left: SetSnapshot, right: SetSnapshot): number {
@@ -7281,13 +7305,24 @@ function App() {
       return [] as PhasePoolGroup[];
     }
 
-    const groupMap = new Map<string, { key: string; phaseName: string; phaseGroupName: string; sets: SetSnapshot[] }>();
+    const groupMap = new Map<string, {
+      key: string;
+      phaseName: string;
+      phaseGroupName: string;
+      phaseOrder: number | null;
+      phaseGroupDisplayIdentifier: string | null;
+      sets: SetSnapshot[];
+    }>();
 
     for (const set of selectedEvent.sets) {
       const phaseName = set.phaseName && set.phaseName.trim() !== "" ? set.phaseName : "Phase 未設定";
       const phaseGroupName =
         set.phaseGroupName && set.phaseGroupName.trim() !== "" ? set.phaseGroupName : "Pool 未設定";
-      const groupKey = `${phaseName}::${phaseGroupName}`;
+      const phaseGroupDisplayIdentifier = set.phaseGroupDisplayIdentifier?.trim() || null;
+      const hasStablePhasePoolIdentity = set.phaseOrder !== null && phaseGroupDisplayIdentifier !== null;
+      const groupKey = hasStablePhasePoolIdentity
+        ? `order:${set.phaseOrder}::pool:${phaseGroupDisplayIdentifier}`
+        : `name:${phaseName}::${phaseGroupName}`;
       const found = groupMap.get(groupKey);
 
       if (found) {
@@ -7299,15 +7334,23 @@ function App() {
         key: groupKey,
         phaseName,
         phaseGroupName,
+        phaseOrder: set.phaseOrder,
+        phaseGroupDisplayIdentifier,
         sets: [set],
       });
     }
 
     return [...groupMap.values()]
       .sort((a, b) => {
+        if (a.phaseOrder !== null && b.phaseOrder !== null && a.phaseOrder !== b.phaseOrder) {
+          return a.phaseOrder - b.phaseOrder;
+        }
         const byPhase = a.phaseName.localeCompare(b.phaseName, "ja");
         if (byPhase !== 0) {
           return byPhase;
+        }
+        if (a.phaseGroupDisplayIdentifier !== null && b.phaseGroupDisplayIdentifier !== null) {
+          return a.phaseGroupDisplayIdentifier.localeCompare(b.phaseGroupDisplayIdentifier, "ja");
         }
         return a.phaseGroupName.localeCompare(b.phaseGroupName, "ja");
       })
@@ -7315,6 +7358,8 @@ function App() {
         key: group.key,
         phaseName: group.phaseName,
         phaseGroupName: group.phaseGroupName,
+        phaseOrder: group.phaseOrder,
+        phaseGroupDisplayIdentifier: group.phaseGroupDisplayIdentifier,
         sets: group.sets,
         columns: buildRoundColumns(group.sets),
       }));
@@ -7531,6 +7576,14 @@ function App() {
       }
     }
 
+    const storedCodes = orderedSets.map((set) => set.phaseGroupSetName?.trim() ?? "");
+    if (orderedSets.length > 0 && storedCodes.every((code) => code !== "")) {
+      orderedSets.forEach((set, index) => {
+        map.set(set.setId, storedCodes[index]);
+      });
+      return map;
+    }
+
     let fallbackIndex = 0;
     let gfSeen = false;
     let reservedAfterGf = false;
@@ -7711,6 +7764,12 @@ function App() {
     const own = tbdSourceLabelBySlotKey.get(`${set.setId}:${slotIndex}`);
     if (own) {
       return own;
+    }
+
+    const source = slotIndex === 0 ? set.entrant1Source : set.entrant2Source;
+    const conditionString = source?.conditionString?.trim();
+    if (conditionString) {
+      return conditionString;
     }
 
     if (set.slots.length === 2) {

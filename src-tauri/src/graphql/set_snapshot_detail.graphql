@@ -1,12 +1,14 @@
 query SetSnapshotDetail($setId: ID!) {
   set(id: $setId) {
     id
+    identifier
     fullRoundText
     round
     phaseGroup {
       displayIdentifier
       phase {
         name
+        phaseOrder
       }
     }
     state

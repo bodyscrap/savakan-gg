@@ -7,15 +7,26 @@ query EventSync($slug: String!, $page: Int!, $perPage: Int!) {
       name
       slug
     }
+    phaseGroups {
+      id
+      displayIdentifier
+      phase {
+        id
+        name
+        phaseOrder
+      }
+    }
     sets(page: $page, perPage: $perPage, sortType: STANDARD) {
       nodes {
         id
+        identifier
         fullRoundText
         round
         phaseGroup {
           displayIdentifier
           phase {
             name
+            phaseOrder
           }
         }
         state

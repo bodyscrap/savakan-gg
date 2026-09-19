@@ -8,12 +8,13 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::models::{
-    EventEntrantMeta, EventLocalMeta, EventManagementMeta, EventSnapshot, GenericMessage,
-    ItemListConfig, LocalGrandFinalResetResultMeta, LocalPlayerMetaInput, LocalSetPlaySideInput,
-    LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta, LocalSetScoreUpdateInput,
-    LocalSnapshotEventListItem, MobileResultRequestInput, MobileResultRequestItem,
-    SaveEventManagementMetaInput, SenderProfile, SetPlaySideMeta, TournamentEventPreviewItem,
-    TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
+    BracketGraphEdge, BracketGraphSnapshot, EventEntrantMeta, EventLocalMeta, EventManagementMeta,
+    EventSnapshot, GenericMessage, ItemListConfig, LocalGrandFinalResetResultMeta,
+    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetResultMeta,
+    LocalSetScoreMeta, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
+    MobileResultRequestInput, MobileResultRequestItem, SaveEventManagementMetaInput, SenderProfile,
+    SetPlaySideMeta, TournamentEventPreviewItem, TournamentLocalMeta, TournamentSnapshot,
+    TournamentWorkspace,
 };
 
 const STORAGE_DIR_NAME: &str = "savakan-gg";
@@ -113,6 +114,23 @@ fn pristine_event_snapshot_path_with_keys(
 ) -> Result<PathBuf, String> {
     let file_name = format!(
         "{}-{}-{}-{}-pristine.json",
+        sanitize_slug(tournament_id),
+        sanitize_slug(slug_key),
+        sanitize_slug(event_id),
+        event_name_slug(event_name)
+    );
+    Ok(snapshots_dir(app)?.join(file_name))
+}
+
+fn event_graph_path_with_keys(
+    app: &AppHandle,
+    tournament_id: &str,
+    slug_key: &str,
+    event_id: &str,
+    event_name: &str,
+) -> Result<PathBuf, String> {
+    let file_name = format!(
+        "{}-{}-{}-{}-graph.json",
         sanitize_slug(tournament_id),
         sanitize_slug(slug_key),
         sanitize_slug(event_id),
@@ -481,6 +499,7 @@ fn merge_snapshot_into_meta(
         .unwrap_or_else(|| EventSnapshot {
             event_id: event_id.to_owned(),
             name: String::new(),
+            phase_groups: Vec::new(),
             sets: Vec::new(),
         });
 
@@ -1235,32 +1254,277 @@ pub fn load_token(app: &AppHandle) -> Result<String, String> {
 pub fn save_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(), String> {
     let normalized_slug = normalize_slug_for_storage(&snapshot.slug);
     for event in &snapshot.events {
-        let event_snapshot = TournamentSnapshot {
-            tournament_id: snapshot.tournament_id.clone(),
-            slug: snapshot.slug.clone(),
-            name: snapshot.name.clone(),
-            events: vec![event.clone()],
-            updated_at: snapshot.updated_at,
-        };
-        save_event_snapshot_file(
+        save_event_graph_file(
             app,
-            &event_snapshot,
+            &build_bracket_graph(snapshot, event),
             &snapshot.tournament_id,
             &normalized_slug,
             &event.event_id,
             &event.name,
-            false,
         )?;
     }
 
-    remove_stale_event_snapshot_files(
+    remove_stale_event_graph_files(
         app,
         &snapshot.tournament_id,
         &normalized_slug,
         &snapshot.events,
-        false,
     )?;
     Ok(())
+}
+
+fn build_bracket_graph(
+    snapshot: &TournamentSnapshot,
+    event: &EventSnapshot,
+) -> BracketGraphSnapshot {
+    let phase_group_key = |set: &crate::models::SetSnapshot| {
+        format!(
+            "{}::{}",
+            set.phase_order
+                .map(|order| order.to_string())
+                .or_else(|| set.phase_name.clone())
+                .unwrap_or_default(),
+            set.phase_group_display_identifier
+                .clone()
+                .or_else(|| set.phase_group_name.clone())
+                .unwrap_or_default(),
+        )
+    };
+
+    let mut graph_event = event.clone();
+    graph_event.sets.retain(|set| !set.is_hidden_intermediate);
+    let mut seen_phase_group_ids = HashSet::new();
+    graph_event
+        .phase_groups
+        .retain(|phase_group| seen_phase_group_ids.insert(phase_group.phase_group_id.clone()));
+
+    let mut set_name_by_id = HashMap::new();
+    let mut phase_group_sets = HashMap::<String, Vec<crate::models::SetSnapshot>>::new();
+    for set in &graph_event.sets {
+        let group_key = phase_group_key(set);
+        phase_group_sets
+            .entry(group_key)
+            .or_default()
+            .push(set.clone());
+    }
+
+    for sets in phase_group_sets.into_values() {
+        let group_event = EventSnapshot {
+            event_id: graph_event.event_id.clone(),
+            name: graph_event.name.clone(),
+            phase_groups: Vec::new(),
+            sets,
+        };
+        for (set_id, set_name) in build_set_display_code_by_id(&group_event) {
+            set_name_by_id.insert(set_id, set_name);
+        }
+    }
+
+    for set in &mut graph_event.sets {
+        set.phase_group_set_name = set
+            .identifier
+            .clone()
+            .or_else(|| set_name_by_id.get(&set.set_id).cloned());
+    }
+
+    let mut raw_edges = Vec::new();
+    for target in &event.sets {
+        let target_phase_group_key = phase_group_key(target);
+        let phase_group_sets = event
+            .sets
+            .iter()
+            .filter(|candidate| phase_group_key(candidate) == target_phase_group_key)
+            .collect::<Vec<_>>();
+
+        for (target_slot_index, source) in [
+            target.entrant1_source.as_ref(),
+            target.entrant2_source.as_ref(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let Some(source) = source else {
+                continue;
+            };
+            let Some(source_set_id) = source.type_id.as_deref() else {
+                continue;
+            };
+
+            let progression_candidate = phase_group_sets
+                .iter()
+                .find_map(|candidate| {
+                    if candidate.winner_progression_seed_id.as_deref() == Some(source_set_id) {
+                        return Some((*candidate, "winner"));
+                    }
+                    if candidate.loser_progression_seed_id.as_deref() == Some(source_set_id) {
+                        return Some((*candidate, "loser"));
+                    }
+                    None
+                })
+                .or_else(|| {
+                    event.sets.iter().find_map(|candidate| {
+                        if candidate.winner_progression_seed_id.as_deref() == Some(source_set_id) {
+                            return Some((candidate, "winner"));
+                        }
+                        if candidate.loser_progression_seed_id.as_deref() == Some(source_set_id) {
+                            return Some((candidate, "loser"));
+                        }
+                        None
+                    })
+                });
+
+            if let Some((candidate, relation)) = progression_candidate {
+                raw_edges.push(BracketGraphEdge {
+                    from_set_id: candidate.set_id.clone(),
+                    to_set_id: target.set_id.clone(),
+                    target_slot_index,
+                    relation: relation.to_owned(),
+                });
+                continue;
+            }
+
+            if let Some(candidate) = phase_group_sets
+                .iter()
+                .find(|candidate| candidate.set_id == source_set_id)
+            {
+                if let Some(relation) = source.condition.as_deref() {
+                    raw_edges.push(BracketGraphEdge {
+                        from_set_id: candidate.set_id.clone(),
+                        to_set_id: target.set_id.clone(),
+                        target_slot_index,
+                        relation: relation.to_ascii_lowercase(),
+                    });
+                }
+            }
+        }
+    }
+
+    let phase_group_keys = event
+        .sets
+        .iter()
+        .map(phase_group_key)
+        .collect::<HashSet<_>>();
+    for phase_group_key_value in phase_group_keys {
+        let group_sets = event
+            .sets
+            .iter()
+            .filter(|set| phase_group_key(set) == phase_group_key_value)
+            .collect::<Vec<_>>();
+        let Some(first_losers_round) = group_sets
+            .iter()
+            .filter(|set| is_losers_set(set))
+            .filter_map(|set| set.round.map(|round| round.abs()))
+            .min()
+        else {
+            continue;
+        };
+        let Some(first_winners_round) = group_sets
+            .iter()
+            .filter(|set| !is_losers_set(set) && !is_grand_final_set(set))
+            .filter_map(|set| set.round.map(|round| round.abs()))
+            .min()
+        else {
+            continue;
+        };
+
+        let mut winners_first_ids = group_sets
+            .iter()
+            .filter(|set| {
+                !is_losers_set(set)
+                    && !is_grand_final_set(set)
+                    && set.round.map(|round| round.abs()) == Some(first_winners_round)
+            })
+            .map(|set| set.set_id.clone())
+            .collect::<Vec<_>>();
+        let mut losers_first_ids = group_sets
+            .iter()
+            .filter(|set| {
+                is_losers_set(set) && set.round.map(|round| round.abs()) == Some(first_losers_round)
+            })
+            .map(|set| set.set_id.clone())
+            .collect::<Vec<_>>();
+        winners_first_ids.sort();
+        losers_first_ids.sort();
+
+        for (target_index, target_set_id) in losers_first_ids.iter().enumerate() {
+            let source_ids =
+                pick_pair_source_ids(&winners_first_ids, losers_first_ids.len(), target_index);
+            raw_edges.retain(|edge| edge.to_set_id != *target_set_id);
+            for (target_slot_index, source_set_id) in source_ids.into_iter().enumerate() {
+                raw_edges.push(BracketGraphEdge {
+                    from_set_id: source_set_id,
+                    to_set_id: target_set_id.clone(),
+                    target_slot_index,
+                    relation: "loser".to_owned(),
+                });
+            }
+        }
+    }
+
+    let mut edges = Vec::new();
+    let mut seen_edges = HashSet::new();
+    for raw_edge in &raw_edges {
+        if event
+            .sets
+            .iter()
+            .find(|set| set.set_id == raw_edge.to_set_id)
+            .is_some_and(|set| set.is_hidden_intermediate)
+        {
+            continue;
+        }
+
+        let mut pending_sources = vec![(raw_edge.from_set_id.clone(), raw_edge.relation.clone())];
+        let mut visited = HashSet::new();
+
+        while let Some((source_set_id, relation)) = pending_sources.pop() {
+            if !visited.insert((source_set_id.clone(), relation.clone())) {
+                continue;
+            }
+
+            let source_set = event.sets.iter().find(|set| set.set_id == source_set_id);
+            if source_set.is_some_and(|set| set.is_hidden_intermediate) {
+                for incoming in raw_edges
+                    .iter()
+                    .filter(|edge| edge.to_set_id == source_set_id)
+                    .filter(|edge| {
+                        source_set
+                            .and_then(hidden_pipe_source_slot_indexes)
+                            .is_none_or(|slot_indexes| {
+                                slot_indexes.contains(&edge.target_slot_index)
+                            })
+                    })
+                {
+                    pending_sources.push((incoming.from_set_id.clone(), incoming.relation.clone()));
+                }
+                continue;
+            }
+
+            let edge_key = (
+                source_set_id.clone(),
+                raw_edge.to_set_id.clone(),
+                raw_edge.target_slot_index,
+                relation.clone(),
+            );
+            if seen_edges.insert(edge_key) {
+                edges.push(BracketGraphEdge {
+                    from_set_id: source_set_id,
+                    to_set_id: raw_edge.to_set_id.clone(),
+                    target_slot_index: raw_edge.target_slot_index,
+                    relation,
+                });
+            }
+        }
+    }
+
+    BracketGraphSnapshot {
+        schema_version: 1,
+        tournament_id: snapshot.tournament_id.clone(),
+        slug: snapshot.slug.clone(),
+        tournament_name: snapshot.name.clone(),
+        event: graph_event,
+        edges,
+        updated_at: snapshot.updated_at,
+    }
 }
 
 fn save_pristine_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(), String> {
@@ -1311,6 +1575,73 @@ fn save_event_snapshot_file(
     let json = serde_json::to_string_pretty(snapshot)
         .map_err(|e| format!("スナップショットのJSON変換に失敗しました: {e}"))?;
     fs::write(path, json).map_err(|e| format!("スナップショット保存に失敗しました: {e}"))
+}
+
+fn save_event_graph_file(
+    app: &AppHandle,
+    graph: &BracketGraphSnapshot,
+    tournament_id: &str,
+    slug_key: &str,
+    event_id: &str,
+    event_name: &str,
+) -> Result<(), String> {
+    let path = event_graph_path_with_keys(app, tournament_id, slug_key, event_id, event_name)?;
+    let json = serde_json::to_string_pretty(graph)
+        .map_err(|e| format!("ブラケットグラフのJSON変換に失敗しました: {e}"))?;
+    fs::write(path, json).map_err(|e| format!("ブラケットグラフ保存に失敗しました: {e}"))
+}
+
+fn remove_stale_event_graph_files(
+    app: &AppHandle,
+    tournament_id: &str,
+    slug_key: &str,
+    events: &[EventSnapshot],
+) -> Result<(), String> {
+    let dir = snapshots_dir(app)?;
+    for entry in
+        fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
+    {
+        let path = match entry {
+            Ok(value) => value.path(),
+            Err(_) => continue,
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !file_name.ends_with("-graph.json") {
+            continue;
+        }
+        let raw = match fs::read_to_string(&path) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let graph = match serde_json::from_str::<BracketGraphSnapshot>(&raw) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if normalize_slug_for_storage(&graph.slug) != slug_key
+            || graph.tournament_id != tournament_id
+        {
+            continue;
+        }
+        let Some(current_event) = events
+            .iter()
+            .find(|event| event.event_id == graph.event.event_id)
+        else {
+            continue;
+        };
+        let expected = event_graph_path_with_keys(
+            app,
+            tournament_id,
+            slug_key,
+            &current_event.event_id,
+            &current_event.name,
+        )?;
+        if path != expected {
+            let _ = fs::remove_file(path);
+        }
+    }
+    Ok(())
 }
 
 fn remove_stale_event_snapshot_files(
@@ -1429,6 +1760,41 @@ fn load_event_snapshot_files(
         }
     }
     Ok(snapshots)
+}
+
+fn load_event_graph_files(
+    app: &AppHandle,
+    slug: &str,
+) -> Result<Vec<BracketGraphSnapshot>, String> {
+    let dir = snapshots_dir(app)?;
+    let slug_key = normalize_slug_for_storage(slug);
+    let mut graphs = Vec::new();
+    for entry in
+        fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
+    {
+        let path = match entry {
+            Ok(value) => value.path(),
+            Err(_) => continue,
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !file_name.ends_with("-graph.json") {
+            continue;
+        }
+        let raw = match fs::read_to_string(path) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let graph = match serde_json::from_str::<BracketGraphSnapshot>(&raw) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if normalize_slug_for_storage(&graph.slug) == slug_key {
+            graphs.push(graph);
+        }
+    }
+    Ok(graphs)
 }
 
 fn merge_event_snapshot_files(snapshots: Vec<TournamentSnapshot>) -> Option<TournamentSnapshot> {
@@ -1601,6 +1967,21 @@ pub fn reconcile_local_event_snapshot_names(
 }
 
 pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, String> {
+    let graphs = load_event_graph_files(app, slug)?;
+    if !graphs.is_empty() {
+        let first = graphs.first().expect("graphs is not empty");
+        let tournament_id = first.tournament_id.clone();
+        let graph_slug = first.slug.clone();
+        let tournament_name = first.tournament_name.clone();
+        let updated_at = first.updated_at;
+        return Ok(TournamentSnapshot {
+            tournament_id,
+            slug: graph_slug,
+            name: tournament_name,
+            events: graphs.into_iter().map(|graph| graph.event).collect(),
+            updated_at,
+        });
+    }
     if let Some(snapshot) = merge_event_snapshot_files(load_event_snapshot_files(app, slug, false)?)
     {
         return Ok(snapshot);
@@ -1638,7 +2019,7 @@ pub fn list_local_snapshot_events(
             continue;
         };
 
-        if !file_name.ends_with("-snapshot.json") {
+        if !file_name.ends_with("-graph.json") {
             continue;
         }
 
@@ -1647,9 +2028,16 @@ pub fn list_local_snapshot_events(
             Err(_) => continue,
         };
 
-        let snapshot = match serde_json::from_str::<TournamentSnapshot>(&raw) {
+        let graph = match serde_json::from_str::<BracketGraphSnapshot>(&raw) {
             Ok(value) => value,
             Err(_) => continue,
+        };
+        let snapshot = TournamentSnapshot {
+            tournament_id: graph.tournament_id,
+            slug: graph.slug,
+            name: graph.tournament_name,
+            events: vec![graph.event],
+            updated_at: graph.updated_at,
         };
 
         for event in snapshot.events {
@@ -1722,16 +2110,16 @@ pub fn delete_local_snapshot_event(
     }
 
     let normalized_slug = normalize_slug_for_storage(slug);
-    let snapshot_path = event_snapshot_path_with_keys(
+    let graph_path = event_graph_path_with_keys(
         app,
         &snapshot.tournament_id,
         &normalized_slug,
         event_id,
         &event_name,
     )?;
-    if snapshot_path.exists() {
-        fs::remove_file(snapshot_path)
-            .map_err(|e| format!("スナップショット削除に失敗しました: {e}"))?;
+    if graph_path.exists() {
+        fs::remove_file(graph_path)
+            .map_err(|e| format!("ブラケットグラフ削除に失敗しました: {e}"))?;
     }
     let pristine_path = pristine_event_snapshot_path_with_keys(
         app,
@@ -1854,6 +2242,31 @@ fn first_empty_slot_index(set: &crate::models::SetSnapshot) -> Option<usize> {
 
 fn is_slot_empty(slot: &crate::models::SetSlotSnapshot) -> bool {
     slot.entrant_id.is_none() || slot.entrant_name.trim().eq_ignore_ascii_case("tbd")
+}
+
+fn hidden_pipe_source_slot_indexes(set: &crate::models::SetSnapshot) -> Option<Vec<usize>> {
+    if !set.is_hidden_intermediate {
+        return None;
+    }
+
+    let sources = [set.entrant1_source.as_ref(), set.entrant2_source.as_ref()];
+    let meaningful_slots = sources
+        .into_iter()
+        .enumerate()
+        .filter_map(|(slot_index, source)| {
+            let has_source_metadata = source.is_some_and(|source| {
+                source.condition.is_some() || source.condition_string.is_some()
+            });
+            let has_entrant = set
+                .slots
+                .get(slot_index)
+                .is_some_and(|slot| slot.entrant_id.is_some());
+
+            (has_source_metadata || has_entrant).then_some(slot_index)
+        })
+        .collect::<Vec<_>>();
+
+    (meaningful_slots.len() == 1).then_some(meaningful_slots)
 }
 
 fn pick_pair_source_indexes(
@@ -2113,10 +2526,15 @@ fn ensure_virtual_grand_final_reset_set(
 
     event.sets.push(crate::models::SetSnapshot {
         set_id: virtual_set_id,
+        identifier: None,
         full_round_text: "Grand Final Reset".to_owned(),
         round: grand_final_set.round,
         phase_name: grand_final_set.phase_name.clone(),
         phase_group_name: grand_final_set.phase_group_name.clone(),
+        phase_order: grand_final_set.phase_order,
+        phase_group_display_identifier: grand_final_set.phase_group_display_identifier.clone(),
+        phase_group_set_name: None,
+        is_hidden_intermediate: false,
         state: if has_empty { 1 } else { 2 },
         winner_id: None,
         entrant1_source: None,
@@ -3804,6 +4222,25 @@ pub fn save_event_snapshot(
         .find(|event| event.event_id == event_id)
         .cloned()
         .ok_or_else(|| format!("指定イベントが見つかりません: {event_id}"))?;
+    let normalized_slug = normalize_slug_for_storage(&snapshot.slug);
+
+    // start.gg取得時点の復元用原本は、ローカル進行用graphとは分離して保持する。
+    let remote_snapshot = TournamentSnapshot {
+        tournament_id: snapshot.tournament_id.clone(),
+        slug: snapshot.slug.clone(),
+        name: snapshot.name.clone(),
+        events: vec![event_snapshot.clone()],
+        updated_at: snapshot.updated_at,
+    };
+    save_event_snapshot_file(
+        app,
+        &remote_snapshot,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        &event_id,
+        &event_snapshot.name,
+        false,
+    )?;
 
     // 同一slugの既存スナップショットを保持しつつ、対象eventのみ差し替える。
     let mut merged_snapshot =

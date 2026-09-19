@@ -54,6 +54,7 @@ type Event {
   name: String
   slug: String
   tournament: Tournament
+  phaseGroups: [PhaseGroup]
   sets(page: Int, perPage: Int, sortType: SetSortType): SetConnection
 }
 
@@ -63,6 +64,7 @@ type SetConnection {
 
 type Set {
   id: GgID!
+  identifier: String
   fullRoundText: String
   round: Int
   phaseGroup: PhaseGroup
@@ -91,6 +93,7 @@ type PhaseGroup {
 type Phase {
   id: GgID!
   name: String
+  phaseOrder: Int
 }
 
 type SetSlot {

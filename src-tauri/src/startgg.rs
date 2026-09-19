@@ -7,7 +7,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::models::{
-    EventSnapshot, SetEntrantSourceSnapshot, SetSlotSnapshot, SetSnapshot,
+    EventSnapshot, PhaseGroupSnapshot, SetEntrantSourceSnapshot, SetSlotSnapshot, SetSnapshot,
     TournamentEventPreviewItem, TournamentPreview, TournamentSnapshot,
 };
 
@@ -274,6 +274,7 @@ async fn fetch_set_snapshot_detail_with_client(
 
     Ok(SetSnapshot {
         set_id: set.id.to_string(),
+        identifier: set.identifier.clone(),
         full_round_text: set.full_round_text.unwrap_or_else(|| "Unknown".to_owned()),
         round: set.round,
         phase_name: set
@@ -285,6 +286,17 @@ async fn fetch_set_snapshot_detail_with_client(
             .phase_group
             .as_ref()
             .and_then(|group| group.display_identifier.clone()),
+        phase_order: set
+            .phase_group
+            .as_ref()
+            .and_then(|group| group.phase.as_ref())
+            .and_then(|phase| phase.phase_order),
+        phase_group_display_identifier: set
+            .phase_group
+            .as_ref()
+            .and_then(|group| group.display_identifier.clone()),
+        phase_group_set_name: None,
+        is_hidden_intermediate: false,
         state: set.state.unwrap_or_default(),
         winner_id: set.winner_id.as_ref().map(|id| id.to_string()),
         entrant1_source: set
@@ -589,6 +601,19 @@ async fn query_tournament_snapshot(
         .into_iter()
         .flatten()
         .map(|event| {
+            let phase_groups = event
+                .phase_groups
+                .unwrap_or_default()
+                .into_iter()
+                .flatten()
+                .map(|group| PhaseGroupSnapshot {
+                    phase_group_id: group.id.to_string(),
+                    phase_id: group.phase.as_ref().map(|phase| phase.id.to_string()),
+                    phase_name: group.phase.as_ref().and_then(|phase| phase.name.clone()),
+                    phase_order: group.phase.as_ref().and_then(|phase| phase.phase_order),
+                    display_identifier: group.display_identifier,
+                })
+                .collect::<Vec<PhaseGroupSnapshot>>();
             let sets = event
                 .sets
                 .and_then(|conn| conn.nodes)
@@ -633,6 +658,7 @@ async fn query_tournament_snapshot(
 
                     Some(SetSnapshot {
                         set_id,
+                        identifier: set.identifier.clone(),
                         full_round_text: set
                             .full_round_text
                             .unwrap_or_else(|| "Unknown".to_owned()),
@@ -646,6 +672,17 @@ async fn query_tournament_snapshot(
                             .phase_group
                             .as_ref()
                             .and_then(|group| group.display_identifier.clone()),
+                        phase_order: set
+                            .phase_group
+                            .as_ref()
+                            .and_then(|group| group.phase.as_ref())
+                            .and_then(|phase| phase.phase_order),
+                        phase_group_display_identifier: set
+                            .phase_group
+                            .as_ref()
+                            .and_then(|group| group.display_identifier.clone()),
+                        phase_group_set_name: None,
+                        is_hidden_intermediate: false,
                         state: set.state.unwrap_or_default(),
                         winner_id: set.winner_id.map(|id| id.to_string()),
                         entrant1_source: set.entrant1_source.map(|source| {
@@ -684,6 +721,7 @@ async fn query_tournament_snapshot(
             EventSnapshot {
                 event_id: event.id.to_string(),
                 name: event.name.unwrap_or_else(|| "Unnamed event".to_owned()),
+                phase_groups,
                 sets,
             }
         })
@@ -737,6 +775,7 @@ pub async fn fetch_event_snapshot_by_slug(
     let mut tournament_slug = String::new();
     let mut event_id = String::new();
     let mut event_name = String::new();
+    let mut phase_groups;
     let mut completed_requests = 0_usize;
 
     progress_cb(EventSnapshotFetchProgress {
@@ -805,6 +844,20 @@ pub async fn fetch_event_snapshot_by_slug(
             let event = data.event.ok_or_else(|| {
                 "指定eventが見つかりません。event slugを確認してください。".to_owned()
             })?;
+            phase_groups = event
+                .phase_groups
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .flatten()
+                .map(|group| PhaseGroupSnapshot {
+                    phase_group_id: group.id.to_string(),
+                    phase_id: group.phase.as_ref().map(|phase| phase.id.to_string()),
+                    phase_name: group.phase.as_ref().and_then(|phase| phase.name.clone()),
+                    phase_order: group.phase.as_ref().and_then(|phase| phase.phase_order),
+                    display_identifier: group.display_identifier,
+                })
+                .collect::<Vec<PhaseGroupSnapshot>>();
 
             let tournament = event
                 .tournament
@@ -854,38 +907,67 @@ pub async fn fetch_event_snapshot_by_slug(
         break;
     }
 
-    let total_set_requests = discovered_set_ids.len();
-    let total_requests = completed_requests + total_set_requests;
-
+    let visible_set_ids = discovered_set_ids
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    let mut pending_set_ids = discovered_set_ids;
+    let mut queued_set_ids = pending_set_ids
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
     progress_cb(EventSnapshotFetchProgress {
         phase: "fetchingSetDetails",
         completed_requests,
-        total_requests: Some(total_requests),
+        total_requests: None,
         current_page: None,
         current_set_id: None,
-        total_planned_set_requests: Some(total_set_requests),
+        total_planned_set_requests: Some(pending_set_ids.len()),
     });
 
-    let mut all_sets: Vec<SetSnapshot> = Vec::with_capacity(total_set_requests);
-    for set_id in discovered_set_ids {
+    let mut all_sets: Vec<SetSnapshot> = Vec::with_capacity(pending_set_ids.len());
+    while let Some(set_id) = pending_set_ids.pop() {
         sleep(Duration::from_millis(START_GG_REQUEST_INTERVAL_MS)).await;
-        let set = fetch_set_snapshot_detail_with_client(&client, token, &set_id).await?;
+        let mut set = match fetch_set_snapshot_detail_with_client(&client, token, &set_id).await {
+            Ok(set) => set,
+            Err(_) if !visible_set_ids.contains(&set_id) => continue,
+            Err(error) => return Err(error),
+        };
+        set.is_hidden_intermediate = !visible_set_ids.contains(&set_id);
+
+        for source in [&set.entrant1_source, &set.entrant2_source]
+            .into_iter()
+            .flatten()
+        {
+            let Some(source_set_id) = source.type_id.as_deref() else {
+                continue;
+            };
+            if source.condition.is_none()
+                || queued_set_ids.contains(source_set_id)
+                || is_preview_set_id(source_set_id)
+            {
+                continue;
+            }
+            queued_set_ids.insert(source_set_id.to_owned());
+            pending_set_ids.push(source_set_id.to_owned());
+        }
+
         completed_requests += 1;
         progress_cb(EventSnapshotFetchProgress {
             phase: "fetchingSetDetails",
             completed_requests,
-            total_requests: Some(total_requests),
+            total_requests: None,
             current_page: None,
             current_set_id: Some(set_id),
-            total_planned_set_requests: Some(total_set_requests),
+            total_planned_set_requests: Some(queued_set_ids.len()),
         });
         all_sets.push(set);
     }
 
     progress_cb(EventSnapshotFetchProgress {
         phase: "completed",
-        completed_requests: total_requests,
-        total_requests: Some(total_requests),
+        completed_requests,
+        total_requests: Some(completed_requests),
         current_page: None,
         current_set_id: None,
         total_planned_set_requests: Some(all_sets.len()),
@@ -898,6 +980,7 @@ pub async fn fetch_event_snapshot_by_slug(
         events: vec![EventSnapshot {
             event_id,
             name: event_name,
+            phase_groups,
             sets: all_sets,
         }],
         updated_at: Utc::now(),

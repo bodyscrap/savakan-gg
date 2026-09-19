@@ -6,15 +6,26 @@ query TournamentSync($slug: String!, $perPage: Int!) {
     events {
       id
       name
+      phaseGroups {
+        id
+        displayIdentifier
+        phase {
+          id
+          name
+          phaseOrder
+        }
+      }
       sets(page: 1, perPage: $perPage, sortType: STANDARD) {
         nodes {
           id
+          identifier
           fullRoundText
           round
           phaseGroup {
             displayIdentifier
             phase {
               name
+              phaseOrder
             }
           }
           state
