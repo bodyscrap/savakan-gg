@@ -2825,6 +2825,7 @@ function App() {
   const startupDirectRestoreTriedRef = useRef(false);
   const startupListRestoreRetryCountRef = useRef(0);
   const lastPersistedSnapshotSelectionRef = useRef("");
+  const overlaySelectionKeyRef = useRef<string | null>(null);
   const lastPersistedEventMetaPhasePoolRef = useRef("");
   const eventSettingHydratedKeyRef = useRef("");
   const suppressEventSettingAutosaveRef = useRef(false);
@@ -3810,15 +3811,11 @@ function App() {
   }, [snapshot]);
 
   const selectedEvent = useMemo(() => {
-    if (!snapshot || snapshot.events.length === 0) {
+    if (!snapshot || snapshot.events.length === 0 || selectedEventId === "") {
       return null;
     }
 
-    if (selectedEventId === "") {
-      return snapshot.events[0];
-    }
-
-    return snapshot.events.find((event) => event.eventId === selectedEventId) ?? snapshot.events[0];
+    return snapshot.events.find((event) => event.eventId === selectedEventId) ?? null;
   }, [snapshot, selectedEventId]);
 
   const selectedEventMeta = useMemo(() => {
@@ -4101,16 +4098,8 @@ function App() {
       }
     }
 
-    if (selectedSidebarItem) {
-      const selectedKey = localSnapshotItemKey(selectedSidebarItem);
-      const matched = homeFilteredSnapshotEvents.find((item) => localSnapshotItemKey(item) === selectedKey);
-      if (matched) {
-        return matched;
-      }
-    }
-
-    return homeFilteredSnapshotEvents[0] ?? null;
-  }, [homeFilteredSnapshotEvents, homeSelectedSnapshotKey, selectedSidebarItem]);
+    return null;
+  }, [homeFilteredSnapshotEvents, homeSelectedSnapshotKey]);
 
   useEffect(() => {
     if (homeFilteredSnapshotEvents.length === 0) {
@@ -4127,12 +4116,6 @@ function App() {
       }
     }
 
-    if (homeSelectedSnapshotItem) {
-      setHomeSelectedSnapshotKey(localSnapshotItemKey(homeSelectedSnapshotItem));
-      return;
-    }
-
-    setHomeSelectedSnapshotKey(localSnapshotItemKey(homeFilteredSnapshotEvents[0]));
   }, [homeFilteredSnapshotEvents, homeSelectedSnapshotItem, homeSelectedSnapshotKey]);
 
   useEffect(() => {
@@ -6298,6 +6281,30 @@ function App() {
   }, [matchSideRandomNotice]);
 
   useEffect(() => {
+    const selectionKey = `${toApiSlug(slug)}::${selectedEventId.trim()}`;
+    if (overlaySelectionKeyRef.current === null) {
+      overlaySelectionKeyRef.current = selectionKey;
+      return;
+    }
+
+    if (overlaySelectionKeyRef.current === selectionKey) {
+      return;
+    }
+
+    overlaySelectionKeyRef.current = selectionKey;
+    void invoke<ObsOverlayState>("set_obs_overlay_fully_stopped", {
+      fullyStopped: true,
+    })
+      .then((next) => {
+        setObsOverlayState(next);
+        setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
+      })
+      .catch((err) => {
+        setError(String(err));
+      });
+  }, [selectedEventId, slug]);
+
+  useEffect(() => {
     if (activeTab !== "overlay") {
       if (isTestOverlayActive) {
         void stopTestOverlay();
@@ -7881,9 +7888,13 @@ function App() {
       return;
     }
 
+    if (selectedEventId === "") {
+      return;
+    }
+
     const exists = snapshot.events.some((event) => event.eventId === selectedEventId);
     if (!exists) {
-      setSelectedEventId(snapshot.events[0].eventId);
+      setSelectedEventId("");
     }
   }, [snapshot, selectedEventId]);
 
@@ -8034,7 +8045,7 @@ function App() {
       await saveStartggToken();
       await invoke("save_last_slug", { slug: tournamentSlug });
 
-      const result = await invoke<TournamentWorkspace>("create_event_snapshot_by_slug", {
+      await invoke("create_event_snapshot_by_slug", {
         input: {
           tournamentSlug,
           eventSlug,
@@ -8043,7 +8054,21 @@ function App() {
         },
       });
 
-      setWorkspace(result);
+      setWorkspace(null);
+      setSelectedEventId("");
+      setSelectedPhaseName("");
+      setSelectedPhasePoolKey("");
+      setHomeSelectedSnapshotKey("");
+      startupSavedSlugRef.current = "";
+      startupSavedEventIdRef.current = "";
+      startupAutoRestoreDoneRef.current = true;
+      lastPersistedSnapshotSelectionRef.current = "";
+      await invoke("save_last_snapshot_selection", {
+        slug: "",
+        eventId: "",
+        phaseName: null,
+        phaseGroupName: null,
+      });
       setCreateSnapshotProgress(null);
       await refreshLocalSnapshotEvents();
       setActiveTab("home");
@@ -8061,6 +8086,16 @@ function App() {
     try {
       const items = await invoke<LocalSnapshotEventListItem[]>("list_local_snapshot_events");
       setLocalSnapshotEvents(items);
+      if (items.length === 0) {
+        setWorkspace(null);
+        setSelectedEventId("");
+        setSelectedPhaseName("");
+        setSelectedPhasePoolKey("");
+        setHomeSelectedSnapshotKey("");
+        startupSavedSlugRef.current = "";
+        startupSavedEventIdRef.current = "";
+        lastPersistedSnapshotSelectionRef.current = "";
+      }
     } catch (err) {
       setError(String(err));
     } finally {

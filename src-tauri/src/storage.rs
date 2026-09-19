@@ -2222,6 +2222,10 @@ fn reset_derived_progression_sets(event: &mut EventSnapshot) {
 
         let completed_winner_id = (set.state == 3).then(|| set.winner_id.clone()).flatten();
 
+        if completed_winner_id.is_some() {
+            continue;
+        }
+
         for (slot_index, slot) in set.slots.iter_mut().enumerate() {
             let source = match slot_index {
                 0 => set.entrant1_source.as_ref(),
@@ -2235,13 +2239,8 @@ fn reset_derived_progression_sets(event: &mut EventSnapshot) {
                 .unwrap_or_else(|| "TBD".to_owned());
             slot.score = None;
         }
-        if completed_winner_id.is_none() {
-            set.state = 1;
-            set.winner_id = None;
-        } else {
-            set.state = 3;
-            set.winner_id = completed_winner_id;
-        }
+        set.state = 1;
+        set.winner_id = None;
     }
 }
 
@@ -5801,6 +5800,27 @@ pub fn clear_pending_set_result_for_set(
             .iter_mut()
             .find(|event| event.event_id == event_id)
             .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
+
+        let matchup_ready = event
+            .sets
+            .iter()
+            .find(|set| set.set_id == set_id)
+            .map(|set| {
+                set.slots
+                    .iter()
+                    .filter(|slot| {
+                        slot.entrant_id
+                            .as_deref()
+                            .map(str::trim)
+                            .is_some_and(|entrant_id| !entrant_id.is_empty())
+                    })
+                    .count()
+                    >= 2
+            })
+            .unwrap_or(false);
+        if !matchup_ready {
+            return Err("対戦カードが確定していないsetは下書きを破棄できません。".to_owned());
+        }
 
         let mut restored_from_pristine = false;
 

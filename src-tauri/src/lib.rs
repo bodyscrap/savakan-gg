@@ -194,10 +194,15 @@ struct MobileInputPortalInfo {
 struct MobileSetListItem {
     set_id: String,
     set_code: String,
+    identifier: Option<String>,
     full_round_text: String,
+    phase_name: Option<String>,
+    phase_group_name: Option<String>,
+    is_intermediate: bool,
     state: i64,
     winner_id: Option<String>,
     entrant_names: Vec<String>,
+    entrant_ids: Vec<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -431,6 +436,23 @@ fn is_grand_final_set(set: &SetSnapshot) -> bool {
 
 fn is_grand_final_reset_set(set: &SetSnapshot) -> bool {
     is_grand_final_set(set) && set.full_round_text.to_lowercase().contains("reset")
+}
+
+fn is_visible_grand_final_reset(sets: &[SetSnapshot], reset_set: &SetSnapshot) -> bool {
+    if !is_grand_final_reset_set(reset_set) {
+        return true;
+    }
+
+    let reset_phase = normalize_optional_key(reset_set.phase_name.as_ref());
+    let reset_group = normalize_optional_key(reset_set.phase_group_name.as_ref());
+
+    sets.iter().any(|set| {
+        is_grand_final_set(set)
+            && !is_grand_final_reset_set(set)
+            && set.state == 3
+            && normalize_optional_key(set.phase_name.as_ref()) == reset_phase
+            && normalize_optional_key(set.phase_group_name.as_ref()) == reset_group
+    })
 }
 
 #[cfg(test)]
@@ -1804,7 +1826,7 @@ fn mobile_input_html() -> &'static str {
             detailSetId.textContent = getDisplaySetLabel(detail);
             mobileSideDrafts = buildMobileSideDraftsFromDetail(detail);
             renderDetailSlots(detail);
-            await syncOverlayFromDetailIfNeeded();
+            await refreshOverlayState();
             shouldRefreshSetListOnReturn = true;
             submitStatus.textContent = '下書きを破棄しました。情報取得で復元済みデータを確認できます。';
         }
@@ -1975,10 +1997,17 @@ fn mobile_input_html() -> &'static str {
 
         function isListItemMatchupReady(set) {
             const names = Array.isArray(set?.entrantNames) ? set.entrantNames : [];
-            return names.length >= 2 && names.every((name) => isResolvedEntrantName(name));
+            const entrantIds = Array.isArray(set?.entrantIds) ? set.entrantIds : [];
+            return names.length >= 2
+                && entrantIds.length >= 2
+                && entrantIds.slice(0, 2).every((entrantId) => Boolean(String(entrantId || '').trim()))
+                && names.slice(0, 2).every((name) => isResolvedEntrantName(name));
         }
 
         function isListItemInputtable(set) {
+            if (Boolean(set?.isIntermediate)) {
+                return false;
+            }
             const isCompleted = Number(set?.state || 0) === 3;
             return isListItemMatchupReady(set) && !isCompleted;
         }
@@ -2139,7 +2168,7 @@ fn mobile_input_html() -> &'static str {
                 ? '結果が確定しているため編集できません。修正する場合は「影響setを取消」からやり直してください。'
                 : '';
             if (discardBtn) {
-                discardBtn.disabled = completed;
+                discardBtn.disabled = completed || !matchupReady;
             }
             const visibleSlots = slots.slice(0, 2);
             const numericScores = matchupReady
@@ -2518,10 +2547,16 @@ fn mobile_input_html() -> &'static str {
 
             setList.innerHTML = filteredSets.map((set) => {
                 const players = Array.isArray(set.entrantNames) ? set.entrantNames.join(' / ') : '';
-                const setLabel = String(set.setCode || '').trim() ? `Set ${set.setCode}` : `Set ${set.setId}`;
+                const identifier = String(set.identifier || '').trim();
+                const setLabel = identifier ? `Set ${identifier}` : (String(set.setCode || '').trim() ? `Set ${set.setCode}` : `Set ${set.setId}`);
+                const phaseLabel = [set.phaseName, set.phaseGroupName]
+                    .map((value) => String(value || '').trim())
+                    .filter(Boolean)
+                    .join(' / ');
                 return `<article class="set-item" data-set-id="${set.setId}">
                     <h2>${set.fullRoundText}</h2>
                     <p class="meta">${setLabel}</p>
+                    ${phaseLabel ? `<p class="meta">${phaseLabel}</p>` : ''}
                     <p class="meta">${players}</p>
                 </article>`;
             }).join('');
@@ -3306,6 +3341,8 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
 
         let mut items = sets
             .iter()
+            .filter(|set| !set.is_intermediate)
+            .filter(|set| is_visible_grand_final_reset(&sets, set))
             .filter(|set| {
                 if query.is_empty() {
                     return true;
@@ -3321,6 +3358,15 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     set_name.to_lowercase(),
                     set.full_round_text.to_lowercase(),
                 ];
+                if let Some(identifier) = set.identifier.as_deref() {
+                    haystacks.push(identifier.to_lowercase());
+                }
+                if let Some(phase_name) = set.phase_name.as_deref() {
+                    haystacks.push(phase_name.to_lowercase());
+                }
+                if let Some(phase_group_name) = set.phase_group_name.as_deref() {
+                    haystacks.push(phase_group_name.to_lowercase());
+                }
                 for slot in &set.slots {
                     haystacks.push(slot.entrant_name.to_lowercase());
                 }
@@ -3333,7 +3379,11 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     .get(&set.set_id)
                     .cloned()
                     .unwrap_or_else(|| set.set_id.clone()),
+                identifier: set.identifier.clone(),
                 full_round_text: set.full_round_text.clone(),
+                phase_name: set.phase_name.clone(),
+                phase_group_name: set.phase_group_name.clone(),
+                is_intermediate: set.is_intermediate,
                 state: set.state,
                 winner_id: set.winner_id.clone(),
                 entrant_names: set
@@ -3341,6 +3391,11 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     .iter()
                     .map(|slot| slot.entrant_name.clone())
                     .collect::<Vec<String>>(),
+                entrant_ids: set
+                    .slots
+                    .iter()
+                    .map(|slot| slot.entrant_id.clone())
+                    .collect::<Vec<Option<String>>>(),
             })
             .collect::<Vec<MobileSetListItem>>();
 
@@ -3675,6 +3730,16 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
         };
 
         emit_workspace_updated(app, &slug, &event_id);
+
+        let overlay_should_stop = snapshot_obs_overlay_state()
+            .ok()
+            .and_then(|state| state.current_set_id)
+            .as_deref()
+            == Some(set_id.as_str());
+        if overlay_should_stop {
+            let _ = set_obs_overlay_fully_stopped(true);
+        }
+        emit_obs_overlay_state_changed(app);
 
         let payload = serde_json::to_string(&detail).unwrap_or_else(|_| "{}".to_owned());
         respond_json(request, 200, payload);
