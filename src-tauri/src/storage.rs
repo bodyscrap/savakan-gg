@@ -1292,7 +1292,7 @@ fn build_bracket_graph(
     };
 
     let mut graph_event = event.clone();
-    graph_event.sets.retain(|set| !set.is_hidden_intermediate);
+    graph_event.sets.retain(|set| !set.is_intermediate);
     let mut seen_phase_group_ids = HashSet::new();
     graph_event
         .phase_groups
@@ -1325,6 +1325,9 @@ fn build_bracket_graph(
             .identifier
             .clone()
             .or_else(|| set_name_by_id.get(&set.set_id).cloned());
+
+        rewrite_intermediate_source(&mut set.entrant1_source, event, &set_name_by_id);
+        rewrite_intermediate_source(&mut set.entrant2_source, event, &set_name_by_id);
     }
 
     let mut raw_edges = Vec::new();
@@ -1380,6 +1383,18 @@ fn build_bracket_graph(
                     target_slot_index,
                     relation: relation.to_owned(),
                 });
+                continue;
+            }
+
+            if let Some(resolved_edges) = resolve_hidden_source_edges(event, source_set_id) {
+                for (from_set_id, relation) in resolved_edges {
+                    raw_edges.push(BracketGraphEdge {
+                        from_set_id,
+                        to_set_id: target.set_id.clone(),
+                        target_slot_index,
+                        relation,
+                    });
+                }
                 continue;
             }
 
@@ -1468,7 +1483,7 @@ fn build_bracket_graph(
             .sets
             .iter()
             .find(|set| set.set_id == raw_edge.to_set_id)
-            .is_some_and(|set| set.is_hidden_intermediate)
+            .is_some_and(|set| set.is_intermediate)
         {
             continue;
         }
@@ -1482,7 +1497,7 @@ fn build_bracket_graph(
             }
 
             let source_set = event.sets.iter().find(|set| set.set_id == source_set_id);
-            if source_set.is_some_and(|set| set.is_hidden_intermediate) {
+            if source_set.is_some_and(|set| set.is_intermediate) {
                 for incoming in raw_edges
                     .iter()
                     .filter(|edge| edge.to_set_id == source_set_id)
@@ -1753,8 +1768,10 @@ fn load_event_snapshot_files(
             if normalize_slug_for_storage(&snapshot.slug) != slug_key {
                 continue;
             }
-            for event in &mut snapshot.events {
-                apply_source_based_tbd_labels(event);
+            if !pristine {
+                for event in &mut snapshot.events {
+                    apply_source_based_tbd_labels(event);
+                }
             }
             snapshots.push(snapshot);
         }
@@ -2245,7 +2262,7 @@ fn is_slot_empty(slot: &crate::models::SetSlotSnapshot) -> bool {
 }
 
 fn hidden_pipe_source_slot_indexes(set: &crate::models::SetSnapshot) -> Option<Vec<usize>> {
-    if !set.is_hidden_intermediate {
+    if !set.is_intermediate {
         return None;
     }
 
@@ -2267,6 +2284,85 @@ fn hidden_pipe_source_slot_indexes(set: &crate::models::SetSnapshot) -> Option<V
         .collect::<Vec<_>>();
 
     (meaningful_slots.len() == 1).then_some(meaningful_slots)
+}
+
+fn resolve_hidden_source_edges(
+    event: &EventSnapshot,
+    source_set_id: &str,
+) -> Option<Vec<(String, String)>> {
+    resolve_hidden_source_edges_with_visited(event, source_set_id, &mut HashSet::new())
+}
+
+fn resolve_hidden_source_edges_with_visited(
+    event: &EventSnapshot,
+    source_set_id: &str,
+    visited: &mut HashSet<String>,
+) -> Option<Vec<(String, String)>> {
+    let source_set = event.sets.iter().find(|set| set.set_id == source_set_id)?;
+    let condition_sources = [
+        source_set.entrant1_source.as_ref(),
+        source_set.entrant2_source.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|source| source.condition.is_some() && source.type_id.is_some())
+    .collect::<Vec<_>>();
+
+    if !source_set.is_intermediate && condition_sources.len() != 1 {
+        return None;
+    }
+    if condition_sources.is_empty() {
+        return None;
+    }
+    if !visited.insert(source_set_id.to_owned()) {
+        return Some(Vec::new());
+    }
+
+    let mut resolved = Vec::new();
+    for source in condition_sources {
+        let condition = source.condition.as_deref().unwrap_or_default();
+        let type_id = source.type_id.as_deref().unwrap_or_default();
+
+        if let Some(nested) = resolve_hidden_source_edges_with_visited(event, type_id, visited) {
+            resolved.extend(nested);
+        } else if event
+            .sets
+            .iter()
+            .any(|candidate| candidate.set_id == type_id)
+        {
+            resolved.push((type_id.to_owned(), condition.to_ascii_lowercase()));
+        }
+    }
+
+    Some(resolved)
+}
+
+fn rewrite_intermediate_source(
+    source: &mut Option<crate::models::SetEntrantSourceSnapshot>,
+    event: &EventSnapshot,
+    set_name_by_id: &HashMap<String, String>,
+) {
+    let Some(source_value) = source.as_mut() else {
+        return;
+    };
+    let Some(source_set_id) = source_value.type_id.as_deref() else {
+        return;
+    };
+    let Some(resolved) = resolve_hidden_source_edges(event, source_set_id) else {
+        return;
+    };
+    if resolved.len() != 1 {
+        return;
+    }
+
+    let (resolved_set_id, relation) = &resolved[0];
+    let Some(set_name) = set_name_by_id.get(resolved_set_id) else {
+        return;
+    };
+
+    source_value.type_id = Some(resolved_set_id.clone());
+    source_value.condition = Some(relation.clone());
+    source_value.condition_string = Some(format!("{relation} of {set_name}"));
 }
 
 fn pick_pair_source_indexes(
@@ -2534,7 +2630,7 @@ fn ensure_virtual_grand_final_reset_set(
         phase_order: grand_final_set.phase_order,
         phase_group_display_identifier: grand_final_set.phase_group_display_identifier.clone(),
         phase_group_set_name: None,
-        is_hidden_intermediate: false,
+        is_intermediate: false,
         state: if has_empty { 1 } else { 2 },
         winner_id: None,
         entrant1_source: None,
@@ -4287,11 +4383,8 @@ pub fn save_event_snapshot(
         .find(|event| event.event_id == event_id)
     {
         *existing = event_snapshot.clone();
-        apply_source_based_tbd_labels(existing);
     } else {
-        let mut next_event_snapshot = event_snapshot;
-        apply_source_based_tbd_labels(&mut next_event_snapshot);
-        pristine_snapshot.events.push(next_event_snapshot);
+        pristine_snapshot.events.push(event_snapshot);
     }
 
     save_pristine_snapshot(app, &pristine_snapshot)?;

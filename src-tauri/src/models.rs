@@ -313,8 +313,8 @@ pub struct SetSnapshot {
     pub phase_group_display_identifier: Option<String>,
     #[serde(default)]
     pub phase_group_set_name: Option<String>,
-    #[serde(default)]
-    pub is_hidden_intermediate: bool,
+    #[serde(default, alias = "isHiddenIntermediate")]
+    pub is_intermediate: bool,
     pub state: i64,
     pub winner_id: Option<String>,
     pub entrant1_source: Option<SetEntrantSourceSnapshot>,

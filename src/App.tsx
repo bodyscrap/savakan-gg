@@ -580,7 +580,14 @@ function isSlotTbd(slot: SetSlot): boolean {
     return true;
   }
 
-  return normalized === "TBD" || normalized === "TBA" || normalized === "UNKNOWN";
+  const unresolvedLabel = slot.entrantName.trim().toLowerCase();
+  return normalized === "TBD"
+    || normalized === "TBA"
+    || normalized === "UNKNOWN"
+    || unresolvedLabel.startsWith("winner of ")
+    || unresolvedLabel.startsWith("loser of ")
+    || slot.entrantName.trim().startsWith("勝者")
+    || slot.entrantName.trim().startsWith("敗者");
 }
 
 function sourceSetIdsForSet(set: SetSnapshot): string[] {
@@ -7627,22 +7634,22 @@ function App() {
 
   const tbdSourceLabelBySlotKey = useMemo(() => {
     const map = new Map<string, string>();
-    const winnersSection = selectedBracketSectionsForView.find((section) => section.key === "winners") ?? null;
-    const losersSection = selectedBracketSectionsForView.find((section) => section.key === "losers") ?? null;
+    const winnersSection = selectedBracketSections.find((section) => section.key === "winners") ?? null;
+    const losersSection = selectedBracketSections.find((section) => section.key === "losers") ?? null;
 
     const winnersColumnsOrdered = winnersSection?.columns ?? [];
     const losersColumnsOrdered = losersSection?.columns ?? [];
 
-    const winnersRoundOneIds = winnersColumnsOrdered[0]?.positionedSets.map((item) => item.set.setId) ?? [];
+    const winnersRoundOneIds = winnersColumnsOrdered[0]?.sets.map((set) => set.setId) ?? [];
     const losersRoundOne = losersColumnsOrdered[0];
     if (losersRoundOne && winnersRoundOneIds.length > 0) {
-      losersRoundOne.positionedSets.forEach((item, currentIndex) => {
-        const sources = pickPairSourceIds(winnersRoundOneIds, losersRoundOne.positionedSets.length, currentIndex)
+      losersRoundOne.sets.forEach((set, currentIndex) => {
+        const sources = pickPairSourceIds(winnersRoundOneIds, losersRoundOne.sets.length, currentIndex)
           .map((setId) => setDisplayCodeById.get(setId))
           .filter((code): code is string => Boolean(code));
 
         sources.forEach((code, sourceIndex) => {
-          map.set(`${item.set.setId}:${sourceIndex}`, normalizeSourceText("losers", code));
+          map.set(`${set.setId}:${sourceIndex}`, normalizeSourceText("losers", code));
         });
       });
     }
@@ -7650,22 +7657,22 @@ function App() {
     for (let columnIndex = 1; columnIndex < winnersColumnsOrdered.length; columnIndex += 1) {
       const previousColumn = winnersColumnsOrdered[columnIndex - 1];
       const currentColumn = winnersColumnsOrdered[columnIndex];
-      const previousIds = previousColumn.positionedSets.map((item) => item.set.setId);
+      const previousIds = previousColumn.sets.map((set) => set.setId);
 
-      currentColumn.positionedSets.forEach((item, currentIndex) => {
-        const sources = pickPairSourceIds(previousIds, currentColumn.positionedSets.length, currentIndex)
+      currentColumn.sets.forEach((set, currentIndex) => {
+        const sources = pickPairSourceIds(previousIds, currentColumn.sets.length, currentIndex)
           .map((setId) => setDisplayCodeById.get(setId))
           .filter((code): code is string => Boolean(code));
 
         sources.forEach((code, sourceIndex) => {
-          map.set(`${item.set.setId}:${sourceIndex}`, normalizeSourceText("winners", code));
+          map.set(`${set.setId}:${sourceIndex}`, normalizeSourceText("winners", code));
         });
       });
     }
 
     const winnersColumnsByCount = new Map<number, Array<Array<string>>>();
     for (const column of winnersColumnsOrdered) {
-      const ids = column.positionedSets.map((item) => item.set.setId);
+      const ids = column.sets.map((set) => set.setId);
       if (ids.length === 0) {
         continue;
       }
@@ -7682,8 +7689,8 @@ function App() {
     for (let columnIndex = 1; columnIndex < losersColumnsOrdered.length; columnIndex += 1) {
       const previousColumn = losersColumnsOrdered[columnIndex - 1];
       const currentColumn = losersColumnsOrdered[columnIndex];
-      const previousIds = previousColumn.positionedSets.map((item) => item.set.setId);
-      const currentCount = currentColumn.positionedSets.length;
+      const previousIds = previousColumn.sets.map((set) => set.setId);
+      const currentCount = currentColumn.sets.length;
 
       if (currentCount <= 0) {
         continue;
@@ -7698,36 +7705,36 @@ function App() {
           winnersCountUseCursor.set(currentCount, winnerCursor + 1);
         }
 
-        currentColumn.positionedSets.forEach((item, currentIndex) => {
+        currentColumn.sets.forEach((set, currentIndex) => {
           const losersCode = setDisplayCodeById.get(previousIds[currentIndex]);
           if (losersCode) {
-            map.set(`${item.set.setId}:0`, normalizeSourceText("winners", losersCode));
+            map.set(`${set.setId}:0`, normalizeSourceText("winners", losersCode));
           }
 
           const winnersSourceId = winnersSourceIds[currentIndex];
           const winnersCode = winnersSourceId ? setDisplayCodeById.get(winnersSourceId) : undefined;
           if (winnersCode) {
-            map.set(`${item.set.setId}:1`, normalizeSourceText("losers", winnersCode));
+            map.set(`${set.setId}:1`, normalizeSourceText("losers", winnersCode));
           }
         });
         continue;
       }
 
-      currentColumn.positionedSets.forEach((item, currentIndex) => {
+      currentColumn.sets.forEach((set, currentIndex) => {
         const sources = pickPairSourceIds(previousIds, currentCount, currentIndex)
           .map((setId) => setDisplayCodeById.get(setId))
           .filter((code): code is string => Boolean(code));
 
         sources.forEach((code, sourceIndex) => {
-          map.set(`${item.set.setId}:${sourceIndex}`, normalizeSourceText("winners", code));
+          map.set(`${set.setId}:${sourceIndex}`, normalizeSourceText("winners", code));
         });
       });
     }
 
     const winnersAllSets = winnersColumnsOrdered
-      .flatMap((column) => column.positionedSets.map((item) => item.set));
+      .flatMap((column) => column.sets);
     const losersAllSets = losersColumnsOrdered
-      .flatMap((column) => column.positionedSets.map((item) => item.set));
+      .flatMap((column) => column.sets);
 
     const winnersFinalSet = winnersAllSets.find((set) => isWinnersFinalText(set.fullRoundText))
       ?? winnersAllSets
@@ -7754,11 +7761,18 @@ function App() {
     }
 
     return map;
-  }, [selectedBracketSectionsForView, setDisplayCodeById]);
+  }, [selectedBracketSections, setDisplayCodeById]);
 
   function resolveTbdSourceLabel(set: SetSnapshot, slotIndex: number, slot: SetSlot): string | null {
     if (!isSlotTbd(slot)) {
       return null;
+    }
+
+    const source = slotIndex === 0 ? set.entrant1Source : set.entrant2Source;
+    const sourceSetCode = source?.typeId ? setDisplayCodeById.get(source.typeId) : undefined;
+    const sourceCondition = source?.condition?.trim().toLowerCase();
+    if (sourceSetCode && (sourceCondition === "winner" || sourceCondition === "loser")) {
+      return normalizeSourceText(sourceCondition === "winner" ? "winners" : "losers", sourceSetCode);
     }
 
     const own = tbdSourceLabelBySlotKey.get(`${set.setId}:${slotIndex}`);
@@ -7766,7 +7780,6 @@ function App() {
       return own;
     }
 
-    const source = slotIndex === 0 ? set.entrant1Source : set.entrant2Source;
     const conditionString = source?.conditionString?.trim();
     if (conditionString) {
       return conditionString;
@@ -9551,26 +9564,17 @@ function App() {
                     ? `${selectedPhaseName} / Pool ${selectedPhaseGroupName}`
                     : "-";
 
-                  const startupSelectedSlug = startupSavedSlugRef.current.trim();
-                  const startupSelectedEventId = startupSavedEventIdRef.current.trim();
-                  const currentSelectedSlug = snapshot?.slug?.trim() || startupSelectedSlug;
-                  const currentSelectedEventId = selectedEvent?.eventId?.trim() || selectedEventId.trim() || startupSelectedEventId;
-                  const isCurrentActive =
-                    currentSelectedSlug !== ""
-                    && currentSelectedEventId !== ""
-                    ? sameSnapshotEventKey(currentSelectedSlug, currentSelectedEventId, item.slug, item.eventId)
-                    : false;
-
                   return (
-                    <article className={`event-list-item selected home-detail-card`}>
-                      <div className="event-list-head">
-                        <h3>{localSnapshotAliasLabel(item)}</h3>
-                        <span className="meta">{new Date(item.updatedAt).toLocaleString()}</span>
-                      </div>
-                      <p className="meta">start.ggのtournament名: {item.tournamentName}</p>
-                      <p className="meta">start.ggのevent名: {item.eventName}</p>
-                      <p className="meta">前回選択Phase/Pool: {selectedPhasePoolLabel}</p>
-                      <p className="meta">現在の選択状態: {isCurrentActive ? "表示中のイベントです" : "未表示"}</p>
+                    <>
+                      <article className="event-list-item home-detail-card">
+                        <div className="event-list-head">
+                          <h3>{localSnapshotAliasLabel(item)}</h3>
+                          <span className="meta">{new Date(item.updatedAt).toLocaleString()}</span>
+                        </div>
+                        <p className="meta">start.ggのtournament名: {item.tournamentName}</p>
+                        <p className="meta">start.ggのevent名: {item.eventName}</p>
+                        <p className="meta">前回選択Phase/Pool: {selectedPhasePoolLabel}</p>
+                      </article>
                       <div className="home-detail-actions">
                         <button
                           type="button"
@@ -9593,7 +9597,7 @@ function App() {
                           {isDeleting ? "削除中..." : "スナップショットの削除"}
                         </button>
                       </div>
-                    </article>
+                    </>
                   );
                 })() : (
                   <p className="meta" style={{ marginTop: "0.7rem" }}>一致する大会がありません。</p>

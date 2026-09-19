@@ -296,7 +296,7 @@ async fn fetch_set_snapshot_detail_with_client(
             .as_ref()
             .and_then(|group| group.display_identifier.clone()),
         phase_group_set_name: None,
-        is_hidden_intermediate: false,
+        is_intermediate: false,
         state: set.state.unwrap_or_default(),
         winner_id: set.winner_id.as_ref().map(|id| id.to_string()),
         entrant1_source: set
@@ -682,7 +682,7 @@ async fn query_tournament_snapshot(
                             .as_ref()
                             .and_then(|group| group.display_identifier.clone()),
                         phase_group_set_name: None,
-                        is_hidden_intermediate: false,
+                        is_intermediate: false,
                         state: set.state.unwrap_or_default(),
                         winner_id: set.winner_id.map(|id| id.to_string()),
                         entrant1_source: set.entrant1_source.map(|source| {
@@ -916,10 +916,11 @@ pub async fn fetch_event_snapshot_by_slug(
         .iter()
         .cloned()
         .collect::<std::collections::HashSet<_>>();
+    completed_requests = 0;
     progress_cb(EventSnapshotFetchProgress {
         phase: "fetchingSetDetails",
         completed_requests,
-        total_requests: None,
+        total_requests: Some(pending_set_ids.len()),
         current_page: None,
         current_set_id: None,
         total_planned_set_requests: Some(pending_set_ids.len()),
@@ -933,7 +934,7 @@ pub async fn fetch_event_snapshot_by_slug(
             Err(_) if !visible_set_ids.contains(&set_id) => continue,
             Err(error) => return Err(error),
         };
-        set.is_hidden_intermediate = !visible_set_ids.contains(&set_id);
+        set.is_intermediate = !visible_set_ids.contains(&set_id);
 
         for source in [&set.entrant1_source, &set.entrant2_source]
             .into_iter()
@@ -956,7 +957,7 @@ pub async fn fetch_event_snapshot_by_slug(
         progress_cb(EventSnapshotFetchProgress {
             phase: "fetchingSetDetails",
             completed_requests,
-            total_requests: None,
+            total_requests: Some(queued_set_ids.len()),
             current_page: None,
             current_set_id: Some(set_id),
             total_planned_set_requests: Some(queued_set_ids.len()),

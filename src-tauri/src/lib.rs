@@ -448,7 +448,7 @@ mod tests {
             phase_order: None,
             phase_group_display_identifier: None,
             phase_group_set_name: None,
-            is_hidden_intermediate: false,
+            is_intermediate: false,
             state: 0,
             winner_id: None,
             entrant1_source: None,
