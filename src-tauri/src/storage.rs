@@ -12,8 +12,8 @@ use crate::models::{
     ItemListConfig, LocalGrandFinalResetResultMeta, LocalPlayerMetaInput, LocalSetPlaySideInput,
     LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta, LocalSetScoreUpdateInput,
     LocalSnapshotEventListItem, MobileResultRequestInput, MobileResultRequestItem,
-    SaveEventManagementMetaInput, SenderProfile, SetPlaySideMeta, TournamentLocalMeta,
-    TournamentSnapshot, TournamentWorkspace,
+    SaveEventManagementMetaInput, SenderProfile, SetPlaySideMeta, TournamentEventPreviewItem,
+    TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
 };
 
 const STORAGE_DIR_NAME: &str = "savakan-gg";
@@ -26,7 +26,8 @@ const GENERIC_MESSAGES_FILE: &str = "generic-messages.json";
 const MOBILE_RESULT_REQUESTS_FILE: &str = "mobile-result-requests.json";
 const LAST_SNAPSHOT_SELECTION_FILE: &str = "last-snapshot-selection.json";
 const TEMP_TOKEN_FILE: &str = "token.txt";
-const PRISTINE_SNAPSHOT_FILE_PREFIX: &str = "pristine-tournament-";
+const SETTINGS_DIR_NAME: &str = "settings";
+const SNAPSHOTS_DIR_NAME: &str = "snapshots";
 const EVENT_SETTING_CATEGORY_SLOT_COUNT: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +53,18 @@ fn sanitize_slug(slug: &str) -> String {
         .collect()
 }
 
+fn event_name_slug(name: &str) -> String {
+    let mut slug = String::new();
+    for ch in name.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.trim_matches('-').to_owned()
+}
+
 fn normalize_slug_for_storage(slug: &str) -> String {
     let trimmed = slug.trim().trim_matches('/');
 
@@ -74,53 +87,55 @@ fn normalize_slug_for_storage(slug: &str) -> String {
     trimmed.to_owned()
 }
 
-fn alternate_slug_for_legacy_path(slug: &str) -> Option<String> {
-    let trimmed = slug.trim().trim_matches('/');
-    let normalized = normalize_slug_for_storage(slug);
-
-    if let Some(rest) = trimmed.strip_prefix("tournament/") {
-        let candidate = rest.trim_matches('/').to_owned();
-        if candidate != normalized {
-            return Some(candidate);
-        }
-        return None;
-    }
-
-    let candidate = format!("tournament/{normalized}");
-    if candidate == trimmed {
-        None
-    } else {
-        Some(candidate)
-    }
-}
-
-fn snapshot_path_with_slug_key(app: &AppHandle, slug_key: &str) -> Result<PathBuf, String> {
-    let file_name = format!("tournament-{}.json", sanitize_slug(slug_key));
-    Ok(storage_dir(app)?.join(file_name))
-}
-
-fn pristine_snapshot_path_with_slug_key(
+fn event_snapshot_path_with_keys(
     app: &AppHandle,
+    tournament_id: &str,
     slug_key: &str,
+    event_id: &str,
+    event_name: &str,
 ) -> Result<PathBuf, String> {
     let file_name = format!(
-        "{PRISTINE_SNAPSHOT_FILE_PREFIX}{}.json",
-        sanitize_slug(slug_key)
+        "{}-{}-{}-{}-snapshot.json",
+        sanitize_slug(tournament_id),
+        sanitize_slug(slug_key),
+        sanitize_slug(event_id),
+        event_name_slug(event_name)
     );
-    Ok(storage_dir(app)?.join(file_name))
+    Ok(snapshots_dir(app)?.join(file_name))
+}
+
+fn pristine_event_snapshot_path_with_keys(
+    app: &AppHandle,
+    tournament_id: &str,
+    slug_key: &str,
+    event_id: &str,
+    event_name: &str,
+) -> Result<PathBuf, String> {
+    let file_name = format!(
+        "{}-{}-{}-{}-pristine.json",
+        sanitize_slug(tournament_id),
+        sanitize_slug(slug_key),
+        sanitize_slug(event_id),
+        event_name_slug(event_name)
+    );
+    Ok(snapshots_dir(app)?.join(file_name))
 }
 
 fn meta_path_with_slug_key(
     app: &AppHandle,
+    tournament_id: &str,
     slug_key: &str,
     event_id: &str,
+    event_name: &str,
 ) -> Result<PathBuf, String> {
     let file_name = format!(
-        "tournament-meta-{}-{}.json",
+        "{}-{}-{}-{}-meta.json",
+        sanitize_slug(tournament_id),
         sanitize_slug(slug_key),
-        sanitize_slug(event_id)
+        sanitize_slug(event_id),
+        event_name_slug(event_name)
     );
-    Ok(storage_dir(app)?.join(file_name))
+    Ok(snapshots_dir(app)?.join(file_name))
 }
 
 fn storage_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -135,51 +150,61 @@ fn storage_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn settings_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let path = storage_dir(app)?.join(SETTINGS_DIR_NAME);
+    fs::create_dir_all(&path)
+        .map_err(|e| format!("設定保存先ディレクトリの作成に失敗しました: {e}"))?;
+    Ok(path)
+}
+
+fn snapshots_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let path = storage_dir(app)?.join(SNAPSHOTS_DIR_NAME);
+    fs::create_dir_all(&path)
+        .map_err(|e| format!("スナップショット保存先ディレクトリの作成に失敗しました: {e}"))?;
+    Ok(path)
+}
+
 fn token_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(storage_dir(app)?.join(TOKEN_FILE))
+    Ok(settings_dir(app)?.join(TOKEN_FILE))
 }
 
-fn snapshot_path(app: &AppHandle, slug: &str) -> Result<PathBuf, String> {
+fn meta_path(
+    app: &AppHandle,
+    tournament_id: &str,
+    slug: &str,
+    event_id: &str,
+    event_name: &str,
+) -> Result<PathBuf, String> {
     let normalized = normalize_slug_for_storage(slug);
-    snapshot_path_with_slug_key(app, &normalized)
-}
-
-fn pristine_snapshot_path(app: &AppHandle, slug: &str) -> Result<PathBuf, String> {
-    let normalized = normalize_slug_for_storage(slug);
-    pristine_snapshot_path_with_slug_key(app, &normalized)
-}
-
-fn meta_path(app: &AppHandle, slug: &str, event_id: &str) -> Result<PathBuf, String> {
-    let normalized = normalize_slug_for_storage(slug);
-    meta_path_with_slug_key(app, &normalized, event_id)
+    meta_path_with_slug_key(app, tournament_id, &normalized, event_id, event_name)
 }
 
 fn slug_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(storage_dir(app)?.join(SLUG_FILE))
+    Ok(settings_dir(app)?.join(SLUG_FILE))
 }
 
 fn item_lists_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(storage_dir(app)?.join(ITEM_LISTS_FILE))
+    Ok(settings_dir(app)?.join(ITEM_LISTS_FILE))
 }
 
 fn event_mgmt_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(storage_dir(app)?.join(EVENT_MGMT_FILE))
+    Ok(settings_dir(app)?.join(EVENT_MGMT_FILE))
 }
 
 fn sender_profile_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(storage_dir(app)?.join(SENDER_PROFILE_FILE))
+    Ok(settings_dir(app)?.join(SENDER_PROFILE_FILE))
 }
 
 fn generic_messages_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(storage_dir(app)?.join(GENERIC_MESSAGES_FILE))
+    Ok(settings_dir(app)?.join(GENERIC_MESSAGES_FILE))
 }
 
 fn last_snapshot_selection_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(storage_dir(app)?.join(LAST_SNAPSHOT_SELECTION_FILE))
+    Ok(settings_dir(app)?.join(LAST_SNAPSHOT_SELECTION_FILE))
 }
 
 fn mobile_result_requests_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(storage_dir(app)?.join(MOBILE_RESULT_REQUESTS_FILE))
+    Ok(settings_dir(app)?.join(MOBILE_RESULT_REQUESTS_FILE))
 }
 
 fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
@@ -1208,31 +1233,367 @@ pub fn load_token(app: &AppHandle) -> Result<String, String> {
 }
 
 pub fn save_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(), String> {
-    let path = snapshot_path(app, &snapshot.slug)?;
-    let json = serde_json::to_string_pretty(snapshot)
-        .map_err(|e| format!("スナップショットのJSON変換に失敗しました: {e}"))?;
-    fs::write(&path, json).map_err(|e| format!("スナップショット保存に失敗しました: {e}"))?;
-
-    if let Some(legacy_slug) = alternate_slug_for_legacy_path(&snapshot.slug) {
-        let legacy_path = snapshot_path_with_slug_key(app, &legacy_slug)?;
-        if legacy_path != path && legacy_path.exists() {
-            let _ = fs::remove_file(legacy_path);
-        }
+    let normalized_slug = normalize_slug_for_storage(&snapshot.slug);
+    for event in &snapshot.events {
+        let event_snapshot = TournamentSnapshot {
+            tournament_id: snapshot.tournament_id.clone(),
+            slug: snapshot.slug.clone(),
+            name: snapshot.name.clone(),
+            events: vec![event.clone()],
+            updated_at: snapshot.updated_at,
+        };
+        save_event_snapshot_file(
+            app,
+            &event_snapshot,
+            &snapshot.tournament_id,
+            &normalized_slug,
+            &event.event_id,
+            &event.name,
+            false,
+        )?;
     }
 
+    remove_stale_event_snapshot_files(
+        app,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        &snapshot.events,
+        false,
+    )?;
     Ok(())
 }
 
 fn save_pristine_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(), String> {
-    let path = pristine_snapshot_path(app, &snapshot.slug)?;
-    let json = serde_json::to_string_pretty(snapshot)
-        .map_err(|e| format!("原本スナップショットのJSON変換に失敗しました: {e}"))?;
-    fs::write(&path, json).map_err(|e| format!("原本スナップショット保存に失敗しました: {e}"))?;
+    let normalized_slug = normalize_slug_for_storage(&snapshot.slug);
+    for event in &snapshot.events {
+        let event_snapshot = TournamentSnapshot {
+            tournament_id: snapshot.tournament_id.clone(),
+            slug: snapshot.slug.clone(),
+            name: snapshot.name.clone(),
+            events: vec![event.clone()],
+            updated_at: snapshot.updated_at,
+        };
+        save_event_snapshot_file(
+            app,
+            &event_snapshot,
+            &snapshot.tournament_id,
+            &normalized_slug,
+            &event.event_id,
+            &event.name,
+            true,
+        )?;
+    }
 
-    if let Some(legacy_slug) = alternate_slug_for_legacy_path(&snapshot.slug) {
-        let legacy_path = pristine_snapshot_path_with_slug_key(app, &legacy_slug)?;
-        if legacy_path != path && legacy_path.exists() {
-            let _ = fs::remove_file(legacy_path);
+    remove_stale_event_snapshot_files(
+        app,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        &snapshot.events,
+        true,
+    )?;
+    Ok(())
+}
+
+fn save_event_snapshot_file(
+    app: &AppHandle,
+    snapshot: &TournamentSnapshot,
+    tournament_id: &str,
+    slug_key: &str,
+    event_id: &str,
+    event_name: &str,
+    pristine: bool,
+) -> Result<(), String> {
+    let path = if pristine {
+        pristine_event_snapshot_path_with_keys(app, tournament_id, slug_key, event_id, event_name)?
+    } else {
+        event_snapshot_path_with_keys(app, tournament_id, slug_key, event_id, event_name)?
+    };
+    let json = serde_json::to_string_pretty(snapshot)
+        .map_err(|e| format!("スナップショットのJSON変換に失敗しました: {e}"))?;
+    fs::write(path, json).map_err(|e| format!("スナップショット保存に失敗しました: {e}"))
+}
+
+fn remove_stale_event_snapshot_files(
+    app: &AppHandle,
+    tournament_id: &str,
+    slug_key: &str,
+    events: &[EventSnapshot],
+    pristine: bool,
+) -> Result<(), String> {
+    let dir = snapshots_dir(app)?;
+    for entry in
+        fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
+    {
+        let path = match entry {
+            Ok(value) => value.path(),
+            Err(_) => continue,
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !file_name.ends_with(".json") {
+            continue;
+        }
+        let suffix = if pristine {
+            "-pristine.json"
+        } else {
+            "-snapshot.json"
+        };
+        if !file_name.ends_with(suffix) {
+            continue;
+        }
+        let file_snapshot = fs::read_to_string(&path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<TournamentSnapshot>(&raw).ok());
+        let Some(file_snapshot) = file_snapshot else {
+            continue;
+        };
+        if normalize_slug_for_storage(&file_snapshot.slug) != slug_key
+            || file_snapshot.tournament_id != tournament_id
+        {
+            continue;
+        }
+
+        let Some(file_event) = file_snapshot.events.first() else {
+            continue;
+        };
+        let Some(current_event) = events
+            .iter()
+            .find(|event| event.event_id == file_event.event_id)
+        else {
+            // 保存対象に含まれないeventは、別event保存時に削除しない。
+            continue;
+        };
+        let expected_name = if pristine {
+            format!(
+                "{}-{}-{}-{}-pristine.json",
+                sanitize_slug(tournament_id),
+                sanitize_slug(slug_key),
+                sanitize_slug(&current_event.event_id),
+                event_name_slug(&current_event.name)
+            )
+        } else {
+            format!(
+                "{}-{}-{}-{}-snapshot.json",
+                sanitize_slug(tournament_id),
+                sanitize_slug(slug_key),
+                sanitize_slug(&current_event.event_id),
+                event_name_slug(&current_event.name)
+            )
+        };
+        if file_name != expected_name {
+            let _ = fs::remove_file(path);
+        }
+    }
+    Ok(())
+}
+
+fn load_event_snapshot_files(
+    app: &AppHandle,
+    slug: &str,
+    pristine: bool,
+) -> Result<Vec<TournamentSnapshot>, String> {
+    let dir = snapshots_dir(app)?;
+    let slug_key = normalize_slug_for_storage(slug);
+    let suffix = if pristine {
+        "-pristine.json"
+    } else {
+        "-snapshot.json"
+    };
+    let mut snapshots = Vec::new();
+    for entry in
+        fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
+    {
+        let path = match entry {
+            Ok(value) => value.path(),
+            Err(_) => continue,
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !file_name.ends_with(suffix) {
+            continue;
+        }
+        let raw = match fs::read_to_string(path) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if let Ok(mut snapshot) = serde_json::from_str::<TournamentSnapshot>(&raw) {
+            if normalize_slug_for_storage(&snapshot.slug) != slug_key {
+                continue;
+            }
+            for event in &mut snapshot.events {
+                apply_source_based_tbd_labels(event);
+            }
+            snapshots.push(snapshot);
+        }
+    }
+    Ok(snapshots)
+}
+
+fn merge_event_snapshot_files(snapshots: Vec<TournamentSnapshot>) -> Option<TournamentSnapshot> {
+    let mut snapshots = snapshots.into_iter();
+    let first = snapshots.next()?;
+    let mut merged = TournamentSnapshot {
+        tournament_id: first.tournament_id,
+        slug: first.slug,
+        name: first.name,
+        events: Vec::new(),
+        updated_at: first.updated_at,
+    };
+    for snapshot in snapshots {
+        merged.tournament_id = snapshot.tournament_id;
+        merged.slug = snapshot.slug;
+        merged.name = snapshot.name;
+        merged.updated_at = merged.updated_at.max(snapshot.updated_at);
+        merged.events.extend(snapshot.events);
+    }
+    Some(merged)
+}
+
+pub fn reconcile_local_event_snapshot_names(
+    app: &AppHandle,
+    slug: &str,
+    remote_tournament_id: &str,
+    remote_tournament_name: &str,
+    remote_events: &[TournamentEventPreviewItem],
+) -> Result<(), String> {
+    let normalized_slug = normalize_slug_for_storage(slug);
+    let event_names = remote_events
+        .iter()
+        .map(|event| (event.event_id.as_str(), event.event_name.as_str()))
+        .collect::<HashMap<&str, &str>>();
+
+    for pristine in [false, true] {
+        let dir = snapshots_dir(app)?;
+        let suffix = if pristine {
+            "-pristine.json"
+        } else {
+            "-snapshot.json"
+        };
+        for entry in
+            fs::read_dir(&dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
+        {
+            let path = match entry {
+                Ok(value) => value.path(),
+                Err(_) => continue,
+            };
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !file_name.ends_with(suffix) {
+                continue;
+            }
+
+            let raw = match fs::read_to_string(&path) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let mut snapshot = match serde_json::from_str::<TournamentSnapshot>(&raw) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            if normalize_slug_for_storage(&snapshot.slug) != normalized_slug {
+                continue;
+            }
+            let Some(event) = snapshot.events.first_mut() else {
+                continue;
+            };
+            let Some(remote_name) = event_names.get(event.event_id.as_str()) else {
+                continue;
+            };
+            if remote_name.trim().is_empty()
+                || (event.name == *remote_name
+                    && snapshot.tournament_id == remote_tournament_id
+                    && snapshot.name == remote_tournament_name)
+            {
+                continue;
+            }
+
+            let event_id = event.event_id.clone();
+            event.name = (*remote_name).to_owned();
+            snapshot.tournament_id = remote_tournament_id.to_owned();
+            snapshot.name = remote_tournament_name.to_owned();
+            let next_path = if pristine {
+                pristine_event_snapshot_path_with_keys(
+                    app,
+                    remote_tournament_id,
+                    &normalized_slug,
+                    &event_id,
+                    remote_name,
+                )?
+            } else {
+                event_snapshot_path_with_keys(
+                    app,
+                    remote_tournament_id,
+                    &normalized_slug,
+                    &event_id,
+                    remote_name,
+                )?
+            };
+            let next_json = serde_json::to_string_pretty(&snapshot)
+                .map_err(|e| format!("スナップショットのJSON変換に失敗しました: {e}"))?;
+            fs::write(&next_path, next_json)
+                .map_err(|e| format!("スナップショット保存に失敗しました: {e}"))?;
+            if next_path != path {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
+    let dir = snapshots_dir(app)?;
+    for entry in
+        fs::read_dir(&dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
+    {
+        let path = match entry {
+            Ok(value) => value.path(),
+            Err(_) => continue,
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !file_name.ends_with("-meta.json") {
+            continue;
+        }
+        let raw = match fs::read_to_string(&path) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let mut meta = match serde_json::from_str::<TournamentLocalMeta>(&raw) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if normalize_slug_for_storage(&meta.slug) != normalized_slug {
+            continue;
+        }
+        let Some(event_meta) = meta.events.first_mut() else {
+            continue;
+        };
+        let Some(remote_name) = event_names.get(event_meta.event_id.as_str()) else {
+            continue;
+        };
+        if remote_name.trim().is_empty()
+            || (event_meta.event_name == *remote_name && meta.tournament_id == remote_tournament_id)
+        {
+            continue;
+        }
+
+        let event_id = event_meta.event_id.clone();
+        event_meta.event_name = (*remote_name).to_owned();
+        meta.tournament_id = remote_tournament_id.to_owned();
+        let next_path = meta_path(
+            app,
+            remote_tournament_id,
+            &normalized_slug,
+            &event_id,
+            remote_name,
+        )?;
+        let next_json = serde_json::to_string_pretty(&meta)
+            .map_err(|e| format!("ローカルメタのJSON変換に失敗しました: {e}"))?;
+        fs::write(&next_path, next_json)
+            .map_err(|e| format!("ローカルメタ保存に失敗しました: {e}"))?;
+        if next_path != path {
+            let _ = fs::remove_file(path);
         }
     }
 
@@ -1240,100 +1601,25 @@ fn save_pristine_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Res
 }
 
 pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, String> {
-    let mut candidate_paths = vec![snapshot_path(app, slug)?];
-    if let Some(legacy_slug) = alternate_slug_for_legacy_path(slug) {
-        candidate_paths.push(snapshot_path_with_slug_key(app, &legacy_slug)?);
+    if let Some(snapshot) = merge_event_snapshot_files(load_event_snapshot_files(app, slug, false)?)
+    {
+        return Ok(snapshot);
     }
-
-    let mut last_error = None;
-    let mut loaded_raw = None;
-    for path in candidate_paths {
-        if !path.exists() {
-            continue;
-        }
-
-        match fs::read_to_string(&path) {
-            Ok(raw) => {
-                loaded_raw = Some(raw);
-                break;
-            }
-            Err(error) => {
-                last_error = Some(error);
-            }
-        }
-    }
-
-    let raw = if let Some(raw) = loaded_raw {
-        raw
-    } else if let Some(error) = last_error {
-        return Err(format!(
-            "ローカルスナップショット読込に失敗しました: {error}"
-        ));
-    } else {
-        return Err(
-            "ローカルスナップショット読込に失敗しました: 保存済みデータが見つかりません。"
-                .to_owned(),
-        );
-    };
-
-    let mut snapshot: TournamentSnapshot = serde_json::from_str(&raw)
-        .map_err(|e| format!("ローカルスナップショットのパースに失敗しました: {e}"))?;
-
-    for event in &mut snapshot.events {
-        apply_source_based_tbd_labels(event);
-    }
-
-    Ok(snapshot)
+    Err("ローカルスナップショット読込に失敗しました: 保存済みデータが見つかりません。".to_owned())
 }
 
 fn load_pristine_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, String> {
-    let mut candidate_paths = vec![pristine_snapshot_path(app, slug)?];
-    if let Some(legacy_slug) = alternate_slug_for_legacy_path(slug) {
-        candidate_paths.push(pristine_snapshot_path_with_slug_key(app, &legacy_slug)?);
+    if let Some(snapshot) = merge_event_snapshot_files(load_event_snapshot_files(app, slug, true)?)
+    {
+        return Ok(snapshot);
     }
-
-    let mut last_error = None;
-    let mut loaded_raw = None;
-    for path in candidate_paths {
-        if !path.exists() {
-            continue;
-        }
-
-        match fs::read_to_string(&path) {
-            Ok(raw) => {
-                loaded_raw = Some(raw);
-                break;
-            }
-            Err(error) => {
-                last_error = Some(error);
-            }
-        }
-    }
-
-    let raw = if let Some(raw) = loaded_raw {
-        raw
-    } else if let Some(error) = last_error {
-        return Err(format!("原本スナップショット読込に失敗しました: {error}"));
-    } else {
-        return Err(
-            "原本スナップショット読込に失敗しました: 保存済みデータが見つかりません。".to_owned(),
-        );
-    };
-
-    let mut snapshot: TournamentSnapshot = serde_json::from_str(&raw)
-        .map_err(|e| format!("原本スナップショットのパースに失敗しました: {e}"))?;
-
-    for event in &mut snapshot.events {
-        apply_source_based_tbd_labels(event);
-    }
-
-    Ok(snapshot)
+    Err("原本スナップショット読込に失敗しました: 保存済みデータが見つかりません。".to_owned())
 }
 
 pub fn list_local_snapshot_events(
     app: &AppHandle,
 ) -> Result<Vec<LocalSnapshotEventListItem>, String> {
-    let dir = storage_dir(app)?;
+    let dir = snapshots_dir(app)?;
     let entries = fs::read_dir(&dir)
         .map_err(|e| format!("保存済みスナップショット一覧の取得に失敗しました: {e}"))?;
     let mut items = Vec::new();
@@ -1352,10 +1638,7 @@ pub fn list_local_snapshot_events(
             continue;
         };
 
-        if !file_name.starts_with("tournament-") || !file_name.ends_with(".json") {
-            continue;
-        }
-        if file_name.starts_with("tournament-meta-") {
+        if !file_name.ends_with("-snapshot.json") {
             continue;
         }
 
@@ -1419,6 +1702,12 @@ pub fn delete_local_snapshot_event(
     event_id: &str,
 ) -> Result<(), String> {
     let mut snapshot = load_snapshot(app, slug)?;
+    let event_name = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .map(|event| event.name.clone())
+        .unwrap_or_default();
     let before_len = snapshot.events.len();
     snapshot.events.retain(|event| event.event_id != event_id);
 
@@ -1426,44 +1715,38 @@ pub fn delete_local_snapshot_event(
         return Err(format!("削除対象のイベントが見つかりません: {event_id}"));
     }
 
-    let target_meta_path = meta_path(app, slug, event_id)?;
+    let target_meta_path = meta_path(app, &snapshot.tournament_id, slug, event_id, &event_name)?;
     if target_meta_path.exists() {
         fs::remove_file(&target_meta_path)
             .map_err(|e| format!("ローカルメタ削除に失敗しました: {e}"))?;
     }
 
-    if snapshot.events.is_empty() {
-        let target_snapshot_path = snapshot_path(app, slug)?;
-        if target_snapshot_path.exists() {
-            fs::remove_file(&target_snapshot_path)
-                .map_err(|e| format!("スナップショット削除に失敗しました: {e}"))?;
-        }
-
-        let dir = storage_dir(app)?;
-        let meta_prefix = format!("tournament-meta-{}-", sanitize_slug(slug));
-        let entries =
-            fs::read_dir(&dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?;
-        for entry in entries {
-            let entry = match entry {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if !file_name.starts_with(&meta_prefix) || !file_name.ends_with(".json") {
-                continue;
-            }
-            let _ = fs::remove_file(path);
-        }
-    } else {
-        snapshot.updated_at = Utc::now();
-        save_snapshot(app, &snapshot)?;
+    let normalized_slug = normalize_slug_for_storage(slug);
+    let snapshot_path = event_snapshot_path_with_keys(
+        app,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        event_id,
+        &event_name,
+    )?;
+    if snapshot_path.exists() {
+        fs::remove_file(snapshot_path)
+            .map_err(|e| format!("スナップショット削除に失敗しました: {e}"))?;
     }
+    let pristine_path = pristine_event_snapshot_path_with_keys(
+        app,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        event_id,
+        &event_name,
+    )?;
+    if pristine_path.exists() {
+        fs::remove_file(pristine_path)
+            .map_err(|e| format!("原本スナップショット削除に失敗しました: {e}"))?;
+    }
+
+    snapshot.updated_at = Utc::now();
+    save_snapshot(app, &snapshot)?;
 
     Ok(())
 }
@@ -3554,13 +3837,7 @@ pub fn save_event_snapshot(
 
     // オフラインでも下書き破棄で戻せるよう、原本スナップショットを別保存する。
     let mut pristine_snapshot =
-        load_pristine_snapshot(app, &snapshot.slug).unwrap_or_else(|_| TournamentSnapshot {
-            tournament_id: snapshot.tournament_id.clone(),
-            slug: snapshot.slug.clone(),
-            name: snapshot.name.clone(),
-            events: Vec::new(),
-            updated_at: snapshot.updated_at,
-        });
+        load_pristine_snapshot(app, &snapshot.slug).unwrap_or_else(|_| merged_snapshot.clone());
 
     pristine_snapshot.tournament_id = snapshot.tournament_id.clone();
     pristine_snapshot.slug = snapshot.slug.clone();
@@ -3621,15 +3898,44 @@ pub fn save_local_meta(
         .pending_grand_final_reset_results
         .retain(|pending| pending.event_id == event_id);
 
-    let path = meta_path(app, &normalized.slug, event_id)?;
+    let event_name = normalized
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .map(|event| event.event_name.as_str())
+        .unwrap_or_default();
+    let path = meta_path(
+        app,
+        &normalized.tournament_id,
+        &normalized.slug,
+        event_id,
+        event_name,
+    )?;
     let json = serde_json::to_string_pretty(&normalized)
         .map_err(|e| format!("ローカルメタのJSON変換に失敗しました: {e}"))?;
     fs::write(&path, json).map_err(|e| format!("ローカルメタ保存に失敗しました: {e}"))?;
 
-    if let Some(legacy_slug) = alternate_slug_for_legacy_path(&normalized.slug) {
-        let legacy_path = meta_path_with_slug_key(app, &legacy_slug, event_id)?;
-        if legacy_path != path && legacy_path.exists() {
-            let _ = fs::remove_file(legacy_path);
+    let meta_prefix = format!(
+        "{}-{}-{}-",
+        sanitize_slug(&normalized.tournament_id),
+        sanitize_slug(&normalize_slug_for_storage(&normalized.slug)),
+        sanitize_slug(event_id)
+    );
+    for entry in fs::read_dir(snapshots_dir(app)?)
+        .map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
+    {
+        let candidate = match entry {
+            Ok(value) => value.path(),
+            Err(_) => continue,
+        };
+        let Some(file_name) = candidate.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if candidate != path
+            && file_name.starts_with(&meta_prefix)
+            && file_name.ends_with("-meta.json")
+        {
+            let _ = fs::remove_file(candidate);
         }
     }
 
@@ -3641,20 +3947,32 @@ pub fn load_local_meta(
     slug: &str,
     event_id: &str,
 ) -> Result<TournamentLocalMeta, String> {
-    let mut candidate_paths = vec![meta_path(app, slug, event_id)?];
-    if let Some(legacy_slug) = alternate_slug_for_legacy_path(slug) {
-        candidate_paths.push(meta_path_with_slug_key(app, &legacy_slug, event_id)?);
-    }
-
+    let dir = snapshots_dir(app)?;
     let mut loaded_raw = None;
     let mut last_error = None;
-    for path in candidate_paths {
-        if !path.exists() {
+    for entry in
+        fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
+    {
+        let path = match entry {
+            Ok(value) => value.path(),
+            Err(_) => continue,
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !file_name.ends_with("-meta.json") {
             continue;
         }
 
         match fs::read_to_string(&path) {
             Ok(raw) => {
+                let parsed = serde_json::from_str::<TournamentLocalMeta>(&raw).ok();
+                if parsed.as_ref().is_none_or(|meta| {
+                    normalize_slug_for_storage(&meta.slug) != normalize_slug_for_storage(slug)
+                        || !meta.events.iter().any(|event| event.event_id == event_id)
+                }) {
+                    continue;
+                }
                 loaded_raw = Some(raw);
                 break;
             }

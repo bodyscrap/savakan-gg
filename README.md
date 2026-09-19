@@ -126,7 +126,9 @@ API ドキュメント入口:
 
 ## 保存先
 
-Tauri の app_data_dir 配下に以下を保存します。
+Tauri の app_data_dir 配下に `settings` と `snapshots` のフォルダを作成して保存します。
+
+`settings`:
 
 - startgg-token.txt
 - last-slug.txt
@@ -135,15 +137,19 @@ Tauri の app_data_dir 配下に以下を保存します。
 - event-mgmt-settings.json
 - sender-profile.json
 - generic-messages.json
-- tournament-<slugを安全化した文字列>.json
-- tournament-meta-<slugを安全化した文字列>-<eventIdを安全化した文字列>.json
+
+`snapshots`:
+
+- <tournamentIdを安全化した文字列>-<slugを安全化した文字列>-<eventIdを安全化した文字列>-<event名slug>-snapshot.json
+- <tournamentIdを安全化した文字列>-<slugを安全化した文字列>-<eventIdを安全化した文字列>-<event名slug>-pristine.json
+- <tournamentIdを安全化した文字列>-<slugを安全化した文字列>-<eventIdを安全化した文字列>-<event名slug>-meta.json
 
 補足:
 
 - 取り込み単位は event です。
 - 同一 tournament で複数 event を持つ場合でも、slug と eventId の組み合わせで個別に管理します。
 - ローカル meta には、イベント設定、プレイヤー設定、1P/2P 配置、保留中結果、playerId 生成用情報が含まれます。
-- start.gg 上の slug は安全なファイル名へ変換して保存されます。
+- start.gg 上の slug と eventId は安全なファイル名へ変換して保存されます。
 
 ## OBS オーバーレイの使い方
 
@@ -155,7 +161,7 @@ Tauri の app_data_dir 配下に以下を保存します。
 
 ## ローカルスナップショットの扱い
 
-大会スナップショットは slug ごとに保持され、イベント別の meta は個別ファイルに分離されます。
+大会スナップショットと原本スナップショットは event ごとに個別ファイルで保持されます。
 
 これにより、同じ tournament でも event ごとの読み込み・更新・削除が可能です。
 

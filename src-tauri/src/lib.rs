@@ -5682,7 +5682,15 @@ async fn preview_tournament(
     slug: String,
 ) -> Result<TournamentPreview, String> {
     let token = storage::load_token(&app)?;
-    startgg::fetch_tournament_preview(&token, &slug).await
+    let preview = startgg::fetch_tournament_preview(&token, &slug).await?;
+    storage::reconcile_local_event_snapshot_names(
+        &app,
+        &slug,
+        &preview.tournament_id,
+        &preview.name,
+        &preview.events,
+    )?;
+    Ok(preview)
 }
 
 #[tauri::command]
@@ -5847,9 +5855,8 @@ async fn refresh_local_event_snapshot_from_remote(
         .and_then(|item| item.event_alias);
 
     storage::save_event_snapshot(&app, &snapshot, &event_id, existing_alias)?;
-    let local_meta = storage::discard_pending_set_results_for_snapshot_refresh(
-        &app, &slug, &event_id,
-    )?;
+    let local_meta =
+        storage::discard_pending_set_results_for_snapshot_refresh(&app, &slug, &event_id)?;
     let snapshot = storage::load_snapshot(&app, &slug)?;
 
     Ok(TournamentWorkspace {

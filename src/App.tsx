@@ -7883,6 +7883,27 @@ function App() {
       return;
     }
 
+    if (createSelectedEventId !== "") {
+      try {
+        const existingItems = await invoke<LocalSnapshotEventListItem[]>("list_local_snapshot_events");
+        const existing = existingItems.find((item) =>
+          toApiSlug(item.slug) === tournamentSlug
+          && item.eventId === createSelectedEventId,
+        );
+        if (existing) {
+          const confirmed = window.confirm(
+            `このeventのスナップショットは既に存在します。上書きして再取得しますか？\n${existing.slug}`,
+          );
+          if (!confirmed) {
+            return;
+          }
+        }
+      } catch (err) {
+        setError(String(err));
+        return;
+      }
+    }
+
     setCreateBusy(true);
     clearStatusMessages();
     setCreateSnapshotProgress({
@@ -9577,7 +9598,7 @@ function App() {
               ) : (
                 <>
                   <p className="meta">
-                    {createPreview.name} / slug: {createPreview.slug} / updatedAt: {new Date(createPreview.updatedAt).toLocaleString()}
+                    {createPreview.name} / tournament ID: {createPreview.tournamentId} / updatedAt: {new Date(createPreview.updatedAt).toLocaleString()}
                   </p>
                   <div className="form" style={{ marginTop: "0.7rem" }}>
                     <label htmlFor="create-event-search-input" style={{ display: "grid", gap: "0.3rem" }}>
