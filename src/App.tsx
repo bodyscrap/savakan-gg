@@ -664,7 +664,7 @@ function buildRoundColumns(sets: SetSnapshot[]): RoundColumn[] {
 type EventSnapshot = {
   eventId: string;
   name: string;
-  phaseGroups: PhaseGroupSnapshot[];
+  phaseGroups?: PhaseGroupSnapshot[];
   sets: SetSnapshot[];
 };
 
@@ -1614,8 +1614,15 @@ function resolveCallPhaseName(event: EventSnapshot | null, rawValue: string, pha
     return normalized;
   }
 
-  const phase = event.phaseGroups.find((group) => group.phaseOrder === resolvedPhaseOrder);
-  return phase?.phaseName?.trim() || normalized;
+  const phase = event.phaseGroups?.find((group) => group.phaseOrder === resolvedPhaseOrder);
+  if (phase?.phaseName?.trim()) {
+    return phase.phaseName.trim();
+  }
+
+  const set = event.sets.find(
+    (candidate) => candidate.phaseOrder === resolvedPhaseOrder && candidate.phaseName?.trim(),
+  );
+  return set?.phaseName?.trim() || normalized;
 }
 
 function normalizeCallPhaseGroupName(rawValue: string): string {
@@ -10626,7 +10633,7 @@ function App() {
                           {group.eventAlias !== "" ? group.eventAlias : "(イベントエイリアス未設定)"}
                           {"("}
                           {resolveCallPhaseName(
-                            selectedEvent?.eventId === group.eventId ? selectedEvent : null,
+                            snapshot?.events.find((event) => event.eventId === group.eventId) ?? null,
                             group.phaseName,
                             null,
                           )}
