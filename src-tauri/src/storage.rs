@@ -369,22 +369,6 @@ fn normalize_event_management_meta(setting: EventManagementMeta) -> EventManagem
     }
 }
 
-fn has_item_selection_setting_changed(
-    existing: Option<&EventManagementMeta>,
-    next: &EventManagementMeta,
-) -> bool {
-    let Some(current) = existing else {
-        return true;
-    };
-
-    current.item_list_snapshots != next.item_list_snapshots
-        || current.category_min_counts != next.category_min_counts
-        || current.category_max_counts != next.category_max_counts
-        || current.category_allow_duplicates != next.category_allow_duplicates
-        || current.total_min_count != next.total_min_count
-        || current.total_max_count != next.total_max_count
-}
-
 fn derive_score_csv_from_slot_scores(
     slot_scores: &[crate::models::LocalSetScoreInput],
     winner_id: &str,
@@ -6081,16 +6065,7 @@ pub fn save_event_management_meta(
     event_meta.event_name = input.event_name.clone();
 
     let next_setting = normalize_event_management_meta(input.setting);
-    let should_clear_player_item_selections =
-        has_item_selection_setting_changed(event_meta.event_management.as_ref(), &next_setting);
-
     event_meta.event_management = Some(next_setting);
-
-    if should_clear_player_item_selections {
-        for entrant in &mut event_meta.entrants {
-            entrant.character_names.clear();
-        }
-    }
 
     local_meta.slug = input.slug;
     local_meta.updated_at = Utc::now();

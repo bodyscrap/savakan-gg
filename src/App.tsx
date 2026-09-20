@@ -2828,6 +2828,7 @@ function App() {
   const lastPersistedEventMetaPhasePoolRef = useRef("");
   const eventSettingHydratedKeyRef = useRef("");
   const suppressEventSettingAutosaveRef = useRef(false);
+  const dirtyMetaDraftKeysRef = useRef(new Set<string>());
   const autoIpFillTriedRef = useRef(false);
   const tabSelectionAutoLoadInFlightRef = useRef(false);
   const dqCameraVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -6111,10 +6112,12 @@ function App() {
           categorySelections[slotIndex] = selections;
         }
 
-        next[key] = {
-          playSide: existingMeta?.playSide ?? "",
-          categorySelections,
-        };
+        if (!current[key] || !dirtyMetaDraftKeysRef.current.has(key)) {
+          next[key] = {
+            playSide: existingMeta?.playSide ?? "",
+            categorySelections,
+          };
+        }
       }
 
       return next;
@@ -6177,7 +6180,7 @@ function App() {
     setCategorySlotAllowDuplicates(normalizeAllowDuplicatesArray(setting.categoryAllowDuplicates));
     setTotalItemMinCount(clampNonNegativeInteger(Number(setting.totalMinCount ?? 0), 0));
     setTotalItemMaxCount(clampNonNegativeInteger(Number(setting.totalMaxCount ?? 3), 3));
-  }, [eventMgmtSettings, selectedEventMeta, selectedEventSettingKey]);
+  }, [eventMgmtSettingsReady, selectedEventMeta, selectedEventSettingKey]);
 
   useEffect(() => {
     if (selectedEventSettingKey === "") {
@@ -6577,6 +6580,7 @@ function App() {
       .find((event) => event.eventId === eventId)
       ?.entrants.find((entrant) => entrant.entrantId === entrantId);
 
+    dirtyMetaDraftKeysRef.current.add(key);
     setMetaDrafts((current) => {
       const baseDraft = current[key] ?? {
         playSide: existingMeta?.playSide ?? "",
@@ -6924,10 +6928,11 @@ function App() {
 
   function deleteItemList(itemListId: string) {
     setItemLists((current) => current.filter((list) => list.id !== itemListId));
-    setCategorySlotListIds((current) => current.map((id) => (id === itemListId ? "" : id)));
-    setCategorySlotMinCounts((current) => current.map((value, index) => (categorySlotListIds[index] === itemListId ? 0 : value)));
-    setCategorySlotMaxCounts((current) => current.map((value, index) => (categorySlotListIds[index] === itemListId ? 0 : value)));
-    setCategorySlotAllowDuplicates((current) => current.map((value, index) => (categorySlotListIds[index] === itemListId ? false : value)));
+    const nextListIds = categorySlotListIds.map((id) => (id === itemListId ? "" : id));
+    setCategorySlotListIds(nextListIds);
+    setCategorySlotMinCounts((current) => current.map((value, index) => (nextListIds[index] === "" && categorySlotListIds[index] === itemListId ? 0 : value)));
+    setCategorySlotMaxCounts((current) => current.map((value, index) => (nextListIds[index] === "" && categorySlotListIds[index] === itemListId ? 0 : value)));
+    setCategorySlotAllowDuplicates((current) => current.map((value, index) => (nextListIds[index] === "" && categorySlotListIds[index] === itemListId ? false : value)));
     if (editingItemListId === itemListId) {
       resetItemListEditor();
     }
@@ -7056,7 +7061,7 @@ function App() {
         ...current,
         [selectedEventSettingKey]: nextSetting,
       }));
-      setMessage("大会管理設定を保存しました。アイテム選択設定が変わった場合、既存のプレイヤー選択はクリアされます。");
+      setMessage("大会管理設定を保存しました。");
     } catch (err) {
       setError(String(err));
     } finally {
@@ -9269,6 +9274,7 @@ function App() {
       });
 
       setWorkspace(result);
+      dirtyMetaDraftKeysRef.current.delete(getMetaDraftKey(eventSnapshot.eventId, entrantId));
       if (!silent) {
         setMessage("ローカルメタを保存しました。");
       }
