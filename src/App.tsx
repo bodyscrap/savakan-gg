@@ -664,7 +664,14 @@ function buildRoundColumns(sets: SetSnapshot[]): RoundColumn[] {
 type EventSnapshot = {
   eventId: string;
   name: string;
+  phaseGroups: PhaseGroupSnapshot[];
   sets: SetSnapshot[];
+};
+
+type PhaseGroupSnapshot = {
+  phaseName: string | null;
+  phaseOrder: number | null;
+  displayIdentifier: string | null;
 };
 
 type TournamentSnapshot = {
@@ -1597,6 +1604,18 @@ function extractMetaString(meta: Record<string, unknown> | null, key: string): s
 function normalizeCallPhaseName(rawValue: string): string {
   const trimmed = rawValue.trim();
   return trimmed === "" ? "Phase 未設定" : trimmed;
+}
+
+function resolveCallPhaseName(event: EventSnapshot | null, rawValue: string, phaseOrder: number | null): string {
+  const normalized = normalizeCallPhaseName(rawValue);
+  const orderMatch = /^order:(\d+)$/.exec(normalized);
+  const resolvedPhaseOrder = phaseOrder ?? (orderMatch ? Number(orderMatch[1]) : null);
+  if (!orderMatch || resolvedPhaseOrder === null || !event) {
+    return normalized;
+  }
+
+  const phase = event.phaseGroups.find((group) => group.phaseOrder === resolvedPhaseOrder);
+  return phase?.phaseName?.trim() || normalized;
 }
 
 function normalizeCallPhaseGroupName(rawValue: string): string {
@@ -5791,7 +5810,7 @@ function App() {
       const targetSetId = activeMatch.setId;
       const playerId = await deriveEncryptedPlayerId(snapshot.tournamentId, selectedEvent.eventId, entrantId);
       const eventAlias = selectedEventMeta?.eventAlias?.trim() || selectedEvent.name;
-      const phaseName = normalizeCallPhaseName(activeMatch.phaseName ?? "");
+      const phaseName = resolveCallPhaseName(selectedEvent, activeMatch.phaseName ?? "", activeMatch.phaseOrder);
       const phaseGroupName = normalizeCallPhaseGroupName(activeMatch.phaseGroupName ?? "");
       const senderLine = senderProfile.senderName.trim() !== ""
         && isValidSenderUserId(senderProfile.senderUserId)
@@ -10605,10 +10624,15 @@ function App() {
                       <p className="call-list-event-summary">
                         <span className="call-list-event-alias">
                           {group.eventAlias !== "" ? group.eventAlias : "(イベントエイリアス未設定)"}
-                          {" / "}
-                          {group.phaseName !== "" ? group.phaseName : "-"}
-                          {" / "}
+                          {"("}
+                          {resolveCallPhaseName(
+                            selectedEvent?.eventId === group.eventId ? selectedEvent : null,
+                            group.phaseName,
+                            null,
+                          )}
+                          {"/"}
                           {group.phaseGroupName !== "" ? group.phaseGroupName : "-"}
+                          {")"}
                         </span>
                         <span className="call-list-event-detail">
                           {group.tournamentName !== "" ? group.tournamentName : "-"}
