@@ -4133,7 +4133,7 @@ function App() {
   }, [homeFilteredSnapshotEvents, homeSelectedSnapshotKey]);
 
   useEffect(() => {
-    if (homeFilteredSnapshotEvents.length === 0) {
+    if (localSnapshotEvents.length === 0) {
       if (homeSelectedSnapshotKey !== "") {
         setHomeSelectedSnapshotKey("");
       }
@@ -4141,13 +4141,13 @@ function App() {
     }
 
     if (homeSelectedSnapshotKey !== "") {
-      const stillExists = homeFilteredSnapshotEvents.some((item) => localSnapshotItemKey(item) === homeSelectedSnapshotKey);
+      const stillExists = localSnapshotEvents.some((item) => localSnapshotItemKey(item) === homeSelectedSnapshotKey);
       if (stillExists) {
         return;
       }
     }
 
-  }, [homeFilteredSnapshotEvents, homeSelectedSnapshotItem, homeSelectedSnapshotKey]);
+  }, [homeSelectedSnapshotKey, localSnapshotEvents]);
 
   useEffect(() => {
     if (workspace || busy || loadingLocalSnapshotEvents || tabSelectionAutoLoadInFlightRef.current) {
@@ -8115,20 +8115,7 @@ function App() {
       });
 
       setWorkspace(null);
-      setSelectedEventId("");
-      setSelectedPhaseName("");
-      setSelectedPhasePoolKey("");
-      setHomeSelectedSnapshotKey("");
-      startupSavedSlugRef.current = "";
-      startupSavedEventIdRef.current = "";
       startupAutoRestoreDoneRef.current = true;
-      lastPersistedSnapshotSelectionRef.current = "";
-      await invoke("save_last_snapshot_selection", {
-        slug: "",
-        eventId: "",
-        phaseName: null,
-        phaseGroupName: null,
-      });
       setCreateSnapshotProgress(null);
       await refreshLocalSnapshotEvents();
       setActiveTab("home");
@@ -8146,6 +8133,27 @@ function App() {
     try {
       const items = await invoke<LocalSnapshotEventListItem[]>("list_local_snapshot_events");
       setLocalSnapshotEvents(items);
+
+      const savedSlug = startupSavedSlugRef.current.trim();
+      const savedEventId = startupSavedEventIdRef.current.trim();
+      const savedSelectionStillExists = savedSlug === "" || savedEventId === ""
+        || items.some((item) => sameSnapshotEventKey(savedSlug, savedEventId, item.slug, item.eventId));
+      if (!savedSelectionStillExists) {
+        setWorkspace(null);
+        setSelectedEventId("");
+        setSelectedPhaseName("");
+        setSelectedPhasePoolKey("");
+        startupSavedSlugRef.current = "";
+        startupSavedEventIdRef.current = "";
+        lastPersistedSnapshotSelectionRef.current = "";
+        await invoke("save_last_snapshot_selection", {
+          slug: "",
+          eventId: "",
+          phaseName: null,
+          phaseGroupName: null,
+        });
+      }
+
       if (items.length === 0) {
         setWorkspace(null);
         setSelectedEventId("");
