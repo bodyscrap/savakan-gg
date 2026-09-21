@@ -5842,7 +5842,7 @@ fn validate_event_bracket_types(
         .map(|group| group.bracket_type.as_deref().unwrap_or("UNKNOWN"))
         .collect::<Vec<_>>();
     Err(format!(
-        "対象eventには未対応のbracketTypeが含まれています。対応形式: SINGLE_ELIMINATION / DOUBLE_ELIMINATION。取得値: {}",
+        "対象eventには未対応のbracketTypeが含まれています。対応形式: SINGLE_ELIMINATION / DOUBLE_ELIMINATION / ROUND_ROBIN。取得値: {}",
         bracket_types.join(", ")
     ))
 }

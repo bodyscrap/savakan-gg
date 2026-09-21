@@ -19,7 +19,11 @@ const START_GG_REQUEST_INTERVAL_MS: u64 = 120;
 const START_GG_SET_ENTRANT_RETRY_ATTEMPTS: usize = 6;
 const START_GG_SET_ENTRANT_RETRY_DELAY_MS: u64 = 350;
 
-pub const SUPPORTED_BRACKET_TYPES: &[&str] = &["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION"];
+pub const SUPPORTED_BRACKET_TYPES: &[&str] = &[
+    "SINGLE_ELIMINATION",
+    "DOUBLE_ELIMINATION",
+    "ROUND_ROBIN",
+];
 
 fn bracket_type_name<T: std::fmt::Debug>(bracket_type: T) -> String {
     format!("{bracket_type:?}").to_ascii_uppercase()

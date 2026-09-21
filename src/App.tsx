@@ -2310,9 +2310,12 @@ function localSnapshotItemKey(item: LocalSnapshotEventListItem): string {
 
 function localSnapshotAliasLabel(item: LocalSnapshotEventListItem): string {
   if (item.eventAlias && item.eventAlias.trim() !== "") {
-    return item.eventAlias;
+    return item.eventAlias.trim();
   }
-  return "-";
+  if (item.eventName && item.eventName.trim() !== "") {
+    return item.eventName.trim();
+  }
+  return item.eventId;
 }
 
 function bytesToBase32(bytes: Uint8Array): string {
@@ -7854,15 +7857,42 @@ function App() {
       const sourceSet = sourceSetId
         ? selectedEvent?.sets.find((candidate) => candidate.setId === sourceSetId)
         : undefined;
-      if (currentSource.placeholderName?.trim()) {
-        return currentSource.placeholderName.trim();
-      }
       if (!sourceSetId || !sourceSet || visited.has(sourceSetId)) {
-        return null;
+        return currentSource.placeholderName?.trim() || null;
       }
 
       const nextVisited = new Set(visited);
       nextVisited.add(sourceSetId);
+
+      const sourceCondition = currentSource.condition?.trim().toLowerCase();
+      if (sourceSet.winnerId && (sourceCondition === "winner" || sourceCondition === "loser")) {
+        const resolvedSlot = sourceSet.slots.find((candidate) => {
+          if (candidate.entrantId === null || !isResolvedEntrantName(candidate.entrantName)) {
+            return false;
+          }
+
+          const isWinner = candidate.entrantId === sourceSet.winnerId;
+          return sourceCondition === "winner" ? isWinner : !isWinner;
+        });
+        if (resolvedSlot) {
+          return resolvedSlot.entrantName.trim();
+        }
+      }
+
+      if (
+        sourceSet.isIntermediate
+        && !sourceSet.winnerId
+        && sourceCondition !== "winner"
+        && sourceCondition !== "loser"
+      ) {
+        const resolvedSlots = sourceSet.slots.filter(
+          (candidate) => candidate.entrantId !== null && isResolvedEntrantName(candidate.entrantName),
+        );
+        if (resolvedSlots.length === 1) {
+          return resolvedSlots[0].entrantName.trim();
+        }
+      }
+
       if (sourceSet.isIntermediate) {
         const nested = [sourceSet.entrant1Source, sourceSet.entrant2Source]
           .map((nestedSource) => resolveSource(nestedSource, nextVisited))
@@ -7873,7 +7903,9 @@ function App() {
       }
 
       const sourceSetCode = setDisplayCodeById.get(sourceSetId);
-      const sourceCondition = currentSource.condition?.trim().toLowerCase();
+      if (currentSource.placeholderName?.trim()) {
+        return currentSource.placeholderName.trim();
+      }
       if (sourceSetCode && (sourceCondition === "winner" || sourceCondition === "loser")) {
         return normalizeSourceText(sourceCondition === "winner" ? "winners" : "losers", sourceSetCode);
       }
