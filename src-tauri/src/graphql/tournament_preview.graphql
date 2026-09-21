@@ -7,6 +7,9 @@ query TournamentPreviewQuery($slug: String!) {
       id
       name
       slug
+      phaseGroups {
+        bracketType
+      }
     }
   }
 }

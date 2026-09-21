@@ -291,6 +291,8 @@ pub struct EventSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct PhaseGroupSnapshot {
     pub phase_group_id: String,
+    #[serde(default)]
+    pub bracket_type: Option<String>,
     pub phase_id: Option<String>,
     pub phase_name: Option<String>,
     pub phase_order: Option<i64>,
@@ -469,6 +471,8 @@ pub struct TournamentEventPreviewItem {
     pub event_id: String,
     pub event_name: String,
     pub event_slug: Option<String>,
+    #[serde(default)]
+    pub bracket_types: Vec<String>,
     pub set_count: usize,
 }
 

@@ -19,6 +19,26 @@ const START_GG_REQUEST_INTERVAL_MS: u64 = 120;
 const START_GG_SET_ENTRANT_RETRY_ATTEMPTS: usize = 6;
 const START_GG_SET_ENTRANT_RETRY_DELAY_MS: u64 = 350;
 
+pub const SUPPORTED_BRACKET_TYPES: &[&str] = &["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION"];
+
+fn bracket_type_name<T: std::fmt::Debug>(bracket_type: T) -> String {
+    format!("{bracket_type:?}").to_ascii_uppercase()
+}
+
+pub fn is_supported_bracket_type(bracket_type: &str) -> bool {
+    SUPPORTED_BRACKET_TYPES
+        .iter()
+        .any(|supported| *supported == bracket_type)
+}
+
+pub fn event_has_only_supported_bracket_types(event: &EventSnapshot) -> bool {
+    !event.phase_groups.is_empty()
+        && event
+            .phase_groups
+            .iter()
+            .all(|group| group.bracket_type.as_deref().is_some_and(is_supported_bracket_type))
+}
+
 #[derive(Debug, Clone)]
 pub struct EventSnapshotFetchProgress {
     pub phase: &'static str,
@@ -693,6 +713,7 @@ async fn query_tournament_snapshot(
                 .flatten()
                 .map(|group| PhaseGroupSnapshot {
                     phase_group_id: group.id.to_string(),
+                    bracket_type: group.bracket_type.map(bracket_type_name),
                     phase_id: group.phase.as_ref().map(|phase| phase.id.to_string()),
                     phase_name: group.phase.as_ref().and_then(|phase| phase.name.clone()),
                     phase_order: group.phase.as_ref().and_then(|phase| phase.phase_order),
@@ -966,6 +987,7 @@ pub async fn fetch_event_snapshot_by_slug(
                 .flatten()
                 .map(|group| PhaseGroupSnapshot {
                     phase_group_id: group.id.to_string(),
+                    bracket_type: group.bracket_type.map(bracket_type_name),
                     phase_id: group.phase.as_ref().map(|phase| phase.id.to_string()),
                     phase_name: group.phase.as_ref().and_then(|phase| phase.name.clone()),
                     phase_order: group.phase.as_ref().and_then(|phase| phase.phase_order),
@@ -1153,7 +1175,21 @@ pub async fn fetch_tournament_preview(
             event_id: event.id.to_string(),
             event_name: event.name.unwrap_or_else(|| "Unnamed event".to_owned()),
             event_slug: event.slug,
+            bracket_types: event
+                .phase_groups
+                .unwrap_or_default()
+                .into_iter()
+                .flatten()
+                .filter_map(|group| group.bracket_type.map(bracket_type_name))
+                .collect(),
             set_count: 0,
+        })
+        .filter(|event| {
+            !event.bracket_types.is_empty()
+                && event
+                    .bracket_types
+                    .iter()
+                    .all(|bracket_type| is_supported_bracket_type(bracket_type))
         })
         .collect::<Vec<_>>();
 

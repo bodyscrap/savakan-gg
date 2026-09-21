@@ -5822,6 +5822,31 @@ async fn preview_tournament(
     Ok(preview)
 }
 
+fn validate_event_bracket_types(
+    snapshot: &TournamentSnapshot,
+    event_id: &str,
+) -> Result<(), String> {
+    let event = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| "対象eventがスナップショットに含まれていません。".to_owned())?;
+
+    if startgg::event_has_only_supported_bracket_types(event) {
+        return Ok(());
+    }
+
+    let bracket_types = event
+        .phase_groups
+        .iter()
+        .map(|group| group.bracket_type.as_deref().unwrap_or("UNKNOWN"))
+        .collect::<Vec<_>>();
+    Err(format!(
+        "対象eventには未対応のbracketTypeが含まれています。対応形式: SINGLE_ELIMINATION / DOUBLE_ELIMINATION。取得値: {}",
+        bracket_types.join(", ")
+    ))
+}
+
 #[tauri::command]
 async fn create_event_snapshot(
     app: tauri::AppHandle,
@@ -5836,6 +5861,7 @@ async fn create_event_snapshot(
         input.per_page.unwrap_or(200),
     )
     .await?;
+    validate_event_bracket_types(&snapshot, &input.event_id)?;
     let event_alias = resolve_event_alias(input.event_alias.clone(), &snapshot, &input.event_id);
 
     storage::save_event_snapshot(&app, &snapshot, &input.event_id, event_alias)?;
@@ -5925,6 +5951,8 @@ async fn create_event_snapshot_by_slug(
     let event_id = target_event_id
         .or_else(|| snapshot.events.first().map(|event| event.event_id.clone()))
         .ok_or_else(|| "eventスナップショットにイベントが含まれていません。".to_owned())?;
+
+    validate_event_bracket_types(&snapshot, &event_id)?;
 
     let target_event_set_count = snapshot
         .events

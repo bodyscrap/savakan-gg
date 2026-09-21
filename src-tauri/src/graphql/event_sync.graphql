@@ -9,6 +9,7 @@ query EventSync($slug: String!, $page: Int!, $perPage: Int!) {
     }
     phaseGroups {
       id
+      bracketType
       displayIdentifier
       phase {
         id

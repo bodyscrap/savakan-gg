@@ -86,8 +86,22 @@ type SetEntrantSource {
 
 type PhaseGroup {
   id: GgID!
+  bracketType: BracketType
   displayIdentifier: String
   phase: Phase
+}
+
+enum BracketType {
+  SINGLE_ELIMINATION
+  DOUBLE_ELIMINATION
+  ROUND_ROBIN
+  SWISS
+  EXHIBITION
+  CUSTOM_SCHEDULE
+  MATCHMAKING
+  ELIMINATION_ROUNDS
+  RACE
+  CIRCUIT
 }
 
 type Phase {

@@ -762,6 +762,7 @@ type TournamentEventPreviewItem = {
   eventId: string;
   eventName: string;
   eventSlug: string | null;
+  bracketTypes: string[];
   setCount: number;
 };
 
@@ -2939,6 +2940,10 @@ function App() {
       try {
         const off = await listen<EventSnapshotProgress>(EVENT_SNAPSHOT_PROGRESS_EVENT, (event) => {
           if (!alive) {
+            return;
+          }
+          if (event.payload.phase === "completed") {
+            setCreateSnapshotProgress(null);
             return;
           }
           setCreateSnapshotProgress(event.payload);

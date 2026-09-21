@@ -8,6 +8,7 @@ query TournamentSync($slug: String!, $perPage: Int!) {
       name
       phaseGroups {
         id
+        bracketType
         displayIdentifier
         phase {
           id
