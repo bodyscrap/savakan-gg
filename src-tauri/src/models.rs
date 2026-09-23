@@ -297,6 +297,49 @@ pub struct PhaseGroupSnapshot {
     pub phase_name: Option<String>,
     pub phase_order: Option<i64>,
     pub display_identifier: Option<String>,
+    #[serde(default)]
+    pub progressions_out: Vec<PhaseGroupProgressionSnapshot>,
+    #[serde(default)]
+    pub seed_order: Vec<String>,
+    #[serde(default)]
+    pub seeds: Vec<PhaseGroupSeedSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhaseGroupSeedSnapshot {
+    pub seed_id: String,
+    #[serde(default)]
+    pub progression_id: Option<String>,
+    #[serde(default)]
+    pub seed_num: Option<i64>,
+    #[serde(default)]
+    pub placement: Option<i64>,
+    #[serde(default)]
+    pub origin_phase_order: Option<i64>,
+    #[serde(default)]
+    pub origin_phase_group_display_identifier: Option<String>,
+    #[serde(default)]
+    pub origin_placement: Option<i64>,
+    #[serde(default)]
+    pub origin_order: Option<i64>,
+    pub entrant_id: Option<String>,
+    pub entrant_name: Option<String>,
+    #[serde(default)]
+    pub placeholder_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhaseGroupProgressionSnapshot {
+    pub progression_id: String,
+    pub origin_order: Option<i64>,
+    pub origin_phase_id: Option<String>,
+    pub origin_phase_order: Option<i64>,
+    pub origin_phase_group_id: Option<String>,
+    pub origin_phase_group_display_identifier: Option<String>,
+    pub origin_placement: Option<i64>,
+    pub placeholder_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -319,9 +362,15 @@ pub struct SetSnapshot {
     pub is_intermediate: bool,
     pub state: i64,
     pub winner_id: Option<String>,
+    #[serde(default)]
+    pub winner_placement: Option<i64>,
+    #[serde(default)]
+    pub loser_placement: Option<i64>,
     pub entrant1_source: Option<SetEntrantSourceSnapshot>,
     pub entrant2_source: Option<SetEntrantSourceSnapshot>,
     pub winner_progression_seed_id: Option<String>,
+    #[serde(default)]
+    pub winner_progression_id: Option<String>,
     pub winner_progression_seed_num: Option<i64>,
     #[serde(default)]
     pub winner_progression_seed_placeholder_name: Option<String>,
@@ -333,7 +382,11 @@ pub struct SetSnapshot {
     pub winner_progression_origin_phase_order: Option<i64>,
     #[serde(default)]
     pub winner_progression_origin_placement: Option<i64>,
+    #[serde(default)]
+    pub winner_progression_origin_order: Option<i64>,
     pub loser_progression_seed_id: Option<String>,
+    #[serde(default)]
+    pub loser_progression_id: Option<String>,
     pub loser_progression_seed_num: Option<i64>,
     #[serde(default)]
     pub loser_progression_seed_placeholder_name: Option<String>,
@@ -345,6 +398,8 @@ pub struct SetSnapshot {
     pub loser_progression_origin_phase_order: Option<i64>,
     #[serde(default)]
     pub loser_progression_origin_placement: Option<i64>,
+    #[serde(default)]
+    pub loser_progression_origin_order: Option<i64>,
     pub slots: Vec<SetSlotSnapshot>,
 }
 
@@ -359,6 +414,12 @@ pub struct SetEntrantSourceSnapshot {
     pub condition_string: Option<String>,
     #[serde(default)]
     pub placeholder_name: Option<String>,
+    #[serde(default)]
+    pub group_seed_num: Option<i64>,
+    #[serde(default)]
+    pub seed_num: Option<i64>,
+    #[serde(default)]
+    pub placement: Option<i64>,
     #[serde(default)]
     pub origin_phase_group_id: Option<String>,
     #[serde(default)]
@@ -386,6 +447,8 @@ pub struct SetSlotSnapshot {
     pub seed_origin_phase_order: Option<i64>,
     #[serde(default)]
     pub seed_origin_placement: Option<i64>,
+    #[serde(default)]
+    pub seed_origin_order: Option<i64>,
     pub score: Option<f64>,
 }
 
@@ -397,8 +460,26 @@ pub struct BracketGraphSnapshot {
     pub slug: String,
     pub tournament_name: String,
     pub event: EventSnapshot,
+    #[serde(default)]
+    pub phase_group_seeds: Vec<PhaseGroupGraphSeedSnapshot>,
     pub edges: Vec<BracketGraphEdge>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhaseGroupGraphSeedSnapshot {
+    pub phase_group_id: String,
+    pub seed_id: String,
+    pub seed_num: Option<i64>,
+    pub origin_phase_order: Option<i64>,
+    pub origin_phase_group_display_identifier: Option<String>,
+    pub origin_placement: Option<i64>,
+    pub origin_order: Option<i64>,
+    pub entrant_id: Option<String>,
+    pub entrant_name: Option<String>,
+    #[serde(default)]
+    pub placeholder_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -408,6 +489,8 @@ pub struct BracketGraphEdge {
     pub to_set_id: String,
     pub target_slot_index: usize,
     pub relation: String,
+    #[serde(default)]
+    pub progression_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

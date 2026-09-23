@@ -11,10 +11,53 @@ query EventSync($slug: String!, $page: Int!, $perPage: Int!) {
       id
       bracketType
       displayIdentifier
+      progressionsOut {
+        id
+        originOrder
+        originPhase {
+          id
+          name
+          phaseOrder
+        }
+        originPhaseGroup {
+          id
+          displayIdentifier
+          phase {
+            id
+            name
+            phaseOrder
+          }
+        }
+        originPlacement
+        placeholderName
+      }
       phase {
         id
         name
         phaseOrder
+      }
+      seeds(query: { page: 1, perPage: 200 }) {
+        nodes {
+            id
+            seedNum
+            placement
+            placeholderName
+            progressionSource {
+              id
+              originOrder
+              originPhase {
+                phaseOrder
+              }
+              originPhaseGroup {
+                displayIdentifier
+              }
+              originPlacement
+            }
+            entrant {
+              id
+              name
+            }
+        }
       }
     }
     sets(page: $page, perPage: $perPage, sortType: STANDARD) {

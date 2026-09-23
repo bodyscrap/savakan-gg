@@ -9,6 +9,7 @@ scalar GgID
 type Query {
   tournament(slug: String!): Tournament
   set(id: ID!): Set
+  seed(id: ID): Seed
   event(slug: String!): Event
   currentUser: User
   tournaments(query: TournamentPaginationQuery): TournamentConnection
@@ -70,6 +71,8 @@ type Set {
   phaseGroup: PhaseGroup
   state: Int
   winnerId: GgID
+  wPlacement: Int
+  lPlacement: Int
   entrant1Source: SetEntrantSource
   entrant2Source: SetEntrantSource
   winnerProgressionSeed: Seed
@@ -89,6 +92,17 @@ type PhaseGroup {
   bracketType: BracketType
   displayIdentifier: String
   phase: Phase
+  progressionsOut: [Progression]
+  seeds(query: SeedPaginationQuery!, eventId: ID): SeedConnection
+}
+
+input SeedPaginationQuery {
+  page: Int
+  perPage: Int
+}
+
+type SeedConnection {
+  nodes: [Seed]
 }
 
 enum BracketType {
@@ -118,13 +132,16 @@ type SetSlot {
 
 type Seed {
   id: GgID!
+  entrant: Entrant
+  groupSeedNum: Int
   seedNum: Int
   placeholderName: String
+  placement: Int
   progressionSource: Progression
 }
 
 type Progression {
-  id: ID!
+  id: GgID!
   originOrder: Int
   originPhase: Phase
   originPhaseGroup: PhaseGroup

@@ -984,6 +984,324 @@ button:disabled {
   margin: 0;
 }
 
+.round-robin-board {
+  --bracket-scale: 1;
+  margin-top: 0.6rem;
+  display: grid;
+  gap: 0.8rem;
+  font-size: calc(0.92rem * var(--bracket-scale));
+}
+
+.round-robin-board-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  border-bottom: 1px solid #dbe3f0;
+  padding-bottom: 0.55rem;
+}
+
+.round-robin-board-header h3 {
+  margin: 0;
+}
+
+.round-robin-set-count {
+  color: var(--muted);
+  font-size: calc(0.82rem * var(--bracket-scale));
+  white-space: nowrap;
+}
+
+.round-robin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: calc(0.7rem * var(--bracket-scale));
+}
+
+.round-robin-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 0.85rem;
+}
+
+.round-robin-matrix-wrap {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  background: #ffffff;
+}
+
+.round-robin-matrix,
+.round-robin-standings table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+}
+
+.round-robin-matrix {
+  min-width: 720px;
+  table-layout: fixed;
+}
+
+.round-robin-matrix th,
+.round-robin-matrix td {
+  width: 116px;
+  height: 74px;
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.35rem;
+  text-align: center;
+}
+
+.round-robin-matrix thead th,
+.round-robin-matrix tbody th {
+  width: 140px;
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.round-robin-matrix thead th:last-child,
+.round-robin-matrix tbody td:last-child {
+  width: 98px;
+  background: #f8fafc;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.round-robin-row-summary {
+  display: table-cell;
+  text-align: center;
+  color: #334155;
+  font-weight: 700;
+}
+
+.round-robin-row-summary span {
+  display: block;
+  line-height: 1.35;
+}
+
+.round-robin-matrix thead th {
+  height: 46px;
+  vertical-align: bottom;
+}
+
+.round-robin-matrix thead th:first-child,
+.round-robin-matrix tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+.round-robin-matrix thead th:first-child {
+  z-index: 2;
+  vertical-align: middle;
+}
+
+.round-robin-matrix tr:last-child th,
+.round-robin-matrix tr:last-child td {
+  border-bottom: 0;
+}
+
+.round-robin-matrix th:last-child,
+.round-robin-matrix td:last-child {
+  border-right: 0;
+}
+
+.round-robin-cell.diagonal {
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
+.round-robin-cell.empty {
+  color: #cbd5e1;
+}
+
+.round-robin-match {
+  display: grid;
+  place-items: center;
+  gap: 0.12rem;
+  width: 100%;
+  height: 100%;
+  border: 1px solid #dbe3f0;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #0f172a;
+  cursor: pointer;
+  font: inherit;
+}
+
+.round-robin-match-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.round-robin-match-status .set-status-badge,
+.round-robin-match-status .set-live-badge {
+  font-size: 0.58rem;
+  padding: 0.04rem 0.28rem;
+}
+
+.round-robin-stream-button {
+  width: 100%;
+  margin-top: 0.2rem;
+  padding: 0.12rem 0.2rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #f8fafc;
+  color: #475569;
+  cursor: pointer;
+  font-size: 0.64rem;
+  line-height: 1.2;
+}
+
+.round-robin-stream-button:hover:not(:disabled),
+.round-robin-stream-button:focus-visible {
+  border-color: #60a5fa;
+  background: #eff6ff;
+  outline: 0;
+}
+
+.round-robin-stream-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.round-robin-match-win {
+  background: #dcfce7;
+  border-color: #86efac;
+}
+
+.round-robin-match-loss {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.round-robin-match:not(.round-robin-match-win):not(.round-robin-match-loss) {
+  background: #ffffff;
+}
+
+.round-robin-match:hover,
+.round-robin-match:focus-visible {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 2px #dbeafe;
+  outline: 0;
+}
+
+.round-robin-match-code,
+.round-robin-match-result {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.round-robin-match strong {
+  font-size: 0.92rem;
+}
+
+.round-robin-status {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+}
+
+.round-robin-status.status-confirmed {
+  background: #16a34a;
+}
+
+.round-robin-status.status-draft {
+  background: #f59e0b;
+}
+
+.round-robin-status.status-inprogress {
+  background: #2563eb;
+}
+
+.round-robin-standings {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--line);
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.round-robin-standings-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.7rem 0.75rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.round-robin-standings-head h4 {
+  margin: 0;
+}
+
+.round-robin-standings-head span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.round-robin-standings th,
+.round-robin-standings td {
+  padding: 0.5rem 0.45rem;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.round-robin-standings th:first-child,
+.round-robin-standings td:first-child,
+.round-robin-standings .round-robin-player-column {
+  text-align: left;
+}
+
+.round-robin-standings .round-robin-player-column {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.round-robin-standings tbody tr:last-child th,
+.round-robin-standings tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.round-robin-standings tbody tr.round-robin-qualified {
+  background: #f0fdf4;
+  box-shadow: inset 3px 0 0 #22c55e;
+}
+
+.round-robin-standings tbody tr.round-robin-qualified th,
+.round-robin-standings tbody tr.round-robin-qualified td {
+  border-bottom-color: #bbf7d0;
+}
+
+.round-robin-standings tbody tr.round-robin-qualified th:first-child {
+  color: #15803d;
+}
+
+.round-robin-set-card {
+  min-width: 0;
+}
+
+.round-robin-set-meta {
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+  font-size: calc(0.7rem * var(--bracket-scale));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .bracket-view-tools {
   display: inline-flex;
   align-items: center;
@@ -1754,6 +2072,10 @@ li {
 
   .tab-trigger {
     justify-content: center;
+  }
+
+  .round-robin-layout {
+    grid-template-columns: 1fr;
   }
 }
 

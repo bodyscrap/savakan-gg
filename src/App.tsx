@@ -12,6 +12,10 @@ type SetSlot = {
   entrantName: string;
   seedId: string | null;
   seedNum: number | null;
+  seedPlaceholderName?: string | null;
+  seedOriginPhaseOrder?: number | null;
+  seedOriginPhaseGroupDisplayIdentifier?: string | null;
+  seedOriginPlacement?: number | null;
   score: number | null;
 };
 
@@ -27,6 +31,16 @@ type SetSnapshot = {
   isIntermediate?: boolean;
   state: number;
   winnerId: string | null;
+  winnerProgressionSeedId?: string | null;
+  winnerProgressionSeedPlaceholderName?: string | null;
+  winnerProgressionOriginPhaseGroupDisplayIdentifier?: string | null;
+  winnerProgressionOriginPhaseOrder?: number | null;
+  winnerProgressionOriginPlacement?: number | null;
+  loserProgressionSeedId?: string | null;
+  loserProgressionSeedPlaceholderName?: string | null;
+  loserProgressionOriginPhaseGroupDisplayIdentifier?: string | null;
+  loserProgressionOriginPhaseOrder?: number | null;
+  loserProgressionOriginPlacement?: number | null;
   entrant1Source: SetEntrantSource | null;
   entrant2Source: SetEntrantSource | null;
   slots: SetSlot[];
@@ -39,6 +53,12 @@ type SetEntrantSource = {
   condition: string | null;
   conditionString: string | null;
   placeholderName?: string | null;
+  groupSeedNum?: number | null;
+  seedNum?: number | null;
+  placement?: number | null;
+  originPhaseOrder?: number | null;
+  originPhaseGroupDisplayIdentifier?: string | null;
+  originPlacement?: number | null;
 };
 
 type RoundColumn = {
@@ -74,11 +94,48 @@ type PhasePoolGroup = {
   key: string;
   phaseName: string;
   phaseGroupName: string;
+  bracketType: string | null;
   phaseOrder: number | null;
   phaseGroupDisplayIdentifier: string | null;
+  progressionsOut: PhaseGroupProgressionSnapshot[];
+  seedOrder: string[];
+  seeds: PhaseGroupSeedSnapshot[];
   sets: SetSnapshot[];
   columns: RoundColumn[];
 };
+
+type RoundRobinStanding = {
+  entrantId: string;
+  entrantName: string;
+  isPlaceholder: boolean;
+  wins: number;
+  losses: number;
+  gameWins: number;
+  gameLosses: number;
+  h2hPoints: number;
+  qualified: boolean;
+};
+
+type RoundRobinTieBreakRule = "total_sets_won" | "game_win_percentage" | "head_to_head";
+
+type RoundRobinBoardData = {
+  entrants: string[];
+  entrantNames: Map<string, string>;
+  entrantIdsByColumnKey: Map<string, string | null>;
+  entrantSeedIds: Map<string, string>;
+  entrantSeedNumbers: Map<string, number>;
+  sourceDiagnostics: string[];
+  setsByPair: Map<string, SetSnapshot>;
+  standings: RoundRobinStanding[];
+  qualifyingCount: number;
+  tieBreakRules: RoundRobinTieBreakRule[];
+};
+
+const DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES: RoundRobinTieBreakRule[] = [
+  "total_sets_won",
+  "game_win_percentage",
+  "head_to_head",
+];
 
 const BRACKET_TOP_PADDING = 10;
 const BRACKET_BOTTOM_PADDING = 16;
@@ -672,6 +729,33 @@ type PhaseGroupSnapshot = {
   phaseName: string | null;
   phaseOrder: number | null;
   displayIdentifier: string | null;
+  bracketType: string | null;
+  progressionsOut?: PhaseGroupProgressionSnapshot[];
+  seedOrder?: string[];
+  seeds?: PhaseGroupSeedSnapshot[];
+};
+
+type PhaseGroupSeedSnapshot = {
+  seedId: string;
+  seedNum?: number | null;
+  originPhaseOrder?: number | null;
+  originPhaseGroupDisplayIdentifier?: string | null;
+  originPlacement?: number | null;
+  originOrder?: number | null;
+  entrantId: string | null;
+  entrantName: string | null;
+  placeholderName?: string | null;
+};
+
+type PhaseGroupProgressionSnapshot = {
+  progressionId: string;
+  originOrder: number | null;
+  originPhaseId: string | null;
+  originPhaseOrder: number | null;
+  originPhaseGroupId: string | null;
+  originPhaseGroupDisplayIdentifier: string | null;
+  originPlacement: number | null;
+  placeholderName: string | null;
 };
 
 type TournamentSnapshot = {
@@ -2082,6 +2166,62 @@ function isLosersBracketSet(set: SetSnapshot): boolean {
 
   const roundText = set.fullRoundText.toLowerCase();
   return roundText.includes("losers") || roundText.includes("loser") || roundText.includes("敗者");
+}
+
+function isRoundRobinBracketType(bracketType: string | null): boolean {
+  return bracketType?.trim().toUpperCase() === "ROUND_ROBIN";
+}
+
+function roundRobinPairKey(leftEntrantId: string, rightEntrantId: string): string {
+  return [leftEntrantId, rightEntrantId].sort((left, right) => left.localeCompare(right, "ja")).join("::");
+}
+
+function roundRobinPlaceholderId(slot: SetSlot, source?: SetEntrantSource | null): string {
+  const sourceIdentity = source?.typeId
+    ? `${source.typeId}:${source.condition?.trim().toLowerCase() || "source"}`
+    : null;
+  const identity = slot.seedId
+    || sourceIdentity
+    || slot.seedPlaceholderName?.trim()
+    || source?.placeholderName?.trim()
+    || slot.entrantName
+    || "unknown";
+  return `placeholder:${identity}`;
+}
+
+function parseRoundRobinGameScore(rawScore: string | undefined): number | null {
+  if (!rawScore || rawScore === "DQ" || rawScore === "✓") {
+    return null;
+  }
+
+  const score = Number(rawScore);
+  return Number.isInteger(score) && score >= 0 ? score : null;
+}
+
+function roundRobinGameWinPercentage(standing: RoundRobinStanding): number {
+  const totalGames = standing.gameWins + standing.gameLosses;
+  return totalGames > 0 ? standing.gameWins / totalGames : 0;
+}
+
+function roundRobinTieBreakRuleLabel(rule: RoundRobinTieBreakRule): string {
+  if (rule === "total_sets_won") {
+    return "Total sets won";
+  }
+  if (rule === "game_win_percentage") {
+    return "Game win %";
+  }
+  return "Head-to-head";
+}
+
+function roundRobinTieBreakRuleValue(standing: RoundRobinStanding, rule: RoundRobinTieBreakRule): string {
+  if (rule === "total_sets_won") {
+    return `${standing.wins}-${standing.losses}`;
+  }
+  if (rule === "game_win_percentage") {
+    const totalGames = standing.gameWins + standing.gameLosses;
+    return totalGames > 0 ? `${(roundRobinGameWinPercentage(standing) * 100).toFixed(1)}%` : "-";
+  }
+  return String(standing.h2hPoints);
 }
 
 function toIntegerScore(value: number | null): number | null {
@@ -7393,8 +7533,12 @@ function App() {
       key: string;
       phaseName: string;
       phaseGroupName: string;
+      bracketType: string | null;
       phaseOrder: number | null;
       phaseGroupDisplayIdentifier: string | null;
+      progressionsOut: PhaseGroupProgressionSnapshot[];
+      seedOrder: string[];
+      seeds: PhaseGroupSeedSnapshot[];
       sets: SetSnapshot[];
     }>();
 
@@ -7403,6 +7547,17 @@ function App() {
       const phaseGroupName =
         set.phaseGroupName && set.phaseGroupName.trim() !== "" ? set.phaseGroupName : "Pool 未設定";
       const phaseGroupDisplayIdentifier = set.phaseGroupDisplayIdentifier?.trim() || null;
+      const phaseGroupMetadata = selectedEvent.phaseGroups?.find((group) =>
+        group.phaseOrder === set.phaseOrder
+        && (group.displayIdentifier?.trim() || null) === phaseGroupDisplayIdentifier,
+      ) ?? selectedEvent.phaseGroups?.find((group) =>
+        group.phaseName === set.phaseName
+        && (group.displayIdentifier?.trim() || null) === phaseGroupDisplayIdentifier,
+      );
+      const bracketType = phaseGroupMetadata?.bracketType?.trim().toUpperCase() || null;
+      const progressionsOut = phaseGroupMetadata?.progressionsOut ?? [];
+      const seedOrder = phaseGroupMetadata?.seedOrder ?? [];
+      const seeds = phaseGroupMetadata?.seeds ?? [];
       const hasStablePhasePoolIdentity = set.phaseOrder !== null && phaseGroupDisplayIdentifier !== null;
       const groupKey = hasStablePhasePoolIdentity
         ? `order:${set.phaseOrder}::pool:${phaseGroupDisplayIdentifier}`
@@ -7411,6 +7566,18 @@ function App() {
 
       if (found) {
         found.sets.push(set);
+        if (found.bracketType === null && bracketType !== null) {
+          found.bracketType = bracketType;
+        }
+        if (found.progressionsOut.length === 0 && progressionsOut.length > 0) {
+          found.progressionsOut = progressionsOut;
+        }
+        if (found.seedOrder.length === 0 && seedOrder.length > 0) {
+          found.seedOrder = seedOrder;
+        }
+        if (found.seeds.length === 0 && seeds.length > 0) {
+          found.seeds = seeds;
+        }
         continue;
       }
 
@@ -7418,8 +7585,12 @@ function App() {
         key: groupKey,
         phaseName,
         phaseGroupName,
+        bracketType,
         phaseOrder: set.phaseOrder,
         phaseGroupDisplayIdentifier,
+        progressionsOut,
+        seedOrder,
+        seeds,
         sets: [set],
       });
     }
@@ -7442,8 +7613,12 @@ function App() {
         key: group.key,
         phaseName: group.phaseName,
         phaseGroupName: group.phaseGroupName,
+        bracketType: group.bracketType,
         phaseOrder: group.phaseOrder,
         phaseGroupDisplayIdentifier: group.phaseGroupDisplayIdentifier,
+        progressionsOut: group.progressionsOut,
+        seedOrder: group.seedOrder,
+        seeds: group.seeds,
         sets: group.sets,
         columns: buildRoundColumns(group.sets),
       }));
@@ -7944,6 +8119,647 @@ function App() {
     }
     return map;
   }, [pendingSetResults]);
+
+  const roundRobinBoardData = useMemo<RoundRobinBoardData>(() => {
+    const entrantNames = new Map<string, string>();
+    const entrantSeedIds = new Map<string, string>();
+    const sourceDiagnostics: string[] = [];
+    const isLaterPhase = (selectedPhasePoolGroup?.phaseOrder ?? 1) > 1;
+    const entrantSeedNumbers = new Map<string, number>();
+    const entrantOriginPlacements = new Map<string, number>();
+    const entrantOriginOrders = new Map<string, number>();
+    const entrantOriginDisplayIdentifiers = new Map<string, string>();
+    const originDisplayIdentifiers = new Set<string>();
+    const setsByPair = new Map<string, SetSnapshot>();
+    const standingByEntrantId = new Map<string, RoundRobinStanding>();
+    const headToHeadWins = new Map<string, Map<string, number>>();
+    const setById = new Map((selectedEvent?.sets ?? []).map((set) => [set.setId, set]));
+    const phaseGroupSeedById = new Map(
+      (selectedPhasePoolGroup?.seeds ?? [])
+        .filter((seed) => Boolean(seed.seedId))
+        .map((seed) => [seed.seedId, seed]),
+    );
+    const phaseGroupSeedOrder = selectedPhasePoolGroup?.seeds.length
+      ? selectedPhasePoolGroup.seeds.map((seed) => seed.seedId)
+      : selectedPhasePoolGroup?.seedOrder ?? [];
+    const seedSlotById = new Map<string, SetSlot>();
+    for (const set of selectedEvent?.sets ?? []) {
+      for (const slot of set.slots) {
+        if (!slot.seedId) {
+          continue;
+        }
+        const current = seedSlotById.get(slot.seedId);
+        const slotHasOrigin = slot.seedOriginPlacement !== null
+          && slot.seedOriginPlacement !== undefined
+          && Boolean(slot.seedOriginPhaseGroupDisplayIdentifier?.trim());
+        const currentHasOrigin = current?.seedOriginPlacement !== null
+          && current?.seedOriginPlacement !== undefined
+          && Boolean(current?.seedOriginPhaseGroupDisplayIdentifier?.trim());
+        if (!current || (slotHasOrigin && !currentHasOrigin)) {
+          seedSlotById.set(slot.seedId, slot);
+        }
+      }
+    }
+
+    const fixedEntrants: string[] = [];
+    const entrantIdsByColumnKey = new Map<string, string | null>();
+    for (const seedId of phaseGroupSeedOrder) {
+      const seed = phaseGroupSeedById.get(seedId);
+      const columnKey = `seed:${seedId}`;
+      fixedEntrants.push(columnKey);
+      entrantIdsByColumnKey.set(columnKey, seed?.entrantId ?? null);
+      if (seed?.entrantId && seed.entrantName?.trim()) {
+        entrantNames.set(columnKey, seed.entrantName.trim());
+      } else {
+        entrantNames.set(
+          columnKey,
+          seed?.placeholderName?.trim()
+            || seedSlotById.get(seedId)?.seedPlaceholderName?.trim()
+            || seed?.entrantName?.trim()
+            || "TBD",
+        );
+      }
+    }
+
+    type ResolvedRoundRobinSlot = {
+      entrantId: string;
+      entrantName: string;
+      isPlaceholder: boolean;
+      seedId?: string | null;
+      seedNum?: number | null;
+      originPlacement?: number | null;
+      originDisplayIdentifier?: string | null;
+      originOrder?: number | null;
+    };
+
+    const findOriginOrder = (
+      originPhaseOrder: number | null | undefined,
+      originDisplayIdentifier: string | null | undefined,
+      originPlacement: number | null | undefined,
+    ): number | null => {
+      if (originPlacement === null || originPlacement === undefined) {
+        return null;
+      }
+      const sourceGroup = (selectedEvent?.phaseGroups ?? []).find((group) =>
+        group.phaseOrder === originPhaseOrder
+        && (group.displayIdentifier?.trim() || null) === (originDisplayIdentifier?.trim() || null),
+      );
+      return sourceGroup?.progressionsOut
+        ?.filter((progression) => progression.originPlacement === originPlacement)
+        .map((progression) => progression.originOrder)
+        .filter((order): order is number => order !== null)
+        .sort((left, right) => left - right)[0] ?? null;
+    };
+
+    const progressionSeedById = new Map<string, ResolvedRoundRobinSlot>();
+    for (const set of selectedEvent?.sets ?? []) {
+      const progressionSeeds = [
+        {
+          seedId: set.winnerProgressionSeedId,
+          placeholderName: set.winnerProgressionSeedPlaceholderName,
+          originDisplayIdentifier: set.winnerProgressionOriginPhaseGroupDisplayIdentifier,
+          originPhaseOrder: set.winnerProgressionOriginPhaseOrder,
+          originPlacement: set.winnerProgressionOriginPlacement,
+        },
+        {
+          seedId: set.loserProgressionSeedId,
+          placeholderName: set.loserProgressionSeedPlaceholderName,
+          originDisplayIdentifier: set.loserProgressionOriginPhaseGroupDisplayIdentifier,
+          originPhaseOrder: set.loserProgressionOriginPhaseOrder,
+          originPlacement: set.loserProgressionOriginPlacement,
+        },
+      ];
+      for (const progressionSeed of progressionSeeds) {
+        if (!progressionSeed.seedId || progressionSeedById.has(progressionSeed.seedId)) {
+          continue;
+        }
+        progressionSeedById.set(progressionSeed.seedId, {
+          entrantId: `placeholder:${progressionSeed.seedId}`,
+          entrantName: progressionSeed.placeholderName?.trim() || progressionSeed.seedId,
+          isPlaceholder: true,
+          seedId: progressionSeed.seedId,
+          originPlacement: progressionSeed.originPlacement,
+          originDisplayIdentifier: progressionSeed.originDisplayIdentifier,
+        });
+      }
+    }
+
+    const resolveSourceSlot = (
+      source: SetEntrantSource | null | undefined,
+      visited: Set<string>,
+    ): ResolvedRoundRobinSlot | null => {
+      if (!source) {
+        return null;
+      }
+
+      if (source.sourceType?.trim().toLowerCase() === "seed" && source.typeId) {
+        const phaseGroupSeed = phaseGroupSeedById.get(source.typeId);
+        if (phaseGroupSeed?.entrantId) {
+          return {
+            entrantId: phaseGroupSeed.entrantId,
+            entrantName: phaseGroupSeed.entrantName?.trim() || phaseGroupSeed.entrantId,
+            isPlaceholder: false,
+            seedId: phaseGroupSeed.seedId,
+            seedNum: source.seedNum ?? phaseGroupSeed.seedNum,
+            originPlacement: source.placement ?? phaseGroupSeed.originPlacement,
+            originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
+              ?? phaseGroupSeed.originPhaseGroupDisplayIdentifier,
+            originOrder: findOriginOrder(
+              source.originPhaseOrder ?? phaseGroupSeed.originPhaseOrder,
+              source.originPhaseGroupDisplayIdentifier
+                ?? phaseGroupSeed.originPhaseGroupDisplayIdentifier,
+              source.placement ?? phaseGroupSeed.originPlacement,
+            ),
+          };
+        }
+        const seedSlot = seedSlotById.get(source.typeId);
+        if (seedSlot) {
+          const placeholderName = source.placeholderName?.trim()
+            || seedSlot.seedPlaceholderName?.trim()
+            || source.conditionString?.trim();
+          if (seedSlot.entrantId) {
+            return {
+              entrantId: seedSlot.entrantId,
+              entrantName: seedSlot.entrantName,
+              isPlaceholder: false,
+              seedId: seedSlot.seedId,
+              seedNum: source.seedNum ?? seedSlot.seedNum,
+              originPlacement: source.placement ?? seedSlot.seedOriginPlacement,
+              originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
+                ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
+              originOrder: findOriginOrder(
+                source.originPhaseOrder ?? seedSlot.seedOriginPhaseOrder,
+                source.originPhaseGroupDisplayIdentifier ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
+                source.placement ?? seedSlot.seedOriginPlacement,
+              ),
+            };
+          }
+          if (placeholderName) {
+            return {
+              entrantId: roundRobinPlaceholderId(seedSlot, source),
+              entrantName: placeholderName,
+              isPlaceholder: true,
+              seedId: seedSlot.seedId,
+              seedNum: source.seedNum ?? seedSlot.seedNum,
+              originPlacement: source.placement ?? seedSlot.seedOriginPlacement,
+              originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
+                ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
+              originOrder: findOriginOrder(
+                source.originPhaseOrder ?? seedSlot.seedOriginPhaseOrder,
+                source.originPhaseGroupDisplayIdentifier ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
+                source.placement ?? seedSlot.seedOriginPlacement,
+              ),
+            };
+          }
+        }
+        const progressionSeed = progressionSeedById.get(source.typeId);
+        if (progressionSeed?.entrantName && progressionSeed.entrantName !== progressionSeed.seedId) {
+          return {
+            ...progressionSeed,
+            entrantName: source.placeholderName?.trim() || progressionSeed.entrantName,
+            seedNum: source.seedNum ?? progressionSeed.seedNum,
+            originPlacement: source.originPlacement ?? progressionSeed.originPlacement,
+            originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
+              ?? progressionSeed.originDisplayIdentifier,
+            originOrder: findOriginOrder(
+              source.originPhaseOrder,
+              source.originPhaseGroupDisplayIdentifier ?? progressionSeed.originDisplayIdentifier,
+              source.originPlacement ?? progressionSeed.originPlacement,
+            ),
+          };
+        }
+      }
+
+      const sourceSetId = source.resolvedSetId ?? source.typeId;
+      const sourceSet = sourceSetId ? setById.get(sourceSetId) : undefined;
+      if (!sourceSet || visited.has(sourceSet.setId)) {
+        const placeholderName = source.placeholderName?.trim() || source.conditionString?.trim();
+        return placeholderName
+          ? {
+            entrantId: roundRobinPlaceholderId({
+              entrantId: null,
+              entrantName: placeholderName,
+              seedId: null,
+              seedNum: null,
+              seedPlaceholderName: null,
+              score: null,
+            }, source),
+            entrantName: placeholderName,
+            isPlaceholder: true,
+          }
+          : null;
+      }
+
+      const nextVisited = new Set(visited);
+      nextVisited.add(sourceSet.setId);
+      const condition = source.condition?.trim().toLowerCase();
+      if ((condition === "winner" || condition === "loser") && sourceSet.winnerId) {
+        const candidate = sourceSet.slots.find((slot) => {
+          if (!slot.entrantId) {
+            return false;
+          }
+          return condition === "winner"
+            ? slot.entrantId === sourceSet.winnerId
+            : slot.entrantId !== sourceSet.winnerId;
+        });
+        if (candidate?.entrantId) {
+          return {
+            entrantId: candidate.entrantId,
+            entrantName: candidate.entrantName,
+            isPlaceholder: false,
+            seedId: candidate.seedId,
+            seedNum: candidate.seedNum,
+            originPlacement: candidate.seedOriginPlacement,
+            originDisplayIdentifier: candidate.seedOriginPhaseGroupDisplayIdentifier,
+            originOrder: findOriginOrder(
+              source.originPhaseOrder,
+              source.originPhaseGroupDisplayIdentifier ?? candidate.seedOriginPhaseGroupDisplayIdentifier,
+              source.originPlacement ?? candidate.seedOriginPlacement,
+            ),
+          };
+        }
+      }
+
+      const nestedSources = [sourceSet.entrant1Source, sourceSet.entrant2Source];
+      return nestedSources
+        .map((nestedSource) => resolveSourceSlot(nestedSource, nextVisited))
+        .find((resolved): resolved is ResolvedRoundRobinSlot => resolved !== null)
+        ?? (source.placeholderName?.trim()
+          ? {
+            entrantId: roundRobinPlaceholderId({
+              entrantId: null,
+              entrantName: source.placeholderName.trim(),
+              seedId: null,
+              seedNum: null,
+              seedPlaceholderName: source.placeholderName.trim(),
+              score: null,
+            }, source),
+            entrantName: source.placeholderName.trim(),
+            isPlaceholder: true,
+          }
+          : null);
+    };
+
+    for (const set of selectedPhasePoolGroup?.sets ?? []) {
+      const entrants = set.slots.map((slot, slotIndex) => {
+        const source = slotIndex === 0 ? set.entrant1Source : set.entrant2Source;
+        if (isLaterPhase) {
+          const sourceSeedSlot = source?.sourceType?.trim().toLowerCase() === "seed" && source.typeId
+            ? seedSlotById.get(source.typeId)
+            : undefined;
+          const sourceProgressionSeed = source?.sourceType?.trim().toLowerCase() === "seed" && source.typeId
+            ? progressionSeedById.get(source.typeId)
+            : undefined;
+          sourceDiagnostics.push([
+            `${set.setId}[${slotIndex + 1}]`,
+            `rawName=${slot.entrantName || ""}`,
+            `entrantId=${slot.entrantId || ""}`,
+            `seedId=${slot.seedId || ""}`,
+            `placeholder=${slot.seedPlaceholderName || ""}`,
+            `sourceType=${source?.sourceType || ""}`,
+            `sourceTypeId=${source?.typeId || ""}`,
+            `sourceGroupSeedNum=${source?.groupSeedNum ?? ""}`,
+            `sourceSeedNum=${source?.seedNum ?? ""}`,
+            `sourcePlacement=${source?.placement ?? ""}`,
+            `seedLookupPlaceholder=${sourceSeedSlot?.seedPlaceholderName || ""}`,
+            `progressionSeedPlaceholder=${sourceProgressionSeed?.entrantName || ""}`,
+            `sourcePlaceholder=${source?.placeholderName || ""}`,
+            `condition=${source?.conditionString || ""}`,
+          ].join(" | "));
+        }
+        const resolved = slot.entrantId
+          ? {
+            entrantId: slot.entrantId,
+            entrantName: slot.entrantName,
+            isPlaceholder: false,
+            seedId: slot.seedId,
+            seedNum: slot.seedNum,
+            originPlacement: slot.seedOriginPlacement,
+            originDisplayIdentifier: slot.seedOriginPhaseGroupDisplayIdentifier,
+            originOrder: findOriginOrder(
+              source?.originPhaseOrder ?? null,
+              source?.originPhaseGroupDisplayIdentifier ?? slot.seedOriginPhaseGroupDisplayIdentifier,
+              source?.originPlacement ?? slot.seedOriginPlacement,
+            ),
+          }
+          : isLaterPhase
+            ? resolveSourceSlot(source, new Set([set.setId]))
+              ?? (slot.seedPlaceholderName?.trim()
+                ? {
+              entrantId: roundRobinPlaceholderId(slot, source),
+              entrantName: slot.seedPlaceholderName.trim(),
+              isPlaceholder: true,
+              seedId: slot.seedId,
+              seedNum: slot.seedNum,
+              originPlacement: slot.seedOriginPlacement,
+              originDisplayIdentifier: slot.seedOriginPhaseGroupDisplayIdentifier,
+                }
+              : null)
+            : null;
+        const entrantId = resolved?.entrantId ?? roundRobinPlaceholderId(slot, source);
+        const sourcePlaceholderName = source?.placeholderName?.trim()
+          || source?.conditionString?.trim();
+        const entrantName = resolved && !resolved.isPlaceholder
+          ? resolved.entrantName
+          : sourcePlaceholderName
+            ?? resolved?.entrantName
+          ?? slot.seedPlaceholderName?.trim()
+          ?? sourcePlaceholderName
+          ?? slot.entrantName
+          ?? "TBD";
+        return {
+          slot,
+          entrantId,
+          entrantName,
+          isPlaceholder: resolved?.isPlaceholder ?? slot.entrantId === null,
+          seedId: resolved?.seedId ?? slot.seedId,
+          seedNum: source?.seedNum ?? resolved?.seedNum,
+          originPlacement: source?.placement ?? resolved?.originPlacement,
+          originDisplayIdentifier: source?.originPhaseGroupDisplayIdentifier
+            ?? resolved?.originDisplayIdentifier,
+          originOrder: resolved?.originOrder ?? findOriginOrder(
+            source?.originPhaseOrder ?? null,
+            source?.originPhaseGroupDisplayIdentifier ?? slot.seedOriginPhaseGroupDisplayIdentifier,
+            source?.originPlacement ?? slot.seedOriginPlacement,
+          ),
+        };
+      });
+      entrants.forEach(({ slot, entrantId, entrantName, isPlaceholder, seedId, seedNum, originPlacement, originDisplayIdentifier, originOrder }) => {
+        entrantNames.set(entrantId, entrantName);
+        const effectiveSeedId = seedId ?? slot.seedId;
+        if (effectiveSeedId) {
+          entrantSeedIds.set(entrantId, effectiveSeedId);
+        }
+        const effectiveSeedNum = seedNum ?? slot.seedNum;
+        const effectiveOriginPlacement = originPlacement ?? slot.seedOriginPlacement;
+        const effectiveOriginDisplayIdentifier = originDisplayIdentifier?.trim()
+          || slot.seedOriginPhaseGroupDisplayIdentifier?.trim();
+        if (effectiveSeedNum !== null && effectiveSeedNum !== undefined) {
+          const currentSeedNumber = entrantSeedNumbers.get(entrantId);
+          if (currentSeedNumber === undefined || effectiveSeedNum < currentSeedNumber) {
+            entrantSeedNumbers.set(entrantId, effectiveSeedNum);
+          }
+        }
+        if (effectiveOriginPlacement !== null && effectiveOriginPlacement !== undefined) {
+          const currentPlacement = entrantOriginPlacements.get(entrantId);
+          if (currentPlacement === undefined || effectiveOriginPlacement < currentPlacement) {
+            entrantOriginPlacements.set(entrantId, effectiveOriginPlacement);
+          }
+        }
+        if (originOrder !== null && originOrder !== undefined) {
+          const currentOrder = entrantOriginOrders.get(entrantId);
+          if (currentOrder === undefined || originOrder < currentOrder) {
+            entrantOriginOrders.set(entrantId, originOrder);
+          }
+        }
+        if (effectiveOriginDisplayIdentifier) {
+          originDisplayIdentifiers.add(effectiveOriginDisplayIdentifier);
+          const currentPlacement = entrantOriginPlacements.get(entrantId);
+          const currentDisplayIdentifier = entrantOriginDisplayIdentifiers.get(entrantId);
+          if (currentDisplayIdentifier === undefined
+            || (effectiveOriginPlacement !== null
+              && effectiveOriginPlacement !== undefined
+              && currentPlacement === effectiveOriginPlacement)) {
+            entrantOriginDisplayIdentifiers.set(entrantId, effectiveOriginDisplayIdentifier);
+          }
+        }
+        if (!standingByEntrantId.has(entrantId)) {
+          standingByEntrantId.set(entrantId, {
+            entrantId,
+            entrantName,
+            isPlaceholder,
+            wins: 0,
+            losses: 0,
+            gameWins: 0,
+            gameLosses: 0,
+            h2hPoints: 0,
+            qualified: false,
+          });
+        }
+      });
+
+      if (entrants.length !== 2 || entrants[0].entrantId === entrants[1].entrantId) {
+        continue;
+      }
+
+      const firstColumnKey = entrants[0].seedId
+        ? `seed:${entrants[0].seedId}`
+        : entrants[0].entrantId;
+      const secondColumnKey = entrants[1].seedId
+        ? `seed:${entrants[1].seedId}`
+        : entrants[1].entrantId;
+      setsByPair.set(roundRobinPairKey(firstColumnKey, secondColumnKey), set);
+      const setDisplay = getSetScoresForDisplay(set);
+      const winnerId = setDisplay.winnerId ?? set.winnerId;
+      if (!winnerId || !standingByEntrantId.has(winnerId)) {
+        continue;
+      }
+
+      const loser = entrants.find((entrant) => entrant.entrantId !== winnerId);
+      const winner = entrants.find((entrant) => entrant.entrantId === winnerId);
+      if (!loser || !winner) {
+        continue;
+      }
+
+      const winnerStanding = standingByEntrantId.get(winner.entrantId);
+      const loserStanding = standingByEntrantId.get(loser.entrantId);
+      if (!winnerStanding || !loserStanding) {
+        continue;
+      }
+
+      winnerStanding.wins += 1;
+      loserStanding.losses += 1;
+      const winnerHeadToHead = headToHeadWins.get(winner.entrantId) ?? new Map<string, number>();
+      winnerHeadToHead.set(loser.entrantId, (winnerHeadToHead.get(loser.entrantId) ?? 0) + 1);
+      headToHeadWins.set(winner.entrantId, winnerHeadToHead);
+      const winnerSlot = winner.slot;
+      const loserSlot = loser.slot;
+      const winnerScore = parseRoundRobinGameScore(setDisplay.scores[winner.entrantId])
+        ?? winnerSlot?.score
+        ?? null;
+      const loserScore = parseRoundRobinGameScore(setDisplay.scores[loser.entrantId])
+        ?? loserSlot?.score
+        ?? null;
+      if (winnerScore !== null && loserScore !== null) {
+        winnerStanding.gameWins += winnerScore;
+        winnerStanding.gameLosses += loserScore;
+        loserStanding.gameWins += loserScore;
+        loserStanding.gameLosses += winnerScore;
+      }
+    }
+
+    const standingsBeforeTieBreak = [...standingByEntrantId.values()];
+    const standingsBySetWins = new Map<number, RoundRobinStanding[]>();
+    for (const standing of standingsBeforeTieBreak) {
+      const tied = standingsBySetWins.get(standing.wins) ?? [];
+      tied.push(standing);
+      standingsBySetWins.set(standing.wins, tied);
+    }
+    for (const tied of standingsBySetWins.values()) {
+      if (tied.length < 2) {
+        continue;
+      }
+      const tiedIds = new Set(tied.map((standing) => standing.entrantId));
+      for (const standing of tied) {
+        standing.h2hPoints = [...(headToHeadWins.get(standing.entrantId)?.entries() ?? [])]
+          .filter(([opponentId]) => tiedIds.has(opponentId))
+          .reduce((points, [, wins]) => points + wins, 0);
+      }
+    }
+
+    const currentPhaseOrder = selectedPhasePoolGroup?.phaseOrder ?? null;
+    const nextPhaseOrder = currentPhaseOrder === null
+      ? null
+      : (selectedEvent?.phaseGroups ?? [])
+        .map((group) => group.phaseOrder)
+        .filter((order): order is number => order !== null && order > currentPhaseOrder)
+        .sort((left, right) => left - right)[0] ?? null;
+    const advancingPlacements = new Set<number>();
+    if (currentPhaseOrder !== null && nextPhaseOrder !== null) {
+      for (const set of selectedEvent?.sets ?? []) {
+        if (set.phaseOrder !== nextPhaseOrder) {
+          continue;
+        }
+        for (const slot of set.slots) {
+          const samePool = slot.seedOriginPhaseGroupDisplayIdentifier === selectedPhasePoolGroup?.phaseGroupDisplayIdentifier;
+          if (slot.seedOriginPhaseOrder === currentPhaseOrder && samePool && slot.seedOriginPlacement !== null && slot.seedOriginPlacement !== undefined) {
+            advancingPlacements.add(slot.seedOriginPlacement);
+          }
+        }
+      }
+    }
+    const configuredAdvancingPlacements = new Set(
+      (selectedPhasePoolGroup?.progressionsOut ?? [])
+        .map((progression) => progression.originPlacement)
+        .filter((placement): placement is number => placement !== null),
+    );
+    const qualifyingCount = configuredAdvancingPlacements.size > 0
+      ? configuredAdvancingPlacements.size
+      : advancingPlacements.size;
+    const tieBreakRules = DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES.slice(0, 3);
+    const seedOrderById = new Map<string, number>(
+      (selectedPhasePoolGroup?.seedOrder ?? []).map((seedId: string, index: number) => [seedId, index]),
+    );
+    const entrantSeedOrder = (entrantId: string): number | undefined => {
+      const seedId = entrantSeedIds.get(entrantId);
+      return seedId === undefined ? undefined : seedOrderById.get(seedId);
+    };
+    const orderedOriginDisplayIdentifiers = [...originDisplayIdentifiers].sort((left, right) =>
+      left.localeCompare(right, "ja"),
+    );
+    const originDisplayIdentifierOrder = new Map(
+      orderedOriginDisplayIdentifiers.map((displayIdentifier, index) => [displayIdentifier, index]),
+    );
+    const originGroupCount = orderedOriginDisplayIdentifiers.length;
+    const entrantAxisOrder = (entrantId: string): number => {
+      const placement = entrantOriginPlacements.get(entrantId);
+      const groupIdentifier = entrantOriginDisplayIdentifiers.get(entrantId);
+      const groupOrder = groupIdentifier === undefined
+        ? originGroupCount
+        : originDisplayIdentifierOrder.get(groupIdentifier) ?? originGroupCount;
+      if (placement === undefined) {
+        return Number.MAX_SAFE_INTEGER;
+      }
+      if (originGroupCount === 0 || groupOrder === originGroupCount) {
+        return placement * (originGroupCount + 1);
+      }
+
+      const groupOrderInPlacement = placement % 2 === 0
+        ? originGroupCount - 1 - groupOrder
+        : groupOrder;
+      return (placement - 1) * originGroupCount + groupOrderInPlacement;
+    };
+    const sortedEntrants = [...standingByEntrantId.keys()].sort((leftEntrantId, rightEntrantId) => {
+      const leftSeedOrder = entrantSeedOrder(leftEntrantId);
+      const rightSeedOrder = entrantSeedOrder(rightEntrantId);
+      if (leftSeedOrder !== undefined || rightSeedOrder !== undefined) {
+        if (leftSeedOrder === undefined || rightSeedOrder === undefined) {
+          return leftSeedOrder === undefined ? 1 : -1;
+        }
+        if (leftSeedOrder !== rightSeedOrder) {
+          return leftSeedOrder - rightSeedOrder;
+        }
+      }
+
+      if (isLaterPhase) {
+        const leftPlacement = entrantOriginPlacements.get(leftEntrantId);
+        const rightPlacement = entrantOriginPlacements.get(rightEntrantId);
+        if (leftPlacement !== undefined || rightPlacement !== undefined) {
+          if (leftPlacement === undefined || rightPlacement === undefined) {
+            return leftPlacement === undefined ? 1 : -1;
+          }
+        }
+
+        if (leftPlacement !== undefined
+          && rightPlacement !== undefined
+          && leftPlacement === rightPlacement) {
+          const leftOriginOrder = entrantOriginOrders.get(leftEntrantId);
+          const rightOriginOrder = entrantOriginOrders.get(rightEntrantId);
+          if (leftOriginOrder !== undefined || rightOriginOrder !== undefined) {
+            if (leftOriginOrder === undefined || rightOriginOrder === undefined) {
+              return leftOriginOrder === undefined ? 1 : -1;
+            }
+            if (leftOriginOrder !== rightOriginOrder) {
+              return leftOriginOrder - rightOriginOrder;
+            }
+          }
+        }
+
+        const byDisplayIdentifier = entrantAxisOrder(leftEntrantId) - entrantAxisOrder(rightEntrantId);
+        if (byDisplayIdentifier !== 0) {
+          return byDisplayIdentifier;
+        }
+      }
+
+      const leftSeedNumber = entrantSeedNumbers.get(leftEntrantId);
+      const rightSeedNumber = entrantSeedNumbers.get(rightEntrantId);
+      if (leftSeedNumber !== undefined && rightSeedNumber !== undefined && leftSeedNumber !== rightSeedNumber) {
+        return leftSeedNumber - rightSeedNumber;
+      }
+      if (leftSeedNumber !== undefined || rightSeedNumber !== undefined) {
+        return leftSeedNumber === undefined ? 1 : -1;
+      }
+      const byName = (entrantNames.get(leftEntrantId) ?? "").localeCompare(entrantNames.get(rightEntrantId) ?? "", "ja");
+      return byName || leftEntrantId.localeCompare(rightEntrantId, "ja");
+    });
+    if (fixedEntrants.length === 0) {
+      fixedEntrants.push(...sortedEntrants);
+    }
+    const entrantOrder = new Map(fixedEntrants.map((entrantId, index) => [entrantId, index]));
+
+    const standings = [...standingByEntrantId.values()].sort((left, right) => {
+      for (const rule of tieBreakRules) {
+        const comparison = rule === "total_sets_won"
+          ? right.wins - left.wins
+          : rule === "game_win_percentage"
+            ? roundRobinGameWinPercentage(right) - roundRobinGameWinPercentage(left)
+            : right.h2hPoints - left.h2hPoints;
+        if (comparison !== 0) {
+          return comparison;
+        }
+      }
+
+      return (entrantOrder.get(left.entrantId) ?? Number.MAX_SAFE_INTEGER)
+        - (entrantOrder.get(right.entrantId) ?? Number.MAX_SAFE_INTEGER);
+    });
+
+    standings.forEach((standing, index) => {
+      standing.qualified = qualifyingCount > 0 && index < qualifyingCount;
+    });
+
+    return {
+      entrants: fixedEntrants,
+      entrantNames,
+      entrantIdsByColumnKey,
+      entrantSeedIds,
+      entrantSeedNumbers,
+      sourceDiagnostics,
+      setsByPair,
+      standings,
+      qualifyingCount,
+      tieBreakRules,
+    };
+  }, [interimScoreDraftsBySetId, pendingResultBySetId, selectedEvent, selectedPhasePoolGroup]);
 
   useEffect(() => {
     if (phaseNames.length === 0) {
@@ -11643,6 +12459,187 @@ function App() {
                   <section className="phase-group" key={selectedPhasePoolGroup.key}>
                     <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
 
+                    {isRoundRobinBracketType(selectedPhasePoolGroup.bracketType) ? (
+                      <div className="round-robin-board" style={bracketScaleStyle}>
+                        <div className="round-robin-board-header">
+                          <div>
+                            <h3>Round Robin</h3>
+                            <p className="meta">set間の接続を持たないため、ラウンド順に一覧表示しています。</p>
+                            {selectedPhasePoolGroup.seeds.length > 0 && (
+                              <details className="meta">
+                                <summary>対象PhaseGroup seedsを確認</summary>
+                                <pre style={{ whiteSpace: "pre-wrap", maxHeight: "16rem", overflow: "auto" }}>
+                                  {JSON.stringify(selectedPhasePoolGroup.seeds, null, 2)}
+                                </pre>
+                              </details>
+                            )}
+                          </div>
+                          <span className="round-robin-set-count">{selectedPhasePoolGroup.sets.length} sets</span>
+                        </div>
+                        <div className="round-robin-layout">
+                          <div className="round-robin-matrix-wrap">
+                            <table className="round-robin-matrix">
+                              <thead>
+                                <tr>
+                                  <th scope="col">対戦表</th>
+                                  {roundRobinBoardData.entrants.map((entrantId) => (
+                                    <th scope="col" key={entrantId} title={roundRobinBoardData.entrantNames.get(entrantId)}>
+                                      {roundRobinBoardData.entrantNames.get(entrantId) || "-"}
+                                    </th>
+                                  ))}
+                                  <th scope="col">set/game</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {roundRobinBoardData.entrants.map((rowEntrantId) => (
+                                  <tr key={rowEntrantId}>
+                                    <th scope="row" title={roundRobinBoardData.entrantNames.get(rowEntrantId)}>
+                                      {roundRobinBoardData.entrantNames.get(rowEntrantId) || "-"}
+                                    </th>
+                                    {roundRobinBoardData.entrants.map((columnEntrantId) => {
+                                      const isDiagonal = rowEntrantId === columnEntrantId;
+                                      const set = isDiagonal
+                                        ? null
+                                        : roundRobinBoardData.setsByPair.get(roundRobinPairKey(rowEntrantId, columnEntrantId));
+                                      if (!set) {
+                                        return <td className={`round-robin-cell ${isDiagonal ? "diagonal" : "empty"}`} key={columnEntrantId}>-</td>;
+                                      }
+
+                                      const setDisplay = getSetScoresForDisplay(set);
+                                      const pendingResult = pendingResultBySetId.get(set.setId);
+                                      const resultStatus = getSetResultVisualStatus(set);
+                                      const resultStatusClass = resultStatus ? `set-card-status-${resultStatus}` : "";
+                                      const resultStatusLabel = resultStatus === "confirmed"
+                                        ? "確定"
+                                        : resultStatus === "draft"
+                                          ? "下書き"
+                                          : resultStatus === "inprogress"
+                                            ? "進行中"
+                                            : "";
+                                      const winnerId = setDisplay.winnerId ?? set.winnerId;
+                                        const rowEntrantIdForSet = roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId);
+                                        const columnEntrantIdForSet = roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId);
+                                        const rowSlot = rowEntrantIdForSet
+                                          ? set.slots.find((slot) => slot.entrantId === rowEntrantIdForSet)
+                                          : undefined;
+                                        const columnSlot = columnEntrantIdForSet
+                                          ? set.slots.find((slot) => slot.entrantId === columnEntrantIdForSet)
+                                          : undefined;
+                                        const rowGameScore = rowEntrantIdForSet
+                                          ? setDisplay.scores[rowEntrantIdForSet]
+                                            ?? (rowSlot?.score !== null && rowSlot?.score !== undefined ? String(rowSlot.score) : "-")
+                                          : "-";
+                                        const columnGameScore = columnEntrantIdForSet
+                                          ? setDisplay.scores[columnEntrantIdForSet]
+                                            ?? (columnSlot?.score !== null && columnSlot?.score !== undefined ? String(columnSlot.score) : "-")
+                                          : "-";
+                                      const changeClass = pendingResult
+                                        ? (isConfirmedSetResult(pendingResult) ? "set-card-changed-confirmed" : "set-card-changed-draft")
+                                        : "";
+                                      const outcomeClass = winnerId === null
+                                        ? ""
+                                        : winnerId === rowEntrantIdForSet
+                                          ? "round-robin-match-win"
+                                          : winnerId === columnEntrantIdForSet
+                                            ? "round-robin-match-loss"
+                                            : "";
+                                      const isLiveOverlaySet = Boolean(
+                                        obsOverlayState?.active
+                                        && obsOverlayState.currentSetId === set.setId
+                                        && obsOverlayState.currentSetId !== "__test__",
+                                      );
+
+                                      return (
+                                        <td key={columnEntrantId} className="round-robin-cell">
+                                          <button
+                                            type="button"
+                                            className={`round-robin-match ${outcomeClass} ${changeClass} ${resultStatusClass} ${isLiveOverlaySet ? "set-card-live" : ""}`}
+                                            title={`${roundRobinBoardData.entrantNames.get(rowEntrantId) || "-"} vs ${roundRobinBoardData.entrantNames.get(columnEntrantId) || "-"}`}
+                                            onClick={(event) => {
+                                              if (event.altKey) {
+                                                event.preventDefault();
+                                                if (!busy && !obsOverlayBusy) void setObsOverlayFullyStopped(true);
+                                                return;
+                                              }
+                                              if (event.ctrlKey) {
+                                                event.preventDefault();
+                                                if (!busy && !obsOverlayBusy) void toggleActiveMatchOverlay(set);
+                                                return;
+                                              }
+                                              openMatchDialog(set);
+                                            }}
+                                          >
+                                            {(resultStatusLabel !== "" || isLiveOverlaySet) && (
+                                              <span className="round-robin-match-status">
+                                                {resultStatusLabel !== "" && (
+                                                  <span className={`set-status-badge status-${resultStatus}`}>
+                                                    {resultStatusLabel}
+                                                  </span>
+                                                )}
+                                                {isLiveOverlaySet && <span className="set-live-badge">配信中</span>}
+                                              </span>
+                                            )}
+                                            <strong>{rowGameScore} - {columnGameScore}</strong>
+                                          </button>
+                                        </td>
+                                      );
+                                    })}
+                                    {(() => {
+                                      const rowEntrantIdForSet = roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId);
+                                      const standing = rowEntrantIdForSet
+                                        ? roundRobinBoardData.standings.find((item) => item.entrantId === rowEntrantIdForSet)
+                                        : undefined;
+                                      return (
+                                        <>
+                                          <td className="round-robin-row-summary">
+                                            <span>{standing ? `${standing.wins}-${standing.losses}` : "-"}</span>
+                                            <span>{standing ? `${standing.gameWins}-${standing.gameLosses}` : "-"}</span>
+                                          </td>
+                                        </>
+                                      );
+                                    })()}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                        <aside className="round-robin-standings">
+                            <div className="round-robin-standings-head">
+                              <h4>現在順位</h4>
+                              <span>{roundRobinBoardData.qualifyingCount > 0 ? `${roundRobinBoardData.qualifyingCount}位まで次フェーズ` : "次フェーズ枠未取得"}</span>
+                            </div>
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>順位</th>
+                                  <th className="round-robin-player-column">プレイヤー</th>
+                                  {roundRobinBoardData.tieBreakRules.map((rule) => (
+                                    <th key={rule}>{roundRobinTieBreakRuleLabel(rule)}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {roundRobinBoardData.standings.map((standing, index) => {
+                                  if (standing.isPlaceholder) {
+                                    return null;
+                                  }
+
+                                  return (
+                                    <tr className={standing.qualified ? "round-robin-qualified" : ""} key={standing.entrantId}>
+                                      <th scope="row">{index + 1}</th>
+                                      <td className="round-robin-player-column" title={standing.entrantName}>{standing.entrantName}</td>
+                                      {roundRobinBoardData.tieBreakRules.map((rule) => (
+                                        <td key={rule}>{roundRobinTieBreakRuleValue(standing, rule)}</td>
+                                      ))}
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                        </aside>
+                      </div>
+                    ) : (
                     <div className="bracket-split-stack" style={bracketScaleStyle}>
                       {renderedBracketSectionsForView.map((section) => (
                         <section className="bracket-subgroup" key={`${selectedPhasePoolGroup.key}-${section.key}`}>
@@ -11779,6 +12776,7 @@ function App() {
                         </section>
                       ))}
                     </div>
+                    )}
                   </section>
                 )}
               </div>

@@ -10,10 +10,53 @@ query TournamentSync($slug: String!, $perPage: Int!) {
         id
         bracketType
         displayIdentifier
+        progressionsOut {
+          id
+          originOrder
+          originPhase {
+            id
+            name
+            phaseOrder
+          }
+          originPhaseGroup {
+            id
+            displayIdentifier
+            phase {
+              id
+              name
+              phaseOrder
+            }
+          }
+          originPlacement
+          placeholderName
+        }
         phase {
           id
           name
           phaseOrder
+        }
+        seeds(query: { page: 1, perPage: 200 }) {
+          nodes {
+            id
+            seedNum
+            placement
+            placeholderName
+            progressionSource {
+              id
+              originOrder
+              originPhase {
+                phaseOrder
+              }
+              originPhaseGroup {
+                displayIdentifier
+              }
+              originPlacement
+            }
+            entrant {
+              id
+              name
+            }
+          }
         }
       }
       sets(page: 1, perPage: $perPage, sortType: STANDARD) {
@@ -31,6 +74,8 @@ query TournamentSync($slug: String!, $perPage: Int!) {
           }
           state
           winnerId
+          wPlacement
+          lPlacement
           entrant1Source {
             type
             typeId
@@ -46,15 +91,77 @@ query TournamentSync($slug: String!, $perPage: Int!) {
           winnerProgressionSeed {
             id
             seedNum
+            placeholderName
+            progressionSource {
+              id
+              originOrder
+              originPhase {
+                id
+                name
+                phaseOrder
+              }
+              originPhaseGroup {
+                id
+                displayIdentifier
+                phase {
+                  id
+                  name
+                  phaseOrder
+                }
+              }
+              originPlacement
+              placeholderName
+            }
           }
           loserProgressionSeed {
             id
             seedNum
+            placeholderName
+            progressionSource {
+              id
+              originOrder
+              originPhase {
+                id
+                name
+                phaseOrder
+              }
+              originPhaseGroup {
+                id
+                displayIdentifier
+                phase {
+                  id
+                  name
+                  phaseOrder
+                }
+              }
+              originPlacement
+              placeholderName
+            }
           }
           slots {
             seed {
               id
               seedNum
+              placeholderName
+              progressionSource {
+                originOrder
+                originPhase {
+                  id
+                  name
+                  phaseOrder
+                }
+                originPhaseGroup {
+                  id
+                  displayIdentifier
+                  phase {
+                    id
+                    name
+                    phaseOrder
+                  }
+                }
+                originPlacement
+                placeholderName
+              }
             }
             entrant {
               id

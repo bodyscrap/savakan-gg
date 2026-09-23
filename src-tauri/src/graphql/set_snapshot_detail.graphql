@@ -13,6 +13,8 @@ query SetSnapshotDetail($setId: ID!) {
     }
     state
     winnerId
+    wPlacement
+    lPlacement
     entrant1Source {
       type
       typeId
@@ -30,6 +32,7 @@ query SetSnapshotDetail($setId: ID!) {
       seedNum
       placeholderName
       progressionSource {
+        id
         originOrder
         originPhase {
           id
@@ -54,6 +57,7 @@ query SetSnapshotDetail($setId: ID!) {
       seedNum
       placeholderName
       progressionSource {
+        id
         originOrder
         originPhase {
           id

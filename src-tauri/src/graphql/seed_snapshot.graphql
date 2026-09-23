@@ -1,0 +1,28 @@
+query SeedSnapshot($seedId: ID) {
+  seed(id: $seedId) {
+    id
+    groupSeedNum
+    seedNum
+    placeholderName
+    placement
+    progressionSource {
+      originOrder
+      originPhase {
+        id
+        name
+        phaseOrder
+      }
+      originPhaseGroup {
+        id
+        displayIdentifier
+        phase {
+          id
+          name
+          phaseOrder
+        }
+      }
+      originPlacement
+      placeholderName
+    }
+  }
+}
