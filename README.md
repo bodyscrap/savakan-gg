@@ -189,6 +189,7 @@ cd src-tauri && cargo check
 
 - start.gg のスキーマ変更時は、GraphQL 定義と `src-tauri/src/graphql` 配下の定義を更新してください。
 - start.gg のイベント作成・seed 確定はこのアプリの前提条件です。
+- ROUND ROBIN、phaseGroup、phase間進出の処理手順は [docs/phase-group-progression.md](docs/phase-group-progression.md) を参照してください。
 - イベント管理設定やアイテムリスト、メッセージ履歴はアプリのローカル保存に依存するため、再インストール時はデータのバックアップに注意してください。
 - Player ID や DQ 申請は本人確認のための検証情報として扱うため、適切な運用に合わせて利用してください。
 

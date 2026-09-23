@@ -2166,10 +2166,19 @@ fn rebuild_progression_from_completed_sets(snapshot: &mut TournamentSnapshot) {
 }
 
 fn normalize_completed_source_slots(event: &mut EventSnapshot) {
+    let is_round_robin_set = |set: &crate::models::SetSnapshot| {
+        event.phase_groups.iter().any(|group| {
+            group.phase_group_id == set.phase_group_id.as_deref().unwrap_or_default()
+                && group
+                    .bracket_type
+                    .as_deref()
+                    .is_some_and(|bracket_type| bracket_type.eq_ignore_ascii_case("ROUND_ROBIN"))
+        })
+    };
     let completed_sets = event
         .sets
         .iter()
-        .filter(|set| set.state == 3 && set.winner_id.is_some())
+        .filter(|set| !is_round_robin_set(set) && set.state == 3 && set.winner_id.is_some())
         .cloned()
         .collect::<Vec<_>>();
 
@@ -2192,6 +2201,9 @@ fn normalize_completed_source_slots(event: &mut EventSnapshot) {
             .enumerate()
             .filter(|(_, target)| {
                 if target.set_id == source_set.set_id {
+                    return false;
+                }
+                if is_round_robin_set(target) {
                     return false;
                 }
                 if (source_set.winner_placement.is_some() || source_set.loser_placement.is_some())
@@ -5185,6 +5197,16 @@ fn hydrate_progression_entrant_to_seed_slots(
     entrant_name: &str,
 ) {
     for target in &mut event.sets {
+        let target_is_round_robin = event.phase_groups.iter().any(|group| {
+            group.phase_group_id == target.phase_group_id.as_deref().unwrap_or_default()
+                && group
+                    .bracket_type
+                    .as_deref()
+                    .is_some_and(|bracket_type| bracket_type.eq_ignore_ascii_case("ROUND_ROBIN"))
+        });
+        if target_is_round_robin {
+            continue;
+        }
         for slot_index in 0..target.slots.len() {
             let Some(slot) = target.slots.get(slot_index) else {
                 continue;

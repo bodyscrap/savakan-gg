@@ -129,6 +129,12 @@ type RoundRobinBoardData = {
   entrantSeedNumbers: Map<string, number>;
   sourceDiagnostics: string[];
   setsByPair: Map<string, SetSnapshot>;
+  candidateSetCount: number;
+  twoSlotSetCount: number;
+  resolvedSetCount: number;
+  registeredSetCount: number;
+  unresolvedSetIds: string[];
+  unresolvedSetReasons: string[];
   standings: RoundRobinStanding[];
   qualifyingCount: number;
   tieBreakRules: RoundRobinTieBreakRule[];
@@ -8159,6 +8165,12 @@ function App() {
     const entrantNames = new Map<string, string>();
     const entrantSeedIds = new Map<string, string>();
     const sourceDiagnostics: string[] = [];
+    const candidateSetCount = selectedPhasePoolGroup?.sets.length ?? 0;
+    let twoSlotSetCount = 0;
+    let resolvedSetCount = 0;
+    const registeredSetIds = new Set<string>();
+    const unresolvedSetIds: string[] = [];
+    const unresolvedSetReasons: string[] = [];
     const isLaterPhase = (selectedPhasePoolGroup?.phaseOrder ?? 1) > 1;
     const entrantSeedNumbers = new Map<string, number>();
     const entrantOriginPlacements = new Map<string, number>();
@@ -8173,6 +8185,16 @@ function App() {
       (selectedPhasePoolGroup?.seeds ?? [])
         .filter((seed) => Boolean(seed.seedId))
         .map((seed) => [seed.seedId, seed]),
+    );
+    const phaseGroupSeedByNum = new Map(
+      (selectedPhasePoolGroup?.seeds ?? [])
+        .filter((seed) => seed.seedNum !== null && seed.seedNum !== undefined)
+        .map((seed) => [seed.seedNum as number, seed]),
+    );
+    const phaseGroupSeedByOriginPlacement = new Map(
+      (selectedPhasePoolGroup?.seeds ?? [])
+        .filter((seed) => seed.originPlacement !== null && seed.originPlacement !== undefined)
+        .map((seed) => [seed.originPlacement as number, seed]),
     );
     const phaseGroupSeedIdByEntrantId = new Map(
       (selectedPhasePoolGroup?.seeds ?? [])
@@ -8221,6 +8243,12 @@ function App() {
       const columnKey = `seed:${seedId}`;
       fixedEntrants.push(columnKey);
       entrantIdsByColumnKey.set(columnKey, seed?.entrantId ?? null);
+      if (seed.entrantId) {
+        entrantSeedIds.set(seed.entrantId, seed.seedId);
+        if (seed.seedNum !== null && seed.seedNum !== undefined) {
+          entrantSeedNumbers.set(seed.entrantId, seed.seedNum);
+        }
+      }
       if (seed?.entrantId && seed.entrantName?.trim()) {
         entrantNames.set(columnKey, seed.entrantName.trim());
       } else {
@@ -8232,6 +8260,23 @@ function App() {
             || "TBD",
         );
       }
+    }
+
+    for (const seed of phaseGroupSeeds) {
+      if (!seed.entrantId || standingByEntrantId.has(seed.entrantId)) {
+        continue;
+      }
+      standingByEntrantId.set(seed.entrantId, {
+        entrantId: seed.entrantId,
+        entrantName: seed.entrantName?.trim() || seed.entrantId,
+        isPlaceholder: false,
+        wins: 0,
+        losses: 0,
+        gameWins: 0,
+        gameLosses: 0,
+        h2hPoints: 0,
+        qualified: false,
+      });
     }
 
     type ResolvedRoundRobinSlot = {
@@ -8306,7 +8351,16 @@ function App() {
       }
 
       if (source.sourceType?.trim().toLowerCase() === "seed" && source.typeId) {
-        const phaseGroupSeed = phaseGroupSeedById.get(source.typeId);
+        const phaseGroupSeed = phaseGroupSeedById.get(source.typeId)
+          ?? (source.seedNum !== null && source.seedNum !== undefined
+            ? phaseGroupSeedByNum.get(source.seedNum)
+            : undefined)
+          ?? (source.groupSeedNum !== null && source.groupSeedNum !== undefined
+            ? phaseGroupSeedByNum.get(source.groupSeedNum)
+            : undefined)
+          ?? (source.placement !== null && source.placement !== undefined
+            ? phaseGroupSeedByOriginPlacement.get(source.placement)
+            : undefined);
         if (phaseGroupSeed?.entrantId) {
           return {
             entrantId: phaseGroupSeed.entrantId,
@@ -8454,6 +8508,9 @@ function App() {
     };
 
     for (const set of selectedPhasePoolGroup?.sets ?? []) {
+      if (set.slots.length === 2) {
+        twoSlotSetCount += 1;
+      }
       const entrants = set.slots.map((slot, slotIndex) => {
         const source = slotIndex === 0 ? set.entrant1Source : set.entrant2Source;
         if (isLaterPhase) {
@@ -8480,7 +8537,19 @@ function App() {
             `condition=${source?.conditionString || ""}`,
           ].join(" | "));
         }
-        const slotSeed = slot.seedId ? phaseGroupSeedById.get(slot.seedId) : undefined;
+        const slotSeed = (slot.seedId ? phaseGroupSeedById.get(slot.seedId) : undefined)
+          ?? (slot.seedNum !== null && slot.seedNum !== undefined
+            ? phaseGroupSeedByNum.get(slot.seedNum)
+            : undefined)
+          ?? (source?.seedNum !== null && source?.seedNum !== undefined
+            ? phaseGroupSeedByNum.get(source.seedNum)
+            : undefined)
+          ?? (source?.groupSeedNum !== null && source?.groupSeedNum !== undefined
+            ? phaseGroupSeedByNum.get(source.groupSeedNum)
+            : undefined)
+          ?? (source?.placement !== null && source?.placement !== undefined
+            ? phaseGroupSeedByOriginPlacement.get(source.placement)
+            : undefined);
         const slotSeedSlot = slot.seedId ? seedSlotById.get(slot.seedId) : undefined;
         const resolved = slot.entrantId
           ? {
@@ -8620,14 +8689,32 @@ function App() {
         }
       });
 
+      const hasUnassignedSlot = set.slots.some((slot) => slot.entrantId === null);
       if (entrants.length !== 2 || entrants[0].entrantId === entrants[1].entrantId) {
+        unresolvedSetIds.push(set.setId);
+        unresolvedSetReasons.push([
+          set.setId,
+          `slots=${set.slots.length}`,
+          `unassigned=${hasUnassignedSlot}`,
+          `entrantIds=${entrants.map((entrant) => entrant.entrantId).join(",")}`,
+          `seedIds=${entrants.map((entrant) => entrant.seedId ?? "").join(",")}`,
+        ].join(" | "));
         continue;
       }
+
+      resolvedSetCount += 1;
+      registeredSetIds.add(set.setId);
 
       setsByPair.set(
         roundRobinPairKey(entrants[0].entrantId, entrants[1].entrantId),
         set,
       );
+      if (entrants[0].seedId && entrants[1].seedId) {
+        setsByPair.set(
+          roundRobinPairKey(entrants[0].seedId, entrants[1].seedId),
+          set,
+        );
+      }
       const setDisplay = getSetScoresForDisplay(set);
       const winnerId = setDisplay.winnerId ?? set.winnerId;
       if (!winnerId || !standingByEntrantId.has(winnerId)) {
@@ -8855,6 +8942,12 @@ function App() {
       entrantSeedNumbers,
       sourceDiagnostics,
       setsByPair,
+      candidateSetCount,
+      twoSlotSetCount,
+      resolvedSetCount,
+      registeredSetCount: registeredSetIds.size,
+      unresolvedSetIds,
+      unresolvedSetReasons,
       standings,
       qualifyingCount,
       tieBreakRules,
@@ -9573,7 +9666,7 @@ function App() {
       return "inprogress";
     }
 
-    if (isCompletedSet(set)) {
+    if (isCompletedSet(set) && Boolean(set.winnerId?.trim())) {
       return "confirmed";
     }
 
@@ -12665,12 +12758,22 @@ function App() {
                                     </th>
                                     {roundRobinBoardData.entrants.map((columnEntrantId) => {
                                       const isDiagonal = rowEntrantId === columnEntrantId;
+                                      const rowSeedId = rowEntrantId.startsWith("seed:")
+                                        ? rowEntrantId.slice("seed:".length)
+                                        : roundRobinBoardData.entrantSeedIds.get(rowEntrantId);
+                                      const columnSeedId = columnEntrantId.startsWith("seed:")
+                                        ? columnEntrantId.slice("seed:".length)
+                                        : roundRobinBoardData.entrantSeedIds.get(columnEntrantId);
                                       const set = isDiagonal
                                         ? null
                                         : roundRobinBoardData.setsByPair.get(roundRobinPairKey(
                                           roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId) ?? rowEntrantId,
                                           roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId) ?? columnEntrantId,
-                                        ));
+                                        ))
+                                          ?? roundRobinBoardData.setsByPair.get(roundRobinPairKey(
+                                            rowSeedId ?? rowEntrantId,
+                                            columnSeedId ?? columnEntrantId,
+                                          ));
                                       if (!set) {
                                         return <td className={`round-robin-cell ${isDiagonal ? "diagonal" : "empty"}`} key={columnEntrantId}>-</td>;
                                       }
@@ -12773,6 +12876,23 @@ function App() {
                               </tbody>
                             </table>
                           </div>
+                          <details className="meta">
+                            <summary>ROUND ROBIN set解決状況</summary>
+                            <div>
+                              <div>phaseGroup set: {roundRobinBoardData.candidateSetCount}</div>
+                              <div>2 slot: {roundRobinBoardData.twoSlotSetCount}</div>
+                              <div>entrant pair解決: {roundRobinBoardData.resolvedSetCount}</div>
+                              <div>表示登録: {roundRobinBoardData.registeredSetCount}</div>
+                              {roundRobinBoardData.unresolvedSetIds.length > 0 && (
+                                <div>
+                                  未解決set:
+                                  <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>
+                                    {roundRobinBoardData.unresolvedSetReasons.join("\n")}
+                                  </pre>
+                                </div>
+                              )}
+                            </div>
+                          </details>
                         </div>
                         <aside className="round-robin-standings">
                             <div className="round-robin-standings-head">
