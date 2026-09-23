@@ -255,6 +255,8 @@ struct MobileSetSaveInput {
     slot_scores: Vec<LocalSetScoreInput>,
     #[serde(default)]
     side_assignments: Vec<MobileSetSideAssignmentInput>,
+    #[serde(default)]
+    direct_win: bool,
     confirmed: bool,
 }
 
@@ -1594,6 +1596,23 @@ fn mobile_input_html() -> &'static str {
             min-width: 0;
             text-align: center;
         }
+        .win-btn {
+            width: 100%;
+            padding: 8px;
+            background: #ecfdf5;
+            border: 1px solid #6ee7b7;
+            color: #047857;
+            font-weight: 700;
+        }
+        .direct-score-label {
+            display: block;
+            padding: 8px;
+            border: 1px solid #86efac;
+            background: #f0fdf4;
+            color: #166534;
+            font-weight: 800;
+            text-align: center;
+        }
         .slot-lock-note {
             color: var(--muted);
             font-size: 0.78rem;
@@ -1799,6 +1818,7 @@ fn mobile_input_html() -> &'static str {
         let overlayState = null;
         let displayOnePOnTop = true;
         let mobileSideDrafts = {};
+        let directWinnerId = null;
         let shouldRefreshSetListOnReturn = false;
 
         function updateHeaderInfo(info) {
@@ -2255,13 +2275,20 @@ fn mobile_input_html() -> &'static str {
                     }
                     return displayOnePOnTop ? (index === 0 ? '1P' : '2P') : (index === 0 ? '2P' : '1P');
                 })();
+                const directWinButton = matchupReady && hasEntrant
+                    ? `<button class="win-btn" type="button" data-win-entrant-id="${entrantId}" ${completed ? 'disabled' : ''}>${directWinnerId === entrantId ? '解除' : 'Win'}</button>`
+                    : '';
+                const directScore = directWinnerId && hasEntrant
+                    ? (directWinnerId === entrantId ? 'W' : 'L')
+                    : null;
                 const scoreControls = hasEntrant
                     ? `<div class="player-controls">
-                        <input class="set-score-input ${isHigher ? 'score-high' : ''}" data-score-entrant-id="${entrantId}" type="text" inputmode="numeric" pattern="-?[0-9]*" min="-1" step="1" value="${formatScoreInputValue(score)}" ${completed ? 'disabled' : ''} />
+                        ${directWinButton}
+                        ${directScore ? `<span class="direct-score-label">${directScore}</span>` : `<input class="set-score-input ${isHigher ? 'score-high' : ''}" data-score-entrant-id="${entrantId}" type="text" inputmode="numeric" pattern="-?[0-9]*" min="-1" step="1" value="${formatScoreInputValue(score)}" ${completed ? 'disabled' : ''} />
                         <div class="score-step-row">
-                            <button class="score-step-btn" type="button" data-score-adjust="1" data-score-entrant-id="${entrantId}" ${completed ? 'disabled' : ''}>+</button>
-                            <button class="score-step-btn" type="button" data-score-adjust="-1" data-score-entrant-id="${entrantId}" ${completed ? 'disabled' : ''}>−</button>
-                        </div>
+                            <button class="score-step-btn" type="button" data-score-adjust="1" data-score-entrant-id="${entrantId}" ${completed || directWinnerId ? 'disabled' : ''}>+</button>
+                            <button class="score-step-btn" type="button" data-score-adjust="-1" data-score-entrant-id="${entrantId}" ${completed || directWinnerId ? 'disabled' : ''}>−</button>
+                        </div>`}
                         ${completed ? '<span class="slot-lock-note">確定済みset</span>' : (matchupReady ? '' : '<span class="slot-lock-note">対戦カード未確定</span>')}
                     </div>`
                     : `<div class="player-controls"><span class="slot-lock-note">対戦カード未確定</span></div>`;
@@ -2347,6 +2374,20 @@ fn mobile_input_html() -> &'static str {
                     }
 
                     updateHigherScoreHighlight();
+                });
+            }
+
+            for (const winButton of slotRows.querySelectorAll('[data-win-entrant-id]')) {
+                winButton.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    const targetEntrantId = winButton.getAttribute('data-win-entrant-id') || '';
+                    directWinnerId = directWinnerId === targetEntrantId ? null : targetEntrantId;
+                    if (directWinnerId) {
+                        for (const scoreInput of slotRows.querySelectorAll('[data-score-entrant-id]')) {
+                            scoreInput.value = '';
+                        }
+                    }
+                    renderDetailSlots(selectedSet);
                 });
             }
 
@@ -2649,6 +2690,9 @@ fn mobile_input_html() -> &'static str {
             const detail = await res.json();
             const previousSetId = selectedSet && selectedSet.setId ? String(selectedSet.setId) : '';
             selectedSet = detail;
+            if (previousSetId !== String(detail.setId || '')) {
+                directWinnerId = null;
+            }
             displayOnePOnTop = onePOnTopCheckbox ? Boolean(onePOnTopCheckbox.checked) : true;
             if (onePOnTopCheckbox && previousSetId !== String(detail.setId || '')) {
                 displayOnePOnTop = true;
@@ -2735,9 +2779,12 @@ fn mobile_input_html() -> &'static str {
             const payload = {
                 slug,
                 eventId,
-                winnerId: null,
-                slotScores,
+                winnerId: directWinnerId,
+                slotScores: directWinnerId
+                    ? (selectedSet.slots || []).filter((slot) => slot && slot.entrantId).map((slot) => ({ entrantId: slot.entrantId, score: 0 }))
+                    : slotScores,
                 sideAssignments,
+                directWin: Boolean(directWinnerId),
                 confirmed,
             };
 
@@ -2825,10 +2872,13 @@ fn mobile_input_html() -> &'static str {
                 return;
             }
 
-            const scores = collectSlotScores();
             const scoreSummary = (selectedSet.slots || [])
                 .filter((slot) => slot && slot.entrantId)
                 .map((slot) => {
+                    if (directWinnerId) {
+                        return `${slot.entrantName || 'TBD'}: ${slot.entrantId === directWinnerId ? 'W' : 'L'}`;
+                    }
+                    const scores = collectSlotScores();
                     const score = scores.find((item) => item.entrantId === slot.entrantId);
                     return `${slot.entrantName || 'TBD'}: ${score ? score.score : '未入力'}`;
                 })
@@ -3682,6 +3732,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     set_id: set_id.clone(),
                     winner_id,
                     confirmed: payload.confirmed,
+                    direct_win: payload.direct_win,
                     slot_scores: payload.slot_scores.clone(),
                 },
             ) {

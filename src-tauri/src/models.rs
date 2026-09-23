@@ -185,6 +185,8 @@ pub struct LocalSetResultInput {
     pub set_id: String,
     pub winner_id: String,
     pub confirmed: bool,
+    #[serde(default)]
+    pub direct_win: bool,
     pub slot_scores: Vec<LocalSetScoreInput>,
 }
 
@@ -212,6 +214,8 @@ pub struct LocalSetResultMeta {
     pub set_id: String,
     pub winner_id: String,
     pub score_csv: String,
+    #[serde(default)]
+    pub direct_win: bool,
     #[serde(default = "default_confirmed")]
     pub confirmed: bool,
     #[serde(default)]
@@ -227,6 +231,8 @@ pub struct LocalGrandFinalResetResultMeta {
     pub source_grand_final_set_id: String,
     pub winner_id: String,
     pub score_csv: String,
+    #[serde(default)]
+    pub direct_win: bool,
     #[serde(default = "default_confirmed")]
     pub confirmed: bool,
     #[serde(default)]

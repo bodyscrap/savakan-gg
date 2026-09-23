@@ -799,6 +799,7 @@ type LocalSetResultMeta = {
   setId: string;
   winnerId: string;
   scoreCsv: string;
+  directWin?: boolean;
   confirmed?: boolean;
   slotScores?: Array<{ entrantId: string; score: number }>;
   recordedAt: string;
@@ -810,6 +811,7 @@ type LocalGrandFinalResetResultMeta = {
   sourceGrandFinalSetId: string;
   winnerId: string;
   scoreCsv: string;
+  directWin?: boolean;
   confirmed?: boolean;
   slotScores?: Array<{ entrantId: string; score: number }>;
   recordedAt: string;
@@ -820,6 +822,7 @@ type SetScoreDraft = Record<string, string>;
 type SetResultDraftState = {
   winnerId: string;
   scoreDrafts: SetScoreDraft;
+  directWin?: boolean;
 };
 
 type SavePlayerMetaOptions = {
@@ -903,6 +906,7 @@ type BatchConflictDialogState = {
 type ResultConfirmationState = {
   match: SetSnapshot;
   scoreDrafts: SetScoreDraft;
+  directWinnerId: string | null;
 };
 
 type EventSnapshotProgress = {
@@ -2741,6 +2745,17 @@ function buildScoreDraftsFromResult(set: SetSnapshot, result: LocalSetResultMeta
 }
 
 function buildDraftStateFromPending(set: SetSnapshot, result: LocalSetResultMeta): SetResultDraftState {
+  if (result.directWin) {
+    return {
+      winnerId: result.winnerId,
+      scoreDrafts: Object.fromEntries(
+        set.slots
+          .filter((slot) => slot.entrantId)
+          .map((slot) => [slot.entrantId as string, slot.entrantId === result.winnerId ? "W" : "L"]),
+      ),
+      directWin: true,
+    };
+  }
   return {
     winnerId: result.winnerId,
     scoreDrafts: buildScoreDraftsFromResult(set, result),
@@ -2884,6 +2899,7 @@ function App() {
   const [activeMatchSetId, setActiveMatchSetId] = useState("");
   const [setId, setSetId] = useState("");
   const [scoreDrafts, setScoreDrafts] = useState<SetScoreDraft>({});
+  const [directWinnerId, setDirectWinnerId] = useState<string | null>(null);
   const [activeMatchSideDrafts, setActiveMatchSideDrafts] = useState<Record<string, PlaySide | "">>({});
   const [setResultDrafts, setSetResultDrafts] = useState<Record<string, SetResultDraftState>>({});
   const [interimScoreDraftsBySetId, setInterimScoreDraftsBySetId] = useState<Record<string, SetScoreDraft>>({});
@@ -9285,6 +9301,18 @@ function App() {
     const interimDrafts = interimScoreDraftsBySetId[set.setId];
 
     if (!result && interimDrafts) {
+      const directWinner = set.slots.find((slot) => slot.entrantId && interimDrafts[slot.entrantId] === "W")?.entrantId;
+      if (directWinner) {
+        return {
+          scores: Object.fromEntries(
+            set.slots
+              .filter((slot) => slot.entrantId)
+              .map((slot) => [slot.entrantId as string, slot.entrantId === directWinner ? "W" : "L"]),
+          ),
+          isDq: false,
+          winnerId: directWinner,
+        };
+      }
       const scores: Record<string, string> = {};
       let hasDq = false;
 
@@ -9349,6 +9377,16 @@ function App() {
     }
 
     const slotScores = result.slotScores ?? [];
+
+    if (result.directWin) {
+      const scores: Record<string, string> = {};
+      for (const slot of set.slots) {
+        if (slot.entrantId) {
+          scores[slot.entrantId] = slot.entrantId === result.winnerId ? "W" : "L";
+        }
+      }
+      return { scores, isDq: false, winnerId: result.winnerId };
+    }
 
     if (slotScores.length > 0) {
       const scores: Record<string, string> = {};
@@ -9445,6 +9483,7 @@ function App() {
     setActiveMatchSideDrafts(sideDrafts);
 
     if (forcedDraftState) {
+      setDirectWinnerId(forcedDraftState.directWin ? forcedDraftState.winnerId : null);
       setScoreDrafts(forcedDraftState.scoreDrafts);
       setSetResultDrafts((current) => ({
         ...current,
@@ -9456,6 +9495,7 @@ function App() {
     const pending = pendingResultBySetId.get(set.setId);
     if (pending) {
       const draftState = buildDraftStateFromPending(set, pending);
+      setDirectWinnerId(draftState.directWin ? draftState.winnerId : null);
       setScoreDrafts(draftState.scoreDrafts);
       setSetResultDrafts((current) => ({
         ...current,
@@ -9466,16 +9506,19 @@ function App() {
 
     const cached = setResultDrafts[set.setId];
     if (cached) {
+      setDirectWinnerId(cached.directWin ? cached.winnerId : null);
       setScoreDrafts(cached.scoreDrafts);
       return;
     }
 
+    setDirectWinnerId(null);
     setScoreDrafts(buildScoreDraftsFromSet(set));
     setSetResultDrafts((current) => ({
       ...current,
       [set.setId]: {
         winnerId: "",
         scoreDrafts: buildScoreDraftsFromSet(set),
+        directWin: false,
       },
     }));
   }
@@ -9488,6 +9531,7 @@ function App() {
     setResultConfirmation({
       match,
       scoreDrafts: { ...scoreDrafts },
+      directWinnerId,
     });
   }
 
@@ -9560,6 +9604,7 @@ function App() {
     setSetId("");
     setActiveMatchSideDrafts({});
     setMatchSideRandomNotice(null);
+    setDirectWinnerId(null);
   }
 
   function closeMobileInputPortalDialog() {
@@ -9750,8 +9795,13 @@ function App() {
 
       await saveMatchSidesIfNeeded(selectedEvent, activeMatch, activeMatchSideDrafts);
 
-      const slotScores = buildSlotScoresForSave(activeMatch, scoreDrafts);
-      let resolvedWinnerId = resolveWinnerIdFromDrafts(activeMatch, scoreDrafts);
+      const directWin = directWinnerId !== null;
+      const slotScores = directWin
+        ? activeMatch.slots
+          .filter((slot): slot is SetSlot & { entrantId: string } => slot.entrantId !== null)
+          .map((slot) => ({ entrantId: slot.entrantId, score: 0 }))
+        : buildSlotScoresForSave(activeMatch, scoreDrafts);
+      let resolvedWinnerId = directWinnerId ?? resolveWinnerIdFromDrafts(activeMatch, scoreDrafts);
 
       if (resolvedWinnerId === "") {
         if (confirmed) {
@@ -9802,6 +9852,7 @@ function App() {
           setId,
           winnerId: resolvedWinnerId,
           confirmed,
+            directWin,
           slotScores,
         },
       });
@@ -9811,6 +9862,7 @@ function App() {
         [setId]: {
           winnerId: resolvedWinnerId,
           scoreDrafts,
+          directWin,
         },
       }));
       setInterimScoreDraftsBySetId((current) => {
@@ -12870,7 +12922,9 @@ function App() {
                         const currentSide = entrantId
                           ? (activeMatchSideDrafts[entrantId] ?? getSetSlotSide(activeMatch.setId, entrantId))
                           : "";
-                        const scoreValue = entrantId ? scoreDrafts[entrantId] ?? "" : "";
+                        const scoreValue = entrantId && directWinnerId
+                          ? (entrantId === directWinnerId ? "W" : "L")
+                          : entrantId ? scoreDrafts[entrantId] ?? "" : "";
                         const otherEntrantId = activeMatch.slots.find(
                           (item) => item.entrantId !== null && item.entrantId !== entrantId,
                         )?.entrantId ?? null;
@@ -12891,7 +12945,7 @@ function App() {
                                     <button
                                       type="button"
                                       className="ghost tiny"
-                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch)}
+                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch) || directWinnerId !== null}
                                       onClick={() => {
                                         if (!entrantId) {
                                           return;
@@ -12912,7 +12966,7 @@ function App() {
                                       type="text"
                                       inputMode="numeric"
                                       value={scoreValue}
-                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch)}
+                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch) || directWinnerId !== null}
                                       onChange={(e) => {
                                         if (!entrantId) {
                                           return;
@@ -12930,7 +12984,7 @@ function App() {
                                     <button
                                       type="button"
                                       className="ghost tiny"
-                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch)}
+                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch) || directWinnerId !== null}
                                       onClick={() => {
                                         if (!entrantId) {
                                           return;
@@ -12948,6 +13002,23 @@ function App() {
                                     </button>
                                   </div>
                                 </label>
+                                {entrantId && otherEntrantId && (
+                                  <button
+                                    type="button"
+                                    className="ghost tiny"
+                                    disabled={busy || activeMatchCompleted}
+                                    onClick={() => {
+                                      setDirectWinnerId((current) => current === entrantId ? null : entrantId);
+                                      setScoreDrafts((current) => ({
+                                        ...current,
+                                        [entrantId]: directWinnerId === entrantId ? "" : "W",
+                                        [otherEntrantId]: directWinnerId === entrantId ? "" : "L",
+                                      }));
+                                    }}
+                                  >
+                                    {directWinnerId === entrantId ? "解除" : "Win"}
+                                  </button>
+                                )}
                                 {entrantId && otherEntrantId && (
                                   <button
                                     type="button"

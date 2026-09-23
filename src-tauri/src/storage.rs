@@ -5605,6 +5605,7 @@ pub fn reset_local_set_result_with_dependencies(
             winner_id: String::new(),
             score_csv: String::new(),
             confirmed: true,
+            direct_win: false,
             slot_scores: Vec::new(),
             recorded_at: Utc::now(),
         });
@@ -5908,6 +5909,7 @@ pub fn load_local_meta(
             winner_id: pending.winner_id.clone(),
             score_csv: pending.score_csv.clone(),
             confirmed: pending.confirmed,
+            direct_win: pending.direct_win,
             slot_scores: pending.slot_scores.clone(),
             recorded_at: pending.recorded_at.clone(),
         });
@@ -6036,7 +6038,11 @@ pub fn upsert_local_set_result(
         (event_id.clone(), input.confirmed)
     };
 
-    let score_csv = derive_score_csv_from_slot_scores(&input.slot_scores, &input.winner_id)?;
+    let score_csv = if input.direct_win {
+        String::new()
+    } else {
+        derive_score_csv_from_slot_scores(&input.slot_scores, &input.winner_id)?
+    };
     let source_grand_final_set_id =
         source_grand_final_set_id_from_virtual_reset_set_id(&input.set_id);
 
@@ -6062,6 +6068,7 @@ pub fn upsert_local_set_result(
                 source_grand_final_set_id,
                 winner_id: input.winner_id,
                 score_csv,
+                direct_win: input.direct_win,
                 confirmed: input.confirmed,
                 slot_scores,
                 recorded_at: Utc::now(),
@@ -6076,6 +6083,7 @@ pub fn upsert_local_set_result(
             set_id: input.set_id.clone(),
             winner_id: input.winner_id,
             score_csv,
+            direct_win: input.direct_win,
             confirmed: input.confirmed,
             slot_scores,
             recorded_at: Utc::now(),
