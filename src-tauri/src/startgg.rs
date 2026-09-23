@@ -3,6 +3,7 @@ use graphql_client::{GraphQLQuery, Response};
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::Serialize;
+use serde_json::Value;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -25,6 +26,16 @@ pub const SUPPORTED_BRACKET_TYPES: &[&str] =
 
 fn bracket_type_name<T: std::fmt::Debug>(bracket_type: T) -> String {
     format!("{bracket_type:?}").to_ascii_uppercase()
+}
+
+fn parse_tiebreak_order(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|rule| rule.get("type").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect()
 }
 
 pub fn is_supported_bracket_type(bracket_type: &str) -> bool {
@@ -957,6 +968,7 @@ async fn query_tournament_snapshot(
                 .map(|group| PhaseGroupSnapshot {
                     phase_group_id: group.id.to_string(),
                     bracket_type: group.bracket_type.map(bracket_type_name),
+                    tiebreak_order: parse_tiebreak_order(group.tiebreak_order.as_ref()),
                     phase_id: group.phase.as_ref().map(|phase| phase.id.to_string()),
                     phase_name: group.phase.as_ref().and_then(|phase| phase.name.clone()),
                     phase_order: group.phase.as_ref().and_then(|phase| phase.phase_order),
@@ -1566,6 +1578,7 @@ pub async fn fetch_event_snapshot_by_slug(
                 .map(|group| PhaseGroupSnapshot {
                     phase_group_id: group.id.to_string(),
                     bracket_type: group.bracket_type.map(bracket_type_name),
+                    tiebreak_order: parse_tiebreak_order(group.tiebreak_order.as_ref()),
                     phase_id: group.phase.as_ref().map(|phase| phase.id.to_string()),
                     phase_name: group.phase.as_ref().and_then(|phase| phase.name.clone()),
                     phase_order: group.phase.as_ref().and_then(|phase| phase.phase_order),

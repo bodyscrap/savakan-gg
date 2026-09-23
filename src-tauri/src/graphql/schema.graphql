@@ -93,6 +93,7 @@ type PhaseGroup {
   id: GgID!
   bracketType: BracketType
   displayIdentifier: String
+  tiebreakOrder: JSON
   phase: Phase
   progressionsOut: [Progression]
   seedMap: JSON

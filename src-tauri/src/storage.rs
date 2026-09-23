@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
@@ -2049,6 +2050,7 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
     if let Some(mut snapshot) =
         merge_event_snapshot_files(load_event_snapshot_files(app, slug, false)?)
     {
+        restore_pending_local_results(app, &slug, &mut snapshot)?;
         rebuild_progression_from_completed_sets(&mut snapshot);
         return Ok(snapshot);
     }
@@ -2056,7 +2058,7 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
     // Keep loading older installations that only have graph files.
     let graphs = load_event_graph_files(app, slug)?;
     if !graphs.is_empty() {
-        let (tournament_id, slug, name, updated_at) = {
+        let (tournament_id, stored_slug, name, updated_at) = {
             let first = graphs.first().expect("graphs is not empty");
             (
                 first.tournament_id.clone(),
@@ -2067,15 +2069,60 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
         };
         let mut snapshot = TournamentSnapshot {
             tournament_id,
-            slug,
+            slug: stored_slug,
             name,
             events: graphs.into_iter().map(|graph| graph.event).collect(),
             updated_at,
         };
+        restore_pending_local_results(app, slug, &mut snapshot)?;
         rebuild_progression_from_completed_sets(&mut snapshot);
         return Ok(snapshot);
     }
     Err("ローカルスナップショット読込に失敗しました: 保存済みデータが見つかりません。".to_owned())
+}
+
+fn restore_pending_local_results(
+    app: &AppHandle,
+    slug: &str,
+    snapshot: &mut TournamentSnapshot,
+) -> Result<(), String> {
+    let pending_results = snapshot
+        .events
+        .iter()
+        .map(|event| {
+            load_local_meta(app, slug, &event.event_id)
+                .map(|meta| (event.event_id.clone(), meta.pending_set_results))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for (event_id, results) in pending_results {
+        let Some(event) = snapshot
+            .events
+            .iter_mut()
+            .find(|event| event.event_id == event_id)
+        else {
+            continue;
+        };
+        for result in results {
+            let Some(set) = event
+                .sets
+                .iter_mut()
+                .find(|set| set.set_id == result.set_id)
+            else {
+                continue;
+            };
+            set.winner_id = result.confirmed.then_some(result.winner_id);
+            set.state = if result.confirmed { 3 } else { 2 };
+            for slot in &mut set.slots {
+                if let Some(score) = result.slot_scores.iter().find(|score| {
+                    score.entrant_id == slot.entrant_id.as_deref().unwrap_or_default()
+                }) {
+                    slot.score = Some(score.score as f64);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn rebuild_progression_from_completed_sets(snapshot: &mut TournamentSnapshot) {
@@ -5156,6 +5203,9 @@ fn set_phase_group_seed_entrant(
 }
 
 fn phase_group_key(set: &crate::models::SetSnapshot) -> String {
+    if let Some(phase_group_id) = set.phase_group_id.as_deref() {
+        return format!("id:{phase_group_id}");
+    }
     format!(
         "{}::{}",
         set.phase_order
@@ -5252,6 +5302,9 @@ fn is_round_robin_set(
         .find(|event| event.event_id == event_id)
         .and_then(|event| {
             event.phase_groups.iter().find(|group| {
+                if let Some(phase_group_id) = set.phase_group_id.as_deref() {
+                    return group.phase_group_id == phase_group_id;
+                }
                 group.phase_order == set.phase_order
                     && normalize_group_key(group.display_identifier.as_ref())
                         == normalize_group_key(set.phase_group_display_identifier.as_ref())
@@ -5279,6 +5332,9 @@ fn apply_completed_round_robin_progression(
         .find(|set| phase_group_key(set) == group_key)
         .and_then(|set| {
             event.phase_groups.iter().find(|group| {
+                if let Some(phase_group_id) = set.phase_group_id.as_deref() {
+                    return group.phase_group_id == phase_group_id;
+                }
                 group.phase_order == set.phase_order
                     && normalize_group_key(group.display_identifier.as_ref())
                         == normalize_group_key(set.phase_group_display_identifier.as_ref())
@@ -5361,36 +5417,37 @@ fn apply_completed_round_robin_progression(
             )
         })
         .collect::<HashMap<_, _>>();
+    let tiebreak_order = source_group.tiebreak_order.clone();
     let mut standings = all_entrant_ids;
     standings.sort_by(|left, right| {
-        let left_wins = wins.get(left).copied().unwrap_or_default();
-        let right_wins = wins.get(right).copied().unwrap_or_default();
-        let left_total = game_wins.get(left).copied().unwrap_or_default()
-            + game_losses.get(left).copied().unwrap_or_default();
-        let right_total = game_wins.get(right).copied().unwrap_or_default()
-            + game_losses.get(right).copied().unwrap_or_default();
-        let left_percentage = if left_total > 0.0 {
-            game_wins.get(left).copied().unwrap_or_default() / left_total
+        if tiebreak_order.is_empty() {
+            wins.get(right)
+                .copied()
+                .unwrap_or_default()
+                .cmp(&wins.get(left).copied().unwrap_or_default())
         } else {
-            0.0
-        };
-        let right_percentage = if right_total > 0.0 {
-            game_wins.get(right).copied().unwrap_or_default() / right_total
-        } else {
-            0.0
-        };
-        let left_head_to_head = head_to_head_points.get(left).copied().unwrap_or_default();
-        let right_head_to_head = head_to_head_points.get(right).copied().unwrap_or_default();
-        right_wins
-            .cmp(&left_wins)
-            .then_with(|| right_percentage.total_cmp(&left_percentage))
-            .then_with(|| right_head_to_head.cmp(&left_head_to_head))
-            .then_with(|| {
-                seed_num_by_entrant_id
-                    .get(left)
-                    .cmp(&seed_num_by_entrant_id.get(right))
-            })
-            .then_with(|| left.cmp(right))
+            for rule in &tiebreak_order {
+                let rule_order = compare_round_robin_tiebreak(
+                    rule,
+                    left,
+                    right,
+                    &wins,
+                    &game_wins,
+                    &game_losses,
+                    &head_to_head_points,
+                );
+                if rule_order != Ordering::Equal {
+                    return rule_order;
+                }
+            }
+            Ordering::Equal
+        }
+        .then_with(|| {
+            seed_num_by_entrant_id
+                .get(left)
+                .cmp(&seed_num_by_entrant_id.get(right))
+        })
+        .then_with(|| left.cmp(right))
     });
 
     let mut progressions = source_group.progressions_out.clone();
@@ -5413,7 +5470,7 @@ fn apply_completed_round_robin_progression(
         return;
     };
     for (progression, entrant_id) in assignments {
-        let Some(target_seed) = event
+        let target_group_ids = event
             .phase_groups
             .iter()
             .filter(|group| {
@@ -5422,12 +5479,42 @@ fn apply_completed_round_robin_progression(
                         .as_deref()
                         .is_none_or(|phase_id| group.phase_id.as_deref() == Some(phase_id))
             })
+            .map(|group| group.phase_group_id.clone())
+            .collect::<HashSet<_>>();
+        let target_seed_by_progression = event
+            .phase_groups
+            .iter()
+            .filter(|group| target_group_ids.contains(&group.phase_group_id))
             .flat_map(|group| group.seeds.iter())
             .find(|seed| {
                 seed.progression_id.as_deref() == Some(progression.progression_id.as_str())
+                    || (seed.origin_phase_order == progression.origin_phase_order
+                        && normalize_group_key(seed.origin_phase_group_display_identifier.as_ref())
+                            == normalize_group_key(
+                                progression.origin_phase_group_display_identifier.as_ref(),
+                            )
+                        && seed.origin_placement == progression.origin_placement
+                        && (progression.origin_order.is_none()
+                            || seed.origin_order == progression.origin_order))
             })
-            .cloned()
-        else {
+            .cloned();
+        let target_seed = target_seed_by_progression.or_else(|| {
+            event
+                .phase_groups
+                .iter()
+                .filter(|group| target_group_ids.contains(&group.phase_group_id))
+                .flat_map(|group| group.seeds.iter())
+                .find(|seed| {
+                    seed.origin_phase_order == Some(source_phase_order)
+                        && normalize_group_key(seed.origin_phase_group_display_identifier.as_ref())
+                            == normalize_group_key(source_group.display_identifier.as_ref())
+                        && seed.origin_placement == progression.origin_placement
+                        && (progression.origin_order.is_none()
+                            || seed.origin_order == progression.origin_order)
+                })
+                .cloned()
+        });
+        let Some(target_seed) = target_seed else {
             continue;
         };
         let entrant_name = event
@@ -5455,6 +5542,52 @@ fn apply_completed_round_robin_progression(
             }
         }
         hydrate_progression_entrant_to_seed_slots(event, &target_seed, &entrant_id, &entrant_name);
+    }
+}
+
+fn compare_round_robin_tiebreak(
+    rule: &str,
+    left: &str,
+    right: &str,
+    wins: &HashMap<String, i64>,
+    game_wins: &HashMap<String, f64>,
+    game_losses: &HashMap<String, f64>,
+    head_to_head_points: &HashMap<String, i64>,
+) -> Ordering {
+    let normalized = rule
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(|character| character.to_uppercase())
+        .collect::<String>();
+    match normalized.as_str() {
+        "SETWINS" | "SETSWON" | "TOTALSETSWON" | "WINS" => wins
+            .get(right)
+            .copied()
+            .unwrap_or_default()
+            .cmp(&wins.get(left).copied().unwrap_or_default()),
+        "GAMEWINS" => game_wins
+            .get(right)
+            .copied()
+            .unwrap_or_default()
+            .total_cmp(&game_wins.get(left).copied().unwrap_or_default()),
+        "GAMERATIO" | "GAMEWINPERCENTAGE" | "GAMEPERCENTAGE" | "WINPERCENTAGE" => {
+            let percentage = |entrant_id: &str| {
+                let total = game_wins.get(entrant_id).copied().unwrap_or_default()
+                    + game_losses.get(entrant_id).copied().unwrap_or_default();
+                if total > 0.0 {
+                    game_wins.get(entrant_id).copied().unwrap_or_default() / total
+                } else {
+                    0.0
+                }
+            };
+            percentage(right).total_cmp(&percentage(left))
+        }
+        "HEADTOHEAD" | "HEADTOHEADWINS" => head_to_head_points
+            .get(right)
+            .copied()
+            .unwrap_or_default()
+            .cmp(&head_to_head_points.get(left).copied().unwrap_or_default()),
+        _ => Ordering::Equal,
     }
 }
 

@@ -16,6 +16,7 @@ query EventSync($slug: String!, $page: Int!, $perPage: Int!) {
       id
       bracketType
       displayIdentifier
+      tiebreakOrder
       progressionsOut {
         id
         originOrder

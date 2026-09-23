@@ -12728,6 +12728,11 @@ function App() {
                             {selectedPhasePoolGroup.seeds.length > 0 && (
                               <details className="meta">
                                 <summary>対象PhaseGroup seedsを確認</summary>
+                                <div>phaseGroupId: {selectedPhasePoolGroup.phaseGroupId ?? "-"}</div>
+                                <div>progressionsOut: {selectedPhasePoolGroup.progressionsOut.length}</div>
+                                <pre style={{ whiteSpace: "pre-wrap", maxHeight: "12rem", overflow: "auto" }}>
+                                  {JSON.stringify(selectedPhasePoolGroup.progressionsOut, null, 2)}
+                                </pre>
                                 <pre style={{ whiteSpace: "pre-wrap", maxHeight: "16rem", overflow: "auto" }}>
                                   {JSON.stringify(selectedPhasePoolGroup.seeds, null, 2)}
                                 </pre>

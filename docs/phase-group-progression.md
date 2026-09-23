@@ -106,8 +106,10 @@ standingsはsetを解決できたentrantだけではなく、phaseGroupのseed�
 1. phaseGroup seedから全entrantを登録する。
 2. setのwinner/loserを登録済みentrantへ加算する。
 3. 未報告setは勝敗0として扱う。
-4. 順位はset勝利数、game win percentage、head-to-headなどの設定順で計算する。
-5. phaseGroupの `progressionsOut` から次phaseへの進出枠を決める。
+4. 同率時は対象phaseGroupの `tiebreakOrder` に記載されたルールを上から適用する。
+5. `tiebreakOrder` が空の場合はset勝利数だけで比較する。
+6. ルール適用後も同率なら、phaseGroup内のseedNumが小さい順にする。
+7. phaseGroupの `progressionsOut` から次phaseへの進出枠を決める。
 
 ## 6. phaseGroup間の進出
 

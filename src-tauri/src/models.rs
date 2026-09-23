@@ -321,6 +321,8 @@ pub struct PhaseGroupSnapshot {
     pub seed_order: Vec<String>,
     #[serde(default)]
     pub seeds: Vec<PhaseGroupSeedSnapshot>,
+    #[serde(default)]
+    pub tiebreak_order: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

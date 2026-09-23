@@ -15,6 +15,7 @@ query TournamentSync($slug: String!, $perPage: Int!) {
         id
         bracketType
         displayIdentifier
+        tiebreakOrder
         progressionsOut {
           id
           originOrder
