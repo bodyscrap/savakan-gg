@@ -5254,7 +5254,20 @@ fn hydrate_progression_entrant_to_seed_slots(
                     .as_deref()
                     .is_some_and(|bracket_type| bracket_type.eq_ignore_ascii_case("ROUND_ROBIN"))
         });
-        if target_is_round_robin {
+        if target.phase_group_id.as_deref().is_none()
+            || (target_is_round_robin
+                && target.phase_group_id.as_deref()
+                    != event
+                        .phase_groups
+                        .iter()
+                        .find(|group| {
+                            group
+                                .seeds
+                                .iter()
+                                .any(|seed| seed.seed_id == target_seed.seed_id)
+                        })
+                        .map(|group| group.phase_group_id.as_str()))
+        {
             continue;
         }
         for slot_index in 0..target.slots.len() {
@@ -5269,11 +5282,28 @@ fn hydrate_progression_entrant_to_seed_slots(
                 })
             });
             let slot_seed_matches = slot.seed_id.as_deref() == Some(target_seed.seed_id.as_str());
+            let round_robin_seed_num_matches = target_is_round_robin
+                && target.phase_group_id.as_deref()
+                    == event
+                        .phase_groups
+                        .iter()
+                        .find(|group| {
+                            group
+                                .seeds
+                                .iter()
+                                .any(|seed| seed.seed_id == target_seed.seed_id)
+                        })
+                        .map(|group| group.phase_group_id.as_str())
+                && slot.seed_num == target_seed.seed_num;
             let source_number_matches = source.is_some_and(|source| {
                 source.group_seed_num == target_seed.seed_num
                     || source.seed_num == target_seed.seed_num
             });
-            if !slot_seed_matches && !source_seed_matches && !source_number_matches {
+            if !slot_seed_matches
+                && !round_robin_seed_num_matches
+                && !source_seed_matches
+                && !source_number_matches
+            {
                 continue;
             }
 
