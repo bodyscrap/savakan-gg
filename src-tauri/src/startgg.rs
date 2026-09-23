@@ -7,8 +7,8 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::models::{
-    EventSnapshot, PhaseGroupProgressionSnapshot, PhaseGroupSeedSnapshot, PhaseGroupSnapshot, SetEntrantSourceSnapshot,
-    SetSlotSnapshot, SetSnapshot,
+    EventSnapshot, PhaseGroupProgressionSnapshot, PhaseGroupSeedSnapshot, PhaseGroupSnapshot,
+    PhaseSnapshot, SetEntrantSourceSnapshot, SetSlotSnapshot, SetSnapshot,
     TournamentEventPreviewItem, TournamentPreview, TournamentSnapshot,
 };
 
@@ -20,11 +20,8 @@ const START_GG_REQUEST_INTERVAL_MS: u64 = 120;
 const START_GG_SET_ENTRANT_RETRY_ATTEMPTS: usize = 6;
 const START_GG_SET_ENTRANT_RETRY_DELAY_MS: u64 = 350;
 
-pub const SUPPORTED_BRACKET_TYPES: &[&str] = &[
-    "SINGLE_ELIMINATION",
-    "DOUBLE_ELIMINATION",
-    "ROUND_ROBIN",
-];
+pub const SUPPORTED_BRACKET_TYPES: &[&str] =
+    &["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION", "ROUND_ROBIN"];
 
 fn bracket_type_name<T: std::fmt::Debug>(bracket_type: T) -> String {
     format!("{bracket_type:?}").to_ascii_uppercase()
@@ -38,10 +35,12 @@ pub fn is_supported_bracket_type(bracket_type: &str) -> bool {
 
 pub fn event_has_only_supported_bracket_types(event: &EventSnapshot) -> bool {
     !event.phase_groups.is_empty()
-        && event
-            .phase_groups
-            .iter()
-            .all(|group| group.bracket_type.as_deref().is_some_and(is_supported_bracket_type))
+        && event.phase_groups.iter().all(|group| {
+            group
+                .bracket_type
+                .as_deref()
+                .is_some_and(is_supported_bracket_type)
+        })
 }
 
 #[derive(Debug, Clone)]
@@ -309,7 +308,13 @@ async fn enrich_seed_source_with_client(
     token: &str,
     source: &mut SetEntrantSourceSnapshot,
 ) -> Result<(), String> {
-    if source.source_type.as_deref().map(str::to_ascii_lowercase).as_deref() != Some("seed") {
+    if source
+        .source_type
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+        != Some("seed")
+    {
         return Ok(());
     }
     let Some(seed_id) = source.type_id.as_deref() else {
@@ -395,14 +400,13 @@ async fn fetch_set_snapshot_detail_with_client(
                 entrant_name,
                 seed_id,
                 seed_num,
-                seed_placeholder_name: seed
-                    .and_then(|seed| {
-                        seed.placeholder_name.clone().or_else(|| {
-                            seed.progression_source
-                                .as_ref()
-                                .and_then(|source| source.placeholder_name.clone())
-                        })
-                    }),
+                seed_placeholder_name: seed.and_then(|seed| {
+                    seed.placeholder_name.clone().or_else(|| {
+                        seed.progression_source
+                            .as_ref()
+                            .and_then(|source| source.placeholder_name.clone())
+                    })
+                }),
                 seed_origin_phase_group_id: progression_source
                     .and_then(|source| source.origin_phase_group.as_ref())
                     .map(|group| group.id.to_string()),
@@ -415,8 +419,7 @@ async fn fetch_set_snapshot_detail_with_client(
                     .and_then(|phase| phase.phase_order),
                 seed_origin_placement: progression_source
                     .and_then(|source| source.origin_placement),
-                seed_origin_order: progression_source
-                    .and_then(|source| source.origin_order),
+                seed_origin_order: progression_source.and_then(|source| source.origin_order),
                 score,
             }
         })
@@ -502,6 +505,7 @@ async fn fetch_set_snapshot_detail_with_client(
 
     Ok(SetSnapshot {
         set_id: set.id.to_string(),
+        phase_group_id: set.phase_group.as_ref().map(|group| group.id.to_string()),
         identifier: set.identifier.clone(),
         full_round_text: set.full_round_text.unwrap_or_else(|| "Unknown".to_owned()),
         round: set.round,
@@ -529,12 +533,9 @@ async fn fetch_set_snapshot_detail_with_client(
         winner_id: set.winner_id.as_ref().map(|id| id.to_string()),
         winner_placement: set.w_placement.map(i64::from),
         loser_placement: set.l_placement.map(i64::from),
-        entrant1_source: set
-            .entrant1_source
-            .as_ref()
-            .map(|source| {
-                let origin = source_origin(source.type_id.as_ref().map(|id| id.to_string()));
-                SetEntrantSourceSnapshot {
+        entrant1_source: set.entrant1_source.as_ref().map(|source| {
+            let origin = source_origin(source.type_id.as_ref().map(|id| id.to_string()));
+            SetEntrantSourceSnapshot {
                 source_type: Some(source.type_.clone()),
                 type_id: source.type_id.as_ref().map(|id| id.to_string()),
                 resolved_set_id: None,
@@ -552,14 +553,11 @@ async fn fetch_set_snapshot_detail_with_client(
                     .and_then(|origin| origin.1.clone()),
                 origin_phase_order: origin.as_ref().and_then(|origin| origin.2),
                 origin_placement: origin.as_ref().and_then(|origin| origin.3),
-                }
-            }),
-        entrant2_source: set
-            .entrant2_source
-            .as_ref()
-            .map(|source| {
-                let origin = source_origin(source.type_id.as_ref().map(|id| id.to_string()));
-                SetEntrantSourceSnapshot {
+            }
+        }),
+        entrant2_source: set.entrant2_source.as_ref().map(|source| {
+            let origin = source_origin(source.type_id.as_ref().map(|id| id.to_string()));
+            SetEntrantSourceSnapshot {
                 source_type: Some(source.type_.clone()),
                 type_id: source.type_id.as_ref().map(|id| id.to_string()),
                 resolved_set_id: None,
@@ -577,8 +575,8 @@ async fn fetch_set_snapshot_detail_with_client(
                     .and_then(|origin| origin.1.clone()),
                 origin_phase_order: origin.as_ref().and_then(|origin| origin.2),
                 origin_placement: origin.as_ref().and_then(|origin| origin.3),
-                }
-            }),
+            }
+        }),
         winner_progression_seed_id: set
             .winner_progression_seed
             .as_ref()
@@ -592,16 +590,15 @@ async fn fetch_set_snapshot_detail_with_client(
             .winner_progression_seed
             .as_ref()
             .and_then(|seed| seed.seed_num.map(i64::from)),
-        winner_progression_seed_placeholder_name: set
-            .winner_progression_seed
-            .as_ref()
-            .and_then(|seed| {
+        winner_progression_seed_placeholder_name: set.winner_progression_seed.as_ref().and_then(
+            |seed| {
                 seed.placeholder_name.clone().or_else(|| {
                     seed.progression_source
                         .as_ref()
                         .and_then(|source| source.placeholder_name.clone())
                 })
-            }),
+            },
+        ),
         winner_progression_origin_phase_group_id: set
             .winner_progression_seed
             .as_ref()
@@ -644,16 +641,15 @@ async fn fetch_set_snapshot_detail_with_client(
             .loser_progression_seed
             .as_ref()
             .and_then(|seed| seed.seed_num.map(i64::from)),
-        loser_progression_seed_placeholder_name: set
-            .loser_progression_seed
-            .as_ref()
-            .and_then(|seed| {
+        loser_progression_seed_placeholder_name: set.loser_progression_seed.as_ref().and_then(
+            |seed| {
                 seed.placeholder_name.clone().or_else(|| {
                     seed.progression_source
                         .as_ref()
                         .and_then(|source| source.placeholder_name.clone())
                 })
-            }),
+            },
+        ),
         loser_progression_origin_phase_group_id: set
             .loser_progression_seed
             .as_ref()
@@ -993,6 +989,7 @@ async fn query_tournament_snapshot(
                             placeholder_name: progression.placeholder_name,
                         })
                         .collect(),
+                    seed_map: group.seed_map,
                     seed_order: group
                         .seeds
                         .clone()
@@ -1010,7 +1007,10 @@ async fn query_tournament_snapshot(
                         .flatten()
                         .map(|seed| PhaseGroupSeedSnapshot {
                             seed_id: seed.id.to_string(),
-                            progression_id: seed.progression_source.as_ref().map(|source| source.id.to_string()),
+                            progression_id: seed
+                                .progression_source
+                                .as_ref()
+                                .map(|source| source.id.to_string()),
                             seed_num: seed.seed_num.map(i64::from),
                             placement: seed.placement.map(i64::from),
                             origin_phase_order: seed
@@ -1111,24 +1111,22 @@ async fn query_tournament_snapshot(
                     let winner_seed = set.winner_progression_seed.as_ref();
                     let loser_seed = set.loser_progression_seed.as_ref();
                     let source_placeholder_name = |source_type_id: Option<String>| {
-                        source_type_id
-                            .as_deref()
-                            .and_then(|source_id| {
-                                slots
-                                    .iter()
-                                    .find(|slot| slot.seed_id.as_deref() == Some(source_id))
-                                    .and_then(|slot| slot.seed_placeholder_name.clone())
-                                    .or_else(|| {
-                                winner_seed
-                                    .filter(|seed| seed.id.to_string() == source_id)
-                                    .and_then(|seed| seed.placeholder_name.clone())
-                                    })
-                                    .or_else(|| {
-                                        loser_seed
-                                            .filter(|seed| seed.id.to_string() == source_id)
-                                            .and_then(|seed| seed.placeholder_name.clone())
-                                    })
-                            })
+                        source_type_id.as_deref().and_then(|source_id| {
+                            slots
+                                .iter()
+                                .find(|slot| slot.seed_id.as_deref() == Some(source_id))
+                                .and_then(|slot| slot.seed_placeholder_name.clone())
+                                .or_else(|| {
+                                    winner_seed
+                                        .filter(|seed| seed.id.to_string() == source_id)
+                                        .and_then(|seed| seed.placeholder_name.clone())
+                                })
+                                .or_else(|| {
+                                    loser_seed
+                                        .filter(|seed| seed.id.to_string() == source_id)
+                                        .and_then(|seed| seed.placeholder_name.clone())
+                                })
+                        })
                     };
                     let source_origin = |source_type_id: Option<String>| {
                         source_type_id.as_deref().and_then(|source_id| {
@@ -1150,13 +1148,21 @@ async fn query_tournament_snapshot(
                                             let source = seed.progression_source.as_ref();
                                             (
                                                 source
-                                                    .and_then(|source| source.origin_phase_group.as_ref())
+                                                    .and_then(|source| {
+                                                        source.origin_phase_group.as_ref()
+                                                    })
                                                     .map(|group| group.id.to_string()),
                                                 source
-                                                    .and_then(|source| source.origin_phase_group.as_ref())
-                                                    .and_then(|group| group.display_identifier.clone()),
+                                                    .and_then(|source| {
+                                                        source.origin_phase_group.as_ref()
+                                                    })
+                                                    .and_then(|group| {
+                                                        group.display_identifier.clone()
+                                                    }),
                                                 source
-                                                    .and_then(|source| source.origin_phase_group.as_ref())
+                                                    .and_then(|source| {
+                                                        source.origin_phase_group.as_ref()
+                                                    })
                                                     .and_then(|group| group.phase.as_ref())
                                                     .and_then(|phase| phase.phase_order),
                                                 source.and_then(|source| source.origin_placement),
@@ -1170,13 +1176,21 @@ async fn query_tournament_snapshot(
                                             let source = seed.progression_source.as_ref();
                                             (
                                                 source
-                                                    .and_then(|source| source.origin_phase_group.as_ref())
+                                                    .and_then(|source| {
+                                                        source.origin_phase_group.as_ref()
+                                                    })
                                                     .map(|group| group.id.to_string()),
                                                 source
-                                                    .and_then(|source| source.origin_phase_group.as_ref())
-                                                    .and_then(|group| group.display_identifier.clone()),
+                                                    .and_then(|source| {
+                                                        source.origin_phase_group.as_ref()
+                                                    })
+                                                    .and_then(|group| {
+                                                        group.display_identifier.clone()
+                                                    }),
                                                 source
-                                                    .and_then(|source| source.origin_phase_group.as_ref())
+                                                    .and_then(|source| {
+                                                        source.origin_phase_group.as_ref()
+                                                    })
                                                     .and_then(|group| group.phase.as_ref())
                                                     .and_then(|phase| phase.phase_order),
                                                 source.and_then(|source| source.origin_placement),
@@ -1188,6 +1202,7 @@ async fn query_tournament_snapshot(
 
                     Some(SetSnapshot {
                         set_id,
+                        phase_group_id: set.phase_group.as_ref().map(|group| group.id.to_string()),
                         identifier: set.identifier.clone(),
                         full_round_text: set
                             .full_round_text
@@ -1395,6 +1410,17 @@ async fn query_tournament_snapshot(
             EventSnapshot {
                 event_id: event.id.to_string(),
                 name: event.name.unwrap_or_else(|| "Unnamed event".to_owned()),
+                phases: event
+                    .phases
+                    .unwrap_or_default()
+                    .into_iter()
+                    .flatten()
+                    .map(|phase| PhaseSnapshot {
+                        phase_id: phase.id.to_string(),
+                        name: phase.name,
+                        phase_order: phase.phase_order,
+                    })
+                    .collect(),
                 phase_groups,
                 sets,
             }
@@ -1449,6 +1475,7 @@ pub async fn fetch_event_snapshot_by_slug(
     let mut tournament_slug = String::new();
     let mut event_id = String::new();
     let mut event_name = String::new();
+    let mut phases: Vec<PhaseSnapshot> = Vec::new();
     let mut phase_groups;
     let mut completed_requests = 0_usize;
 
@@ -1518,6 +1545,18 @@ pub async fn fetch_event_snapshot_by_slug(
             let event = data.event.ok_or_else(|| {
                 "指定eventが見つかりません。event slugを確認してください。".to_owned()
             })?;
+            phases = event
+                .phases
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .flatten()
+                .map(|phase| PhaseSnapshot {
+                    phase_id: phase.id.to_string(),
+                    name: phase.name,
+                    phase_order: phase.phase_order,
+                })
+                .collect::<Vec<PhaseSnapshot>>();
             phase_groups = event
                 .phase_groups
                 .clone()
@@ -1559,6 +1598,7 @@ pub async fn fetch_event_snapshot_by_slug(
                             placeholder_name: progression.placeholder_name,
                         })
                         .collect(),
+                    seed_map: group.seed_map,
                     seed_order: group
                         .seeds
                         .clone()
@@ -1576,7 +1616,10 @@ pub async fn fetch_event_snapshot_by_slug(
                         .flatten()
                         .map(|seed| PhaseGroupSeedSnapshot {
                             seed_id: seed.id.to_string(),
-                            progression_id: seed.progression_source.as_ref().map(|source| source.id.to_string()),
+                            progression_id: seed
+                                .progression_source
+                                .as_ref()
+                                .map(|source| source.id.to_string()),
                             seed_num: seed.seed_num.map(i64::from),
                             placement: seed.placement.map(i64::from),
                             origin_phase_order: seed
@@ -1743,6 +1786,7 @@ pub async fn fetch_event_snapshot_by_slug(
         events: vec![EventSnapshot {
             event_id,
             name: event_name,
+            phases,
             phase_groups,
             sets: all_sets,
         }],

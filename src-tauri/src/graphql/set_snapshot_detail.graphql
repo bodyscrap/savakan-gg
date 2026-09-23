@@ -5,6 +5,7 @@ query SetSnapshotDetail($setId: ID!) {
     fullRoundText
     round
     phaseGroup {
+      id
       displayIdentifier
       phase {
         name

@@ -5,6 +5,7 @@ schema {
 
 scalar ID
 scalar GgID
+scalar JSON
 
 type Query {
   tournament(slug: String!): Tournament
@@ -55,6 +56,7 @@ type Event {
   name: String
   slug: String
   tournament: Tournament
+  phases: [Phase]
   phaseGroups: [PhaseGroup]
   sets(page: Int, perPage: Int, sortType: SetSortType): SetConnection
 }
@@ -93,6 +95,7 @@ type PhaseGroup {
   displayIdentifier: String
   phase: Phase
   progressionsOut: [Progression]
+  seedMap: JSON
   seeds(query: SeedPaginationQuery!, eventId: ID): SeedConnection
 }
 

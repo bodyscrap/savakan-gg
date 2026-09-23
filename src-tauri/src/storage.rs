@@ -9,13 +9,12 @@ use tauri::{AppHandle, Manager};
 
 use crate::models::{
     BracketGraphEdge, BracketGraphSnapshot, EventEntrantMeta, EventLocalMeta, EventManagementMeta,
-    PhaseGroupGraphSeedSnapshot,
     EventSnapshot, GenericMessage, ItemListConfig, LocalGrandFinalResetResultMeta,
     LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetResultMeta,
     LocalSetScoreMeta, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
-    MobileResultRequestInput, MobileResultRequestItem, SaveEventManagementMetaInput, SenderProfile,
-    SetPlaySideMeta, TournamentEventPreviewItem, TournamentLocalMeta, TournamentSnapshot,
-    TournamentWorkspace,
+    MobileResultRequestInput, MobileResultRequestItem, PhaseGroupGraphSeedSnapshot,
+    PhaseGroupSeedSnapshot, SaveEventManagementMetaInput, SenderProfile, SetPlaySideMeta,
+    TournamentEventPreviewItem, TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
 };
 
 const STORAGE_DIR_NAME: &str = "savakan-gg";
@@ -135,7 +134,7 @@ fn event_graph_path_with_keys(
         sanitize_slug(tournament_id),
         sanitize_slug(slug_key),
         sanitize_slug(event_id),
-            event_name_slug(event_name),
+        event_name_slug(event_name),
     );
     Ok(snapshots_dir(app)?.join(file_name))
 }
@@ -152,7 +151,7 @@ fn meta_path_with_slug_key(
         sanitize_slug(tournament_id),
         sanitize_slug(slug_key),
         sanitize_slug(event_id),
-            event_name_slug(event_name),
+        event_name_slug(event_name),
     );
     Ok(snapshots_dir(app)?.join(file_name))
 }
@@ -484,6 +483,7 @@ fn merge_snapshot_into_meta(
         .unwrap_or_else(|| EventSnapshot {
             event_id: event_id.to_owned(),
             name: String::new(),
+            phases: Vec::new(),
             phase_groups: Vec::new(),
             sets: Vec::new(),
         });
@@ -1297,6 +1297,7 @@ fn build_bracket_graph(
         let group_event = EventSnapshot {
             event_id: graph_event.event_id.clone(),
             name: graph_event.name.clone(),
+            phases: Vec::new(),
             phase_groups: Vec::new(),
             sets,
         };
@@ -1866,18 +1867,28 @@ fn merge_event_snapshot_files(snapshots: Vec<TournamentSnapshot>) -> Option<Tour
     let mut snapshots = snapshots.into_iter();
     let first = snapshots.next()?;
     let mut merged = TournamentSnapshot {
-        tournament_id: first.tournament_id,
-        slug: first.slug,
-        name: first.name,
+        tournament_id: first.tournament_id.clone(),
+        slug: first.slug.clone(),
+        name: first.name.clone(),
         events: Vec::new(),
         updated_at: first.updated_at,
     };
-    for snapshot in snapshots {
+    let mut event_indexes = HashMap::<String, usize>::new();
+    for snapshot in std::iter::once(first).chain(snapshots) {
         merged.tournament_id = snapshot.tournament_id;
         merged.slug = snapshot.slug;
         merged.name = snapshot.name;
         merged.updated_at = merged.updated_at.max(snapshot.updated_at);
-        merged.events.extend(snapshot.events);
+        for event in snapshot.events {
+            if let Some(index) = event_indexes.get(&event.event_id).copied() {
+                if let Some(existing) = merged.events.get_mut(index) {
+                    *existing = event;
+                }
+            } else {
+                event_indexes.insert(event.event_id.clone(), merged.events.len());
+                merged.events.push(event);
+            }
+        }
     }
     Some(merged)
 }
@@ -2032,26 +2043,35 @@ pub fn reconcile_local_event_snapshot_names(
 }
 
 pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, String> {
-    let graphs = load_event_graph_files(app, slug)?;
-    if !graphs.is_empty() {
-        let first = graphs.first().expect("graphs is not empty");
-        let tournament_id = first.tournament_id.clone();
-        let graph_slug = first.slug.clone();
-        let tournament_name = first.tournament_name.clone();
-        let updated_at = first.updated_at;
-        let mut snapshot = TournamentSnapshot {
-            tournament_id,
-            slug: graph_slug,
-            name: tournament_name,
-            events: graphs.into_iter().map(|graph| graph.event).collect(),
-            updated_at,
-        };
-        rebuild_progression_from_completed_sets(&mut snapshot);
-        return Ok(snapshot);
-    }
+    // raw snapshot is the source of truth. The graph is a derived view that
+    // rewrites sources and removes intermediate sets, so loading it first can
+    // corrupt phase/set placement after a remote refresh.
     if let Some(mut snapshot) =
         merge_event_snapshot_files(load_event_snapshot_files(app, slug, false)?)
     {
+        rebuild_progression_from_completed_sets(&mut snapshot);
+        return Ok(snapshot);
+    }
+
+    // Keep loading older installations that only have graph files.
+    let graphs = load_event_graph_files(app, slug)?;
+    if !graphs.is_empty() {
+        let (tournament_id, slug, name, updated_at) = {
+            let first = graphs.first().expect("graphs is not empty");
+            (
+                first.tournament_id.clone(),
+                first.slug.clone(),
+                first.tournament_name.clone(),
+                first.updated_at,
+            )
+        };
+        let mut snapshot = TournamentSnapshot {
+            tournament_id,
+            slug,
+            name,
+            events: graphs.into_iter().map(|graph| graph.event).collect(),
+            updated_at,
+        };
         rebuild_progression_from_completed_sets(&mut snapshot);
         return Ok(snapshot);
     }
@@ -2174,8 +2194,7 @@ fn normalize_completed_source_slots(event: &mut EventSnapshot) {
                 if target.set_id == source_set.set_id {
                     return false;
                 }
-                if (source_set.winner_placement.is_some()
-                    || source_set.loser_placement.is_some())
+                if (source_set.winner_placement.is_some() || source_set.loser_placement.is_some())
                     && target.phase_order > source_set.phase_order
                 {
                     return false;
@@ -3052,6 +3071,7 @@ fn ensure_virtual_grand_final_reset_set(
 
     event.sets.push(crate::models::SetSnapshot {
         set_id: virtual_set_id,
+        phase_group_id: grand_final_set.phase_group_id.clone(),
         identifier: None,
         full_round_text: "Grand Final Reset".to_owned(),
         round: grand_final_set.round,
@@ -4295,15 +4315,14 @@ fn source_relation_reaches_set(
 
     // start.gg の typeId は set ID ではなく progression seed ID になることがある。
     // その場合でも winner/loser progression の対応を優先して解決する。
-    let progression_relation = if source.type_id.as_deref()
-        == source_set.winner_progression_seed_id.as_deref()
-    {
-        Some("winner")
-    } else if source.type_id.as_deref() == source_set.loser_progression_seed_id.as_deref() {
-        Some("loser")
-    } else {
-        None
-    };
+    let progression_relation =
+        if source.type_id.as_deref() == source_set.winner_progression_seed_id.as_deref() {
+            Some("winner")
+        } else if source.type_id.as_deref() == source_set.loser_progression_seed_id.as_deref() {
+            Some("loser")
+        } else {
+            None
+        };
     if let Some(relation) = progression_relation {
         return Some(relation);
     }
@@ -4926,38 +4945,43 @@ fn advance_completed_set_by_placement(
     let Some(source_phase_order) = source_set.phase_order else {
         return;
     };
-    let Some(target_phase_order) = source_phase_order.checked_add(1) else {
+    let source_group_snapshot = event.phase_groups.iter().find(|group| {
+        group.phase_order == Some(source_phase_order)
+            && normalize_group_key(group.display_identifier.as_ref())
+                == normalize_group_key(source_set.phase_group_display_identifier.as_ref())
+    });
+    let Some((target_phase_id, target_phase_order)) = next_phase_id_and_order(
+        event,
+        source_group_snapshot.and_then(|group| group.phase_id.as_deref()),
+        source_phase_order,
+    ) else {
         return;
     };
     let source_group = normalize_group_key(source_set.phase_group_display_identifier.as_ref());
 
     let participants = [
-        source_set
-            .winner_placement
-            .map(|placement| {
+        source_set.winner_placement.map(|placement| {
+            (
+                placement,
+                source_set.winner_progression_seed_id.as_deref(),
+                source_set.winner_progression_id.as_deref(),
+                source_set.winner_progression_origin_order,
+                winner_id,
+                winner_name,
+            )
+        }),
+        source_set.loser_placement.and_then(|placement| {
+            loser.map(|(id, name)| {
                 (
                     placement,
-                    source_set.winner_progression_seed_id.as_deref(),
-                    source_set.winner_progression_id.as_deref(),
-                    source_set.winner_progression_origin_order,
-                    winner_id,
-                    winner_name,
+                    source_set.loser_progression_seed_id.as_deref(),
+                    source_set.loser_progression_id.as_deref(),
+                    source_set.loser_progression_origin_order,
+                    id,
+                    name,
                 )
-            }),
-        source_set
-            .loser_placement
-            .and_then(|placement| {
-                loser.map(|(id, name)| {
-                    (
-                        placement,
-                        source_set.loser_progression_seed_id.as_deref(),
-                        source_set.loser_progression_id.as_deref(),
-                        source_set.loser_progression_origin_order,
-                        id,
-                        name,
-                    )
-                })
-            }),
+            })
+        }),
     ];
 
     for participant in participants.into_iter().flatten() {
@@ -4969,31 +4993,57 @@ fn advance_completed_set_by_placement(
             entrant_id,
             entrant_name,
         ) = participant;
-        let progression_target_seed_id = progression_id.and_then(|progression_id| {
+        let target_group_and_seed = progression_id.and_then(|progression_id| {
             event
                 .phase_groups
                 .iter()
-                .filter(|group| group.phase_order == Some(target_phase_order))
-                .flat_map(|group| group.seeds.iter())
-                .find(|seed| seed.progression_id.as_deref() == Some(progression_id))
-                .map(|seed| seed.seed_id.clone())
+                .filter(|group| {
+                    group.phase_order == Some(target_phase_order)
+                        && target_phase_id
+                            .as_deref()
+                            .is_none_or(|phase_id| group.phase_id.as_deref() == Some(phase_id))
+                })
+                .find_map(|group| {
+                    group
+                        .seeds
+                        .iter()
+                        .find(|seed| seed.progression_id.as_deref() == Some(progression_id))
+                        .map(|seed| {
+                            (
+                                group.phase_group_id.clone(),
+                                group.display_identifier.clone(),
+                                seed.seed_id.clone(),
+                            )
+                        })
+                })
         });
+        let progression_target_seed_id = target_group_and_seed
+            .as_ref()
+            .map(|(_, _, seed_id)| seed_id.as_str());
+        let target_group_display_identifier = target_group_and_seed
+            .as_ref()
+            .and_then(|(_, display_identifier, _)| display_identifier.as_ref());
         let Some(target_index) = event.sets.iter().position(|target| {
             target.phase_order == Some(target_phase_order)
+                && target_group_display_identifier.is_none_or(|display_identifier| {
+                    normalize_group_key(target.phase_group_display_identifier.as_ref())
+                        == normalize_group_key(Some(display_identifier))
+                })
                 && target.slots.iter().any(|slot| {
                     is_slot_empty(slot)
-                        && (progression_target_seed_id.as_deref().is_some_and(|seed_id| {
+                        && if let Some(seed_id) = progression_target_seed_id {
                             slot.seed_id.as_deref() == Some(seed_id)
-                        }) || progression_seed_id.is_none_or(|seed_id| {
-                            slot.seed_id.as_deref() == Some(seed_id)
-                        }) || (slot.seed_origin_phase_order == Some(source_phase_order)
-                            && normalize_group_key(
-                                slot.seed_origin_phase_group_display_identifier.as_ref(),
-                            ) == source_group
-                            && slot.seed_origin_placement == Some(placement)
-                            && origin_order.is_none_or(|order| {
-                                slot.seed_origin_order == Some(order)
-                            })))
+                        } else {
+                            progression_seed_id
+                                .is_none_or(|seed_id| slot.seed_id.as_deref() == Some(seed_id))
+                                || (slot.seed_origin_phase_order == Some(source_phase_order)
+                                    && normalize_group_key(
+                                        slot.seed_origin_phase_group_display_identifier.as_ref(),
+                                    ) == source_group
+                                    && slot.seed_origin_placement == Some(placement)
+                                    && origin_order
+                                        .is_none_or(|order| slot.seed_origin_order == Some(order)))
+                        }
                 })
         }) else {
             continue;
@@ -5001,12 +5051,15 @@ fn advance_completed_set_by_placement(
         set_phase_group_seed_entrant(
             event,
             target_phase_order,
+            target_group_and_seed
+                .as_ref()
+                .map(|(group_id, _, _)| group_id.as_str()),
             source_phase_order,
             &source_group,
             placement,
             origin_order,
             progression_id,
-            progression_target_seed_id.as_deref(),
+            progression_target_seed_id,
             entrant_id,
             entrant_name,
         );
@@ -5019,18 +5072,19 @@ fn advance_completed_set_by_placement(
             .enumerate()
             .filter(|(_, slot)| {
                 is_slot_empty(slot)
-                    && (progression_target_seed_id.as_deref().is_some_and(|seed_id| {
+                    && if let Some(seed_id) = progression_target_seed_id {
                         slot.seed_id.as_deref() == Some(seed_id)
-                    }) || progression_seed_id.is_none_or(|seed_id| {
-                        slot.seed_id.as_deref() == Some(seed_id)
-                    }) || (slot.seed_origin_phase_order == Some(source_phase_order)
-                        && normalize_group_key(
-                            slot.seed_origin_phase_group_display_identifier.as_ref(),
-                        ) == source_group
-                        && slot.seed_origin_placement == Some(placement)
-                        && origin_order.is_none_or(|order| {
-                            slot.seed_origin_order == Some(order)
-                        })))
+                    } else {
+                        progression_seed_id
+                            .is_none_or(|seed_id| slot.seed_id.as_deref() == Some(seed_id))
+                            || (slot.seed_origin_phase_order == Some(source_phase_order)
+                                && normalize_group_key(
+                                    slot.seed_origin_phase_group_display_identifier.as_ref(),
+                                ) == source_group
+                                && slot.seed_origin_placement == Some(placement)
+                                && origin_order
+                                    .is_none_or(|order| slot.seed_origin_order == Some(order)))
+                    }
             })
             .min_by_key(|(_, slot)| slot.seed_origin_order.unwrap_or(i64::MAX))
             .map(|(index, _)| index)
@@ -5055,6 +5109,7 @@ fn advance_completed_set_by_placement(
 fn set_phase_group_seed_entrant(
     event: &mut EventSnapshot,
     target_phase_order: i64,
+    target_group_id: Option<&str>,
     source_phase_order: i64,
     source_group: &str,
     placement: i64,
@@ -5065,14 +5120,15 @@ fn set_phase_group_seed_entrant(
     entrant_name: &str,
 ) {
     for group in &mut event.phase_groups {
-        if group.phase_order != Some(target_phase_order) {
+        if group.phase_order != Some(target_phase_order)
+            || target_group_id.is_some_and(|group_id| group.phase_group_id != group_id)
+        {
             continue;
         }
         for seed in &mut group.seeds {
             let origin_matches = seed.origin_phase_order == Some(source_phase_order)
-                && normalize_group_key(
-                    seed.origin_phase_group_display_identifier.as_ref(),
-                ) == source_group
+                && normalize_group_key(seed.origin_phase_group_display_identifier.as_ref())
+                    == source_group
                 && seed.origin_placement == Some(placement)
                 && origin_order.is_none_or(|order| seed.origin_order == Some(order));
             if !origin_matches
@@ -5101,6 +5157,68 @@ fn phase_group_key(set: &crate::models::SetSnapshot) -> String {
     )
 }
 
+fn next_phase_id_and_order(
+    event: &EventSnapshot,
+    source_phase_id: Option<&str>,
+    source_phase_order: i64,
+) -> Option<(Option<String>, i64)> {
+    let source_order = event
+        .phases
+        .iter()
+        .find(|phase| source_phase_id.is_some_and(|phase_id| phase.phase_id == phase_id))
+        .and_then(|phase| phase.phase_order)
+        .unwrap_or(source_phase_order);
+    event
+        .phases
+        .iter()
+        .filter_map(|phase| phase.phase_order.map(|order| (order, phase)))
+        .filter(|(order, _)| *order > source_order)
+        .min_by_key(|(order, _)| *order)
+        .map(|(order, phase)| (Some(phase.phase_id.clone()), order))
+        .or_else(|| source_order.checked_add(1).map(|order| (None, order)))
+}
+
+fn hydrate_progression_entrant_to_seed_slots(
+    event: &mut EventSnapshot,
+    target_seed: &PhaseGroupSeedSnapshot,
+    entrant_id: &str,
+    entrant_name: &str,
+) {
+    for target in &mut event.sets {
+        for slot_index in 0..target.slots.len() {
+            let Some(slot) = target.slots.get(slot_index) else {
+                continue;
+            };
+            let source = entrant_source_for_slot(target, slot_index);
+            let source_seed_matches = source.is_some_and(|source| {
+                source.source_type.as_deref().is_some_and(|source_type| {
+                    source_type.eq_ignore_ascii_case("seed")
+                        && source.type_id.as_deref() == Some(target_seed.seed_id.as_str())
+                })
+            });
+            let slot_seed_matches = slot.seed_id.as_deref() == Some(target_seed.seed_id.as_str());
+            let source_number_matches = source.is_some_and(|source| {
+                source.group_seed_num == target_seed.seed_num
+                    || source.seed_num == target_seed.seed_num
+            });
+            if !slot_seed_matches && !source_seed_matches && !source_number_matches {
+                continue;
+            }
+
+            let Some(slot) = target.slots.get_mut(slot_index) else {
+                continue;
+            };
+            slot.entrant_id = Some(entrant_id.to_owned());
+            slot.entrant_name = entrant_name.to_owned();
+            slot.score = None;
+        }
+
+        if empty_slot_count(target) == 0 && target.state == 1 {
+            target.state = 2;
+        }
+    }
+}
+
 fn is_round_robin_set(
     snapshot: &TournamentSnapshot,
     event_id: &str,
@@ -5126,7 +5244,11 @@ fn apply_completed_round_robin_progression(
     event_id: &str,
     group_key: &str,
 ) {
-    let Some(event) = snapshot.events.iter().find(|event| event.event_id == event_id) else {
+    let Some(event) = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+    else {
         return;
     };
     let Some(source_group) = event
@@ -5147,6 +5269,11 @@ fn apply_completed_round_robin_progression(
     let Some(source_phase_order) = source_group.phase_order else {
         return;
     };
+    let Some((target_phase_id, target_phase_order)) =
+        next_phase_id_and_order(event, source_group.phase_id.as_deref(), source_phase_order)
+    else {
+        return;
+    };
 
     let group_sets = event
         .sets
@@ -5165,6 +5292,11 @@ fn apply_completed_round_robin_progression(
     let mut game_wins = HashMap::<String, f64>::new();
     let mut game_losses = HashMap::<String, f64>::new();
     let mut head_to_head = HashMap::<(String, String), i64>::new();
+    let seed_num_by_entrant_id = source_group
+        .seeds
+        .iter()
+        .filter_map(|seed| Some((seed.entrant_id.clone()?, seed.seed_num?)))
+        .collect::<HashMap<String, i64>>();
     for set in &group_sets {
         let Some(winner_id) = set.winner_id.as_ref() else {
             return;
@@ -5231,6 +5363,11 @@ fn apply_completed_round_robin_progression(
             .cmp(&left_wins)
             .then_with(|| right_percentage.total_cmp(&left_percentage))
             .then_with(|| right_head_to_head.cmp(&left_head_to_head))
+            .then_with(|| {
+                seed_num_by_entrant_id
+                    .get(left)
+                    .cmp(&seed_num_by_entrant_id.get(right))
+            })
             .then_with(|| left.cmp(right))
     });
 
@@ -5245,20 +5382,28 @@ fn apply_completed_round_robin_progression(
                     .cmp(&right.origin_order.unwrap_or(i64::MAX))
             })
     });
-    let assignments = progressions
-        .into_iter()
-        .zip(standings)
-        .collect::<Vec<_>>();
-    let Some(event) = snapshot.events.iter_mut().find(|event| event.event_id == event_id) else {
+    let assignments = progressions.into_iter().zip(standings).collect::<Vec<_>>();
+    let Some(event) = snapshot
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == event_id)
+    else {
         return;
     };
     for (progression, entrant_id) in assignments {
         let Some(target_seed) = event
             .phase_groups
             .iter()
-            .filter(|group| group.phase_order.is_some_and(|order| order > source_phase_order))
+            .filter(|group| {
+                group.phase_order == Some(target_phase_order)
+                    && target_phase_id
+                        .as_deref()
+                        .is_none_or(|phase_id| group.phase_id.as_deref() == Some(phase_id))
+            })
             .flat_map(|group| group.seeds.iter())
-            .find(|seed| seed.progression_id.as_deref() == Some(progression.progression_id.as_str()))
+            .find(|seed| {
+                seed.progression_id.as_deref() == Some(progression.progression_id.as_str())
+            })
             .cloned()
         else {
             continue;
@@ -5271,29 +5416,23 @@ fn apply_completed_round_robin_progression(
             .map(|slot| slot.entrant_name.clone())
             .unwrap_or_else(|| "TBD".to_owned());
         for group in &mut event.phase_groups {
-            if !group.seeds.iter().any(|seed| seed.seed_id == target_seed.seed_id) {
+            if !group
+                .seeds
+                .iter()
+                .any(|seed| seed.seed_id == target_seed.seed_id)
+            {
                 continue;
             }
-            if let Some(seed) = group.seeds.iter_mut().find(|seed| seed.seed_id == target_seed.seed_id) {
+            if let Some(seed) = group
+                .seeds
+                .iter_mut()
+                .find(|seed| seed.seed_id == target_seed.seed_id)
+            {
                 seed.entrant_id = Some(entrant_id.clone());
                 seed.entrant_name = Some(entrant_name.clone());
             }
         }
-        for target in &mut event.sets {
-            if !target.slots.iter().any(|slot| slot.seed_id.as_deref() == Some(target_seed.seed_id.as_str())) {
-                continue;
-            }
-            for slot in &mut target.slots {
-                if slot.seed_id.as_deref() == Some(target_seed.seed_id.as_str()) {
-                    slot.entrant_id = Some(entrant_id.clone());
-                    slot.entrant_name = entrant_name.clone();
-                    slot.score = None;
-                }
-            }
-            if empty_slot_count(target) == 0 && target.state == 1 {
-                target.state = 2;
-            }
-        }
+        hydrate_progression_entrant_to_seed_slots(event, &target_seed, &entrant_id, &entrant_name);
     }
 }
 
@@ -5691,16 +5830,25 @@ pub fn save_event_snapshot(
         &event_snapshot.name,
         false,
     )?;
+    remove_stale_event_snapshot_files(
+        app,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        std::slice::from_ref(&event_snapshot),
+        false,
+    )?;
 
     // 同一slugの既存スナップショットを保持しつつ、対象eventのみ差し替える。
+    // 更新時はgraphを読むと未報告のローカル進行が混ざるため、raw snapshotを基準にする。
     let mut merged_snapshot =
-        load_snapshot(app, &snapshot.slug).unwrap_or_else(|_| TournamentSnapshot {
-            tournament_id: snapshot.tournament_id.clone(),
-            slug: snapshot.slug.clone(),
-            name: snapshot.name.clone(),
-            events: Vec::new(),
-            updated_at: snapshot.updated_at,
-        });
+        merge_event_snapshot_files(load_event_snapshot_files(app, &snapshot.slug, false)?)
+            .unwrap_or_else(|| TournamentSnapshot {
+                tournament_id: snapshot.tournament_id.clone(),
+                slug: snapshot.slug.clone(),
+                name: snapshot.name.clone(),
+                events: Vec::new(),
+                updated_at: snapshot.updated_at,
+            });
 
     merged_snapshot.tournament_id = snapshot.tournament_id.clone();
     merged_snapshot.slug = snapshot.slug.clone();

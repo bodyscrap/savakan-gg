@@ -289,8 +289,18 @@ pub struct EventSnapshot {
     pub event_id: String,
     pub name: String,
     #[serde(default)]
+    pub phases: Vec<PhaseSnapshot>,
+    #[serde(default)]
     pub phase_groups: Vec<PhaseGroupSnapshot>,
     pub sets: Vec<SetSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhaseSnapshot {
+    pub phase_id: String,
+    pub name: Option<String>,
+    pub phase_order: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -305,6 +315,8 @@ pub struct PhaseGroupSnapshot {
     pub display_identifier: Option<String>,
     #[serde(default)]
     pub progressions_out: Vec<PhaseGroupProgressionSnapshot>,
+    #[serde(default)]
+    pub seed_map: Option<serde_json::Value>,
     #[serde(default)]
     pub seed_order: Vec<String>,
     #[serde(default)]
@@ -352,6 +364,8 @@ pub struct PhaseGroupProgressionSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct SetSnapshot {
     pub set_id: String,
+    #[serde(default)]
+    pub phase_group_id: Option<String>,
     #[serde(default)]
     pub identifier: Option<String>,
     pub full_round_text: String,

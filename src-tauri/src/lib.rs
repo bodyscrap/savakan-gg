@@ -467,6 +467,7 @@ mod tests {
     fn make_set(set_id: &str, full_round_text: &str, round: Option<i64>) -> SetSnapshot {
         SetSnapshot {
             set_id: set_id.to_owned(),
+            phase_group_id: None,
             identifier: None,
             full_round_text: full_round_text.to_owned(),
             round,

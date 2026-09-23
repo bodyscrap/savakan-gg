@@ -7,6 +7,11 @@ query EventSync($slug: String!, $page: Int!, $perPage: Int!) {
       name
       slug
     }
+    phases {
+      id
+      name
+      phaseOrder
+    }
     phaseGroups {
       id
       bracketType
@@ -31,6 +36,7 @@ query EventSync($slug: String!, $page: Int!, $perPage: Int!) {
         originPlacement
         placeholderName
       }
+        seedMap
       phase {
         id
         name
@@ -67,6 +73,7 @@ query EventSync($slug: String!, $page: Int!, $perPage: Int!) {
         fullRoundText
         round
         phaseGroup {
+          id
           displayIdentifier
           phase {
             name

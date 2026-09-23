@@ -21,6 +21,7 @@ type SetSlot = {
 
 type SetSnapshot = {
   setId: string;
+  phaseGroupId?: string | null;
   fullRoundText: string;
   round: number | null;
   phaseName: string | null;
@@ -92,12 +93,14 @@ type BracketSectionForView = {
 
 type PhasePoolGroup = {
   key: string;
+  phaseGroupId: string | null;
   phaseName: string;
   phaseGroupName: string;
   bracketType: string | null;
   phaseOrder: number | null;
   phaseGroupDisplayIdentifier: string | null;
   progressionsOut: PhaseGroupProgressionSnapshot[];
+  seedMap: unknown;
   seedOrder: string[];
   seeds: PhaseGroupSeedSnapshot[];
   sets: SetSnapshot[];
@@ -726,11 +729,13 @@ type EventSnapshot = {
 };
 
 type PhaseGroupSnapshot = {
+  phaseGroupId?: string;
   phaseName: string | null;
   phaseOrder: number | null;
   displayIdentifier: string | null;
   bracketType: string | null;
   progressionsOut?: PhaseGroupProgressionSnapshot[];
+  seedMap?: unknown;
   seedOrder?: string[];
   seeds?: PhaseGroupSeedSnapshot[];
 };
@@ -7547,12 +7552,14 @@ function App() {
 
     const groupMap = new Map<string, {
       key: string;
+      phaseGroupId: string | null;
       phaseName: string;
       phaseGroupName: string;
       bracketType: string | null;
       phaseOrder: number | null;
       phaseGroupDisplayIdentifier: string | null;
       progressionsOut: PhaseGroupProgressionSnapshot[];
+      seedMap: unknown;
       seedOrder: string[];
       seeds: PhaseGroupSeedSnapshot[];
       sets: SetSnapshot[];
@@ -7563,20 +7570,25 @@ function App() {
       const phaseGroupName =
         set.phaseGroupName && set.phaseGroupName.trim() !== "" ? set.phaseGroupName : "Pool 未設定";
       const phaseGroupDisplayIdentifier = set.phaseGroupDisplayIdentifier?.trim() || null;
-      const phaseGroupMetadata = selectedEvent.phaseGroups?.find((group) =>
-        group.phaseOrder === set.phaseOrder
-        && (group.displayIdentifier?.trim() || null) === phaseGroupDisplayIdentifier,
-      ) ?? selectedEvent.phaseGroups?.find((group) =>
-        group.phaseName === set.phaseName
-        && (group.displayIdentifier?.trim() || null) === phaseGroupDisplayIdentifier,
-      );
+      const phaseGroupMetadata = set.phaseGroupId
+        ? selectedEvent.phaseGroups?.find((group) => group.phaseGroupId === set.phaseGroupId)
+        : selectedEvent.phaseGroups?.find((group) =>
+          group.phaseOrder === set.phaseOrder
+          && (group.displayIdentifier?.trim() || null) === phaseGroupDisplayIdentifier,
+        ) ?? selectedEvent.phaseGroups?.find((group) =>
+          group.phaseName === set.phaseName
+          && (group.displayIdentifier?.trim() || null) === phaseGroupDisplayIdentifier,
+        );
       const bracketType = phaseGroupMetadata?.bracketType?.trim().toUpperCase() || null;
       const progressionsOut = phaseGroupMetadata?.progressionsOut ?? [];
+      const seedMap = phaseGroupMetadata?.seedMap ?? null;
       const seedOrder = phaseGroupMetadata?.seedOrder ?? [];
       const seeds = phaseGroupMetadata?.seeds ?? [];
       const hasStablePhasePoolIdentity = set.phaseOrder !== null && phaseGroupDisplayIdentifier !== null;
-      const groupKey = hasStablePhasePoolIdentity
-        ? `order:${set.phaseOrder}::pool:${phaseGroupDisplayIdentifier}`
+      const groupKey = set.phaseGroupId
+        ? `id:${set.phaseGroupId}`
+        : hasStablePhasePoolIdentity
+          ? `order:${set.phaseOrder}::pool:${phaseGroupDisplayIdentifier}`
         : `name:${phaseName}::${phaseGroupName}`;
       const found = groupMap.get(groupKey);
 
@@ -7587,6 +7599,9 @@ function App() {
         }
         if (found.progressionsOut.length === 0 && progressionsOut.length > 0) {
           found.progressionsOut = progressionsOut;
+        }
+        if (found.seedMap === null && seedMap !== null) {
+          found.seedMap = seedMap;
         }
         if (found.seedOrder.length === 0 && seedOrder.length > 0) {
           found.seedOrder = seedOrder;
@@ -7599,12 +7614,14 @@ function App() {
 
       groupMap.set(groupKey, {
         key: groupKey,
+        phaseGroupId: set.phaseGroupId ?? null,
         phaseName,
         phaseGroupName,
         bracketType,
         phaseOrder: set.phaseOrder,
         phaseGroupDisplayIdentifier,
         progressionsOut,
+        seedMap,
         seedOrder,
         seeds,
         sets: [set],
@@ -7627,12 +7644,14 @@ function App() {
       })
       .map((group) => ({
         key: group.key,
+        phaseGroupId: group.phaseGroupId,
         phaseName: group.phaseName,
         phaseGroupName: group.phaseGroupName,
         bracketType: group.bracketType,
         phaseOrder: group.phaseOrder,
         phaseGroupDisplayIdentifier: group.phaseGroupDisplayIdentifier,
         progressionsOut: group.progressionsOut,
+        seedMap: group.seedMap,
         seedOrder: group.seedOrder,
         seeds: group.seeds,
         sets: group.sets,
@@ -8155,11 +8174,29 @@ function App() {
         .filter((seed) => Boolean(seed.seedId))
         .map((seed) => [seed.seedId, seed]),
     );
-    const phaseGroupSeedOrder = selectedPhasePoolGroup?.seeds.length
-      ? selectedPhasePoolGroup.seeds.map((seed) => seed.seedId)
-      : selectedPhasePoolGroup?.seedOrder ?? [];
+    const phaseGroupSeedIdByEntrantId = new Map(
+      (selectedPhasePoolGroup?.seeds ?? [])
+        .filter((seed) => Boolean(seed.seedId && seed.entrantId))
+        .map((seed) => [seed.entrantId as string, seed.seedId]),
+    );
+    const phaseGroupSeeds = [...(selectedPhasePoolGroup?.seeds ?? [])]
+      .filter((seed) => Boolean(seed.seedId))
+      .sort((left, right) => {
+        if (left.seedNum !== null && left.seedNum !== undefined
+          && right.seedNum !== null && right.seedNum !== undefined
+          && left.seedNum !== right.seedNum) {
+          return left.seedNum - right.seedNum;
+        }
+        if (left.seedNum !== null && left.seedNum !== undefined) {
+          return -1;
+        }
+        if (right.seedNum !== null && right.seedNum !== undefined) {
+          return 1;
+        }
+        return left.seedId.localeCompare(right.seedId);
+      });
     const seedSlotById = new Map<string, SetSlot>();
-    for (const set of selectedEvent?.sets ?? []) {
+    for (const set of selectedPhasePoolGroup?.sets ?? []) {
       for (const slot of set.slots) {
         if (!slot.seedId) {
           continue;
@@ -8179,8 +8216,8 @@ function App() {
 
     const fixedEntrants: string[] = [];
     const entrantIdsByColumnKey = new Map<string, string | null>();
-    for (const seedId of phaseGroupSeedOrder) {
-      const seed = phaseGroupSeedById.get(seedId);
+    for (const seed of phaseGroupSeeds) {
+      const seedId = seed.seedId;
       const columnKey = `seed:${seedId}`;
       fixedEntrants.push(columnKey);
       entrantIdsByColumnKey.set(columnKey, seed?.entrantId ?? null);
@@ -8443,6 +8480,8 @@ function App() {
             `condition=${source?.conditionString || ""}`,
           ].join(" | "));
         }
+        const slotSeed = slot.seedId ? phaseGroupSeedById.get(slot.seedId) : undefined;
+        const slotSeedSlot = slot.seedId ? seedSlotById.get(slot.seedId) : undefined;
         const resolved = slot.entrantId
           ? {
             entrantId: slot.entrantId,
@@ -8458,20 +8497,42 @@ function App() {
               source?.originPlacement ?? slot.seedOriginPlacement,
             ),
           }
-          : isLaterPhase
-            ? resolveSourceSlot(source, new Set([set.setId]))
-              ?? (slot.seedPlaceholderName?.trim()
-                ? {
-              entrantId: roundRobinPlaceholderId(slot, source),
-              entrantName: slot.seedPlaceholderName.trim(),
-              isPlaceholder: true,
-              seedId: slot.seedId,
-              seedNum: slot.seedNum,
-              originPlacement: slot.seedOriginPlacement,
-              originDisplayIdentifier: slot.seedOriginPhaseGroupDisplayIdentifier,
-                }
-              : null)
-            : null;
+          : (slotSeed?.entrantId
+            ? {
+              entrantId: slotSeed.entrantId,
+              entrantName: slotSeed.entrantName?.trim() || slotSeed.entrantId,
+              isPlaceholder: false,
+              seedId: slotSeed.seedId,
+              seedNum: slot.seedNum ?? slotSeed.seedNum,
+              originPlacement: slot.seedOriginPlacement ?? slotSeed.originPlacement,
+              originDisplayIdentifier: slot.seedOriginPhaseGroupDisplayIdentifier
+                ?? slotSeed.originPhaseGroupDisplayIdentifier,
+              originOrder: slotSeed.originOrder,
+            }
+            : slotSeedSlot?.entrantId
+              ? {
+                entrantId: slotSeedSlot.entrantId,
+                entrantName: slotSeedSlot.entrantName,
+                isPlaceholder: false,
+                seedId: slotSeedSlot.seedId,
+                seedNum: slot.seedNum ?? slotSeedSlot.seedNum,
+                originPlacement: slot.seedOriginPlacement ?? slotSeedSlot.seedOriginPlacement,
+                originDisplayIdentifier: slot.seedOriginPhaseGroupDisplayIdentifier
+                  ?? slotSeedSlot.seedOriginPhaseGroupDisplayIdentifier,
+                originOrder: null,
+              }
+              : resolveSourceSlot(source, new Set([set.setId])))
+            ?? (slot.seedPlaceholderName?.trim()
+              ? {
+                entrantId: roundRobinPlaceholderId(slot, source),
+                entrantName: slot.seedPlaceholderName.trim(),
+                isPlaceholder: true,
+                seedId: slot.seedId,
+                seedNum: slot.seedNum,
+                originPlacement: slot.seedOriginPlacement,
+                originDisplayIdentifier: slot.seedOriginPhaseGroupDisplayIdentifier,
+              }
+              : null);
         const entrantId = resolved?.entrantId ?? roundRobinPlaceholderId(slot, source);
         const sourcePlaceholderName = source?.placeholderName?.trim()
           || source?.conditionString?.trim();
@@ -8483,12 +8544,15 @@ function App() {
           ?? sourcePlaceholderName
           ?? slot.entrantName
           ?? "TBD";
+        const effectiveSeedId = phaseGroupSeedIdByEntrantId.get(entrantId)
+          ?? resolved?.seedId
+          ?? slot.seedId;
         return {
           slot,
           entrantId,
           entrantName,
           isPlaceholder: resolved?.isPlaceholder ?? slot.entrantId === null,
-          seedId: resolved?.seedId ?? slot.seedId,
+          seedId: effectiveSeedId,
           seedNum: source?.seedNum ?? resolved?.seedNum,
           originPlacement: source?.placement ?? resolved?.originPlacement,
           originDisplayIdentifier: source?.originPhaseGroupDisplayIdentifier
@@ -8502,7 +8566,9 @@ function App() {
       });
       entrants.forEach(({ slot, entrantId, entrantName, isPlaceholder, seedId, seedNum, originPlacement, originDisplayIdentifier, originOrder }) => {
         entrantNames.set(entrantId, entrantName);
-        const effectiveSeedId = seedId ?? slot.seedId;
+        const effectiveSeedId = phaseGroupSeedIdByEntrantId.get(entrantId)
+          ?? seedId
+          ?? slot.seedId;
         if (effectiveSeedId) {
           entrantSeedIds.set(entrantId, effectiveSeedId);
         }
@@ -8558,13 +8624,10 @@ function App() {
         continue;
       }
 
-      const firstColumnKey = entrants[0].seedId
-        ? `seed:${entrants[0].seedId}`
-        : entrants[0].entrantId;
-      const secondColumnKey = entrants[1].seedId
-        ? `seed:${entrants[1].seedId}`
-        : entrants[1].entrantId;
-      setsByPair.set(roundRobinPairKey(firstColumnKey, secondColumnKey), set);
+      setsByPair.set(
+        roundRobinPairKey(entrants[0].entrantId, entrants[1].entrantId),
+        set,
+      );
       const setDisplay = getSetScoresForDisplay(set);
       const winnerId = setDisplay.winnerId ?? set.winnerId;
       if (!winnerId || !standingByEntrantId.has(winnerId)) {
@@ -8738,8 +8801,18 @@ function App() {
       const byName = (entrantNames.get(leftEntrantId) ?? "").localeCompare(entrantNames.get(rightEntrantId) ?? "", "ja");
       return byName || leftEntrantId.localeCompare(rightEntrantId, "ja");
     });
-    if (fixedEntrants.length === 0) {
-      fixedEntrants.push(...sortedEntrants);
+    if (phaseGroupSeeds.length === 0) {
+      const fixedEntrantIds = new Set(
+        [...entrantIdsByColumnKey.values()].filter((entrantId): entrantId is string => entrantId !== null),
+      );
+      for (const entrantId of sortedEntrants) {
+        if (fixedEntrantIds.has(entrantId)) {
+          continue;
+        }
+        fixedEntrants.push(entrantId);
+        entrantIdsByColumnKey.set(entrantId, entrantId);
+        fixedEntrantIds.add(entrantId);
+      }
     }
     const entrantOrder = new Map(fixedEntrants.map((entrantId, index) => [entrantId, index]));
 
@@ -8752,6 +8825,17 @@ function App() {
             : right.h2hPoints - left.h2hPoints;
         if (comparison !== 0) {
           return comparison;
+        }
+      }
+
+      const leftSeedNumber = entrantSeedNumbers.get(left.entrantId);
+      const rightSeedNumber = entrantSeedNumbers.get(right.entrantId);
+      if (leftSeedNumber !== undefined || rightSeedNumber !== undefined) {
+        if (leftSeedNumber === undefined || rightSeedNumber === undefined) {
+          return leftSeedNumber === undefined ? 1 : -1;
+        }
+        if (leftSeedNumber !== rightSeedNumber) {
+          return leftSeedNumber - rightSeedNumber;
         }
       }
 
@@ -9352,6 +9436,33 @@ function App() {
         const loserScore = loserSlot ? toIntegerScore(loserSlot.score) : null;
         const loserIsDq = loserSlot ? isDqScoreValue(loserSlot.score) : false;
 
+        if (winnerSlot && loserSlot && !loserIsDq && (winnerScore === null || loserScore === null)) {
+          const scores: Record<string, string> = {};
+          scores[winnerId] = "W";
+          if (loserSlot.entrantId) {
+            scores[loserSlot.entrantId] = "L";
+          }
+          return {
+            scores,
+            isDq: false,
+            winnerId,
+          };
+        }
+
+        if (winnerScore === null && loserScore === null && !loserIsDq) {
+          const scores: Record<string, string> = {};
+          for (const slot of set.slots) {
+            if (slot.entrantId) {
+              scores[slot.entrantId] = slot.entrantId === winnerId ? "W" : "L";
+            }
+          }
+          return {
+            scores,
+            isDq: false,
+            winnerId,
+          };
+        }
+
         if (winnerScore !== null && (loserScore === null || loserIsDq)) {
           const scores: Record<string, string> = {};
           for (const slot of set.slots) {
@@ -9512,12 +9623,16 @@ function App() {
     }
 
     setDirectWinnerId(null);
-    setScoreDrafts(buildScoreDraftsFromSet(set));
+    const snapshotDisplay = getSetScoresForDisplay(set);
+    const snapshotScoreDrafts = Object.keys(snapshotDisplay.scores).length > 0
+      ? snapshotDisplay.scores
+      : buildScoreDraftsFromSet(set);
+    setScoreDrafts(snapshotScoreDrafts);
     setSetResultDrafts((current) => ({
       ...current,
       [set.setId]: {
         winnerId: "",
-        scoreDrafts: buildScoreDraftsFromSet(set),
+        scoreDrafts: snapshotScoreDrafts,
         directWin: false,
       },
     }));
@@ -12552,7 +12667,10 @@ function App() {
                                       const isDiagonal = rowEntrantId === columnEntrantId;
                                       const set = isDiagonal
                                         ? null
-                                        : roundRobinBoardData.setsByPair.get(roundRobinPairKey(rowEntrantId, columnEntrantId));
+                                        : roundRobinBoardData.setsByPair.get(roundRobinPairKey(
+                                          roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId) ?? rowEntrantId,
+                                          roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId) ?? columnEntrantId,
+                                        ));
                                       if (!set) {
                                         return <td className={`round-robin-cell ${isDiagonal ? "diagonal" : "empty"}`} key={columnEntrantId}>-</td>;
                                       }
@@ -12693,6 +12811,17 @@ function App() {
                       </div>
                     ) : (
                     <div className="bracket-split-stack" style={bracketScaleStyle}>
+                      <details className="meta bracket-debug-seeds">
+                        <summary>対象PhaseGroup seeds / seedMapを確認</summary>
+                        <h4>seeds</h4>
+                        <pre style={{ whiteSpace: "pre-wrap", maxHeight: "16rem", overflow: "auto" }}>
+                          {JSON.stringify(selectedPhasePoolGroup.seeds, null, 2)}
+                        </pre>
+                        <h4>seedMap</h4>
+                        <pre style={{ whiteSpace: "pre-wrap", maxHeight: "20rem", overflow: "auto" }}>
+                          {JSON.stringify(selectedPhasePoolGroup.seedMap, null, 2)}
+                        </pre>
+                      </details>
                       {renderedBracketSectionsForView.map((section) => (
                         <section className="bracket-subgroup" key={`${selectedPhasePoolGroup.key}-${section.key}`}>
                           <h4>{section.title}</h4>
@@ -12798,11 +12927,12 @@ function App() {
                                           : sideLabel === "2P"
                                             ? (finishedSet ? "side-2p-finished" : "side-2p")
                                             : "side-none";
-                                        const gameWins = slot.score !== null
-                                          ? (isDqScoreValue(slot.score) ? "DQ" : formatScoreValue(slot.score))
-                                          : entrantId
-                                            ? (scoreMap[entrantId] ?? (winnerId ? (isWinner ? "✓" : "-") : "-"))
-                                            : "-";
+                                        const gameWins = entrantId
+                                          ? (scoreMap[entrantId]
+                                            ?? (slot.score !== null
+                                              ? (isDqScoreValue(slot.score) ? "DQ" : formatScoreValue(slot.score))
+                                              : (winnerId ? (isWinner ? "✓" : "-") : "-")))
+                                          : "-";
                                         const scoreClass = (isDqScoreValue(slot.score) || setDisplay.isDq)
                                           ? (isWinner ? "win" : "dq")
                                           : (isWinner ? "win" : "lose");
