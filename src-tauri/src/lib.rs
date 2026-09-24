@@ -6184,6 +6184,15 @@ async fn refresh_local_event_snapshot_from_remote(
 }
 
 #[tauri::command]
+fn restore_local_event_graph_from_snapshot(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+) -> Result<TournamentWorkspace, String> {
+    storage::restore_event_graph_from_snapshot(&app, &slug, &event_id)
+}
+
+#[tauri::command]
 async fn clear_local_set_result_drafts(
     app: tauri::AppHandle,
     slug: String,
@@ -7047,6 +7056,7 @@ pub fn run() {
             create_event_snapshot,
             create_event_snapshot_by_slug,
             refresh_local_event_snapshot_from_remote,
+            restore_local_event_graph_from_snapshot,
             clear_local_set_result_drafts,
             clear_local_set_result_draft_for_set,
             save_local_player_meta,

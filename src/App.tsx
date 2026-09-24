@@ -3124,6 +3124,7 @@ function App() {
   const [isTestOverlayActive, setIsTestOverlayActive] = useState(false);
   const [mobileInputPortalBusy, setMobileInputPortalBusy] = useState(false);
   const [mobileInputPortalOpen, setMobileInputPortalOpen] = useState(false);
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [mobileInputPortalDialog, setMobileInputPortalDialog] = useState<MobileInputPortalInfo | null>(null);
   const [mobileInputPortalCandidates, setMobileInputPortalCandidates] = useState<LocalNetworkSettingsCandidate[]>([]);
   const [mobileInputIssuedUrl, setMobileInputIssuedUrl] = useState("");
@@ -9535,6 +9536,36 @@ function App() {
     }
   }
 
+  async function restoreGraphFromSnapshot() {
+    const normalizedSlug = toApiSlug(slug);
+    const eventId = selectedEvent?.eventId ?? selectedEventId;
+    if (normalizedSlug === "" || eventId === "") {
+      setError("先にイベントを選択してください。");
+      return;
+    }
+
+    setRestoreDialogOpen(false);
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const result = await invoke<TournamentWorkspace>("restore_local_event_graph_from_snapshot", {
+        slug: normalizedSlug,
+        eventId,
+      });
+      setWorkspace(result);
+      setSetResultDrafts({});
+      setInterimScoreDraftsBySetId({});
+      closeMatchDialog();
+      setMessage("保存済みスナップショットからグラフを復元しました。");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function getSetSlotSide(setId: string, entrantId: string | null): PlaySide | "" {
     if (!entrantId) {
       return "";
@@ -12860,18 +12891,13 @@ function App() {
                   >
                     スマートフォンでアクセス
                   </button>
-                  <button type="button" className="ghost" disabled={busy || toApiSlug(slug) === ""} onClick={updateSnapshot}>
-                    スナップショット更新
-                  </button>
                   <button
                     type="button"
                     className="ghost"
                     disabled={busy || toApiSlug(slug) === "" || !selectedEvent}
-                    onClick={() => {
-                      void discardLocalResultDraftsForBracket();
-                    }}
+                    onClick={() => setRestoreDialogOpen(true)}
                   >
-                    全下書きを破棄
+                    復元
                   </button>
                   <button
                     type="button"
@@ -13606,6 +13632,57 @@ function App() {
                     }}
                   >
                     この結果を確定
+                  </button>
+                </div>
+              </section>
+            </div>
+          )}
+          {restoreDialogOpen && (
+            <div className="dialog-backdrop" onClick={() => setRestoreDialogOpen(false)}>
+              <section
+                className="dialog-panel"
+                role="dialog"
+                aria-modal="true"
+                aria-label="復元方法"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="dialog-head">
+                  <div>
+                    <h3>復元方法</h3>
+                    <p className="meta">対象: {selectedEvent?.name ?? "選択中のイベント"}</p>
+                  </div>
+                  <button type="button" className="ghost" onClick={() => setRestoreDialogOpen(false)}>閉じる</button>
+                </div>
+                <div className="dialog-body" style={{ display: "grid", gap: "0.5rem" }}>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy || !selectedEvent}
+                    onClick={() => void restoreGraphFromSnapshot()}
+                  >
+                    スナップショットから復元
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy || toApiSlug(slug) === ""}
+                    onClick={() => {
+                      setRestoreDialogOpen(false);
+                      void updateSnapshot();
+                    }}
+                  >
+                    スナップショットの更新
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={busy || toApiSlug(slug) === "" || !selectedEvent}
+                    onClick={() => {
+                      setRestoreDialogOpen(false);
+                      void discardLocalResultDraftsForBracket();
+                    }}
+                  >
+                    全下書きの破棄
                   </button>
                 </div>
               </section>

@@ -6804,6 +6804,39 @@ pub fn load_workspace(
     })
 }
 
+pub fn restore_event_graph_from_snapshot(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentWorkspace, String> {
+    let workspace = load_workspace(app, slug, event_id)?;
+    let event = workspace
+        .snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("復元対象イベントが見つかりません: {event_id}"))?;
+    let normalized_slug = normalize_slug_for_storage(slug);
+    let graph = build_bracket_graph(&workspace.snapshot, event);
+
+    save_event_graph_file(
+        app,
+        &graph,
+        &workspace.snapshot.tournament_id,
+        &normalized_slug,
+        &event.event_id,
+        &event.name,
+    )?;
+    remove_stale_event_graph_files(
+        app,
+        &workspace.snapshot.tournament_id,
+        &normalized_slug,
+        std::slice::from_ref(event),
+    )?;
+
+    Ok(workspace)
+}
+
 pub fn upsert_local_set_result(
     app: &AppHandle,
     input: LocalSetResultInput,
