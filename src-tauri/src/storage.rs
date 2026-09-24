@@ -3251,6 +3251,50 @@ fn ordered_grand_final_reset_slots(
 mod grand_final_reset_order_tests {
     use super::*;
 
+    #[test]
+    fn replaces_only_the_requested_event_from_pristine_snapshot() {
+        let mut snapshot = TournamentSnapshot {
+            tournament_id: "tournament".to_owned(),
+            slug: "event".to_owned(),
+            name: "Tournament".to_owned(),
+            events: vec![
+                EventSnapshot {
+                    event_id: "event-a".to_owned(),
+                    name: "Locally changed A".to_owned(),
+                    phases: Vec::new(),
+                    phase_groups: Vec::new(),
+                    sets: Vec::new(),
+                },
+                EventSnapshot {
+                    event_id: "event-b".to_owned(),
+                    name: "Local B".to_owned(),
+                    phases: Vec::new(),
+                    phase_groups: Vec::new(),
+                    sets: Vec::new(),
+                },
+            ],
+            updated_at: Utc::now(),
+        };
+        let pristine_snapshot = TournamentSnapshot {
+            tournament_id: "tournament".to_owned(),
+            slug: "event".to_owned(),
+            name: "Tournament".to_owned(),
+            events: vec![EventSnapshot {
+                event_id: "event-a".to_owned(),
+                name: "Downloaded A".to_owned(),
+                phases: Vec::new(),
+                phase_groups: Vec::new(),
+                sets: Vec::new(),
+            }],
+            updated_at: Utc::now(),
+        };
+
+        replace_event_with_pristine_snapshot(&mut snapshot, &pristine_snapshot, "event-a").unwrap();
+
+        assert_eq!(snapshot.events[0].name, "Downloaded A");
+        assert_eq!(snapshot.events[1].name, "Local B");
+    }
+
     fn make_slot(entrant_id: &str) -> crate::models::SetSlotSnapshot {
         crate::models::SetSlotSnapshot {
             entrant_id: Some(entrant_id.to_owned()),
@@ -6816,12 +6860,37 @@ pub fn load_workspace(
     })
 }
 
+fn replace_event_with_pristine_snapshot(
+    snapshot: &mut TournamentSnapshot,
+    pristine_snapshot: &TournamentSnapshot,
+    event_id: &str,
+) -> Result<(), String> {
+    let pristine_event = pristine_snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .cloned()
+        .ok_or_else(|| format!("取得時点のスナップショットにイベントがありません: {event_id}"))?;
+    let current_event = snapshot
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("復元対象イベントが見つかりません: {event_id}"))?;
+
+    *current_event = pristine_event;
+    Ok(())
+}
+
 pub fn restore_event_graph_from_snapshot(
     app: &AppHandle,
     slug: &str,
     event_id: &str,
 ) -> Result<TournamentWorkspace, String> {
-    let workspace = load_workspace(app, slug, event_id)?;
+    let mut workspace = load_workspace(app, slug, event_id)?;
+    let pristine_snapshot = load_pristine_snapshot(app, slug)?;
+    replace_event_with_pristine_snapshot(&mut workspace.snapshot, &pristine_snapshot, event_id)?;
+    let local_meta = discard_pending_set_results_for_snapshot_refresh(app, slug, event_id)?;
+    let local_meta = merge_snapshot_into_meta(&workspace.snapshot, event_id, local_meta);
     let event = workspace
         .snapshot
         .events
@@ -6846,7 +6915,10 @@ pub fn restore_event_graph_from_snapshot(
         std::slice::from_ref(event),
     )?;
 
-    Ok(workspace)
+    Ok(TournamentWorkspace {
+        snapshot: workspace.snapshot,
+        local_meta,
+    })
 }
 
 pub fn upsert_local_set_result(

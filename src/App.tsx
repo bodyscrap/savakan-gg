@@ -9602,7 +9602,7 @@ function App() {
       setSetResultDrafts({});
       setInterimScoreDraftsBySetId({});
       closeMatchDialog();
-      setMessage("保存済みスナップショットからグラフを復元しました。");
+      setMessage("最後に取得したスナップショット時点に復元しました。対象eventの未報告結果は破棄されました。");
     } catch (err) {
       setError(String(err));
     } finally {
@@ -13698,6 +13698,9 @@ function App() {
                   <button type="button" className="ghost" onClick={() => setRestoreDialogOpen(false)}>閉じる</button>
                 </div>
                 <div className="dialog-body" style={{ display: "grid", gap: "0.5rem" }}>
+                  <p className="meta">
+                    スナップショット取得後の対象eventの未報告結果（確定済みを含む）は破棄されます。
+                  </p>
                   <button
                     type="button"
                     className="ghost"
