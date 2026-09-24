@@ -7496,6 +7496,7 @@ function App() {
       });
       setObsOverlayState(next);
       setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
+      setError("");
     } catch (err) {
       setError(String(err));
     } finally {
@@ -7516,6 +7517,7 @@ function App() {
       });
       setObsOverlayState(next);
       setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
+      setError("");
     } catch (err) {
       setError(String(err));
     } finally {
