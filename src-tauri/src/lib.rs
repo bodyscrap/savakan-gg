@@ -469,6 +469,32 @@ fn is_visible_grand_final_reset(sets: &[SetSnapshot], reset_set: &SetSnapshot) -
     })
 }
 
+fn sort_pending_set_results_by_phase_order(
+    pending: &mut [models::LocalSetResultMeta],
+    event: &models::EventSnapshot,
+) {
+    let phase_order_by_set_id = event
+        .sets
+        .iter()
+        .map(|set| (set.set_id.as_str(), set.phase_order.unwrap_or(i64::MAX)))
+        .collect::<HashMap<_, _>>();
+
+    pending.sort_by(|left, right| {
+        let left_phase_order = phase_order_by_set_id
+            .get(left.set_id.as_str())
+            .copied()
+            .unwrap_or(i64::MAX);
+        let right_phase_order = phase_order_by_set_id
+            .get(right.set_id.as_str())
+            .copied()
+            .unwrap_or(i64::MAX);
+
+        left_phase_order
+            .cmp(&right_phase_order)
+            .then_with(|| left.recorded_at.cmp(&right.recorded_at))
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,6 +538,53 @@ mod tests {
             loser_progression_origin_order: None,
             slots: vec![],
         }
+    }
+
+    fn make_pending_result(set_id: &str, recorded_at_seconds: i64) -> models::LocalSetResultMeta {
+        models::LocalSetResultMeta {
+            event_id: "event".to_owned(),
+            event_name: "event".to_owned(),
+            set_id: set_id.to_owned(),
+            winner_id: format!("winner-{set_id}"),
+            score_csv: "2-0".to_owned(),
+            direct_win: false,
+            confirmed: true,
+            slot_scores: Vec::new(),
+            recorded_at: chrono::DateTime::<chrono::Utc>::from_timestamp(recorded_at_seconds, 0)
+                .unwrap(),
+        }
+    }
+
+    #[test]
+    fn confirmed_results_are_sorted_by_phase_then_registration_time() {
+        let mut lower_phase = make_set("lower", "Round Robin", Some(1));
+        lower_phase.phase_order = Some(1);
+        let mut upper_phase_first = make_set("upper-first", "Upper Round", Some(1));
+        upper_phase_first.phase_order = Some(2);
+        let mut upper_phase_second = make_set("upper-second", "Upper Round", Some(1));
+        upper_phase_second.phase_order = Some(2);
+        let event = models::EventSnapshot {
+            event_id: "event".to_owned(),
+            name: "event".to_owned(),
+            phases: Vec::new(),
+            phase_groups: Vec::new(),
+            sets: vec![lower_phase, upper_phase_first, upper_phase_second],
+        };
+        let mut pending = vec![
+            make_pending_result("upper-first", 1),
+            make_pending_result("lower", 3),
+            make_pending_result("upper-second", 2),
+        ];
+
+        sort_pending_set_results_by_phase_order(&mut pending, &event);
+
+        assert_eq!(
+            pending
+                .iter()
+                .map(|item| item.set_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["lower", "upper-first", "upper-second"]
+        );
     }
 
     #[test]
@@ -6026,9 +6099,12 @@ async fn create_event_snapshot_by_slug(
         }
     }
 
-    let event_id = target_event_id
-        .or_else(|| snapshot.events.first().map(|event| event.event_id.clone()))
-        .ok_or_else(|| "eventスナップショットにイベントが含まれていません。".to_owned())?;
+    let event_id = target_event_id.ok_or_else(|| {
+        format!(
+            "event slugから対象eventを特定できませんでした: {}",
+            input.event_slug
+        )
+    })?;
 
     validate_event_bracket_types(&snapshot, &event_id)?;
 
@@ -6225,25 +6301,7 @@ async fn report_confirmed_sets_from_bracket(
         .collect::<Vec<_>>();
     let mut removable_pending_gf_reset_source_set_ids = Vec::<String>::new();
     pending.retain(|item| !item.set_id.starts_with("preview_"));
-    pending.sort_by(|left, right| {
-        let left_is_gf_reset = local_event
-            .sets
-            .iter()
-            .find(|set| set.set_id == left.set_id)
-            .map(|set| is_grand_final_reset_text(&set.full_round_text))
-            .unwrap_or(false);
-        let right_is_gf_reset = local_event
-            .sets
-            .iter()
-            .find(|set| set.set_id == right.set_id)
-            .map(|set| is_grand_final_reset_text(&set.full_round_text))
-            .unwrap_or(false);
-
-        left_is_gf_reset
-            .cmp(&right_is_gf_reset)
-            .then_with(|| left.recorded_at.cmp(&right.recorded_at))
-            .then_with(|| left.set_id.cmp(&right.set_id))
-    });
+    sort_pending_set_results_by_phase_order(&mut pending, local_event);
 
     let total_count = pending.len() + pending_virtual_gf_reset.len();
     emit_bracket_report_progress(&app, "starting", total_count, 0, 0, 0, None);

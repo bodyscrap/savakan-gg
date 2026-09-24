@@ -6528,28 +6528,36 @@ pub fn save_event_snapshot(
         merged_snapshot.events.push(next_event_snapshot);
     }
 
-    save_snapshot(app, &merged_snapshot)?;
-
-    // オフラインでも下書き破棄で戻せるよう、原本スナップショットを別保存する。
-    let mut pristine_snapshot =
-        load_pristine_snapshot(app, &snapshot.slug).unwrap_or_else(|_| merged_snapshot.clone());
-
-    pristine_snapshot.tournament_id = snapshot.tournament_id.clone();
-    pristine_snapshot.slug = snapshot.slug.clone();
-    pristine_snapshot.name = snapshot.name.clone();
-    pristine_snapshot.updated_at = snapshot.updated_at;
-
-    if let Some(existing) = pristine_snapshot
+    let graph_event = merged_snapshot
         .events
-        .iter_mut()
+        .iter()
         .find(|event| event.event_id == event_id)
-    {
-        *existing = event_snapshot.clone();
-    } else {
-        pristine_snapshot.events.push(event_snapshot);
-    }
+        .ok_or_else(|| format!("保存対象イベントが見つかりません: {event_id}"))?;
+    let graph = build_bracket_graph(&merged_snapshot, graph_event);
+    save_event_graph_file(
+        app,
+        &graph,
+        &merged_snapshot.tournament_id,
+        &normalized_slug,
+        &graph_event.event_id,
+        &graph_event.name,
+    )?;
+    remove_stale_event_graph_files(
+        app,
+        &merged_snapshot.tournament_id,
+        &normalized_slug,
+        std::slice::from_ref(graph_event),
+    )?;
 
-    save_pristine_snapshot(app, &pristine_snapshot)?;
+    // 原本スナップショットも対象eventだけを更新し、他eventのファイルには触れない。
+    let pristine_event_snapshot = TournamentSnapshot {
+        tournament_id: snapshot.tournament_id.clone(),
+        slug: snapshot.slug.clone(),
+        name: snapshot.name.clone(),
+        events: vec![event_snapshot.clone()],
+        updated_at: snapshot.updated_at,
+    };
+    save_pristine_snapshot(app, &pristine_event_snapshot)?;
 
     let mut local_meta = sync_local_meta_from_snapshot(app, &merged_snapshot, event_id)?;
     if let Some(event_meta) = local_meta

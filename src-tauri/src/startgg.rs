@@ -4,6 +4,7 @@ use reqwest::Client;
 use reqwest::StatusCode;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -62,6 +63,47 @@ pub struct EventSnapshotFetchProgress {
     pub current_page: Option<i64>,
     pub current_set_id: Option<String>,
     pub total_planned_set_requests: Option<usize>,
+}
+
+fn should_include_event_snapshot_set(
+    is_visible_set: bool,
+    phase_group_id: Option<&str>,
+    event_phase_group_ids: &HashSet<String>,
+) -> bool {
+    is_visible_set
+        || phase_group_id
+            .is_some_and(|phase_group_id| event_phase_group_ids.contains(phase_group_id))
+}
+
+#[cfg(test)]
+mod event_snapshot_scope_tests {
+    use super::*;
+
+    #[test]
+    fn excludes_indirect_sets_from_other_events() {
+        let event_phase_group_ids = HashSet::from(["target-group".to_owned()]);
+
+        assert!(should_include_event_snapshot_set(
+            true,
+            Some("other-group"),
+            &event_phase_group_ids
+        ));
+        assert!(should_include_event_snapshot_set(
+            false,
+            Some("target-group"),
+            &event_phase_group_ids
+        ));
+        assert!(!should_include_event_snapshot_set(
+            false,
+            Some("other-group"),
+            &event_phase_group_ids
+        ));
+        assert!(!should_include_event_snapshot_set(
+            false,
+            None,
+            &event_phase_group_ids
+        ));
+    }
 }
 
 #[derive(GraphQLQuery)]
@@ -1713,6 +1755,10 @@ pub async fn fetch_event_snapshot_by_slug(
         .iter()
         .cloned()
         .collect::<std::collections::HashSet<_>>();
+    let event_phase_group_ids = phase_groups
+        .iter()
+        .map(|group| group.phase_group_id.clone())
+        .collect::<HashSet<_>>();
     let mut pending_set_ids = discovered_set_ids;
     let mut queued_set_ids = pending_set_ids
         .iter()
@@ -1736,7 +1782,15 @@ pub async fn fetch_event_snapshot_by_slug(
             Err(_) if !visible_set_ids.contains(&set_id) => continue,
             Err(error) => return Err(error),
         };
-        set.is_intermediate = !visible_set_ids.contains(&set_id);
+        let is_visible_set = visible_set_ids.contains(&set_id);
+        if !should_include_event_snapshot_set(
+            is_visible_set,
+            set.phase_group_id.as_deref(),
+            &event_phase_group_ids,
+        ) {
+            continue;
+        }
+        set.is_intermediate = !is_visible_set;
 
         for source in [&mut set.entrant1_source, &mut set.entrant2_source]
             .into_iter()
