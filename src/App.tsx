@@ -929,11 +929,10 @@ type ResultConfirmationState = {
 
 type EventSnapshotProgress = {
   phase: string;
-  completedRequests: number;
-  totalRequests: number | null;
+  completedSets: number;
+  totalSets: number | null;
   currentPage: number | null;
   currentSetId: string | null;
-  totalPlannedSetRequests: number | null;
 };
 
 type BracketReportProgressEvent = {
@@ -4884,11 +4883,11 @@ function App() {
       return 100;
     }
 
-    if (createSnapshotProgress.totalRequests === null || createSnapshotProgress.totalRequests <= 0) {
+    if (createSnapshotProgress.totalSets === null || createSnapshotProgress.totalSets <= 0) {
       return 0;
     }
 
-    const raw = (createSnapshotProgress.completedRequests / createSnapshotProgress.totalRequests) * 100;
+    const raw = (createSnapshotProgress.completedSets / createSnapshotProgress.totalSets) * 100;
     return Math.max(0, Math.min(100, raw));
   }, [createSnapshotProgress]);
 
@@ -4901,18 +4900,41 @@ function App() {
       return "開始準備中...";
     }
 
+    if (createSnapshotProgress.phase === "requestingEventPage") {
+      return `ページ${createSnapshotProgress.currentPage ?? 1}を取得中`;
+    }
+
+    if (createSnapshotProgress.phase === "requestingTournamentPreview") {
+      return "大会event一覧を取得中";
+    }
+
+    if (createSnapshotProgress.phase === "requestingTournamentSnapshot") {
+      return "大会snapshotへ切替えて取得中";
+    }
+
     if (createSnapshotProgress.phase === "discovering") {
       const pageText = createSnapshotProgress.currentPage !== null
-        ? `ページ${createSnapshotProgress.currentPage}を確認中`
+        ? `ページ${createSnapshotProgress.currentPage}を確認済み`
         : "ページを確認中";
-      return `${pageText}（総リクエスト数を見積り中）`;
+      return `${pageText}（対象set数を確認中）`;
+    }
+
+    if (createSnapshotProgress.phase === "requestingSetDetails") {
+      const total = createSnapshotProgress.totalSets ?? 0;
+      const details = total > 0
+        ? `${createSnapshotProgress.completedSets}/${total} set処理済み`
+        : `${createSnapshotProgress.completedSets} set処理済み`;
+      const currentSet = createSnapshotProgress.currentSetId
+        ? `set ${createSnapshotProgress.currentSetId} を含むbatch`
+        : "set詳細batch";
+      return `${details} / ${currentSet}を取得中`;
     }
 
     if (createSnapshotProgress.phase === "fetchingSetDetails") {
-      const total = createSnapshotProgress.totalRequests ?? 0;
+      const total = createSnapshotProgress.totalSets ?? 0;
       const details = total > 0
-        ? `${createSnapshotProgress.completedRequests}/${total} リクエスト完了`
-        : `${createSnapshotProgress.completedRequests} リクエスト完了`;
+        ? `${createSnapshotProgress.completedSets}/${total} set処理済み`
+        : `${createSnapshotProgress.completedSets} set処理済み`;
       if (createSnapshotProgress.currentSetId) {
         return `${details} / set ${createSnapshotProgress.currentSetId} を取得中`;
       }
@@ -9309,11 +9331,10 @@ function App() {
     clearStatusMessages();
     setCreateSnapshotProgress({
       phase: "starting",
-      completedRequests: 0,
-      totalRequests: null,
+      completedSets: 0,
+      totalSets: null,
       currentPage: null,
       currentSetId: null,
-      totalPlannedSetRequests: null,
     });
 
     try {
@@ -9338,6 +9359,7 @@ function App() {
     } catch (err) {
       setError(String(err));
     } finally {
+      setCreateSnapshotProgress(null);
       setCreateBusy(false);
     }
   }
@@ -9427,6 +9449,7 @@ function App() {
     } catch (err) {
       setError(String(err));
     } finally {
+      setCreateSnapshotProgress(null);
       setBusy(false);
     }
   }
@@ -9530,11 +9553,10 @@ function App() {
     setMessage("");
     setCreateSnapshotProgress({
       phase: "starting",
-      completedRequests: 0,
-      totalRequests: null,
+      completedSets: 0,
+      totalSets: null,
       currentPage: null,
       currentSetId: null,
-      totalPlannedSetRequests: null,
     });
 
     try {
@@ -9553,6 +9575,7 @@ function App() {
     } catch (err) {
       setError(String(err));
     } finally {
+      setCreateSnapshotProgress(null);
       setBusy(false);
     }
   }
@@ -11231,7 +11254,7 @@ function App() {
                   </div>
                   <p className="create-snapshot-progress-meta">
                     {createSnapshotProgressLabel}
-                    {createSnapshotProgress && createSnapshotProgress.totalRequests !== null
+                    {createSnapshotProgress && createSnapshotProgress.totalSets !== null
                       ? ` (${Math.round(createSnapshotProgressPercent)}%)`
                       : ""}
                   </p>
@@ -12834,7 +12857,7 @@ function App() {
                 </div>
                 <p className="create-snapshot-progress-meta">
                   {`報告後スナップショット更新: ${createSnapshotProgressLabel}`}
-                  {createSnapshotProgress?.totalRequests !== null ? ` (${Math.round(createSnapshotProgressPercent)}%)` : ""}
+                  {createSnapshotProgress?.totalSets !== null ? ` (${Math.round(createSnapshotProgressPercent)}%)` : ""}
                 </p>
               </div>
             )}

@@ -20,6 +20,7 @@ const START_GG_RETRY_ATTEMPTS: usize = 8;
 const START_GG_RETRY_BASE_DELAY_MS: u64 = 500;
 const START_GG_RETRY_MAX_DELAY_MS: u64 = 10_000;
 const START_GG_MIN_REQUEST_INTERVAL_MS: u64 = 800;
+const START_GG_SET_DETAIL_BATCH_SIZE: usize = 8;
 const START_GG_SET_ENTRANT_RETRY_ATTEMPTS: usize = 6;
 const START_GG_SET_ENTRANT_RETRY_DELAY_MS: u64 = 350;
 
@@ -59,11 +60,10 @@ pub fn event_has_only_supported_bracket_types(event: &EventSnapshot) -> bool {
 #[derive(Debug, Clone)]
 pub struct EventSnapshotFetchProgress {
     pub phase: &'static str,
-    pub completed_requests: usize,
-    pub total_requests: Option<usize>,
+    pub completed_sets: usize,
+    pub total_sets: Option<usize>,
     pub current_page: Option<i64>,
     pub current_set_id: Option<String>,
-    pub total_planned_set_requests: Option<usize>,
 }
 
 fn should_include_event_snapshot_set(
@@ -74,6 +74,15 @@ fn should_include_event_snapshot_set(
     is_visible_set
         || phase_group_id
             .is_some_and(|phase_group_id| event_phase_group_ids.contains(phase_group_id))
+}
+
+fn split_set_snapshot_batch(set_ids: Vec<String>) -> Option<(Vec<String>, Vec<String>)> {
+    if set_ids.len() < 2 {
+        return None;
+    }
+
+    let midpoint = set_ids.len() / 2;
+    Some((set_ids[..midpoint].to_vec(), set_ids[midpoint..].to_vec()))
 }
 
 #[cfg(test)]
@@ -104,6 +113,34 @@ mod event_snapshot_scope_tests {
             None,
             &event_phase_group_ids
         ));
+    }
+
+    #[test]
+    fn detects_complexity_limit_errors_case_insensitively() {
+        assert!(is_complexity_error_message(
+            "Query COMPLEXITY exceeds the maximum of 1000"
+        ));
+        assert!(!is_complexity_error_message("Request timed out"));
+    }
+
+    #[test]
+    fn splits_eight_set_batches_into_halves() {
+        let ids = vec!["1", "2", "3", "4", "5", "6", "7", "8"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let (left, right) = split_set_snapshot_batch(ids).unwrap();
+
+        assert_eq!(left, ["1", "2", "3", "4"]);
+        assert_eq!(right, ["5", "6", "7", "8"]);
+
+        let (left, right) = split_set_snapshot_batch(left).unwrap();
+        assert_eq!(left, ["1", "2"]);
+        assert_eq!(right, ["3", "4"]);
+
+        let (left, right) = split_set_snapshot_batch(left).unwrap();
+        assert_eq!(left, ["1"]);
+        assert_eq!(right, ["2"]);
     }
 }
 
@@ -188,10 +225,14 @@ fn join_graphql_errors(errors: &[graphql_client::Error]) -> String {
 }
 
 fn is_complexity_too_high(errors: &[graphql_client::Error]) -> bool {
-    errors.iter().any(|error| {
-        let message = error.message.to_ascii_lowercase();
-        message.contains("complexity") && message.contains("maximum of 1000")
-    })
+    errors
+        .iter()
+        .any(|error| is_complexity_error_message(&error.message))
+}
+
+fn is_complexity_error_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("complexity") && message.contains("maximum of 1000")
 }
 
 fn summarize_response_body(raw: &str) -> String {
@@ -273,6 +314,7 @@ async fn post_graphql_with_retry<T: Serialize + ?Sized>(
             .bearer_auth(token)
             .header("Client-Version", "20")
             .json(body)
+            .timeout(Duration::from_secs(30))
             .send()
             .await
         {
@@ -410,13 +452,33 @@ async fn enrich_seed_source_with_client(
     Ok(())
 }
 
-async fn fetch_set_snapshot_detail_with_client(
+async fn fetch_set_snapshot_details_batch_with_client(
     client: &Client,
     token: &str,
-    set_id: &str,
-) -> Result<SetSnapshot, String> {
+    set_ids: &[String],
+) -> Result<Vec<(String, Option<SetSnapshot>)>, String> {
+    if set_ids.is_empty() || set_ids.len() > START_GG_SET_DETAIL_BATCH_SIZE {
+        return Err("set詳細取得batchの件数が不正です。".to_owned());
+    }
+    let first_set_id = set_ids
+        .first()
+        .ok_or_else(|| "set詳細取得batchが空です。".to_owned())?;
     let variables = set_snapshot_detail::Variables {
-        set_id: set_id.to_owned(),
+        first_set_id: first_set_id.clone(),
+        second_set_id: set_ids.get(1).unwrap_or(first_set_id).clone(),
+        third_set_id: set_ids.get(2).unwrap_or(first_set_id).clone(),
+        fourth_set_id: set_ids.get(3).unwrap_or(first_set_id).clone(),
+        fifth_set_id: set_ids.get(4).unwrap_or(first_set_id).clone(),
+        sixth_set_id: set_ids.get(5).unwrap_or(first_set_id).clone(),
+        seventh_set_id: set_ids.get(6).unwrap_or(first_set_id).clone(),
+        eighth_set_id: set_ids.get(7).unwrap_or(first_set_id).clone(),
+        include_second: set_ids.len() > 1,
+        include_third: set_ids.len() > 2,
+        include_fourth: set_ids.len() > 3,
+        include_fifth: set_ids.len() > 4,
+        include_sixth: set_ids.len() > 5,
+        include_seventh: set_ids.len() > 6,
+        include_eighth: set_ids.len() > 7,
     };
     let body = SetSnapshotDetail::build_query(variables);
 
@@ -445,318 +507,398 @@ async fn fetch_set_snapshot_detail_with_client(
     let data = payload
         .data
         .ok_or_else(|| "set詳細取得レスポンスにdataがありません。".to_owned())?;
-    let set = data
-        .set
-        .ok_or_else(|| format!("指定setが見つかりません: {set_id}"))?;
+    let mut details = vec![(first_set_id.clone(), data.first)];
+    if let Some(set_id) = set_ids.get(1) {
+        details.push((set_id.clone(), data.second));
+    }
+    if let Some(set_id) = set_ids.get(2) {
+        details.push((set_id.clone(), data.third));
+    }
+    if let Some(set_id) = set_ids.get(3) {
+        details.push((set_id.clone(), data.fourth));
+    }
+    if let Some(set_id) = set_ids.get(4) {
+        details.push((set_id.clone(), data.fifth));
+    }
+    if let Some(set_id) = set_ids.get(5) {
+        details.push((set_id.clone(), data.sixth));
+    }
+    if let Some(set_id) = set_ids.get(6) {
+        details.push((set_id.clone(), data.seventh));
+    }
+    if let Some(set_id) = set_ids.get(7) {
+        details.push((set_id.clone(), data.eighth));
+    }
+    let mut snapshots = Vec::with_capacity(details.len());
+    for (set_id, maybe_set) in details {
+        let Some(set) = maybe_set else {
+            snapshots.push((set_id, None));
+            continue;
+        };
 
-    let slots = set
-        .slots
-        .unwrap_or_default()
-        .into_iter()
-        .flatten()
-        .map(|slot| {
-            let entrant_id = slot.entrant.as_ref().map(|e| e.id.to_string());
-            let entrant_name = slot
-                .entrant
-                .as_ref()
-                .and_then(|e| e.name.clone())
-                .unwrap_or_else(|| "TBD".to_owned());
-            let seed = slot.seed.as_ref();
-            let progression_source = seed.and_then(|seed| seed.progression_source.as_ref());
-            let seed_id = seed.map(|seed| seed.id.to_string());
-            let seed_num = seed.and_then(|seed| seed.seed_num.map(i64::from));
-            let score = slot
-                .standing
-                .and_then(|standing| standing.stats)
-                .and_then(|stats| stats.score)
-                .and_then(|score| score.value);
+        let slots = set
+            .slots
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .map(|slot| {
+                let entrant_id = slot.entrant.as_ref().map(|e| e.id.to_string());
+                let entrant_name = slot
+                    .entrant
+                    .as_ref()
+                    .and_then(|e| e.name.clone())
+                    .unwrap_or_else(|| "TBD".to_owned());
+                let seed = slot.seed.as_ref();
+                let progression_source = seed.and_then(|seed| seed.progression_source.as_ref());
+                let seed_id = seed.map(|seed| seed.id.to_string());
+                let seed_num = seed.and_then(|seed| seed.seed_num.map(i64::from));
+                let score = slot
+                    .standing
+                    .and_then(|standing| standing.stats)
+                    .and_then(|stats| stats.score)
+                    .and_then(|score| score.value);
 
-            SetSlotSnapshot {
-                entrant_id,
-                entrant_name,
-                seed_id,
-                seed_num,
-                seed_placeholder_name: seed.and_then(|seed| {
-                    seed.placeholder_name.clone().or_else(|| {
-                        seed.progression_source
+                SetSlotSnapshot {
+                    entrant_id,
+                    entrant_name,
+                    seed_id,
+                    seed_num,
+                    seed_placeholder_name: seed.and_then(|seed| {
+                        seed.placeholder_name.clone().or_else(|| {
+                            seed.progression_source
+                                .as_ref()
+                                .and_then(|source| source.placeholder_name.clone())
+                        })
+                    }),
+                    seed_origin_phase_group_id: progression_source
+                        .and_then(|source| source.origin_phase_group.as_ref())
+                        .map(|group| group.id.to_string()),
+                    seed_origin_phase_group_display_identifier: progression_source
+                        .and_then(|source| source.origin_phase_group.as_ref())
+                        .and_then(|group| group.display_identifier.clone()),
+                    seed_origin_phase_order: progression_source
+                        .and_then(|source| source.origin_phase_group.as_ref())
+                        .and_then(|group| group.phase.as_ref())
+                        .and_then(|phase| phase.phase_order),
+                    seed_origin_placement: progression_source
+                        .and_then(|source| source.origin_placement),
+                    seed_origin_order: progression_source.and_then(|source| source.origin_order),
+                    score,
+                }
+            })
+            .collect::<Vec<SetSlotSnapshot>>();
+
+        let source_placeholder_name = |source_type_id: Option<String>| {
+            source_type_id.as_deref().and_then(|source_id| {
+                slots
+                    .iter()
+                    .find(|slot| slot.seed_id.as_deref() == Some(source_id))
+                    .and_then(|slot| slot.seed_placeholder_name.clone())
+                    .or_else(|| {
+                        set.winner_progression_seed
                             .as_ref()
-                            .and_then(|source| source.placeholder_name.clone())
+                            .filter(|seed| seed.id.to_string() == source_id)
+                            .and_then(|seed| seed.placeholder_name.clone())
                     })
+                    .or_else(|| {
+                        set.loser_progression_seed
+                            .as_ref()
+                            .filter(|seed| seed.id.to_string() == source_id)
+                            .and_then(|seed| seed.placeholder_name.clone())
+                    })
+            })
+        };
+        let source_origin = |source_type_id: Option<String>| {
+            source_type_id.as_deref().and_then(|source_id| {
+                slots
+                    .iter()
+                    .find(|slot| slot.seed_id.as_deref() == Some(source_id))
+                    .map(|slot| {
+                        (
+                            slot.seed_origin_phase_group_id.clone(),
+                            slot.seed_origin_phase_group_display_identifier.clone(),
+                            slot.seed_origin_phase_order,
+                            slot.seed_origin_placement,
+                        )
+                    })
+                    .or_else(|| {
+                        set.winner_progression_seed
+                            .as_ref()
+                            .filter(|seed| seed.id.to_string() == source_id)
+                            .map(|seed| {
+                                let source = seed.progression_source.as_ref();
+                                (
+                                    source
+                                        .and_then(|source| source.origin_phase_group.as_ref())
+                                        .map(|group| group.id.to_string()),
+                                    source
+                                        .and_then(|source| source.origin_phase_group.as_ref())
+                                        .and_then(|group| group.display_identifier.clone()),
+                                    source
+                                        .and_then(|source| source.origin_phase_group.as_ref())
+                                        .and_then(|group| group.phase.as_ref())
+                                        .and_then(|phase| phase.phase_order),
+                                    source.and_then(|source| source.origin_placement),
+                                )
+                            })
+                    })
+                    .or_else(|| {
+                        set.loser_progression_seed
+                            .as_ref()
+                            .filter(|seed| seed.id.to_string() == source_id)
+                            .map(|seed| {
+                                let source = seed.progression_source.as_ref();
+                                (
+                                    source
+                                        .and_then(|source| source.origin_phase_group.as_ref())
+                                        .map(|group| group.id.to_string()),
+                                    source
+                                        .and_then(|source| source.origin_phase_group.as_ref())
+                                        .and_then(|group| group.display_identifier.clone()),
+                                    source
+                                        .and_then(|source| source.origin_phase_group.as_ref())
+                                        .and_then(|group| group.phase.as_ref())
+                                        .and_then(|phase| phase.phase_order),
+                                    source.and_then(|source| source.origin_placement),
+                                )
+                            })
+                    })
+            })
+        };
+
+        snapshots.push((
+            set_id,
+            Some(SetSnapshot {
+                set_id: set.id.to_string(),
+                phase_group_id: set.phase_group.as_ref().map(|group| group.id.to_string()),
+                identifier: set.identifier.clone(),
+                full_round_text: set.full_round_text.unwrap_or_else(|| "Unknown".to_owned()),
+                round: set.round,
+                phase_name: set
+                    .phase_group
+                    .as_ref()
+                    .and_then(|group| group.phase.as_ref())
+                    .and_then(|phase| phase.name.clone()),
+                phase_group_name: set
+                    .phase_group
+                    .as_ref()
+                    .and_then(|group| group.display_identifier.clone()),
+                phase_order: set
+                    .phase_group
+                    .as_ref()
+                    .and_then(|group| group.phase.as_ref())
+                    .and_then(|phase| phase.phase_order),
+                phase_group_display_identifier: set
+                    .phase_group
+                    .as_ref()
+                    .and_then(|group| group.display_identifier.clone()),
+                phase_group_set_name: None,
+                is_intermediate: false,
+                state: set.state.unwrap_or_default(),
+                winner_id: set.winner_id.as_ref().map(|id| id.to_string()),
+                winner_placement: set.w_placement.map(i64::from),
+                loser_placement: set.l_placement.map(i64::from),
+                entrant1_source: set.entrant1_source.as_ref().map(|source| {
+                    let origin = source_origin(source.type_id.as_ref().map(|id| id.to_string()));
+                    SetEntrantSourceSnapshot {
+                        source_type: Some(source.type_.clone()),
+                        type_id: source.type_id.as_ref().map(|id| id.to_string()),
+                        resolved_set_id: None,
+                        condition: source.condition.clone(),
+                        condition_string: source.condition_string.clone(),
+                        placeholder_name: source_placeholder_name(
+                            source.type_id.as_ref().map(|id| id.to_string()),
+                        ),
+                        group_seed_num: None,
+                        seed_num: None,
+                        placement: None,
+                        origin_phase_group_id: origin.as_ref().and_then(|origin| origin.0.clone()),
+                        origin_phase_group_display_identifier: origin
+                            .as_ref()
+                            .and_then(|origin| origin.1.clone()),
+                        origin_phase_order: origin.as_ref().and_then(|origin| origin.2),
+                        origin_placement: origin.as_ref().and_then(|origin| origin.3),
+                    }
                 }),
-                seed_origin_phase_group_id: progression_source
+                entrant2_source: set.entrant2_source.as_ref().map(|source| {
+                    let origin = source_origin(source.type_id.as_ref().map(|id| id.to_string()));
+                    SetEntrantSourceSnapshot {
+                        source_type: Some(source.type_.clone()),
+                        type_id: source.type_id.as_ref().map(|id| id.to_string()),
+                        resolved_set_id: None,
+                        condition: source.condition.clone(),
+                        condition_string: source.condition_string.clone(),
+                        placeholder_name: source_placeholder_name(
+                            source.type_id.as_ref().map(|id| id.to_string()),
+                        ),
+                        group_seed_num: None,
+                        seed_num: None,
+                        placement: None,
+                        origin_phase_group_id: origin.as_ref().and_then(|origin| origin.0.clone()),
+                        origin_phase_group_display_identifier: origin
+                            .as_ref()
+                            .and_then(|origin| origin.1.clone()),
+                        origin_phase_order: origin.as_ref().and_then(|origin| origin.2),
+                        origin_placement: origin.as_ref().and_then(|origin| origin.3),
+                    }
+                }),
+                winner_progression_seed_id: set
+                    .winner_progression_seed
+                    .as_ref()
+                    .map(|seed| seed.id.to_string()),
+                winner_progression_id: set
+                    .winner_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.progression_source.as_ref())
+                    .map(|source| source.id.to_string()),
+                winner_progression_seed_num: set
+                    .winner_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.seed_num.map(i64::from)),
+                winner_progression_seed_placeholder_name: set
+                    .winner_progression_seed
+                    .as_ref()
+                    .and_then(|seed| {
+                        seed.placeholder_name.clone().or_else(|| {
+                            seed.progression_source
+                                .as_ref()
+                                .and_then(|source| source.placeholder_name.clone())
+                        })
+                    }),
+                winner_progression_origin_phase_group_id: set
+                    .winner_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.progression_source.as_ref())
                     .and_then(|source| source.origin_phase_group.as_ref())
                     .map(|group| group.id.to_string()),
-                seed_origin_phase_group_display_identifier: progression_source
+                winner_progression_origin_phase_group_display_identifier: set
+                    .winner_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.progression_source.as_ref())
                     .and_then(|source| source.origin_phase_group.as_ref())
                     .and_then(|group| group.display_identifier.clone()),
-                seed_origin_phase_order: progression_source
+                winner_progression_origin_phase_order: set
+                    .winner_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.progression_source.as_ref())
                     .and_then(|source| source.origin_phase_group.as_ref())
                     .and_then(|group| group.phase.as_ref())
                     .and_then(|phase| phase.phase_order),
-                seed_origin_placement: progression_source
+                winner_progression_origin_placement: set
+                    .winner_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.progression_source.as_ref())
                     .and_then(|source| source.origin_placement),
-                seed_origin_order: progression_source.and_then(|source| source.origin_order),
-                score,
-            }
-        })
-        .collect::<Vec<SetSlotSnapshot>>();
-
-    let source_placeholder_name = |source_type_id: Option<String>| {
-        source_type_id.as_deref().and_then(|source_id| {
-            slots
-                .iter()
-                .find(|slot| slot.seed_id.as_deref() == Some(source_id))
-                .and_then(|slot| slot.seed_placeholder_name.clone())
-                .or_else(|| {
-                    set.winner_progression_seed
-                        .as_ref()
-                        .filter(|seed| seed.id.to_string() == source_id)
-                        .and_then(|seed| seed.placeholder_name.clone())
-                })
-                .or_else(|| {
-                    set.loser_progression_seed
-                        .as_ref()
-                        .filter(|seed| seed.id.to_string() == source_id)
-                        .and_then(|seed| seed.placeholder_name.clone())
-                })
-        })
-    };
-    let source_origin = |source_type_id: Option<String>| {
-        source_type_id.as_deref().and_then(|source_id| {
-            slots
-                .iter()
-                .find(|slot| slot.seed_id.as_deref() == Some(source_id))
-                .map(|slot| {
-                    (
-                        slot.seed_origin_phase_group_id.clone(),
-                        slot.seed_origin_phase_group_display_identifier.clone(),
-                        slot.seed_origin_phase_order,
-                        slot.seed_origin_placement,
-                    )
-                })
-                .or_else(|| {
-                    set.winner_progression_seed
-                        .as_ref()
-                        .filter(|seed| seed.id.to_string() == source_id)
-                        .map(|seed| {
-                            let source = seed.progression_source.as_ref();
-                            (
-                                source
-                                    .and_then(|source| source.origin_phase_group.as_ref())
-                                    .map(|group| group.id.to_string()),
-                                source
-                                    .and_then(|source| source.origin_phase_group.as_ref())
-                                    .and_then(|group| group.display_identifier.clone()),
-                                source
-                                    .and_then(|source| source.origin_phase_group.as_ref())
-                                    .and_then(|group| group.phase.as_ref())
-                                    .and_then(|phase| phase.phase_order),
-                                source.and_then(|source| source.origin_placement),
-                            )
-                        })
-                })
-                .or_else(|| {
-                    set.loser_progression_seed
-                        .as_ref()
-                        .filter(|seed| seed.id.to_string() == source_id)
-                        .map(|seed| {
-                            let source = seed.progression_source.as_ref();
-                            (
-                                source
-                                    .and_then(|source| source.origin_phase_group.as_ref())
-                                    .map(|group| group.id.to_string()),
-                                source
-                                    .and_then(|source| source.origin_phase_group.as_ref())
-                                    .and_then(|group| group.display_identifier.clone()),
-                                source
-                                    .and_then(|source| source.origin_phase_group.as_ref())
-                                    .and_then(|group| group.phase.as_ref())
-                                    .and_then(|phase| phase.phase_order),
-                                source.and_then(|source| source.origin_placement),
-                            )
-                        })
-                })
-        })
-    };
-
-    Ok(SetSnapshot {
-        set_id: set.id.to_string(),
-        phase_group_id: set.phase_group.as_ref().map(|group| group.id.to_string()),
-        identifier: set.identifier.clone(),
-        full_round_text: set.full_round_text.unwrap_or_else(|| "Unknown".to_owned()),
-        round: set.round,
-        phase_name: set
-            .phase_group
-            .as_ref()
-            .and_then(|group| group.phase.as_ref())
-            .and_then(|phase| phase.name.clone()),
-        phase_group_name: set
-            .phase_group
-            .as_ref()
-            .and_then(|group| group.display_identifier.clone()),
-        phase_order: set
-            .phase_group
-            .as_ref()
-            .and_then(|group| group.phase.as_ref())
-            .and_then(|phase| phase.phase_order),
-        phase_group_display_identifier: set
-            .phase_group
-            .as_ref()
-            .and_then(|group| group.display_identifier.clone()),
-        phase_group_set_name: None,
-        is_intermediate: false,
-        state: set.state.unwrap_or_default(),
-        winner_id: set.winner_id.as_ref().map(|id| id.to_string()),
-        winner_placement: set.w_placement.map(i64::from),
-        loser_placement: set.l_placement.map(i64::from),
-        entrant1_source: set.entrant1_source.as_ref().map(|source| {
-            let origin = source_origin(source.type_id.as_ref().map(|id| id.to_string()));
-            SetEntrantSourceSnapshot {
-                source_type: Some(source.type_.clone()),
-                type_id: source.type_id.as_ref().map(|id| id.to_string()),
-                resolved_set_id: None,
-                condition: source.condition.clone(),
-                condition_string: source.condition_string.clone(),
-                placeholder_name: source_placeholder_name(
-                    source.type_id.as_ref().map(|id| id.to_string()),
-                ),
-                group_seed_num: None,
-                seed_num: None,
-                placement: None,
-                origin_phase_group_id: origin.as_ref().and_then(|origin| origin.0.clone()),
-                origin_phase_group_display_identifier: origin
+                winner_progression_origin_order: set
+                    .winner_progression_seed
                     .as_ref()
-                    .and_then(|origin| origin.1.clone()),
-                origin_phase_order: origin.as_ref().and_then(|origin| origin.2),
-                origin_placement: origin.as_ref().and_then(|origin| origin.3),
-            }
-        }),
-        entrant2_source: set.entrant2_source.as_ref().map(|source| {
-            let origin = source_origin(source.type_id.as_ref().map(|id| id.to_string()));
-            SetEntrantSourceSnapshot {
-                source_type: Some(source.type_.clone()),
-                type_id: source.type_id.as_ref().map(|id| id.to_string()),
-                resolved_set_id: None,
-                condition: source.condition.clone(),
-                condition_string: source.condition_string.clone(),
-                placeholder_name: source_placeholder_name(
-                    source.type_id.as_ref().map(|id| id.to_string()),
-                ),
-                group_seed_num: None,
-                seed_num: None,
-                placement: None,
-                origin_phase_group_id: origin.as_ref().and_then(|origin| origin.0.clone()),
-                origin_phase_group_display_identifier: origin
+                    .and_then(|seed| seed.progression_source.as_ref())
+                    .and_then(|source| source.origin_order),
+                loser_progression_seed_id: set
+                    .loser_progression_seed
                     .as_ref()
-                    .and_then(|origin| origin.1.clone()),
-                origin_phase_order: origin.as_ref().and_then(|origin| origin.2),
-                origin_placement: origin.as_ref().and_then(|origin| origin.3),
+                    .map(|seed| seed.id.to_string()),
+                loser_progression_id: set
+                    .loser_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.progression_source.as_ref())
+                    .map(|source| source.id.to_string()),
+                loser_progression_seed_num: set
+                    .loser_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.seed_num.map(i64::from)),
+                loser_progression_seed_placeholder_name: set
+                    .loser_progression_seed
+                    .as_ref()
+                    .and_then(|seed| {
+                        seed.placeholder_name.clone().or_else(|| {
+                            seed.progression_source
+                                .as_ref()
+                                .and_then(|source| source.placeholder_name.clone())
+                        })
+                    }),
+                loser_progression_origin_phase_group_id: set
+                    .loser_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.progression_source.as_ref())
+                    .and_then(|source| source.origin_phase_group.as_ref())
+                    .map(|group| group.id.to_string()),
+                loser_progression_origin_phase_group_display_identifier: set
+                    .loser_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.progression_source.as_ref())
+                    .and_then(|source| source.origin_phase_group.as_ref())
+                    .and_then(|group| group.display_identifier.clone()),
+                loser_progression_origin_phase_order: set
+                    .loser_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.progression_source.as_ref())
+                    .and_then(|source| source.origin_phase_group.as_ref())
+                    .and_then(|group| group.phase.as_ref())
+                    .and_then(|phase| phase.phase_order),
+                loser_progression_origin_placement: set
+                    .loser_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.progression_source.as_ref())
+                    .and_then(|source| source.origin_placement),
+                loser_progression_origin_order: set
+                    .loser_progression_seed
+                    .as_ref()
+                    .and_then(|seed| seed.progression_source.as_ref())
+                    .and_then(|source| source.origin_order),
+                slots,
+            }),
+        ));
+    }
+
+    Ok(snapshots)
+}
+
+async fn fetch_set_snapshot_detail_with_client(
+    client: &Client,
+    token: &str,
+    set_id: &str,
+) -> Result<SetSnapshot, String> {
+    let set_ids = vec![set_id.to_owned()];
+    fetch_set_snapshot_details_batch_with_client(client, token, &set_ids)
+        .await?
+        .into_iter()
+        .next()
+        .and_then(|(_, set)| set)
+        .ok_or_else(|| format!("指定setが見つかりません: {set_id}"))
+}
+
+async fn fetch_set_snapshot_details_adaptive_with_client(
+    client: &Client,
+    token: &str,
+    set_ids: &[String],
+) -> Result<Vec<(String, Result<Option<SetSnapshot>, String>)>, String> {
+    let mut pending_batches = vec![set_ids.to_vec()];
+    let mut details = Vec::with_capacity(set_ids.len());
+
+    while let Some(batch_ids) = pending_batches.pop() {
+        match fetch_set_snapshot_details_batch_with_client(client, token, &batch_ids).await {
+            Ok(batch_details) => {
+                details.extend(
+                    batch_details
+                        .into_iter()
+                        .map(|(set_id, set)| (set_id, Ok(set))),
+                );
             }
-        }),
-        winner_progression_seed_id: set
-            .winner_progression_seed
-            .as_ref()
-            .map(|seed| seed.id.to_string()),
-        winner_progression_id: set
-            .winner_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .map(|source| source.id.to_string()),
-        winner_progression_seed_num: set
-            .winner_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.seed_num.map(i64::from)),
-        winner_progression_seed_placeholder_name: set.winner_progression_seed.as_ref().and_then(
-            |seed| {
-                seed.placeholder_name.clone().or_else(|| {
-                    seed.progression_source
-                        .as_ref()
-                        .and_then(|source| source.placeholder_name.clone())
-                })
-            },
-        ),
-        winner_progression_origin_phase_group_id: set
-            .winner_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .and_then(|source| source.origin_phase_group.as_ref())
-            .map(|group| group.id.to_string()),
-        winner_progression_origin_phase_group_display_identifier: set
-            .winner_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .and_then(|source| source.origin_phase_group.as_ref())
-            .and_then(|group| group.display_identifier.clone()),
-        winner_progression_origin_phase_order: set
-            .winner_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .and_then(|source| source.origin_phase_group.as_ref())
-            .and_then(|group| group.phase.as_ref())
-            .and_then(|phase| phase.phase_order),
-        winner_progression_origin_placement: set
-            .winner_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .and_then(|source| source.origin_placement),
-        winner_progression_origin_order: set
-            .winner_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .and_then(|source| source.origin_order),
-        loser_progression_seed_id: set
-            .loser_progression_seed
-            .as_ref()
-            .map(|seed| seed.id.to_string()),
-        loser_progression_id: set
-            .loser_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .map(|source| source.id.to_string()),
-        loser_progression_seed_num: set
-            .loser_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.seed_num.map(i64::from)),
-        loser_progression_seed_placeholder_name: set.loser_progression_seed.as_ref().and_then(
-            |seed| {
-                seed.placeholder_name.clone().or_else(|| {
-                    seed.progression_source
-                        .as_ref()
-                        .and_then(|source| source.placeholder_name.clone())
-                })
-            },
-        ),
-        loser_progression_origin_phase_group_id: set
-            .loser_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .and_then(|source| source.origin_phase_group.as_ref())
-            .map(|group| group.id.to_string()),
-        loser_progression_origin_phase_group_display_identifier: set
-            .loser_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .and_then(|source| source.origin_phase_group.as_ref())
-            .and_then(|group| group.display_identifier.clone()),
-        loser_progression_origin_phase_order: set
-            .loser_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .and_then(|source| source.origin_phase_group.as_ref())
-            .and_then(|group| group.phase.as_ref())
-            .and_then(|phase| phase.phase_order),
-        loser_progression_origin_placement: set
-            .loser_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .and_then(|source| source.origin_placement),
-        loser_progression_origin_order: set
-            .loser_progression_seed
-            .as_ref()
-            .and_then(|seed| seed.progression_source.as_ref())
-            .and_then(|source| source.origin_order),
-        slots,
-    })
+            Err(error) if batch_ids.len() > 1 && is_complexity_error_message(&error) => {
+                let (left, right) = split_set_snapshot_batch(batch_ids)
+                    .expect("複数set batchは分割できる必要があります");
+                pending_batches.push(right);
+                pending_batches.push(left);
+            }
+            Err(error) if batch_ids.len() == 1 => {
+                details.push((batch_ids[0].clone(), Err(error)));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(details)
 }
 async fn reset_set_if_needed(token: &str, set_id: &str) -> Result<(), String> {
     let variables = reset_set::Variables {
@@ -1560,15 +1702,14 @@ pub async fn fetch_event_snapshot_by_slug(
     let mut event_name = String::new();
     let mut phases: Vec<PhaseSnapshot> = Vec::new();
     let mut phase_groups;
-    let mut completed_requests = 0_usize;
+    let mut completed_sets = 0_usize;
 
     progress_cb(EventSnapshotFetchProgress {
         phase: "discovering",
-        completed_requests,
-        total_requests: None,
+        completed_sets,
+        total_sets: None,
         current_page: Some(1),
         current_set_id: None,
-        total_planned_set_requests: None,
     });
 
     'retry: loop {
@@ -1583,15 +1724,20 @@ pub async fn fetch_event_snapshot_by_slug(
             };
             let body = EventSync::build_query(variables);
 
-            let response = post_graphql_with_retry(&client, token, &body, "event取得").await?;
-            completed_requests += 1;
             progress_cb(EventSnapshotFetchProgress {
-                phase: "discovering",
-                completed_requests,
-                total_requests: None,
+                phase: "requestingEventPage",
+                completed_sets,
+                total_sets: None,
                 current_page: Some(page),
                 current_set_id: None,
-                total_planned_set_requests: None,
+            });
+            let response = post_graphql_with_retry(&client, token, &body, "event取得").await?;
+            progress_cb(EventSnapshotFetchProgress {
+                phase: "discovering",
+                completed_sets,
+                total_sets: None,
+                current_page: Some(page),
+                current_set_id: None,
             });
 
             let status = response.status();
@@ -1817,86 +1963,105 @@ pub async fn fetch_event_snapshot_by_slug(
         .iter()
         .cloned()
         .collect::<std::collections::HashSet<_>>();
-    completed_requests = 0;
     progress_cb(EventSnapshotFetchProgress {
         phase: "fetchingSetDetails",
-        completed_requests,
-        total_requests: Some(pending_set_ids.len()),
+        completed_sets,
+        total_sets: Some(pending_set_ids.len()),
         current_page: None,
         current_set_id: None,
-        total_planned_set_requests: Some(pending_set_ids.len()),
     });
 
     let mut all_sets: Vec<SetSnapshot> = Vec::with_capacity(pending_set_ids.len());
-    while let Some(set_id) = pending_set_ids.pop() {
-        let mut set = match fetch_set_snapshot_detail_with_client(&client, token, &set_id).await {
-            Ok(set) => set,
-            Err(_) if !visible_set_ids.contains(&set_id) => continue,
-            Err(error) => return Err(error),
-        };
-        let is_visible_set = visible_set_ids.contains(&set_id);
-        if !should_include_event_snapshot_set(
-            is_visible_set,
-            set.phase_group_id.as_deref(),
-            &event_phase_group_ids,
-        ) {
-            continue;
-        }
-        set.is_intermediate = !is_visible_set;
-
-        for source in [&mut set.entrant1_source, &mut set.entrant2_source]
-            .into_iter()
-            .flatten()
-        {
-            let is_seed_source = source
-                .source_type
-                .as_deref()
-                .is_some_and(|source_type| source_type.eq_ignore_ascii_case("seed"));
-            let Some(source_seed_id) = source.type_id.clone() else {
-                continue;
-            };
-            if is_seed_source {
-                enrich_seed_source_with_client(&client, token, source, &seed_source_info_by_id)
-                    .await?;
-            }
-        }
-
-        for source in [&set.entrant1_source, &set.entrant2_source]
-            .into_iter()
-            .flatten()
-        {
-            let Some(source_set_id) = source.type_id.as_deref() else {
-                continue;
-            };
-            if source.condition.is_none()
-                || queued_set_ids.contains(source_set_id)
-                || is_preview_set_id(source_set_id)
-            {
-                continue;
-            }
-            queued_set_ids.insert(source_set_id.to_owned());
-            pending_set_ids.push(source_set_id.to_owned());
-        }
-
-        completed_requests += 1;
+    while !pending_set_ids.is_empty() {
+        let batch_set_ids = (0..START_GG_SET_DETAIL_BATCH_SIZE)
+            .filter_map(|_| pending_set_ids.pop())
+            .collect::<Vec<_>>();
         progress_cb(EventSnapshotFetchProgress {
-            phase: "fetchingSetDetails",
-            completed_requests,
-            total_requests: Some(queued_set_ids.len()),
+            phase: "requestingSetDetails",
+            completed_sets,
+            total_sets: Some(queued_set_ids.len()),
             current_page: None,
-            current_set_id: Some(set_id),
-            total_planned_set_requests: Some(queued_set_ids.len()),
+            current_set_id: batch_set_ids.first().cloned(),
         });
-        all_sets.push(set);
+        let details =
+            fetch_set_snapshot_details_adaptive_with_client(&client, token, &batch_set_ids).await?;
+        for (set_id, set_result) in details {
+            let maybe_set = match set_result {
+                Ok(set) => set,
+                Err(_) if !visible_set_ids.contains(&set_id) => None,
+                Err(error) => return Err(error),
+            };
+            if let Some(mut set) = maybe_set {
+                let is_visible_set = visible_set_ids.contains(&set_id);
+                if should_include_event_snapshot_set(
+                    is_visible_set,
+                    set.phase_group_id.as_deref(),
+                    &event_phase_group_ids,
+                ) {
+                    set.is_intermediate = !is_visible_set;
+
+                    for source in [&mut set.entrant1_source, &mut set.entrant2_source]
+                        .into_iter()
+                        .flatten()
+                    {
+                        let is_seed_source = source
+                            .source_type
+                            .as_deref()
+                            .is_some_and(|source_type| source_type.eq_ignore_ascii_case("seed"));
+                        if source.type_id.is_none() {
+                            continue;
+                        }
+                        if is_seed_source {
+                            enrich_seed_source_with_client(
+                                &client,
+                                token,
+                                source,
+                                &seed_source_info_by_id,
+                            )
+                            .await?;
+                        }
+                    }
+
+                    for source in [&set.entrant1_source, &set.entrant2_source]
+                        .into_iter()
+                        .flatten()
+                    {
+                        let Some(source_set_id) = source.type_id.as_deref() else {
+                            continue;
+                        };
+                        if source.condition.is_none()
+                            || queued_set_ids.contains(source_set_id)
+                            || is_preview_set_id(source_set_id)
+                        {
+                            continue;
+                        }
+                        queued_set_ids.insert(source_set_id.to_owned());
+                        pending_set_ids.push(source_set_id.to_owned());
+                    }
+
+                    all_sets.push(set);
+                }
+            } else if visible_set_ids.contains(&set_id) {
+                return Err(format!("指定setが見つかりません: {set_id}"));
+            }
+
+            completed_sets += 1;
+            progress_cb(EventSnapshotFetchProgress {
+                phase: "fetchingSetDetails",
+                completed_sets,
+                total_sets: Some(queued_set_ids.len()),
+                current_page: None,
+                current_set_id: Some(set_id),
+            });
+        }
     }
 
     progress_cb(EventSnapshotFetchProgress {
         phase: "completed",
-        completed_requests,
-        total_requests: Some(completed_requests),
+        completed_sets,
+        total_sets: Some(completed_sets),
         current_page: None,
         current_set_id: None,
-        total_planned_set_requests: Some(all_sets.len()),
     });
 
     Ok(TournamentSnapshot {

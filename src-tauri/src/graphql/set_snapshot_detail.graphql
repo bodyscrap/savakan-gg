@@ -1,117 +1,158 @@
-query SetSnapshotDetail($setId: ID!) {
-  set(id: $setId) {
+query SetSnapshotDetail(
+  $firstSetId: ID!
+  $secondSetId: ID!
+  $thirdSetId: ID!
+  $fourthSetId: ID!
+  $fifthSetId: ID!
+  $sixthSetId: ID!
+  $seventhSetId: ID!
+  $eighthSetId: ID!
+  $includeSecond: Boolean!
+  $includeThird: Boolean!
+  $includeFourth: Boolean!
+  $includeFifth: Boolean!
+  $includeSixth: Boolean!
+  $includeSeventh: Boolean!
+  $includeEighth: Boolean!
+) {
+  first: set(id: $firstSetId) {
+    ...SetSnapshotDetailFields
+  }
+  second: set(id: $secondSetId) @include(if: $includeSecond) {
+    ...SetSnapshotDetailFields
+  }
+  third: set(id: $thirdSetId) @include(if: $includeThird) {
+    ...SetSnapshotDetailFields
+  }
+  fourth: set(id: $fourthSetId) @include(if: $includeFourth) {
+    ...SetSnapshotDetailFields
+  }
+  fifth: set(id: $fifthSetId) @include(if: $includeFifth) {
+    ...SetSnapshotDetailFields
+  }
+  sixth: set(id: $sixthSetId) @include(if: $includeSixth) {
+    ...SetSnapshotDetailFields
+  }
+  seventh: set(id: $seventhSetId) @include(if: $includeSeventh) {
+    ...SetSnapshotDetailFields
+  }
+  eighth: set(id: $eighthSetId) @include(if: $includeEighth) {
+    ...SetSnapshotDetailFields
+  }
+}
+
+fragment SetSnapshotDetailFields on Set {
+  id
+  identifier
+  fullRoundText
+  round
+  phaseGroup {
     id
-    identifier
-    fullRoundText
-    round
-    phaseGroup {
+    displayIdentifier
+    phase {
+      name
+      phaseOrder
+    }
+  }
+  state
+  winnerId
+  wPlacement
+  lPlacement
+  entrant1Source {
+    type
+    typeId
+    condition
+    conditionString
+  }
+  entrant2Source {
+    type
+    typeId
+    condition
+    conditionString
+  }
+  winnerProgressionSeed {
+    id
+    seedNum
+    placeholderName
+    progressionSource {
       id
-      displayIdentifier
-      phase {
+      originOrder
+      originPhase {
+        id
         name
         phaseOrder
       }
-    }
-    state
-    winnerId
-    wPlacement
-    lPlacement
-    entrant1Source {
-      type
-      typeId
-      condition
-      conditionString
-    }
-    entrant2Source {
-      type
-      typeId
-      condition
-      conditionString
-    }
-    winnerProgressionSeed {
-      id
-      seedNum
-      placeholderName
-      progressionSource {
+      originPhaseGroup {
         id
-        originOrder
-        originPhase {
+        displayIdentifier
+        phase {
           id
           name
           phaseOrder
         }
-        originPhaseGroup {
-          id
-          displayIdentifier
-          phase {
-            id
-            name
-            phaseOrder
-          }
-        }
-        originPlacement
-        placeholderName
       }
-    }
-    loserProgressionSeed {
-      id
-      seedNum
+      originPlacement
       placeholderName
-      progressionSource {
-        id
-        originOrder
-        originPhase {
-          id
-          name
-          phaseOrder
-        }
-        originPhaseGroup {
-          id
-          displayIdentifier
-          phase {
-            id
-            name
-            phaseOrder
-          }
-        }
-        originPlacement
-        placeholderName
-      }
     }
-    slots {
-      seed {
-        id
-        seedNum
-        placeholderName
-        progressionSource {
-          originOrder
-          originPhase {
-            id
-            name
-            phaseOrder
-          }
-          originPhaseGroup {
-            id
-            displayIdentifier
-            phase {
-              id
-              name
-              phaseOrder
-            }
-          }
-          originPlacement
-          placeholderName
-        }
-      }
-      entrant {
+  }
+  loserProgressionSeed {
+    id
+    seedNum
+    placeholderName
+    progressionSource {
+      id
+      originOrder
+      originPhase {
         id
         name
+        phaseOrder
       }
-      standing {
-        stats {
-          score {
-            value
+      originPhaseGroup {
+        id
+        displayIdentifier
+        phase {
+          id
+          name
+          phaseOrder
+        }
+      }
+      originPlacement
+      placeholderName
+    }
+  }
+  slots {
+    seed {
+      id
+      seedNum
+      placeholderName
+      progressionSource {
+        originOrder
+        originPhase {
+          id
+          name
+          phaseOrder
+        }
+        originPhaseGroup {
+          id
+          displayIdentifier
+          phase {
+            id
+            name
+            phaseOrder
           }
+        }
+        originPlacement
+        placeholderName
+      }
+    }
+    entrant {
+      id
+      name
+    }
+    standing {
+      stats {
+        score {
+          value
         }
       }
     }

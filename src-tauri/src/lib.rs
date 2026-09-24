@@ -48,11 +48,10 @@ const GF_RESET_LINK_RETRY_DELAY_MS: u64 = 700;
 #[serde(rename_all = "camelCase")]
 struct EventSnapshotProgressPayload {
     phase: String,
-    completed_requests: usize,
-    total_requests: Option<usize>,
+    completed_sets: usize,
+    total_sets: Option<usize>,
     current_page: Option<i64>,
     current_set_id: Option<String>,
-    total_planned_set_requests: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,11 +97,10 @@ fn emit_event_snapshot_progress(
 ) {
     let payload = EventSnapshotProgressPayload {
         phase: progress.phase.to_owned(),
-        completed_requests: progress.completed_requests,
-        total_requests: progress.total_requests,
+        completed_sets: progress.completed_sets,
+        total_sets: progress.total_sets,
         current_page: progress.current_page,
         current_set_id: progress.current_set_id,
-        total_planned_set_requests: progress.total_planned_set_requests,
     };
 
     let _ = app.emit(EVENT_SNAPSHOT_PROGRESS_EVENT, payload);
@@ -5592,6 +5590,16 @@ async fn fetch_event_snapshot_with_fallback(
     event_id: &str,
     per_page: u32,
 ) -> Result<TournamentSnapshot, String> {
+    emit_event_snapshot_progress(
+        app,
+        startgg::EventSnapshotFetchProgress {
+            phase: "requestingTournamentPreview",
+            completed_sets: 0,
+            total_sets: None,
+            current_page: None,
+            current_set_id: None,
+        },
+    );
     let (event_slug, preview_error) = match startgg::fetch_tournament_preview(token, slug).await {
         Ok(preview) => (
             preview
@@ -5632,6 +5640,16 @@ async fn fetch_event_snapshot_with_fallback(
         }
     }
 
+    emit_event_snapshot_progress(
+        app,
+        startgg::EventSnapshotFetchProgress {
+            phase: "requestingTournamentSnapshot",
+            completed_sets: 0,
+            total_sets: None,
+            current_page: None,
+            current_set_id: None,
+        },
+    );
     let mut snapshot = startgg::fetch_tournament_snapshot(token, slug, per_page).await?;
     snapshot.slug = slug.to_owned();
 
@@ -6064,6 +6082,16 @@ async fn create_event_snapshot_by_slug(
                 return Err("event slugの取得に失敗し、fallback先tournament slugも特定できませんでした。大会slugを指定して再実行してください。".to_owned());
             }
 
+            emit_event_snapshot_progress(
+                &app,
+                startgg::EventSnapshotFetchProgress {
+                    phase: "requestingTournamentSnapshot",
+                    completed_sets: 0,
+                    total_sets: None,
+                    current_page: None,
+                    current_set_id: None,
+                },
+            );
             let mut fallback_snapshot =
                 startgg::fetch_tournament_snapshot(&token, &fallback_slug, per_page).await?;
             fallback_snapshot.slug = fallback_slug.clone();
@@ -6072,6 +6100,16 @@ async fn create_event_snapshot_by_slug(
     };
 
     if !fallback_slug.is_empty() {
+        emit_event_snapshot_progress(
+            &app,
+            startgg::EventSnapshotFetchProgress {
+                phase: "requestingTournamentPreview",
+                completed_sets: 0,
+                total_sets: None,
+                current_page: None,
+                current_set_id: None,
+            },
+        );
         if let Ok(preview) = startgg::fetch_tournament_preview(&token, &fallback_slug).await {
             let input_event_slug = input
                 .event_slug
