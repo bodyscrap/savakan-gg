@@ -4,9 +4,10 @@ use reqwest::Client;
 use reqwest::StatusCode;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::time::{sleep, Instant};
 
 use crate::models::{
     EventSnapshot, PhaseGroupProgressionSnapshot, PhaseGroupSeedSnapshot, PhaseGroupSnapshot,
@@ -18,7 +19,7 @@ const START_GG_GQL_ENDPOINT: &str = "https://api.start.gg/gql/alpha";
 const START_GG_RETRY_ATTEMPTS: usize = 8;
 const START_GG_RETRY_BASE_DELAY_MS: u64 = 500;
 const START_GG_RETRY_MAX_DELAY_MS: u64 = 10_000;
-const START_GG_REQUEST_INTERVAL_MS: u64 = 120;
+const START_GG_MIN_REQUEST_INTERVAL_MS: u64 = 800;
 const START_GG_SET_ENTRANT_RETRY_ATTEMPTS: usize = 6;
 const START_GG_SET_ENTRANT_RETRY_DELAY_MS: u64 = 350;
 
@@ -243,6 +244,22 @@ fn retry_delay_for_attempt(attempt: usize, retry_after_seconds: Option<u64>) -> 
     Duration::from_millis(wait_ms.saturating_add(jitter_ms))
 }
 
+async fn wait_for_startgg_request_slot() {
+    static LAST_REQUEST_AT: OnceLock<tokio::sync::Mutex<Option<Instant>>> = OnceLock::new();
+    let request_lock = LAST_REQUEST_AT.get_or_init(|| tokio::sync::Mutex::new(None));
+    let mut last_request_at = request_lock.lock().await;
+    let minimum_interval = Duration::from_millis(START_GG_MIN_REQUEST_INTERVAL_MS);
+
+    if let Some(previous_request_at) = *last_request_at {
+        let wait = minimum_interval.saturating_sub(previous_request_at.elapsed());
+        if !wait.is_zero() {
+            sleep(wait).await;
+        }
+    }
+
+    *last_request_at = Some(Instant::now());
+}
+
 async fn post_graphql_with_retry<T: Serialize + ?Sized>(
     client: &Client,
     token: &str,
@@ -250,6 +267,7 @@ async fn post_graphql_with_retry<T: Serialize + ?Sized>(
     operation_name: &str,
 ) -> Result<reqwest::Response, String> {
     for attempt in 0..START_GG_RETRY_ATTEMPTS {
+        wait_for_startgg_request_slot().await;
         match client
             .post(START_GG_GQL_ENDPOINT)
             .bearer_auth(token)
@@ -360,6 +378,7 @@ async fn enrich_seed_source_with_client(
     client: &Client,
     token: &str,
     source: &mut SetEntrantSourceSnapshot,
+    seed_source_info_by_id: &HashMap<String, SeedSourceInfo>,
 ) -> Result<(), String> {
     if source
         .source_type
@@ -373,7 +392,11 @@ async fn enrich_seed_source_with_client(
     let Some(seed_id) = source.type_id.as_deref() else {
         return Ok(());
     };
-    let Some(seed) = fetch_seed_snapshot_with_client(client, token, seed_id).await? else {
+    let seed = match seed_source_info_by_id.get(seed_id) {
+        Some(seed) => Some(seed.clone()),
+        None => fetch_seed_snapshot_with_client(client, token, seed_id).await?,
+    };
+    let Some(seed) = seed else {
         return Ok(());
     };
     source.placeholder_name = seed.placeholder_name;
@@ -1065,6 +1088,7 @@ async fn query_tournament_snapshot(
                                 .progression_source
                                 .as_ref()
                                 .map(|source| source.id.to_string()),
+                            group_seed_num: seed.group_seed_num.map(i64::from),
                             seed_num: seed.seed_num.map(i64::from),
                             placement: seed.placement.map(i64::from),
                             origin_phase_order: seed
@@ -1077,6 +1101,11 @@ async fn query_tournament_snapshot(
                                 .as_ref()
                                 .and_then(|source| source.origin_phase_group.as_ref())
                                 .and_then(|group| group.display_identifier.clone()),
+                            origin_phase_group_id: seed
+                                .progression_source
+                                .as_ref()
+                                .and_then(|source| source.origin_phase_group.as_ref())
+                                .map(|group| group.id.to_string()),
                             origin_placement: seed
                                 .progression_source
                                 .as_ref()
@@ -1547,10 +1576,6 @@ pub async fn fetch_event_snapshot_by_slug(
         discovered_set_ids.clear();
 
         loop {
-            if page > 1 {
-                sleep(Duration::from_millis(START_GG_REQUEST_INTERVAL_MS)).await;
-            }
-
             let variables = event_sync::Variables {
                 slug: event_slug.to_owned(),
                 page,
@@ -1675,6 +1700,7 @@ pub async fn fetch_event_snapshot_by_slug(
                                 .progression_source
                                 .as_ref()
                                 .map(|source| source.id.to_string()),
+                            group_seed_num: seed.group_seed_num.map(i64::from),
                             seed_num: seed.seed_num.map(i64::from),
                             placement: seed.placement.map(i64::from),
                             origin_phase_order: seed
@@ -1687,6 +1713,11 @@ pub async fn fetch_event_snapshot_by_slug(
                                 .as_ref()
                                 .and_then(|source| source.origin_phase_group.as_ref())
                                 .and_then(|group| group.display_identifier.clone()),
+                            origin_phase_group_id: seed
+                                .progression_source
+                                .as_ref()
+                                .and_then(|source| source.origin_phase_group.as_ref())
+                                .map(|group| group.id.to_string()),
                             origin_placement: seed
                                 .progression_source
                                 .as_ref()
@@ -1751,6 +1782,28 @@ pub async fn fetch_event_snapshot_by_slug(
         break;
     }
 
+    let seed_source_info_by_id = phase_groups
+        .iter()
+        .flat_map(|group| group.seeds.iter())
+        .map(|seed| {
+            (
+                seed.seed_id.clone(),
+                SeedSourceInfo {
+                    placeholder_name: seed.placeholder_name.clone(),
+                    group_seed_num: seed.group_seed_num,
+                    seed_num: seed.seed_num,
+                    placement: seed.placement,
+                    origin_phase_group_id: seed.origin_phase_group_id.clone(),
+                    origin_phase_group_display_identifier: seed
+                        .origin_phase_group_display_identifier
+                        .clone(),
+                    origin_phase_order: seed.origin_phase_order,
+                    origin_placement: seed.origin_placement,
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
     let visible_set_ids = discovered_set_ids
         .iter()
         .cloned()
@@ -1776,7 +1829,6 @@ pub async fn fetch_event_snapshot_by_slug(
 
     let mut all_sets: Vec<SetSnapshot> = Vec::with_capacity(pending_set_ids.len());
     while let Some(set_id) = pending_set_ids.pop() {
-        sleep(Duration::from_millis(START_GG_REQUEST_INTERVAL_MS)).await;
         let mut set = match fetch_set_snapshot_detail_with_client(&client, token, &set_id).await {
             Ok(set) => set,
             Err(_) if !visible_set_ids.contains(&set_id) => continue,
@@ -1804,7 +1856,8 @@ pub async fn fetch_event_snapshot_by_slug(
                 continue;
             };
             if is_seed_source {
-                enrich_seed_source_with_client(&client, token, source).await?;
+                enrich_seed_source_with_client(&client, token, source, &seed_source_info_by_id)
+                    .await?;
             }
         }
 

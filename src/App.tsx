@@ -8315,6 +8315,27 @@ function App() {
   }, [pendingSetResults]);
 
   const roundRobinBoardData = useMemo<RoundRobinBoardData>(() => {
+    if (selectedPhasePoolGroup?.bracketType !== "ROUND_ROBIN") {
+      return {
+        entrants: [],
+        entrantNames: new Map(),
+        entrantIdsByColumnKey: new Map(),
+        entrantSeedIds: new Map(),
+        entrantSeedNumbers: new Map(),
+        sourceDiagnostics: [],
+        setsByPair: new Map(),
+        candidateSetCount: 0,
+        twoSlotSetCount: 0,
+        resolvedSetCount: 0,
+        registeredSetCount: 0,
+        unresolvedSetIds: [],
+        unresolvedSetReasons: [],
+        standings: [],
+        qualifyingCount: 0,
+        tieBreakRules: DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES,
+      };
+    }
+
     const entrantNames = new Map<string, string>();
     const entrantSeedIds = new Map<string, string>();
     const sourceDiagnostics: string[] = [];

@@ -2050,8 +2050,9 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
     if let Some(mut snapshot) =
         merge_event_snapshot_files(load_event_snapshot_files(app, slug, false)?)
     {
-        restore_pending_local_results(app, &slug, &mut snapshot)?;
-        rebuild_progression_from_completed_sets(&mut snapshot);
+        if restore_pending_local_results(app, slug, &mut snapshot)? {
+            rebuild_progression_from_completed_sets(&mut snapshot);
+        }
         return Ok(snapshot);
     }
 
@@ -2085,17 +2086,28 @@ fn restore_pending_local_results(
     app: &AppHandle,
     slug: &str,
     snapshot: &mut TournamentSnapshot,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let pending_results = snapshot
         .events
         .iter()
         .map(|event| {
-            load_local_meta(app, slug, &event.event_id)
-                .map(|meta| (event.event_id.clone(), meta.pending_set_results))
+            load_local_meta(app, slug, &event.event_id).map(|meta| {
+                (
+                    event.event_id.clone(),
+                    meta.pending_set_results,
+                    !meta.pending_grand_final_reset_results.is_empty(),
+                )
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let has_pending_results =
+        pending_results
+            .iter()
+            .any(|(_, results, has_grand_final_reset_results)| {
+                !results.is_empty() || *has_grand_final_reset_results
+            });
 
-    for (event_id, results) in pending_results {
+    for (event_id, results, _) in pending_results {
         let Some(event) = snapshot
             .events
             .iter_mut()
@@ -2122,7 +2134,7 @@ fn restore_pending_local_results(
             }
         }
     }
-    Ok(())
+    Ok(has_pending_results)
 }
 
 fn rebuild_progression_from_completed_sets(snapshot: &mut TournamentSnapshot) {

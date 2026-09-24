@@ -334,6 +334,8 @@ pub struct PhaseGroupSeedSnapshot {
     #[serde(default)]
     pub progression_id: Option<String>,
     #[serde(default)]
+    pub group_seed_num: Option<i64>,
+    #[serde(default)]
     pub seed_num: Option<i64>,
     #[serde(default)]
     pub placement: Option<i64>,
@@ -341,6 +343,8 @@ pub struct PhaseGroupSeedSnapshot {
     pub origin_phase_order: Option<i64>,
     #[serde(default)]
     pub origin_phase_group_display_identifier: Option<String>,
+    #[serde(default)]
+    pub origin_phase_group_id: Option<String>,
     #[serde(default)]
     pub origin_placement: Option<i64>,
     #[serde(default)]

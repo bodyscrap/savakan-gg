@@ -45,6 +45,7 @@ query TournamentSync($slug: String!, $perPage: Int!) {
         seeds(query: { page: 1, perPage: 200 }) {
           nodes {
             id
+            groupSeedNum
             seedNum
             placement
             placeholderName
@@ -55,6 +56,7 @@ query TournamentSync($slug: String!, $perPage: Int!) {
                 phaseOrder
               }
               originPhaseGroup {
+                id
                 displayIdentifier
               }
               originPlacement
