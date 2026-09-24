@@ -1197,8 +1197,13 @@ button:disabled {
 
 .round-robin-match-code,
 .round-robin-match-result {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
   font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .round-robin-match strong {

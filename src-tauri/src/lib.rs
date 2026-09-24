@@ -234,6 +234,7 @@ struct MobileSetDetailItem {
     phase_group_name: Option<String>,
     state: i64,
     winner_id: Option<String>,
+    direct_win: bool,
     slots: Vec<MobileSetSlotItem>,
 }
 
@@ -551,6 +552,159 @@ mod tests {
             recorded_at: chrono::DateTime::<chrono::Utc>::from_timestamp(recorded_at_seconds, 0)
                 .unwrap(),
         }
+    }
+
+    #[test]
+    fn mobile_set_resolution_assigns_loser_source_entrant() {
+        let mut source_set = make_set("source-set", "Winners Round 1", Some(1));
+        source_set.winner_id = Some("winner-id".to_owned());
+        source_set.slots = vec![
+            models::SetSlotSnapshot {
+                entrant_id: Some("winner-id".to_owned()),
+                entrant_name: "Winner".to_owned(),
+                seed_id: None,
+                seed_num: None,
+                seed_placeholder_name: None,
+                seed_origin_phase_group_id: None,
+                seed_origin_phase_group_display_identifier: None,
+                seed_origin_phase_order: None,
+                seed_origin_placement: None,
+                seed_origin_order: None,
+                score: Some(2.0),
+            },
+            models::SetSlotSnapshot {
+                entrant_id: Some("loser-id".to_owned()),
+                entrant_name: "Loser".to_owned(),
+                seed_id: None,
+                seed_num: None,
+                seed_placeholder_name: None,
+                seed_origin_phase_group_id: None,
+                seed_origin_phase_group_display_identifier: None,
+                seed_origin_phase_order: None,
+                seed_origin_placement: None,
+                seed_origin_order: None,
+                score: Some(0.0),
+            },
+        ];
+
+        let mut losers_set = make_set("losers-set", "Losers Round 1", Some(-1));
+        losers_set.entrant2_source = Some(models::SetEntrantSourceSnapshot {
+            source_type: Some("set".to_owned()),
+            type_id: Some("source-set".to_owned()),
+            resolved_set_id: None,
+            condition: Some("loser".to_owned()),
+            condition_string: Some("Loser of Winners Round 1".to_owned()),
+            placeholder_name: None,
+            group_seed_num: None,
+            seed_num: None,
+            placement: None,
+            origin_phase_group_id: None,
+            origin_phase_group_display_identifier: None,
+            origin_phase_order: None,
+            origin_placement: None,
+        });
+        losers_set.slots = vec![
+            models::SetSlotSnapshot {
+                entrant_id: Some("other-id".to_owned()),
+                entrant_name: "Other".to_owned(),
+                seed_id: None,
+                seed_num: None,
+                seed_placeholder_name: None,
+                seed_origin_phase_group_id: None,
+                seed_origin_phase_group_display_identifier: None,
+                seed_origin_phase_order: None,
+                seed_origin_placement: None,
+                seed_origin_order: None,
+                score: None,
+            },
+            models::SetSlotSnapshot {
+                entrant_id: None,
+                entrant_name: "Loser of Winners Round 1".to_owned(),
+                seed_id: None,
+                seed_num: None,
+                seed_placeholder_name: None,
+                seed_origin_phase_group_id: None,
+                seed_origin_phase_group_display_identifier: None,
+                seed_origin_phase_order: None,
+                seed_origin_placement: None,
+                seed_origin_order: None,
+                score: None,
+            },
+        ];
+
+        let event = models::EventSnapshot {
+            event_id: "event".to_owned(),
+            name: "event".to_owned(),
+            phases: Vec::new(),
+            phase_groups: Vec::new(),
+            sets: vec![source_set, losers_set],
+        };
+
+        let resolved = resolve_mobile_set_entrants(&event, "losers-set").unwrap();
+
+        assert_eq!(resolved.slots[1].entrant_id.as_deref(), Some("loser-id"));
+        assert_eq!(resolved.slots[1].entrant_name, "Loser");
+        assert_eq!(resolved.slots[1].score, None);
+    }
+
+    #[test]
+    fn mobile_detail_prefers_pending_scores_and_preserves_direct_win() {
+        let mut detail = MobileSetDetailItem {
+            set_id: "set".to_owned(),
+            set_code: "A".to_owned(),
+            full_round_text: "Round 1".to_owned(),
+            round: Some(1),
+            phase_name: None,
+            phase_group_name: None,
+            state: 2,
+            winner_id: None,
+            direct_win: false,
+            slots: vec![
+                MobileSetSlotItem {
+                    entrant_id: Some("entrant-1".to_owned()),
+                    entrant_name: "Player 1".to_owned(),
+                    score: Some(0.0),
+                    play_side: None,
+                },
+                MobileSetSlotItem {
+                    entrant_id: Some("entrant-2".to_owned()),
+                    entrant_name: "Player 2".to_owned(),
+                    score: Some(0.0),
+                    play_side: None,
+                },
+            ],
+        };
+        let mut pending = make_pending_result("set", 1);
+        pending.winner_id = "entrant-1".to_owned();
+        pending.slot_scores = vec![
+            models::LocalSetScoreMeta {
+                entrant_id: "entrant-1".to_owned(),
+                score: 3,
+            },
+            models::LocalSetScoreMeta {
+                entrant_id: "entrant-2".to_owned(),
+                score: 1,
+            },
+        ];
+
+        apply_pending_mobile_result(&mut detail, &pending);
+
+        assert!(!detail.direct_win);
+        assert_eq!(detail.state, 3);
+        assert_eq!(detail.winner_id.as_deref(), Some("entrant-1"));
+        assert_eq!(detail.slots[0].score, Some(3.0));
+        assert_eq!(detail.slots[1].score, Some(1.0));
+
+        pending.direct_win = true;
+        pending
+            .slot_scores
+            .iter_mut()
+            .for_each(|slot| slot.score = 0);
+        apply_pending_mobile_result(&mut detail, &pending);
+
+        assert!(detail.direct_win);
+        assert_eq!(detail.slots[0].score, None);
+        assert_eq!(detail.slots[1].score, None);
     }
 
     #[test]
@@ -1981,6 +2135,7 @@ fn mobile_input_html() -> &'static str {
 
             const detail = await res.json();
             selectedSet = detail;
+            directWinnerId = detail.directWin && detail.winnerId ? String(detail.winnerId) : null;
             detailMeta.textContent = '';
             detailSetId.textContent = getDisplaySetLabel(detail);
             mobileSideDrafts = buildMobileSideDraftsFromDetail(detail);
@@ -2771,9 +2926,7 @@ fn mobile_input_html() -> &'static str {
             const detail = await res.json();
             const previousSetId = selectedSet && selectedSet.setId ? String(selectedSet.setId) : '';
             selectedSet = detail;
-            if (previousSetId !== String(detail.setId || '')) {
-                directWinnerId = null;
-            }
+            directWinnerId = detail.directWin && detail.winnerId ? String(detail.winnerId) : null;
             displayOnePOnTop = onePOnTopCheckbox ? Boolean(onePOnTopCheckbox.checked) : true;
             if (onePOnTopCheckbox && previousSetId !== String(detail.setId || '')) {
                 displayOnePOnTop = true;
@@ -2886,6 +3039,7 @@ fn mobile_input_html() -> &'static str {
 
             const detail = await res.json();
             selectedSet = detail;
+            directWinnerId = detail.directWin && detail.winnerId ? String(detail.winnerId) : null;
             detailMeta.textContent = '';
             detailSetId.textContent = getDisplaySetLabel(detail);
             mobileSideDrafts = buildMobileSideDraftsFromDetail(detail);
@@ -3052,7 +3206,7 @@ fn build_mobile_set_detail_from_workspace(
         .events
         .iter()
         .find(|item| item.event_id == event_id)?;
-    let set = event.sets.iter().find(|item| item.set_id == set_id)?;
+    let set = resolve_mobile_set_entrants(event, set_id)?;
     let set_display_code_by_id = build_set_display_code_by_id(&event.sets);
     let mut side_by_key = std::collections::HashMap::<String, String>::new();
     for item in &workspace.local_meta.set_play_sides {
@@ -3066,10 +3220,194 @@ fn build_mobile_set_detail_from_workspace(
     }
 
     build_mobile_set_detail_from_set_snapshot(
-        set,
+        &set,
         set_display_code_by_id.get(&set.set_id).cloned(),
         side_by_key,
     )
+}
+
+fn resolve_mobile_set_entrants(
+    event: &crate::models::EventSnapshot,
+    set_id: &str,
+) -> Option<SetSnapshot> {
+    let mut set = event
+        .sets
+        .iter()
+        .find(|item| item.set_id == set_id)?
+        .clone();
+    for (slot_index, slot) in set.slots.iter_mut().enumerate() {
+        if slot.entrant_id.is_some() {
+            continue;
+        }
+        let source = match slot_index {
+            0 => set.entrant1_source.as_ref(),
+            1 => set.entrant2_source.as_ref(),
+            _ => None,
+        };
+        if let Some(resolved) = resolve_mobile_entrant_from_source(
+            source,
+            event,
+            &mut HashSet::from([set.set_id.clone()]),
+        ) {
+            slot.entrant_id = resolved.entrant_id;
+            slot.entrant_name = resolved.entrant_name;
+        }
+    }
+
+    for slot in &mut set.slots {
+        let Some(entrant_id) = slot.entrant_id.as_deref() else {
+            continue;
+        };
+        if !is_mobile_resolved_entrant_name(&slot.entrant_name) {
+            if let Some(name) = event
+                .sets
+                .iter()
+                .flat_map(|candidate| candidate.slots.iter())
+                .find(|candidate| candidate.entrant_id.as_deref() == Some(entrant_id))
+                .filter(|candidate| is_mobile_resolved_entrant_name(&candidate.entrant_name))
+                .map(|candidate| candidate.entrant_name.clone())
+                .or_else(|| {
+                    event
+                        .phase_groups
+                        .iter()
+                        .flat_map(|group| group.seeds.iter())
+                        .find(|seed| {
+                            seed.entrant_id.as_deref() == Some(entrant_id)
+                                && seed
+                                    .entrant_name
+                                    .as_deref()
+                                    .is_some_and(is_mobile_resolved_entrant_name)
+                        })
+                        .and_then(|seed| seed.entrant_name.clone())
+                })
+            {
+                slot.entrant_name = name;
+            }
+        }
+    }
+
+    Some(set)
+}
+
+fn is_mobile_resolved_entrant_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let normalized = trimmed.to_ascii_uppercase();
+    !matches!(normalized.as_str(), "TBD" | "TBA" | "UNKNOWN")
+        && !trimmed.to_ascii_lowercase().starts_with("winner of ")
+        && !trimmed.to_ascii_lowercase().starts_with("loser of ")
+        && !trimmed.starts_with("勝者")
+        && !trimmed.starts_with("敗者")
+}
+
+fn resolve_mobile_entrant_from_source(
+    source: Option<&crate::models::SetEntrantSourceSnapshot>,
+    event: &crate::models::EventSnapshot,
+    visited: &mut HashSet<String>,
+) -> Option<crate::models::SetSlotSnapshot> {
+    let source = source?;
+    if source.source_type.as_deref() == Some("seed") {
+        if let Some(seed) = event
+            .phase_groups
+            .iter()
+            .flat_map(|group| group.seeds.iter())
+            .find(|seed| Some(seed.seed_id.as_str()) == source.type_id.as_deref())
+        {
+            if let Some(entrant_id) = seed.entrant_id.as_ref() {
+                return Some(crate::models::SetSlotSnapshot {
+                    entrant_id: Some(entrant_id.clone()),
+                    entrant_name: seed
+                        .entrant_name
+                        .clone()
+                        .unwrap_or_else(|| "TBD".to_owned()),
+                    seed_id: Some(seed.seed_id.clone()),
+                    seed_num: seed.seed_num,
+                    seed_placeholder_name: seed.placeholder_name.clone(),
+                    seed_origin_phase_group_id: seed.origin_phase_group_id.clone(),
+                    seed_origin_phase_group_display_identifier: seed
+                        .origin_phase_group_display_identifier
+                        .clone(),
+                    seed_origin_phase_order: seed.origin_phase_order,
+                    seed_origin_placement: seed.origin_placement,
+                    seed_origin_order: seed.origin_order,
+                    score: None,
+                });
+            }
+        }
+
+        let progression_source = event.sets.iter().find_map(|candidate| {
+            if candidate.winner_progression_seed_id.as_deref() == source.type_id.as_deref()
+                || candidate.winner_progression_id.as_deref() == source.type_id.as_deref()
+            {
+                Some((candidate, "winner"))
+            } else if candidate.loser_progression_seed_id.as_deref() == source.type_id.as_deref()
+                || candidate.loser_progression_id.as_deref() == source.type_id.as_deref()
+            {
+                Some((candidate, "loser"))
+            } else {
+                None
+            }
+        });
+        if let Some((source_set, relation)) = progression_source {
+            return source_set.winner_id.as_ref().and_then(|winner_id| {
+                source_set
+                    .slots
+                    .iter()
+                    .find(|slot| {
+                        slot.entrant_id.as_ref().is_some_and(|entrant_id| {
+                            if relation == "winner" {
+                                entrant_id == winner_id
+                            } else {
+                                entrant_id != winner_id
+                            }
+                        })
+                    })
+                    .cloned()
+            });
+        }
+        return None;
+    }
+
+    let source_set_id = source
+        .resolved_set_id
+        .as_deref()
+        .or(source.type_id.as_deref())?;
+    if !visited.insert(source_set_id.to_owned()) {
+        return None;
+    }
+    let source_set = event.sets.iter().find(|set| set.set_id == source_set_id)?;
+    let condition = source.condition.as_deref().unwrap_or_default();
+    if let Some(winner_id) = source_set.winner_id.as_ref() {
+        if condition == "winner" || condition == "loser" {
+            return source_set
+                .slots
+                .iter()
+                .find(|slot| {
+                    slot.entrant_id.as_ref().is_some_and(|entrant_id| {
+                        if condition == "winner" {
+                            entrant_id == winner_id
+                        } else {
+                            entrant_id != winner_id
+                        }
+                    })
+                })
+                .cloned();
+        }
+    }
+
+    if source_set.is_intermediate {
+        for nested_source in [
+            source_set.entrant1_source.as_ref(),
+            source_set.entrant2_source.as_ref(),
+        ] {
+            if let Some(slot) = resolve_mobile_entrant_from_source(nested_source, event, visited) {
+                return Some(slot);
+            }
+        }
+    }
+    None
 }
 
 fn build_mobile_set_detail_from_set_snapshot(
@@ -3088,6 +3426,7 @@ fn build_mobile_set_detail_from_set_snapshot(
         phase_group_name: set.phase_group_name.clone(),
         state: set.state,
         winner_id: set.winner_id.clone(),
+        direct_win: false,
         slots: set
             .slots
             .iter()
@@ -3102,6 +3441,43 @@ fn build_mobile_set_detail_from_set_snapshot(
             })
             .collect::<Vec<MobileSetSlotItem>>(),
     })
+}
+
+fn apply_pending_mobile_result(
+    detail: &mut MobileSetDetailItem,
+    pending: &models::LocalSetResultMeta,
+) {
+    detail.direct_win = pending.direct_win;
+    if pending.confirmed {
+        detail.state = 3;
+    }
+    if detail
+        .winner_id
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+        && !pending.winner_id.trim().is_empty()
+    {
+        detail.winner_id = Some(pending.winner_id.clone());
+    }
+
+    for slot in &mut detail.slots {
+        if pending.direct_win {
+            slot.score = None;
+            continue;
+        }
+        let Some(entrant_id) = slot.entrant_id.as_deref() else {
+            continue;
+        };
+        if let Some(score) = pending
+            .slot_scores
+            .iter()
+            .find(|score| score.entrant_id == entrant_id)
+        {
+            slot.score = Some(score.score as f64);
+        }
+    }
 }
 
 fn hydrate_mobile_detail_with_local_meta(
@@ -3144,13 +3520,6 @@ fn hydrate_mobile_detail_with_local_meta(
             item.entrant_id.clone(),
             play_side_label(item.play_side.clone()),
         );
-    }
-
-    let mut score_by_id = HashMap::<String, f64>::new();
-    if let Some(pending) = pending {
-        for slot in &pending.slot_scores {
-            score_by_id.insert(slot.entrant_id.clone(), slot.score as f64);
-        }
     }
 
     let mut candidate_ids = Vec::<String>::new();
@@ -3224,9 +3593,6 @@ fn hydrate_mobile_detail_with_local_meta(
                         slot.entrant_name = name.clone();
                     }
                 }
-                if slot.score.is_none() {
-                    slot.score = score_by_id.get(&entrant_id).cloned();
-                }
                 if slot
                     .play_side
                     .as_deref()
@@ -3242,21 +3608,11 @@ fn hydrate_mobile_detail_with_local_meta(
             .collect::<Vec<MobileSetSlotItem>>();
     }
 
+    if let Some(pending) = pending {
+        apply_pending_mobile_result(&mut detail, pending);
+    }
     if detail.full_round_text.trim().is_empty() {
         detail.full_round_text = format!("Set {}", detail.set_code);
-    }
-    if detail
-        .winner_id
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or("")
-        .is_empty()
-    {
-        if let Some(pending) = pending {
-            if !pending.winner_id.trim().is_empty() {
-                detail.winner_id = Some(pending.winner_id.clone());
-            }
-        }
     }
 
     detail
@@ -3356,6 +3712,7 @@ fn build_mobile_set_detail_local_only(
         } else {
             Some(pending.winner_id.clone())
         },
+        direct_win: pending.direct_win,
         slots,
     })
 }
@@ -3367,21 +3724,6 @@ fn mobile_detail_has_entrant_ids(detail: &MobileSetDetailItem) -> bool {
         .filter(|slot| slot.entrant_id.is_some())
         .count()
         >= 2
-}
-
-fn load_target_event_sets(
-    app: &tauri::AppHandle,
-    slug: &str,
-    event_id: &str,
-) -> Result<Vec<SetSnapshot>, String> {
-    let workspace = storage::load_workspace(app, slug, event_id)?;
-    let event = workspace
-        .snapshot
-        .events
-        .iter()
-        .find(|item| item.event_id == event_id)
-        .ok_or_else(|| format!("指定eventが見つかりません: {event_id}"))?;
-    Ok(event.sets.clone())
 }
 
 fn load_target_workspace(
@@ -3514,7 +3856,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             return;
         }
 
-        let sets = match load_target_event_sets(app, &slug, &event_id) {
+        let workspace = match load_target_workspace(app, &slug, &event_id) {
             Ok(value) => value,
             Err(err) => {
                 respond_json(
@@ -3525,6 +3867,35 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 return;
             }
         };
+
+        let event = match workspace
+            .snapshot
+            .events
+            .iter()
+            .find(|item| item.event_id == event_id)
+        {
+            Some(value) => value,
+            None => {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"指定eventが見つかりません: {}\"}}", event_id),
+                );
+                return;
+            }
+        };
+        let sets = event
+            .sets
+            .iter()
+            .filter_map(|set| resolve_mobile_set_entrants(event, &set.set_id))
+            .collect::<Vec<_>>();
+        let confirmed_pending_set_ids = workspace
+            .local_meta
+            .pending_set_results
+            .iter()
+            .filter(|pending| pending.event_id == event_id && pending.confirmed)
+            .map(|pending| pending.set_id.as_str())
+            .collect::<HashSet<_>>();
 
         let set_display_code_by_id = build_set_display_code_by_id(&sets);
 
@@ -3573,7 +3944,11 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 phase_name: set.phase_name.clone(),
                 phase_group_name: set.phase_group_name.clone(),
                 is_intermediate: set.is_intermediate,
-                state: set.state,
+                state: if confirmed_pending_set_ids.contains(set.set_id.as_str()) {
+                    3
+                } else {
+                    set.state
+                },
                 winner_id: set.winner_id.clone(),
                 entrant_names: set
                     .slots
@@ -3708,7 +4083,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             .events
             .iter()
             .find(|event| event.event_id == event_id)
-            .and_then(|event| event.sets.iter().find(|set| set.set_id == set_id))
+            .and_then(|event| resolve_mobile_set_entrants(event, &set_id))
         else {
             respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
             return;
@@ -3766,14 +4141,18 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             let play_side = parse_play_side_value(assignment.play_side.as_deref())
                 .ok()
                 .flatten();
-            if let Err(err) = storage::upsert_local_set_play_side(
-                app,
+            let opponent_entrant_id = known_entrant_ids
+                .iter()
+                .find(|id| id.as_str() != assignment.entrant_id)
+                .cloned();
+            if let Err(err) = save_local_set_play_side(
+                app.clone(),
                 LocalSetPlaySideInput {
                     slug: slug.clone(),
                     event_id: event_id.clone(),
                     set_id: set_id.clone(),
                     entrant_id: assignment.entrant_id.clone(),
-                    opponent_entrant_id: None,
+                    opponent_entrant_id,
                     play_side,
                 },
             ) {
@@ -3792,7 +4171,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
-            .or_else(|| resolve_winner_id_from_slot_scores(target_set, &payload.slot_scores));
+            .or_else(|| resolve_winner_id_from_slot_scores(&target_set, &payload.slot_scores));
 
         if let Some(value) = winner_id.as_ref() {
             if !known_entrant_ids.iter().any(|id| id == value) {
@@ -3805,9 +4184,9 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             }
         }
 
-        let workspace_after = if let Some(winner_id) = winner_id {
-            match storage::upsert_local_set_result(
-                app,
+        let _saved_workspace = if let Some(winner_id) = winner_id {
+            match save_local_set_result(
+                app.clone(),
                 LocalSetResultInput {
                     slug: slug.clone(),
                     event_id: event_id.clone(),
@@ -3838,8 +4217,8 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 return;
             }
 
-            match storage::upsert_local_set_scores(
-                app,
+            match save_local_set_scores(
+                app.clone(),
                 LocalSetScoreUpdateInput {
                     slug: slug.clone(),
                     event_id: event_id.clone(),
@@ -3856,6 +4235,18 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     );
                     return;
                 }
+            }
+        };
+
+        let workspace_after = match load_target_workspace(app, &slug, &event_id) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
             }
         };
 
@@ -4152,7 +4543,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             }
         };
 
-        let sets = match load_target_event_sets(app, &payload.slug, &payload.event_id) {
+        let workspace = match load_target_workspace(app, &payload.slug, &payload.event_id) {
             Ok(value) => value,
             Err(err) => {
                 respond_json(
@@ -4164,7 +4555,13 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             }
         };
 
-        let Some(target_set) = sets.iter().find(|set| set.set_id == payload.set_id) else {
+        let Some(target_set) = workspace
+            .snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == payload.event_id)
+            .and_then(|event| resolve_mobile_set_entrants(event, &payload.set_id))
+        else {
             respond_json(
                 request,
                 400,
@@ -6367,7 +6764,7 @@ async fn report_confirmed_sets_from_bracket(
     let mut conflict = None;
 
     for item in pending {
-        let is_reset_action = item.winner_id.trim().is_empty();
+        let is_reset_action = item.winner_id.trim().is_empty() && item.slot_scores.is_empty();
 
         let local_set = match local_event
             .sets
@@ -6639,7 +7036,8 @@ async fn report_confirmed_sets_from_bracket(
             resolved_remote_gf_reset_source_set_id =
                 Some(virtual_item.source_grand_final_set_id.clone());
             let remote_set = startgg::fetch_set_snapshot(&token, &remote_reset_set.set_id).await?;
-            let is_reset_action = virtual_item.winner_id.trim().is_empty();
+            let is_reset_action =
+                virtual_item.winner_id.trim().is_empty() && virtual_item.slot_scores.is_empty();
 
             if is_reset_action {
                 let remote_is_already_reset = remote_set.winner_id.is_none()

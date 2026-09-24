@@ -444,9 +444,19 @@ fn is_pending_result_matched_with_set(
     pending: &LocalSetResultMeta,
     set: &crate::models::SetSnapshot,
 ) -> bool {
-    // winner_id が空の場合は「結果取り消し(reset)」の差分を表す。
+    // スコアのみのdraftは、winner_idが空でも結果取り消しとは区別する。
     if pending.winner_id.trim().is_empty() {
-        return set.winner_id.is_none();
+        if pending.slot_scores.is_empty() {
+            return set.winner_id.is_none();
+        }
+        return set.winner_id.is_none()
+            && pending.slot_scores.iter().all(|pending_score| {
+                set.slots
+                    .iter()
+                    .find(|slot| slot.entrant_id.as_deref() == Some(&pending_score.entrant_id))
+                    .and_then(|slot| integer_score(slot.score))
+                    == Some(pending_score.score)
+            });
     }
 
     if set.winner_id.as_deref() != Some(pending.winner_id.as_str()) {
@@ -2630,6 +2640,17 @@ pub fn delete_local_snapshot_event(
         fs::remove_file(graph_path)
             .map_err(|e| format!("ブラケットグラフ削除に失敗しました: {e}"))?;
     }
+    let event_snapshot_path = event_snapshot_path_with_keys(
+        app,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        event_id,
+        &event_name,
+    )?;
+    if event_snapshot_path.exists() {
+        fs::remove_file(event_snapshot_path)
+            .map_err(|e| format!("スナップショット削除に失敗しました: {e}"))?;
+    }
     let pristine_path = pristine_event_snapshot_path_with_keys(
         app,
         &snapshot.tournament_id,
@@ -3330,6 +3351,41 @@ mod grand_final_reset_order_tests {
             }).collect::<Vec<_>>(),
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn score_only_pending_is_not_treated_as_a_reset() {
+        let mut set = make_set("set-1", "Round 1", None, &["entrant-1", "entrant-2"]);
+        set.slots[0].score = Some(2.0);
+        set.slots[1].score = Some(1.0);
+        let pending = LocalSetResultMeta {
+            event_id: "event".to_owned(),
+            event_name: "Event".to_owned(),
+            set_id: "set-1".to_owned(),
+            winner_id: String::new(),
+            score_csv: String::new(),
+            direct_win: false,
+            confirmed: false,
+            slot_scores: vec![
+                LocalSetScoreMeta {
+                    entrant_id: "entrant-1".to_owned(),
+                    score: 2,
+                },
+                LocalSetScoreMeta {
+                    entrant_id: "entrant-2".to_owned(),
+                    score: 1,
+                },
+            ],
+            recorded_at: Utc::now(),
+        };
+
+        assert!(is_pending_result_matched_with_set(&pending, &set));
+        set.slots[1].score = Some(0.0);
+        assert!(!is_pending_result_matched_with_set(&pending, &set));
+
+        let mut reset = pending;
+        reset.slot_scores.clear();
+        assert!(is_pending_result_matched_with_set(&reset, &set));
     }
 
     #[test]
@@ -7031,8 +7087,8 @@ pub fn upsert_local_set_result(
         rebuild_progression_from_completed_sets(&mut snapshot);
     }
 
-    save_snapshot(app, &snapshot)?;
     save_local_meta(app, &applied_event_id, &local_meta)?;
+    save_snapshot(app, &snapshot)?;
 
     Ok(TournamentWorkspace {
         snapshot,
@@ -7089,6 +7145,20 @@ pub fn upsert_local_set_scores(
         event_id.clone()
     };
 
+    let event_name = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == applied_event_id)
+        .map(|event| event.name.clone())
+        .unwrap_or_default();
+    let slot_scores = input
+        .slot_scores
+        .iter()
+        .map(|slot| LocalSetScoreMeta {
+            entrant_id: slot.entrant_id.clone(),
+            score: slot.score,
+        })
+        .collect::<Vec<_>>();
     local_meta
         .pending_set_results
         .retain(|item| item.set_id != input.set_id);
@@ -7099,14 +7169,41 @@ pub fn upsert_local_set_scores(
             !(item.event_id == applied_event_id
                 && item.source_grand_final_set_id == source_grand_final_set_id)
         });
+        if !slot_scores.is_empty() {
+            local_meta
+                .pending_grand_final_reset_results
+                .push(LocalGrandFinalResetResultMeta {
+                    event_id: applied_event_id.clone(),
+                    event_name,
+                    source_grand_final_set_id,
+                    winner_id: String::new(),
+                    score_csv: String::new(),
+                    direct_win: false,
+                    confirmed: false,
+                    slot_scores,
+                    recorded_at: Utc::now(),
+                });
+        }
+    } else if !slot_scores.is_empty() {
+        local_meta.pending_set_results.push(LocalSetResultMeta {
+            event_id: applied_event_id.clone(),
+            event_name,
+            set_id: input.set_id.clone(),
+            winner_id: String::new(),
+            score_csv: String::new(),
+            direct_win: false,
+            confirmed: false,
+            slot_scores,
+            recorded_at: Utc::now(),
+        });
     }
 
     local_meta.slug = input.slug;
     local_meta.tournament_id = snapshot.tournament_id.clone();
     local_meta.updated_at = Utc::now();
 
-    save_snapshot(app, &snapshot)?;
     save_local_meta(app, &applied_event_id, &local_meta)?;
+    save_snapshot(app, &snapshot)?;
 
     Ok(TournamentWorkspace {
         snapshot,

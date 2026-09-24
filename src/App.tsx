@@ -3294,7 +3294,15 @@ function App() {
                   .find((event) => event.eventId === selectedEventId)
                   ?.sets.find((set) => set.setId === activeMatchSetId);
                 if (refreshedSet) {
-                  setScoreDrafts(buildScoreDraftsFromSet(refreshedSet));
+                  const refreshedPending = result.localMeta.pendingSetResults.find(
+                    (item) => item.eventId === selectedEventId && item.setId === activeMatchSetId,
+                  );
+                  setScoreDrafts(
+                    refreshedPending
+                      ? buildScoreDraftsFromResult(refreshedSet, refreshedPending)
+                      : buildScoreDraftsFromSet(refreshedSet),
+                  );
+                  setDirectWinnerId(refreshedPending?.directWin ? refreshedPending.winnerId : null);
                   const refreshedSideDrafts: Record<string, PlaySide | ""> = {};
                   for (const slot of refreshedSet.slots) {
                     if (slot.entrantId) {
@@ -8333,8 +8341,22 @@ function App() {
     for (const pending of pendingSetResults) {
       map.set(pending.setId, pending);
     }
+    for (const pending of pendingGrandFinalResetResults) {
+      const setId = `virtual_gf_reset_${pending.sourceGrandFinalSetId}`;
+      map.set(setId, {
+        eventId: pending.eventId,
+        eventName: pending.eventName,
+        setId,
+        winnerId: pending.winnerId,
+        scoreCsv: pending.scoreCsv,
+        directWin: pending.directWin,
+        confirmed: pending.confirmed,
+        slotScores: pending.slotScores,
+        recordedAt: pending.recordedAt,
+      });
+    }
     return map;
-  }, [pendingSetResults]);
+  }, [pendingGrandFinalResetResults, pendingSetResults]);
 
   const roundRobinBoardData = useMemo<RoundRobinBoardData>(() => {
     if (selectedPhasePoolGroup?.bracketType !== "ROUND_ROBIN") {
@@ -9821,8 +9843,27 @@ function App() {
 
     if (slotScores.length > 0) {
       const scores: Record<string, string> = {};
-      for (const slot of slotScores) {
-        scores[slot.entrantId] = slot.score < 0 ? "DQ" : String(slot.score);
+      const matchedEntrantIds = new Set<string>();
+      const unresolvedSlots: SetSlot[] = [];
+      for (const slot of set.slots) {
+        if (!slot.entrantId) {
+          continue;
+        }
+        const matchedScore = slotScores.find((score) => score.entrantId === slot.entrantId);
+        if (matchedScore) {
+          scores[slot.entrantId] = matchedScore.score < 0 ? "DQ" : String(matchedScore.score);
+          matchedEntrantIds.add(matchedScore.entrantId);
+        } else {
+          unresolvedSlots.push(slot);
+        }
+      }
+
+      const unresolvedScores = slotScores.filter((slot) => !matchedEntrantIds.has(slot.entrantId));
+      for (const [index, slot] of unresolvedSlots.entries()) {
+        const fallbackScore = unresolvedScores[index];
+        if (slot.entrantId && fallbackScore) {
+          scores[slot.entrantId] = fallbackScore.score < 0 ? "DQ" : String(fallbackScore.score);
+        }
       }
 
       return {
@@ -13066,13 +13107,15 @@ function App() {
                                         && obsOverlayState.currentSetId === set.setId
                                         && obsOverlayState.currentSetId !== "__test__",
                                       );
+                                      const roundLabel = set.fullRoundText.trim() || `Round ${set.round ?? "-"}`;
+                                      const setLabel = `Set ${setDisplayCodeById.get(set.setId) ?? set.identifier?.trim() ?? "-"}`;
 
                                       return (
                                         <td key={columnEntrantId} className="round-robin-cell">
                                           <button
                                             type="button"
                                             className={`round-robin-match ${outcomeClass} ${changeClass} ${resultStatusClass} ${isLiveOverlaySet ? "set-card-live" : ""}`}
-                                            title={`${roundRobinBoardData.entrantNames.get(rowEntrantId) || "-"} vs ${roundRobinBoardData.entrantNames.get(columnEntrantId) || "-"}`}
+                                            title={`${roundLabel} / ${setLabel}: ${roundRobinBoardData.entrantNames.get(rowEntrantId) || "-"} vs ${roundRobinBoardData.entrantNames.get(columnEntrantId) || "-"}`}
                                             onClick={(event) => {
                                               if (event.altKey) {
                                                 event.preventDefault();
@@ -13087,6 +13130,8 @@ function App() {
                                               openMatchDialog(set);
                                             }}
                                           >
+                                            <span className="round-robin-match-code" title={roundLabel}>{roundLabel}</span>
+                                            <span className="round-robin-match-result">{setLabel}</span>
                                             {(resultStatusLabel !== "" || isLiveOverlaySet) && (
                                               <span className="round-robin-match-status">
                                                 {resultStatusLabel !== "" && (
