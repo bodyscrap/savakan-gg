@@ -22,6 +22,7 @@ type SetSlot = {
 type SetSnapshot = {
   setId: string;
   phaseGroupId?: string | null;
+  identifier?: string | null;
   fullRoundText: string;
   round: number | null;
   phaseName: string | null;
@@ -33,11 +34,13 @@ type SetSnapshot = {
   state: number;
   winnerId: string | null;
   winnerProgressionSeedId?: string | null;
+  winnerProgressionId?: string | null;
   winnerProgressionSeedPlaceholderName?: string | null;
   winnerProgressionOriginPhaseGroupDisplayIdentifier?: string | null;
   winnerProgressionOriginPhaseOrder?: number | null;
   winnerProgressionOriginPlacement?: number | null;
   loserProgressionSeedId?: string | null;
+  loserProgressionId?: string | null;
   loserProgressionSeedPlaceholderName?: string | null;
   loserProgressionOriginPhaseGroupDisplayIdentifier?: string | null;
   loserProgressionOriginPhaseOrder?: number | null;
@@ -666,6 +669,10 @@ function sourceSetIdsForSet(set: SetSnapshot): string[] {
     set.entrant2Source?.resolvedSetId ?? set.entrant2Source?.typeId,
   ]
     .filter((setId): setId is string => Boolean(setId && setId.trim() !== ""));
+}
+
+function isDisplayableSet(set: SetSnapshot): boolean {
+  return set.isIntermediate !== true;
 }
 
 function compareSetsForStableLane(left: SetSnapshot, right: SetSnapshot): number {
@@ -2167,7 +2174,132 @@ function isMatchupReady(set: SetSnapshot): boolean {
     return false;
   }
 
-  return set.slots.every((slot) => slot.entrantId !== null && isResolvedEntrantName(slot.entrantName));
+  return set.slots.every((slot) => slot.entrantId !== null);
+}
+
+function resolveEntrantFromSource(
+  source: SetEntrantSource | null | undefined,
+  sets: SetSnapshot[],
+  phaseGroups: PhaseGroupSnapshot[],
+  visited: Set<string>,
+): SetSlot | null {
+  if (!source) {
+    return null;
+  }
+
+  if (source.sourceType?.trim().toLowerCase() === "seed") {
+    const seed = phaseGroups
+      .flatMap((group) => group.seeds ?? [])
+      .find((candidate) => candidate.seedId === source.typeId);
+    if (seed?.entrantId) {
+      return {
+        entrantId: seed.entrantId,
+        entrantName: seed.entrantName?.trim() || "TBD",
+        seedId: seed.seedId,
+        seedNum: seed.seedNum ?? null,
+        seedPlaceholderName: seed.placeholderName ?? null,
+        score: null,
+      };
+    }
+
+    const progressionSource = sets.find((candidate) => {
+      return candidate.winnerProgressionSeedId === source.typeId
+        || candidate.loserProgressionSeedId === source.typeId
+        || candidate.winnerProgressionId === source.typeId
+        || candidate.loserProgressionId === source.typeId;
+    });
+    if (progressionSource?.winnerId) {
+      const progressionRelation = progressionSource.winnerProgressionSeedId === source.typeId
+        || progressionSource.winnerProgressionId === source.typeId
+        ? "winner"
+        : "loser";
+      return progressionSource.slots.find((slot) => {
+        if (!slot.entrantId) {
+          return false;
+        }
+        return progressionRelation === "winner"
+          ? slot.entrantId === progressionSource.winnerId
+          : slot.entrantId !== progressionSource.winnerId;
+      }) ?? null;
+    }
+    return null;
+  }
+
+  const sourceSetId = source.resolvedSetId ?? source.typeId;
+  if (!sourceSetId || visited.has(sourceSetId)) {
+    return null;
+  }
+
+  const sourceSet = sets.find((candidate) => candidate.setId === sourceSetId);
+  if (!sourceSet) {
+    return null;
+  }
+
+  const nextVisited = new Set(visited);
+  nextVisited.add(sourceSetId);
+  const condition = source.condition?.trim().toLowerCase();
+  if (sourceSet.winnerId && (condition === "winner" || condition === "loser")) {
+    return sourceSet.slots.find((slot) => {
+      if (!slot.entrantId) {
+        return false;
+      }
+      return condition === "winner"
+        ? slot.entrantId === sourceSet.winnerId
+        : slot.entrantId !== sourceSet.winnerId;
+    }) ?? null;
+  }
+
+  if (sourceSet.isIntermediate) {
+    return [sourceSet.entrant1Source, sourceSet.entrant2Source]
+      .map((nestedSource) => resolveEntrantFromSource(nestedSource, sets, phaseGroups, nextVisited))
+      .find((slot): slot is SetSlot => slot !== null)
+      ?? null;
+  }
+
+  return null;
+}
+
+function resolveSetEntrantsForInput(
+  set: SetSnapshot,
+  sets: SetSnapshot[],
+  phaseGroups: PhaseGroupSnapshot[],
+): SetSnapshot {
+  const resolveKnownEntrantName = (entrantId: string, fallbackName: string): string => {
+    const knownSlotName = sets
+      .flatMap((candidate) => candidate.slots)
+      .find((candidate) => candidate.entrantId === entrantId && isResolvedEntrantName(candidate.entrantName))
+      ?.entrantName;
+    if (knownSlotName) {
+      return knownSlotName;
+    }
+
+    return phaseGroups
+      .flatMap((group) => group.seeds ?? [])
+      .find((seed) => seed.entrantId === entrantId && isResolvedEntrantName(seed.entrantName ?? ""))
+      ?.entrantName
+      ?? fallbackName;
+  };
+
+  const slots = set.slots.map((slot, slotIndex) => {
+    if (slot.entrantId) {
+      return {
+        ...slot,
+        entrantName: resolveKnownEntrantName(slot.entrantId, slot.entrantName),
+      };
+    }
+
+    const source = slotIndex === 0 ? set.entrant1Source : set.entrant2Source;
+    const resolved = resolveEntrantFromSource(source, sets, phaseGroups, new Set([set.setId]));
+    return resolved?.entrantId
+      ? {
+        ...slot,
+        entrantId: resolved.entrantId,
+        entrantName: resolveKnownEntrantName(resolved.entrantId, resolved.entrantName),
+      }
+      : slot;
+  });
+
+  return slots === set.slots ? set : { ...set, slots };
 }
 
 function isCompletedSet(set: SetSnapshot): boolean {
@@ -4007,7 +4139,9 @@ function App() {
     }
 
     return snapshot.events.flatMap((event) =>
-      event.sets.map((set) => ({ eventName: event.name, set })),
+      event.sets
+        .filter(isDisplayableSet)
+        .map((set) => ({ eventName: event.name, set })),
     );
   }, [snapshot]);
 
@@ -6633,7 +6767,9 @@ function App() {
     const nextReadiness: Record<string, string> = {};
     const updates: Array<{ setSnapshot: SetSnapshot; upperEntrantId: string; upperSide: PlaySide }> = [];
 
-    for (const set of selectedEvent.sets) {
+    for (const set of selectedEvent.sets.map((candidate) =>
+      resolveSetEntrantsForInput(candidate, selectedEvent.sets, selectedEvent.phaseGroups ?? []),
+    )) {
       const isReadyForAutoAssign = !isCompletedSet(set) && isMatchupReady(set);
       const slots = set.slots.filter((slot) => slot.entrantId !== null);
       const upperId = slots[0]?.entrantId ?? "";
@@ -6855,7 +6991,9 @@ function App() {
       const method = getConfiguredSideDecisionMethod();
       const updates: Array<{ setSnapshot: SetSnapshot; upperEntrantId: string; upperSide: PlaySide }> = [];
 
-      for (const set of selectedEvent.sets) {
+      for (const set of selectedEvent.sets.map((candidate) =>
+        resolveSetEntrantsForInput(candidate, selectedEvent.sets, selectedEvent.phaseGroups ?? []),
+      )) {
         if (isCompletedSet(set) || !isMatchupReady(set)) {
           continue;
         }
@@ -7393,11 +7531,14 @@ function App() {
   }
 
   async function toggleActiveMatchOverlay(set: SetSnapshot) {
+    if (!isDisplayableSet(set)) {
+      return;
+    }
     const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === set.setId;
     const displayCode = setDisplayCodeById.get(set.setId);
     const nextRoundLabel = abbreviateOverlayRoundText(set.fullRoundText);
     const phasePoolLabel = `${set.phaseName?.trim() || "-"} / Pool ${set.phaseGroupDisplayIdentifier?.trim() || "-"}`;
-    const setName = set.phaseGroupSetName?.trim() || displayCode || "-";
+    const setName = set.identifier?.trim() || displayCode || "-";
     const nextRoundText = `${phasePoolLabel} / Set ${setName}\n${nextRoundLabel}`;
     const overlaySides = resolveOverlaySidesForSet(set);
 
@@ -7509,6 +7650,9 @@ function App() {
     if (set.setId === "__test__") {
       return;
     }
+    if (!isDisplayableSet(set)) {
+      return;
+    }
 
     let currentOverlayState = obsOverlayState;
     if (!currentOverlayState?.active || currentOverlayState.currentSetId !== set.setId) {
@@ -7534,7 +7678,7 @@ function App() {
     const displayCode = setDisplayCodeById.get(set.setId);
     const nextRoundLabel = abbreviateOverlayRoundText(set.fullRoundText);
     const phasePoolLabel = `${set.phaseName?.trim() || "-"} / Pool ${set.phaseGroupDisplayIdentifier?.trim() || "-"}`;
-    const setName = set.phaseGroupSetName?.trim() || displayCode || "-";
+    const setName = set.identifier?.trim() || displayCode || "-";
     const overlaySides = resolveOverlaySidesForSet(set, scoreByEntrantId);
 
     await toggleObsOverlaySet({
@@ -7572,6 +7716,9 @@ function App() {
     }>();
 
     for (const set of selectedEvent.sets) {
+      if (!isDisplayableSet(set)) {
+        continue;
+      }
       const phaseName = set.phaseName && set.phaseName.trim() !== "" ? set.phaseName : "Phase 未設定";
       const phaseGroupName =
         set.phaseGroupName && set.phaseGroupName.trim() !== "" ? set.phaseGroupName : "Pool 未設定";
@@ -7585,6 +7732,9 @@ function App() {
           group.phaseName === set.phaseName
           && (group.displayIdentifier?.trim() || null) === phaseGroupDisplayIdentifier,
         );
+      if (!phaseGroupMetadata) {
+        continue;
+      }
       const bracketType = phaseGroupMetadata?.bracketType?.trim().toUpperCase() || null;
       const progressionsOut = phaseGroupMetadata?.progressionsOut ?? [];
       const seedMap = phaseGroupMetadata?.seedMap ?? null;
@@ -7706,8 +7856,11 @@ function App() {
       return null;
     }
 
-    return selectedPhasePoolGroup.sets.find((set) => set.setId === activeMatchSetId) ?? null;
-  }, [selectedPhasePoolGroup, activeMatchSetId]);
+    const set = selectedPhasePoolGroup.sets.find((candidate) => candidate.setId === activeMatchSetId);
+    return set
+      ? resolveSetEntrantsForInput(set, selectedEvent?.sets ?? [], selectedEvent?.phaseGroups ?? [])
+      : null;
+  }, [selectedEvent, selectedPhasePoolGroup, activeMatchSetId]);
 
   const activeObsOverlaySet = useMemo(() => {
     if (!obsOverlayState?.active || !obsOverlayState.currentSetId) {
@@ -7876,12 +8029,11 @@ function App() {
       }
     }
 
-    const storedCodes = orderedSets.map((set) => set.phaseGroupSetName?.trim() ?? "");
-    if (orderedSets.length > 0 && storedCodes.every((code) => code !== "")) {
-      orderedSets.forEach((set, index) => {
-        map.set(set.setId, storedCodes[index]);
-      });
-      return map;
+    for (const set of orderedSets) {
+      const identifier = set.identifier?.trim();
+      if (identifier) {
+        map.set(set.setId, identifier);
+      }
     }
 
     let fallbackIndex = 0;
@@ -9674,11 +9826,17 @@ function App() {
   }
 
   function openMatchDialog(set: SetSnapshot, forcedDraftState?: SetResultDraftState) {
+    if (!isDisplayableSet(set)) {
+      return;
+    }
+    const inputSet = selectedEvent
+      ? resolveSetEntrantsForInput(set, selectedEvent.sets, selectedEvent.phaseGroups ?? [])
+      : set;
     setActiveMatchSetId(set.setId);
     setSetId(set.setId);
 
     const sideDrafts: Record<string, PlaySide | ""> = {};
-    for (const slot of set.slots) {
+    for (const slot of inputSet.slots) {
       if (!slot.entrantId) {
         continue;
       }
@@ -9698,7 +9856,7 @@ function App() {
 
     const pending = pendingResultBySetId.get(set.setId);
     if (pending) {
-      const draftState = buildDraftStateFromPending(set, pending);
+      const draftState = buildDraftStateFromPending(inputSet, pending);
       setDirectWinnerId(draftState.directWin ? draftState.winnerId : null);
       setScoreDrafts(draftState.scoreDrafts);
       setSetResultDrafts((current) => ({
@@ -9719,7 +9877,7 @@ function App() {
     const snapshotDisplay = getSetScoresForDisplay(set);
     const snapshotScoreDrafts = Object.keys(snapshotDisplay.scores).length > 0
       ? snapshotDisplay.scores
-      : buildScoreDraftsFromSet(set);
+      : buildScoreDraftsFromSet(inputSet);
     setScoreDrafts(snapshotScoreDrafts);
     setSetResultDrafts((current) => ({
       ...current,
@@ -10461,6 +10619,9 @@ function App() {
           eventId: eventSnapshot.eventId,
           setId: setSnapshot.setId,
           entrantId,
+          opponentEntrantId: setSnapshot.slots
+            .map((slot) => slot.entrantId)
+            .find((candidate) => candidate && candidate !== entrantId) ?? null,
           playSide: playSide === "" ? null : playSide,
         },
       });
@@ -10590,8 +10751,17 @@ function App() {
 
     const currentUpper = getSetSlotSide(set.setId, upperId);
     const currentLower = getSetSlotSide(set.setId, lowerId);
-    const draftUpper = sideDrafts[upperId] ?? currentUpper;
-    const draftLower = sideDrafts[lowerId] ?? currentLower;
+    const fallbackUpper = getSetSlotSideLabel(set.setId, upperId, {
+      fallbackBySlotIndex: 0,
+      matchupReady: true,
+    });
+    const fallbackLower = getSetSlotSideLabel(set.setId, lowerId, {
+      fallbackBySlotIndex: 1,
+      matchupReady: true,
+    });
+    const toPlaySide = (value: string): PlaySide | "" => value === "1P" || value === "2P" ? value : "";
+    const draftUpper = sideDrafts[upperId] || currentUpper || toPlaySide(fallbackUpper);
+    const draftLower = sideDrafts[lowerId] || currentLower || toPlaySide(fallbackLower);
 
     let resolvedUpper: PlaySide | "" = "";
     if (draftUpper !== "" && draftLower !== "") {
@@ -12964,6 +13134,9 @@ function App() {
                                 <div className="column-sets positioned" style={{ height: `${column.height}px` }}>
                                   {column.positionedSets.map(({ set, y }) => (
                                     (() => {
+                                      const displaySet = selectedEvent
+                                        ? resolveSetEntrantsForInput(set, selectedEvent.sets, selectedEvent.phaseGroups ?? [])
+                                        : set;
                                       const pendingResult = pendingResultBySetId.get(set.setId);
                                       const displayCode = setDisplayCodeById.get(set.setId);
                                       const changeClass = pendingResult
@@ -13030,15 +13203,15 @@ function App() {
                                           </div>
                                         </div>
                                       )}
-                                      {set.slots.map((slot, idx) => {
+                                      {displaySet.slots.map((slot, idx) => {
                                         const entrantId = slot.entrantId;
                                         const tbdSourceLabel = resolveTbdSourceLabel(set, idx, slot);
-                                        const displayEntrantName = tbdSourceLabel
+                                        const displayEntrantName = !entrantId && tbdSourceLabel
                                           ? tbdSourceLabel
                                           : slot.entrantName;
                                         const finishedSet = isCompletedSet(set);
-                                        const matchupReady = isMatchupReady(set);
-                                        const setDisplay = getSetScoresForDisplay(set);
+                                        const matchupReady = isMatchupReady(displaySet);
+                                        const setDisplay = getSetScoresForDisplay(displaySet);
                                         const scoreMap = setDisplay.scores;
                                         const winnerId = setDisplay.winnerId ?? set.winnerId;
                                         const isWinner = entrantId && winnerId ? entrantId === winnerId : false;
@@ -13173,9 +13346,13 @@ function App() {
                       return displaySlots.map(({ slot, slotIndex: idx }) => {
                         const entrantId = slot.entrantId;
                         const dialogTbdLabel = resolveTbdSourceLabel(activeMatch, idx, slot);
-                        const dialogEntrantName = dialogTbdLabel ? dialogTbdLabel : slot.entrantName;
+                        const dialogEntrantName = !entrantId && dialogTbdLabel ? dialogTbdLabel : slot.entrantName;
+                        const fallbackSide = getSetSlotSideLabel(activeMatch.setId, entrantId, {
+                          fallbackBySlotIndex: idx,
+                          matchupReady,
+                        });
                         const currentSide = entrantId
-                          ? (activeMatchSideDrafts[entrantId] ?? getSetSlotSide(activeMatch.setId, entrantId))
+                          ? (activeMatchSideDrafts[entrantId] || getSetSlotSide(activeMatch.setId, entrantId) || fallbackSide)
                           : "";
                         const scoreValue = entrantId && directWinnerId
                           ? (entrantId === directWinnerId ? "W" : "L")

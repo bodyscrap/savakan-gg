@@ -389,6 +389,15 @@ fn build_set_display_code_by_id(sets: &[SetSnapshot]) -> HashMap<String, String>
         }
 
         let current_set = sets.iter().find(|set| set.set_id == set_id);
+        if let Some(identifier) = current_set
+            .and_then(|set| set.identifier.as_deref())
+            .map(str::trim)
+            .filter(|identifier| !identifier.is_empty())
+        {
+            map.insert(set_id.clone(), identifier.to_owned());
+            used.insert(identifier.to_owned());
+            continue;
+        }
         let current_is_losers = current_set.as_ref().is_some_and(|set| is_losers_set(set));
         let current_is_gf = current_set
             .as_ref()
@@ -3693,6 +3702,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     event_id: event_id.clone(),
                     set_id: set_id.clone(),
                     entrant_id: assignment.entrant_id.clone(),
+                    opponent_entrant_id: None,
                     play_side,
                 },
             ) {

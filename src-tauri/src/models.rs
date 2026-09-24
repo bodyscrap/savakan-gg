@@ -166,6 +166,8 @@ pub struct LocalSetPlaySideInput {
     pub event_id: String,
     pub set_id: String,
     pub entrant_id: String,
+    #[serde(default)]
+    pub opponent_entrant_id: Option<String>,
     pub play_side: Option<PlaySide>,
 }
 
