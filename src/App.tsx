@@ -746,8 +746,15 @@ function buildRoundColumns(sets: SetSnapshot[]): RoundColumn[] {
 type EventSnapshot = {
   eventId: string;
   name: string;
+  phases?: PhaseSnapshot[];
   phaseGroups?: PhaseGroupSnapshot[];
   sets: SetSnapshot[];
+};
+
+type PhaseSnapshot = {
+  phaseId: string;
+  name: string | null;
+  phaseOrder: number | null;
 };
 
 type PhaseGroupSnapshot = {
@@ -7878,19 +7885,53 @@ function App() {
   }, [selectedEvent]);
 
   const phaseNames = useMemo(() => {
-    const seen = new Set<string>();
-    const names: string[] = [];
-
-    for (const group of phasePoolGroups) {
-      if (seen.has(group.phaseName)) {
-        continue;
+    const names = [...new Set(phasePoolGroups.map((group) => group.phaseName))];
+    const phasePositionByName = new Map<string, number>();
+    for (const [index, phase] of (selectedEvent?.phases ?? []).entries()) {
+      if (phase.name && !phasePositionByName.has(phase.name)) {
+        phasePositionByName.set(phase.name, index);
       }
-      seen.add(group.phaseName);
-      names.push(group.phaseName);
     }
 
-    return names;
-  }, [phasePoolGroups]);
+    const groupOrderByName = new Map<string, number>();
+    for (const group of phasePoolGroups) {
+      if (group.phaseOrder === null) {
+        continue;
+      }
+      const currentOrder = groupOrderByName.get(group.phaseName);
+      if (currentOrder === undefined || group.phaseOrder < currentOrder) {
+        groupOrderByName.set(group.phaseName, group.phaseOrder);
+      }
+    }
+
+    const useGroupOrderFallback = phasePositionByName.size === 0;
+    return names.sort((left, right) => {
+      const leftPosition = phasePositionByName.get(left);
+      const rightPosition = phasePositionByName.get(right);
+      if (leftPosition !== undefined && rightPosition !== undefined && leftPosition !== rightPosition) {
+        return leftPosition - rightPosition;
+      }
+      if (leftPosition !== undefined && rightPosition === undefined) {
+        return -1;
+      }
+      if (leftPosition === undefined && rightPosition !== undefined) {
+        return 1;
+      }
+
+      const leftOrder = useGroupOrderFallback ? groupOrderByName.get(left) : undefined;
+      const rightOrder = useGroupOrderFallback ? groupOrderByName.get(right) : undefined;
+      if (leftOrder === undefined && rightOrder !== undefined) {
+        return 1;
+      }
+      if (leftOrder !== undefined && rightOrder === undefined) {
+        return -1;
+      }
+      if (leftOrder !== undefined && rightOrder !== undefined && leftOrder !== rightOrder) {
+        return leftOrder - rightOrder;
+      }
+      return left.localeCompare(right, "ja");
+    });
+  }, [phasePoolGroups, selectedEvent]);
 
   const phaseScopedPoolGroups = useMemo(() => {
     if (phasePoolGroups.length === 0) {

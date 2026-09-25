@@ -58,6 +58,8 @@ snapshotには用途の異なるファイルがあります。
 
 UIでは、eventのsetを `set.phaseGroupId` 単位でグループ化します。
 
+対象フェーズのドロップダウンは、event snapshotの `phases` 配列順を進行順として表示します。`Phase.phaseOrder` はフェーズの進行順と一致しないeventがあるため、配列が取得できている場合の並べ替えには使用しません。旧snapshotなどで `phases` が空の場合に限り、phaseGroupの `phaseOrder` をfallbackとして使います。
+
 1. setにphaseGroup IDがある場合、そのIDに一致するphaseGroup metadataだけを使う。
 2. IDがない旧データだけ、phaseOrder/displayIdentifierなどをfallbackに使う。
 3. 選択したphaseGroupの `seeds.nodes` を列の正本にする。
