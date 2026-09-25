@@ -102,6 +102,7 @@ type PhasePoolGroup = {
   bracketType: string | null;
   phaseOrder: number | null;
   phaseGroupDisplayIdentifier: string | null;
+  tiebreakOrder?: string[];
   progressionsOut: PhaseGroupProgressionSnapshot[];
   seedMap: unknown;
   seedOrder: string[];
@@ -122,7 +123,7 @@ type RoundRobinStanding = {
   qualified: boolean;
 };
 
-type RoundRobinTieBreakRule = "total_sets_won" | "game_win_percentage" | "head_to_head";
+type RoundRobinTieBreakRule = "total_sets_won" | "game_wins" | "game_win_percentage" | "head_to_head";
 
 type RoundRobinBoardData = {
   entrants: string[];
@@ -145,8 +146,6 @@ type RoundRobinBoardData = {
 
 const DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES: RoundRobinTieBreakRule[] = [
   "total_sets_won",
-  "game_win_percentage",
-  "head_to_head",
 ];
 
 const BRACKET_TOP_PADDING = 10;
@@ -760,6 +759,7 @@ type PhaseSnapshot = {
 type PhaseGroupSnapshot = {
   phaseGroupId?: string;
   setIds?: string[];
+  tiebreakOrder?: string[];
   phaseName: string | null;
   phaseOrder: number | null;
   displayIdentifier: string | null;
@@ -2386,9 +2386,17 @@ function roundRobinGameWinPercentage(standing: RoundRobinStanding): number {
   return totalGames > 0 ? standing.gameWins / totalGames : 0;
 }
 
+function roundRobinSetWinPercentage(standing: RoundRobinStanding): number {
+  const totalSets = standing.wins + standing.losses;
+  return totalSets > 0 ? standing.wins / totalSets : 0;
+}
+
 function roundRobinTieBreakRuleLabel(rule: RoundRobinTieBreakRule): string {
   if (rule === "total_sets_won") {
     return "Total sets won";
+  }
+  if (rule === "game_wins") {
+    return "Game wins";
   }
   if (rule === "game_win_percentage") {
     return "Game win %";
@@ -2396,12 +2404,49 @@ function roundRobinTieBreakRuleLabel(rule: RoundRobinTieBreakRule): string {
   return "Head-to-head";
 }
 
-function roundRobinTieBreakRuleValue(standing: RoundRobinStanding, rule: RoundRobinTieBreakRule): string {
+function roundRobinTieBreakRuleFromApi(value: string): RoundRobinTieBreakRule | null {
+  const normalized = value.replace(/[^a-z0-9]/gi, "").toUpperCase();
+  if (["SETWINS", "SETSWON", "TOTALSETSWON", "WINS"].includes(normalized)) {
+    return "total_sets_won";
+  }
+  if (normalized === "GAMEWINS") {
+    return "game_wins";
+  }
+  if (["GAMERATIO", "GAMEWINPERCENTAGE", "GAMEPERCENTAGE", "WINPERCENTAGE"].includes(normalized)) {
+    return "game_win_percentage";
+  }
+  if (["HEADTOHEAD", "HEADTOHEADWINS"].includes(normalized)) {
+    return "head_to_head";
+  }
+  return null;
+}
+
+function compareRoundRobinTieBreakRule(
+  left: RoundRobinStanding,
+  right: RoundRobinStanding,
+  rule: RoundRobinTieBreakRule,
+): number {
   if (rule === "total_sets_won") {
-    return `${standing.wins}-${standing.losses}`;
+    return right.wins - left.wins;
+  }
+  if (rule === "game_wins") {
+    return right.gameWins - left.gameWins;
   }
   if (rule === "game_win_percentage") {
-    return `${(roundRobinGameWinPercentage(standing) * 100).toFixed(1)}%`;
+    return roundRobinGameWinPercentage(right) - roundRobinGameWinPercentage(left);
+  }
+  return right.h2hPoints - left.h2hPoints;
+}
+
+function roundRobinTieBreakRuleValue(standing: RoundRobinStanding, rule: RoundRobinTieBreakRule): string {
+  if (rule === "total_sets_won") {
+    return `${standing.wins}-${standing.losses}(${(roundRobinSetWinPercentage(standing) * 100).toFixed(2)}%)`;
+  }
+  if (rule === "game_wins") {
+    return `${standing.gameWins}-${standing.gameLosses}(${(roundRobinGameWinPercentage(standing) * 100).toFixed(2)}%)`;
+  }
+  if (rule === "game_win_percentage") {
+    return `${standing.gameWins}-${standing.gameLosses}(${(roundRobinGameWinPercentage(standing) * 100).toFixed(2)}%)`;
   }
   return String(standing.h2hPoints);
 }
@@ -7777,6 +7822,7 @@ function App() {
       bracketType: string | null;
       phaseOrder: number | null;
       phaseGroupDisplayIdentifier: string | null;
+      tiebreakOrder: string[];
       progressionsOut: PhaseGroupProgressionSnapshot[];
       seedMap: unknown;
       seedOrder: string[];
@@ -7805,6 +7851,7 @@ function App() {
         continue;
       }
       const bracketType = phaseGroupMetadata?.bracketType?.trim().toUpperCase() || null;
+      const tiebreakOrder = phaseGroupMetadata?.tiebreakOrder ?? [];
       const progressionsOut = phaseGroupMetadata?.progressionsOut ?? [];
       const seedMap = phaseGroupMetadata?.seedMap ?? null;
       const seedOrder = phaseGroupMetadata?.seedOrder ?? [];
@@ -7845,6 +7892,7 @@ function App() {
         bracketType,
         phaseOrder: set.phaseOrder,
         phaseGroupDisplayIdentifier,
+        tiebreakOrder,
         progressionsOut,
         seedMap,
         seedOrder,
@@ -7881,6 +7929,7 @@ function App() {
         bracketType: group.bracketType,
         phaseOrder: group.phaseOrder,
         phaseGroupDisplayIdentifier: group.phaseGroupDisplayIdentifier,
+        tiebreakOrder: group.tiebreakOrder,
         progressionsOut: group.progressionsOut,
         seedMap: group.seedMap,
         seedOrder: group.seedOrder,
@@ -9050,21 +9099,25 @@ function App() {
       }
     }
 
-    const standingsBeforeTieBreak = [...standingByEntrantId.values()];
-    const standingsBySetWins = new Map<number, RoundRobinStanding[]>();
-    for (const standing of standingsBeforeTieBreak) {
-      const tied = standingsBySetWins.get(standing.wins) ?? [];
-      tied.push(standing);
-      standingsBySetWins.set(standing.wins, tied);
-    }
-    for (const tied of standingsBySetWins.values()) {
-      if (tied.length < 2) {
-        continue;
-      }
-      const tiedIds = new Set(tied.map((standing) => standing.entrantId));
-      for (const standing of tied) {
+    const configuredTieBreakOrder: string[] = selectedPhasePoolGroup?.tiebreakOrder ?? [];
+    const tieBreakRules = configuredTieBreakOrder.length === 0
+      ? [...DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES]
+      : [...new Set<RoundRobinTieBreakRule>(configuredTieBreakOrder
+        .map((rule) => roundRobinTieBreakRuleFromApi(rule))
+        .filter((rule): rule is RoundRobinTieBreakRule => rule !== null))];
+    const headToHeadRuleIndex = tieBreakRules.indexOf("head_to_head");
+    if (headToHeadRuleIndex >= 0) {
+      const standingsBeforeHeadToHead = [...standingByEntrantId.values()];
+      const precedingRules = tieBreakRules.slice(0, headToHeadRuleIndex);
+      for (const standing of standingsBeforeHeadToHead) {
+        const tiedEntrantIds = new Set(
+          standingsBeforeHeadToHead
+            .filter((candidate) => precedingRules.every((rule) =>
+              compareRoundRobinTieBreakRule(candidate, standing, rule) === 0))
+            .map((candidate) => candidate.entrantId),
+        );
         standing.h2hPoints = [...(headToHeadWins.get(standing.entrantId)?.entries() ?? [])]
-          .filter(([opponentId]) => tiedIds.has(opponentId))
+          .filter(([opponentId]) => tiedEntrantIds.has(opponentId))
           .reduce((points, [, wins]) => points + wins, 0);
       }
     }
@@ -9098,7 +9151,6 @@ function App() {
     const qualifyingCount = configuredAdvancingPlacements.size > 0
       ? configuredAdvancingPlacements.size
       : advancingPlacements.size;
-    const tieBreakRules = DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES.slice(0, 3);
     const seedOrderById = new Map<string, number>(
       (selectedPhasePoolGroup?.seedOrder ?? []).map((seedId: string, index: number) => [seedId, index]),
     );
@@ -9201,11 +9253,7 @@ function App() {
 
     const standings = [...standingByEntrantId.values()].sort((left, right) => {
       for (const rule of tieBreakRules) {
-        const comparison = rule === "total_sets_won"
-          ? right.wins - left.wins
-          : rule === "game_win_percentage"
-            ? roundRobinGameWinPercentage(right) - roundRobinGameWinPercentage(left)
-            : right.h2hPoints - left.h2hPoints;
+        const comparison = compareRoundRobinTieBreakRule(left, right, rule);
         if (comparison !== 0) {
           return comparison;
         }
@@ -13282,8 +13330,8 @@ function App() {
                                 <tr>
                                   <th>順位</th>
                                   <th className="round-robin-player-column">プレイヤー</th>
-                                  {roundRobinBoardData.tieBreakRules.map((rule) => (
-                                    <th key={rule}>{roundRobinTieBreakRuleLabel(rule)}</th>
+                                  {roundRobinBoardData.tieBreakRules.map((rule, index) => (
+                                    <th key={rule}>{index + 1}. {roundRobinTieBreakRuleLabel(rule)}</th>
                                   ))}
                                 </tr>
                               </thead>

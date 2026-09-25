@@ -6223,16 +6223,15 @@ fn apply_completed_round_robin_progression(
     }
 
     let all_entrant_ids = wins.keys().cloned().collect::<Vec<_>>();
-    let head_to_head_points = all_entrant_ids
-        .iter()
-        .map(|entrant_id| {
-            (
-                entrant_id.clone(),
-                standings_head_to_head_points(entrant_id, &all_entrant_ids, &head_to_head),
-            )
-        })
-        .collect::<HashMap<_, _>>();
     let tiebreak_order = source_group.tiebreak_order.clone();
+    let head_to_head_points = round_robin_tiebreak_head_to_head_points(
+        &all_entrant_ids,
+        &tiebreak_order,
+        &wins,
+        &game_wins,
+        &game_losses,
+        &head_to_head,
+    );
     let mut standings = all_entrant_ids;
     standings.sort_by(|left, right| {
         if tiebreak_order.is_empty() {
@@ -6384,11 +6383,7 @@ fn compare_round_robin_tiebreak(
     game_losses: &HashMap<String, f64>,
     head_to_head_points: &HashMap<String, i64>,
 ) -> Ordering {
-    let normalized = rule
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .flat_map(|character| character.to_uppercase())
-        .collect::<String>();
+    let normalized = normalize_round_robin_tiebreak_rule(rule);
     match normalized.as_str() {
         "SETWINS" | "SETSWON" | "TOTALSETSWON" | "WINS" => wins
             .get(right)
@@ -6421,6 +6416,60 @@ fn compare_round_robin_tiebreak(
     }
 }
 
+fn normalize_round_robin_tiebreak_rule(rule: &str) -> String {
+    rule.chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(|character| character.to_uppercase())
+        .collect()
+}
+
+fn round_robin_tiebreak_head_to_head_points(
+    entrants: &[String],
+    tiebreak_order: &[String],
+    wins: &HashMap<String, i64>,
+    game_wins: &HashMap<String, f64>,
+    game_losses: &HashMap<String, f64>,
+    head_to_head: &HashMap<(String, String), i64>,
+) -> HashMap<String, i64> {
+    let Some(head_to_head_index) = tiebreak_order.iter().position(|rule| {
+        matches!(
+            normalize_round_robin_tiebreak_rule(rule).as_str(),
+            "HEADTOHEAD" | "HEADTOHEADWINS"
+        )
+    }) else {
+        return HashMap::new();
+    };
+    let preceding_rules = &tiebreak_order[..head_to_head_index];
+    let empty_head_to_head_points = HashMap::new();
+
+    entrants
+        .iter()
+        .map(|entrant_id| {
+            let tied_entrants = entrants
+                .iter()
+                .filter(|candidate_id| {
+                    preceding_rules.iter().all(|rule| {
+                        compare_round_robin_tiebreak(
+                            rule,
+                            candidate_id,
+                            entrant_id,
+                            wins,
+                            game_wins,
+                            game_losses,
+                            &empty_head_to_head_points,
+                        ) == Ordering::Equal
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            (
+                entrant_id.clone(),
+                standings_head_to_head_points(entrant_id, &tied_entrants, head_to_head),
+            )
+        })
+        .collect()
+}
+
 fn standings_head_to_head_points(
     entrant_id: &str,
     standings: &[String],
@@ -6436,6 +6485,38 @@ fn standings_head_to_head_points(
                 .unwrap_or_default()
         })
         .sum()
+}
+
+#[cfg(test)]
+mod round_robin_head_to_head_tiebreak_tests {
+    use super::round_robin_tiebreak_head_to_head_points;
+    use std::collections::HashMap;
+
+    #[test]
+    fn head_to_head_only_counts_entrants_tied_by_preceding_rules() {
+        let entrants = vec!["a".to_owned(), "b".to_owned(), "c".to_owned()];
+        let wins = HashMap::from([
+            ("a".to_owned(), 2),
+            ("b".to_owned(), 2),
+            ("c".to_owned(), 3),
+        ]);
+        let head_to_head = HashMap::from([
+            (("a".to_owned(), "c".to_owned()), 10),
+            (("b".to_owned(), "a".to_owned()), 1),
+        ]);
+        let points = round_robin_tiebreak_head_to_head_points(
+            &entrants,
+            &["SET_WINS".to_owned(), "HEAD_TO_HEAD".to_owned()],
+            &wins,
+            &HashMap::new(),
+            &HashMap::new(),
+            &head_to_head,
+        );
+
+        assert_eq!(points.get("a"), Some(&0));
+        assert_eq!(points.get("b"), Some(&1));
+        assert_eq!(points.get("c"), Some(&0));
+    }
 }
 
 fn apply_local_progression(
