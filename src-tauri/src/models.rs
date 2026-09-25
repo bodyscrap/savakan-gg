@@ -297,6 +297,17 @@ pub struct EventSnapshot {
     pub sets: Vec<SetSnapshot>,
 }
 
+pub fn is_intermediate_set(phase_groups: &[PhaseGroupSnapshot], set: &SetSnapshot) -> bool {
+    if phase_groups.iter().all(|phase_group| phase_group.set_ids.is_empty()) {
+        return set.is_intermediate;
+    }
+
+    !phase_groups
+        .iter()
+        .flat_map(|phase_group| &phase_group.set_ids)
+        .any(|set_id| set_id == &set.set_id)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhaseSnapshot {
@@ -309,6 +320,8 @@ pub struct PhaseSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct PhaseGroupSnapshot {
     pub phase_group_id: String,
+    #[serde(default)]
+    pub set_ids: Vec<String>,
     #[serde(default)]
     pub bracket_type: Option<String>,
     pub phase_id: Option<String>,

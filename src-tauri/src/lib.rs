@@ -3397,7 +3397,7 @@ fn resolve_mobile_entrant_from_source(
         }
     }
 
-    if source_set.is_intermediate {
+    if crate::models::is_intermediate_set(&event.phase_groups, source_set) {
         for nested_source in [
             source_set.entrant1_source.as_ref(),
             source_set.entrant2_source.as_ref(),
@@ -3901,7 +3901,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
 
         let mut items = sets
             .iter()
-            .filter(|set| !set.is_intermediate)
+            .filter(|set| !crate::models::is_intermediate_set(&event.phase_groups, set))
             .filter(|set| is_visible_grand_final_reset(&sets, set))
             .filter(|set| {
                 if query.is_empty() {
@@ -3943,7 +3943,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 full_round_text: set.full_round_text.clone(),
                 phase_name: set.phase_name.clone(),
                 phase_group_name: set.phase_group_name.clone(),
-                is_intermediate: set.is_intermediate,
+                is_intermediate: crate::models::is_intermediate_set(&event.phase_groups, set),
                 state: if confirmed_pending_set_ids.contains(set.set_id.as_str()) {
                     3
                 } else {

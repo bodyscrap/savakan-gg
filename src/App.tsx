@@ -671,8 +671,17 @@ function sourceSetIdsForSet(set: SetSnapshot): string[] {
     .filter((setId): setId is string => Boolean(setId && setId.trim() !== ""));
 }
 
-function isDisplayableSet(set: SetSnapshot): boolean {
-  return set.isIntermediate !== true;
+function isDisplayableSet(set: SetSnapshot, event: EventSnapshot | null): boolean {
+  if (!event?.phaseGroups) {
+    return set.isIntermediate !== true;
+  }
+
+  const phaseGroupSetIds = event.phaseGroups.flatMap((phaseGroup) => phaseGroup.setIds ?? []);
+  if (phaseGroupSetIds.length === 0) {
+    return set.isIntermediate !== true;
+  }
+
+  return phaseGroupSetIds.includes(set.setId);
 }
 
 function compareSetsForStableLane(left: SetSnapshot, right: SetSnapshot): number {
@@ -743,6 +752,7 @@ type EventSnapshot = {
 
 type PhaseGroupSnapshot = {
   phaseGroupId?: string;
+  setIds?: string[];
   phaseName: string | null;
   phaseOrder: number | null;
   displayIdentifier: string | null;
@@ -2168,6 +2178,10 @@ function isResolvedEntrantName(name: string): boolean {
   return true;
 }
 
+function isPlaceholderEntrantName(name: string, placeholderName?: string | null): boolean {
+  return placeholderName?.trim() !== "" && name.trim() === placeholderName?.trim();
+}
+
 function isMatchupReady(set: SetSnapshot): boolean {
   if (set.slots.length < 2) {
     return false;
@@ -2264,17 +2278,26 @@ function resolveSetEntrantsForInput(
   phaseGroups: PhaseGroupSnapshot[],
 ): SetSnapshot {
   const resolveKnownEntrantName = (entrantId: string, fallbackName: string): string => {
-    const knownSlotName = sets
-      .flatMap((candidate) => candidate.slots)
-      .find((candidate) => candidate.entrantId === entrantId && isResolvedEntrantName(candidate.entrantName))
-      ?.entrantName;
+    const knownSlotName = sets.flatMap((candidate) => candidate.slots.map((slot, slotIndex) => ({
+      slot,
+      source: slotIndex === 0 ? candidate.entrant1Source : candidate.entrant2Source,
+    }))).find(({ slot, source }) => (
+      slot.entrantId === entrantId
+      && isResolvedEntrantName(slot.entrantName)
+      && !isPlaceholderEntrantName(slot.entrantName, slot.seedPlaceholderName)
+      && !isPlaceholderEntrantName(slot.entrantName, source?.placeholderName)
+    ))?.slot.entrantName;
     if (knownSlotName) {
       return knownSlotName;
     }
 
     return phaseGroups
       .flatMap((group) => group.seeds ?? [])
-      .find((seed) => seed.entrantId === entrantId && isResolvedEntrantName(seed.entrantName ?? ""))
+      .find((seed) => (
+        seed.entrantId === entrantId
+        && isResolvedEntrantName(seed.entrantName ?? "")
+        && !isPlaceholderEntrantName(seed.entrantName ?? "", seed.placeholderName)
+      ))
       ?.entrantName
       ?? fallbackName;
   };
@@ -4148,7 +4171,7 @@ function App() {
 
     return snapshot.events.flatMap((event) =>
       event.sets
-        .filter(isDisplayableSet)
+        .filter((set) => isDisplayableSet(set, event))
         .map((set) => ({ eventName: event.name, set })),
     );
   }, [snapshot]);
@@ -7564,7 +7587,7 @@ function App() {
   }
 
   async function toggleActiveMatchOverlay(set: SetSnapshot) {
-    if (!isDisplayableSet(set)) {
+    if (!isDisplayableSet(set, selectedEvent)) {
       return;
     }
     const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === set.setId;
@@ -7683,7 +7706,7 @@ function App() {
     if (set.setId === "__test__") {
       return;
     }
-    if (!isDisplayableSet(set)) {
+    if (!isDisplayableSet(set, selectedEvent)) {
       return;
     }
 
@@ -7749,7 +7772,7 @@ function App() {
     }>();
 
     for (const set of selectedEvent.sets) {
-      if (!isDisplayableSet(set)) {
+      if (!isDisplayableSet(set, selectedEvent)) {
         continue;
       }
       const phaseName = set.phaseName && set.phaseName.trim() !== "" ? set.phaseName : "Phase 未設定";
@@ -7819,6 +7842,12 @@ function App() {
 
     return [...groupMap.values()]
       .sort((a, b) => {
+        if (a.phaseOrder === null && b.phaseOrder !== null) {
+          return 1;
+        }
+        if (a.phaseOrder !== null && b.phaseOrder === null) {
+          return -1;
+        }
         if (a.phaseOrder !== null && b.phaseOrder !== null && a.phaseOrder !== b.phaseOrder) {
           return a.phaseOrder - b.phaseOrder;
         }
@@ -9944,7 +9973,7 @@ function App() {
   }
 
   function openMatchDialog(set: SetSnapshot, forcedDraftState?: SetResultDraftState) {
-    if (!isDisplayableSet(set)) {
+    if (!isDisplayableSet(set, selectedEvent)) {
       return;
     }
     const inputSet = selectedEvent

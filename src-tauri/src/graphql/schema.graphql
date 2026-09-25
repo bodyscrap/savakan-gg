@@ -93,6 +93,7 @@ type PhaseGroup {
   id: GgID!
   bracketType: BracketType
   displayIdentifier: String
+  sets(page: Int, perPage: Int, sortType: SetSortType): SetConnection
   tiebreakOrder: JSON
   phase: Phase
   progressionsOut: [Progression]

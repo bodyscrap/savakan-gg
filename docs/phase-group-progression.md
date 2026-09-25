@@ -156,3 +156,35 @@ phaseGroupやROUND ROBINを確認する場合は、次を順番に確認しま�
 - RR setのslotが他setのwinner/loserで上書きされていないか
 - 進出先seedのprogression IDが正しいか
 - 次phaseで両entrant確定後に入力可能になるか
+
+## 9. ダブルエリミネーションのset間進行
+
+DEでは、phaseGroup間進出と同一bracket内のwinner/loser移動を分けて考えます。Set A確定後にSet BとSet Fが正しい位置で有効になっていても、entrant名がplaceholderに戻っていれば進行再構築に不整合が残っています。**行先の正しさとslotのentrant ID・表示名の正しさは別々に確認してください。**
+
+### source graphの扱い
+
+- `entrant1Source` / `entrant2Source` とwinner/loser progressionを進出先slotの判定元にします。`typeId` が常にsource set IDとは限らず、progression seed IDの場合もあるため、set IDだけで照合しないでください。
+- winner/loser条件をsource setまでたどり、中間setが挟まる経路も解決します。例: Set Aのloser → hidden intermediate J → Set F。
+- 中間setは表示上のsetと同じではありません。表示・進出先の候補からは除外しても、source graphの探索経路からは取り除かないでください。
+- sourceの関係が取れない場合、set名や表示上のラウンド順だけでwinner/loserを推測せず、source/progression情報とsnapshotを確認します。
+
+### IDと名前の維持
+
+ローカル確定結果からsnapshotを再構築するときは、次の順序と優先関係を崩さないようにします。
+
+1. 確定pending結果のslotScoresから元setのentrant IDとscoreを復元する。
+2. completed setをphase順に再生し、winner/loserをsource graphに従って進出先slotへ配置する。
+3. seed情報を再適用する。これはseed metadataや未確定slotを補う処理であり、ローカル進行で設定済みのentrant ID・実名をplaceholderで上書きしてはいけない。
+4. entrant IDから既知名を引くとき、`placeholderName`と一致する名前を実名候補として扱わない。
+
+特に、progression先seed自身のentrant IDが未設定でも、進出処理ですでにslotに入ったentrant IDは保持します。そのIDに対応する実名がslotにある場合は実名を優先し、placeholderはfallbackに限定します。slot IDだけを確認して終わらず、seed補完後の名前も確認してください。
+
+### 再発時の切り分け
+
+1. 元set AのwinnerId、slot entrant ID、slot名、pending slotScoresを確認する。
+2. B/F各slotのsource type、typeId、condition、progression IDを確認し、Jなど中間setを含む経路をたどる。
+3. 再構築後にB/Fのentrant IDが意図したwinner/loserと一致するか確認する。
+4. 同じslotのentrant名が実名かplaceholderNameか確認する。IDが正しく名前だけ違う場合は進出先判定ではなく、pending復元・seed再適用・IDからの名前解決を調べる。
+5. 表示だけでなく、seed補完後のsnapshot値も確認し、保存データとUIの名前解決のどちらでplaceholderが優先されたかを切り分ける。
+
+この経路の回帰テストは [storage.rs](../src-tauri/src/storage.rs) の `restores_pending_slot_ids_before_rebuilding_loser_progression`、`seed_source_reapplication_preserves_advanced_entrant_name`、`bracket_graph_preserves_losers_round_one_sources_through_intermediate_sets` を基準にします。少なくとも「AのwinnerはBへ、loserはJを経由してFへ進む」「entrant IDを維持する」「seed再適用後も実名を維持する」を一連で確認してください。

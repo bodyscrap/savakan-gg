@@ -16,6 +16,11 @@ query EventSync($slug: String!, $page: Int!, $perPage: Int!) {
       id
       bracketType
       displayIdentifier
+      sets(page: 1, perPage: 200, sortType: STANDARD) {
+        nodes {
+          id
+        }
+      }
       tiebreakOrder
       progressionsOut {
         id

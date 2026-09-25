@@ -1174,6 +1174,14 @@ async fn query_tournament_snapshot(
                 .flatten()
                 .map(|group| PhaseGroupSnapshot {
                     phase_group_id: group.id.to_string(),
+                    set_ids: group
+                        .sets
+                        .and_then(|sets| sets.nodes)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .flatten()
+                        .map(|set| set.id.to_string())
+                        .collect(),
                     bracket_type: group.bracket_type.map(bracket_type_name),
                     tiebreak_order: parse_tiebreak_order(group.tiebreak_order.as_ref()),
                     phase_id: group.phase.as_ref().map(|phase| phase.id.to_string()),
@@ -1790,6 +1798,14 @@ pub async fn fetch_event_snapshot_by_slug(
                 .flatten()
                 .map(|group| PhaseGroupSnapshot {
                     phase_group_id: group.id.to_string(),
+                    set_ids: group
+                        .sets
+                        .and_then(|sets| sets.nodes)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .flatten()
+                        .map(|set| set.id.to_string())
+                        .collect(),
                     bracket_type: group.bracket_type.map(bracket_type_name),
                     tiebreak_order: parse_tiebreak_order(group.tiebreak_order.as_ref()),
                     phase_id: group.phase.as_ref().map(|phase| phase.id.to_string()),
@@ -1958,6 +1974,10 @@ pub async fn fetch_event_snapshot_by_slug(
         .iter()
         .map(|group| group.phase_group_id.clone())
         .collect::<HashSet<_>>();
+    let phase_group_set_ids = phase_groups
+        .iter()
+        .flat_map(|group| group.set_ids.iter().cloned())
+        .collect::<HashSet<_>>();
     let mut pending_set_ids = discovered_set_ids;
     let mut queued_set_ids = pending_set_ids
         .iter()
@@ -1998,7 +2018,7 @@ pub async fn fetch_event_snapshot_by_slug(
                     set.phase_group_id.as_deref(),
                     &event_phase_group_ids,
                 ) {
-                    set.is_intermediate = !is_visible_set;
+                    set.is_intermediate = !phase_group_set_ids.contains(&set_id);
 
                     for source in [&mut set.entrant1_source, &mut set.entrant2_source]
                         .into_iter()
