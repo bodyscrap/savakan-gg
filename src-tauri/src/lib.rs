@@ -472,24 +472,31 @@ fn sort_pending_set_results_by_phase_order(
     pending: &mut [models::LocalSetResultMeta],
     event: &models::EventSnapshot,
 ) {
-    let phase_order_by_set_id = event
+    let phase_sequence_by_set_id = event
         .sets
         .iter()
-        .map(|set| (set.set_id.as_str(), set.phase_order.unwrap_or(i64::MAX)))
+        .map(|set| {
+            (
+                set.set_id.as_str(),
+                models::phase_sequence_index_for_set(event, set)
+                    .map(|index| (false, index))
+                    .unwrap_or((true, usize::MAX)),
+            )
+        })
         .collect::<HashMap<_, _>>();
 
     pending.sort_by(|left, right| {
-        let left_phase_order = phase_order_by_set_id
+        let left_phase_sequence = phase_sequence_by_set_id
             .get(left.set_id.as_str())
             .copied()
-            .unwrap_or(i64::MAX);
-        let right_phase_order = phase_order_by_set_id
+            .unwrap_or((true, usize::MAX));
+        let right_phase_sequence = phase_sequence_by_set_id
             .get(right.set_id.as_str())
             .copied()
-            .unwrap_or(i64::MAX);
+            .unwrap_or((true, usize::MAX));
 
-        left_phase_order
-            .cmp(&right_phase_order)
+        left_phase_sequence
+            .cmp(&right_phase_sequence)
             .then_with(|| left.recorded_at.cmp(&right.recorded_at))
     });
 }
@@ -709,23 +716,54 @@ mod tests {
 
     #[test]
     fn confirmed_results_are_sorted_by_phase_then_registration_time() {
-        let mut lower_phase = make_set("lower", "Round Robin", Some(1));
-        lower_phase.phase_order = Some(1);
-        let mut upper_phase_first = make_set("upper-first", "Upper Round", Some(1));
-        upper_phase_first.phase_order = Some(2);
-        let mut upper_phase_second = make_set("upper-second", "Upper Round", Some(1));
-        upper_phase_second.phase_order = Some(2);
+        let mut qualifiers = make_set("qualifiers", "Round Robin", Some(1));
+        qualifiers.phase_order = Some(1);
+        qualifiers.phase_group_id = Some("qualifiers-group".to_owned());
+        let mut middle = make_set("middle", "Middle Round", Some(1));
+        middle.phase_order = Some(3);
+        middle.phase_group_id = Some("middle-group".to_owned());
+        let mut finals_first = make_set("finals-first", "Finals Round", Some(1));
+        finals_first.phase_order = Some(2);
+        finals_first.phase_group_id = Some("finals-group".to_owned());
+        let mut finals_second = make_set("finals-second", "Finals Round", Some(2));
+        finals_second.phase_order = Some(2);
+        finals_second.phase_group_id = Some("finals-group".to_owned());
+        let phase_groups: Vec<models::PhaseGroupSnapshot> = serde_json::from_value(
+            serde_json::json!([
+                { "phaseGroupId": "qualifiers-group", "phaseId": "qualifiers-phase", "phaseOrder": 1 },
+                { "phaseGroupId": "middle-group", "phaseId": "middle-phase", "phaseOrder": 3 },
+                { "phaseGroupId": "finals-group", "phaseId": "finals-phase", "phaseOrder": 2 }
+            ]),
+        )
+        .expect("test phase groups should deserialize");
         let event = models::EventSnapshot {
             event_id: "event".to_owned(),
             name: "event".to_owned(),
-            phases: Vec::new(),
-            phase_groups: Vec::new(),
-            sets: vec![lower_phase, upper_phase_first, upper_phase_second],
+            phases: vec![
+                models::PhaseSnapshot {
+                    phase_id: "qualifiers-phase".to_owned(),
+                    name: Some("Qualifiers".to_owned()),
+                    phase_order: Some(1),
+                },
+                models::PhaseSnapshot {
+                    phase_id: "middle-phase".to_owned(),
+                    name: Some("Middle".to_owned()),
+                    phase_order: Some(3),
+                },
+                models::PhaseSnapshot {
+                    phase_id: "finals-phase".to_owned(),
+                    name: Some("Finals".to_owned()),
+                    phase_order: Some(2),
+                },
+            ],
+            phase_groups,
+            sets: vec![qualifiers, middle, finals_first, finals_second],
         };
         let mut pending = vec![
-            make_pending_result("upper-first", 1),
-            make_pending_result("lower", 3),
-            make_pending_result("upper-second", 2),
+            make_pending_result("finals-second", 3),
+            make_pending_result("middle", 4),
+            make_pending_result("qualifiers", 5),
+            make_pending_result("finals-first", 2),
         ];
 
         sort_pending_set_results_by_phase_order(&mut pending, &event);
@@ -735,7 +773,7 @@ mod tests {
                 .iter()
                 .map(|item| item.set_id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["lower", "upper-first", "upper-second"]
+            vec!["qualifiers", "middle", "finals-first", "finals-second"]
         );
     }
 

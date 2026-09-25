@@ -308,6 +308,33 @@ pub fn is_intermediate_set(phase_groups: &[PhaseGroupSnapshot], set: &SetSnapsho
         .any(|set_id| set_id == &set.set_id)
 }
 
+pub fn phase_sequence_index_for_set(event: &EventSnapshot, set: &SetSnapshot) -> Option<usize> {
+    let phase_id = event
+        .phase_groups
+        .iter()
+        .find(|group| {
+            if let Some(phase_group_id) = set.phase_group_id.as_deref() {
+                group.phase_group_id == phase_group_id
+            } else {
+                group.phase_order == set.phase_order
+                    && group.display_identifier == set.phase_group_display_identifier
+            }
+        })
+        .and_then(|group| group.phase_id.as_deref())
+        .or_else(|| {
+            event
+                .phases
+                .iter()
+                .find(|phase| phase.phase_order == set.phase_order)
+                .map(|phase| phase.phase_id.as_str())
+        })?;
+
+    event
+        .phases
+        .iter()
+        .position(|phase| phase.phase_id == phase_id)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhaseSnapshot {

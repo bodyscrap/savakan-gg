@@ -2365,13 +2365,20 @@ function roundRobinPlaceholderId(slot: SetSlot, source?: SetEntrantSource | null
   return `placeholder:${identity}`;
 }
 
-function parseRoundRobinGameScore(rawScore: string | undefined): number | null {
-  if (!rawScore || rawScore === "DQ" || rawScore === "✓") {
+function parseRoundRobinGameScore(rawScore: string | number | undefined): number | null {
+  if (rawScore === undefined || rawScore === "✓") {
     return null;
   }
 
+  if (rawScore === "DQ" || rawScore === "W" || rawScore === "L") {
+    return 0;
+  }
+
   const score = Number(rawScore);
-  return Number.isInteger(score) && score >= 0 ? score : null;
+  if (!Number.isInteger(score)) {
+    return null;
+  }
+  return score === -1 ? 0 : score >= 0 ? score : null;
 }
 
 function roundRobinGameWinPercentage(standing: RoundRobinStanding): number {
@@ -2394,8 +2401,7 @@ function roundRobinTieBreakRuleValue(standing: RoundRobinStanding, rule: RoundRo
     return `${standing.wins}-${standing.losses}`;
   }
   if (rule === "game_win_percentage") {
-    const totalGames = standing.gameWins + standing.gameLosses;
-    return totalGames > 0 ? `${(roundRobinGameWinPercentage(standing) * 100).toFixed(1)}%` : "-";
+    return `${(roundRobinGameWinPercentage(standing) * 100).toFixed(1)}%`;
   }
   return String(standing.h2hPoints);
 }
@@ -9030,12 +9036,12 @@ function App() {
       headToHeadWins.set(winner.entrantId, winnerHeadToHead);
       const winnerSlot = winner.slot;
       const loserSlot = loser.slot;
-      const winnerScore = parseRoundRobinGameScore(setDisplay.scores[winner.entrantId])
-        ?? winnerSlot?.score
-        ?? null;
-      const loserScore = parseRoundRobinGameScore(setDisplay.scores[loser.entrantId])
-        ?? loserSlot?.score
-        ?? null;
+      const winnerScore = parseRoundRobinGameScore(
+        setDisplay.scores[winner.entrantId] ?? winnerSlot?.score ?? undefined,
+      );
+      const loserScore = parseRoundRobinGameScore(
+        setDisplay.scores[loser.entrantId] ?? loserSlot?.score ?? undefined,
+      );
       if (winnerScore !== null && loserScore !== null) {
         winnerStanding.gameWins += winnerScore;
         winnerStanding.gameLosses += loserScore;
@@ -13148,14 +13154,18 @@ function App() {
                                             ? "進行中"
                                             : "";
                                       const winnerId = setDisplay.winnerId ?? set.winnerId;
-                                        const rowEntrantIdForSet = roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId);
-                                        const columnEntrantIdForSet = roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId);
-                                        const rowSlot = rowEntrantIdForSet
-                                          ? set.slots.find((slot) => slot.entrantId === rowEntrantIdForSet)
-                                          : undefined;
-                                        const columnSlot = columnEntrantIdForSet
-                                          ? set.slots.find((slot) => slot.entrantId === columnEntrantIdForSet)
-                                          : undefined;
+                                      const rowColumnEntrantId = roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId);
+                                      const columnColumnEntrantId = roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId);
+                                      const rowSlot = set.slots.find((slot) =>
+                                        rowColumnEntrantId !== null && rowColumnEntrantId !== undefined
+                                        && slot.entrantId === rowColumnEntrantId,
+                                      ) ?? set.slots.find((slot) => rowSeedId && slot.seedId === rowSeedId);
+                                      const columnSlot = set.slots.find((slot) =>
+                                        columnColumnEntrantId !== null && columnColumnEntrantId !== undefined
+                                        && slot.entrantId === columnColumnEntrantId,
+                                      ) ?? set.slots.find((slot) => columnSeedId && slot.seedId === columnSeedId);
+                                      const rowEntrantIdForSet = rowSlot?.entrantId ?? null;
+                                      const columnEntrantIdForSet = columnSlot?.entrantId ?? null;
                                         const rowGameScore = rowEntrantIdForSet
                                           ? setDisplay.scores[rowEntrantIdForSet]
                                             ?? (rowSlot?.score !== null && rowSlot?.score !== undefined ? String(rowSlot.score) : "-")
@@ -13220,10 +13230,16 @@ function App() {
                                       );
                                     })}
                                     {(() => {
-                                      const rowEntrantIdForSet = roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId);
-                                      const standing = rowEntrantIdForSet
-                                        ? roundRobinBoardData.standings.find((item) => item.entrantId === rowEntrantIdForSet)
-                                        : undefined;
+                                      const rowEntrantIdForColumn = roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId);
+                                      const rowSeedId = rowEntrantId.startsWith("seed:")
+                                        ? rowEntrantId.slice("seed:".length)
+                                        : roundRobinBoardData.entrantSeedIds.get(rowEntrantId);
+                                      const standing = roundRobinBoardData.standings.find((item) =>
+                                        item.entrantId === rowEntrantIdForColumn
+                                        || (rowSeedId !== undefined
+                                          && roundRobinBoardData.entrantSeedIds.get(item.entrantId) === rowSeedId)
+                                        || (!rowEntrantId.startsWith("seed:") && item.entrantId === rowEntrantId),
+                                      );
                                       return (
                                         <>
                                           <td className="round-robin-row-summary">
