@@ -15,9 +15,19 @@ import { EventSelector, localSnapshotAliasLabel, localSnapshotItemKey, type Loca
 import { EventSetting } from "./EventSetting";
 import { OverlayControl, type ObsOverlayState } from "./OverlayControl";
 import {
+  calculateRoundRobinQualifyingCount,
+  compareRoundRobinTieBreakRule,
+  createSetEntrantResolver,
+  DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES,
+  getBracketProgressionModel,
   isResolvedEntrantName,
-  resolveSetEntrantsForInput,
+  parseRoundRobinGameScore,
+  rankRoundRobinStandings,
+  roundRobinTieBreakRuleFromApi,
+  type PhaseGroupProgressionSnapshot,
   type PhaseGroupSeedSnapshot,
+  type RoundRobinStanding,
+  type RoundRobinTieBreakRule,
   type SetEntrantSource,
   type SetSlot,
   type SetSnapshot,
@@ -70,20 +80,6 @@ type PhasePoolGroup = {
   columns: RoundColumn[];
 };
 
-type RoundRobinStanding = {
-  entrantId: string;
-  entrantName: string;
-  isPlaceholder: boolean;
-  wins: number;
-  losses: number;
-  gameWins: number;
-  gameLosses: number;
-  h2hPoints: number;
-  qualified: boolean;
-};
-
-type RoundRobinTieBreakRule = "total_sets_won" | "game_wins" | "game_win_percentage" | "head_to_head";
-
 type RoundRobinBoardData = {
   entrants: string[];
   entrantNames: Map<string, string>;
@@ -102,10 +98,6 @@ type RoundRobinBoardData = {
   qualifyingCount: number;
   tieBreakRules: RoundRobinTieBreakRule[];
 };
-
-const DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES: RoundRobinTieBreakRule[] = [
-  "total_sets_won",
-];
 
 const BRACKET_TOP_PADDING = 10;
 const BRACKET_BOTTOM_PADDING = 16;
@@ -727,17 +719,6 @@ type PhaseGroupSnapshot = {
   seedMap?: unknown;
   seedOrder?: string[];
   seeds?: PhaseGroupSeedSnapshot[];
-};
-
-type PhaseGroupProgressionSnapshot = {
-  progressionId: string;
-  originOrder: number | null;
-  originPhaseId: string | null;
-  originPhaseOrder: number | null;
-  originPhaseGroupId: string | null;
-  originPhaseGroupDisplayIdentifier: string | null;
-  originPlacement: number | null;
-  placeholderName: string | null;
 };
 
 type TournamentSnapshot = {
@@ -1982,10 +1963,6 @@ function isLosersBracketSet(set: SetSnapshot): boolean {
   return roundText.includes("losers") || roundText.includes("loser") || roundText.includes("敗者");
 }
 
-function isRoundRobinBracketType(bracketType: string | null): boolean {
-  return bracketType?.trim().toUpperCase() === "ROUND_ROBIN";
-}
-
 function roundRobinPairKey(leftEntrantId: string, rightEntrantId: string): string {
   return [leftEntrantId, rightEntrantId].sort((left, right) => left.localeCompare(right, "ja")).join("::");
 }
@@ -2001,22 +1978,6 @@ function roundRobinPlaceholderId(slot: SetSlot, source?: SetEntrantSource | null
     || slot.entrantName
     || "unknown";
   return `placeholder:${identity}`;
-}
-
-function parseRoundRobinGameScore(rawScore: string | number | undefined): number | null {
-  if (rawScore === undefined || rawScore === "✓") {
-    return null;
-  }
-
-  if (rawScore === "DQ" || rawScore === "W" || rawScore === "L") {
-    return 0;
-  }
-
-  const score = Number(rawScore);
-  if (!Number.isInteger(score)) {
-    return null;
-  }
-  return score === -1 ? 0 : score >= 0 ? score : null;
 }
 
 function roundRobinGameWinPercentage(standing: RoundRobinStanding): number {
@@ -2040,40 +2001,6 @@ function roundRobinTieBreakRuleLabel(rule: RoundRobinTieBreakRule): string {
     return "Game win %";
   }
   return "Head-to-head";
-}
-
-function roundRobinTieBreakRuleFromApi(value: string): RoundRobinTieBreakRule | null {
-  const normalized = value.replace(/[^a-z0-9]/gi, "").toUpperCase();
-  if (["SETWINS", "SETSWON", "TOTALSETSWON", "WINS"].includes(normalized)) {
-    return "total_sets_won";
-  }
-  if (normalized === "GAMEWINS") {
-    return "game_wins";
-  }
-  if (["GAMERATIO", "GAMEWINPERCENTAGE", "GAMEPERCENTAGE", "WINPERCENTAGE"].includes(normalized)) {
-    return "game_win_percentage";
-  }
-  if (["HEADTOHEAD", "HEADTOHEADWINS"].includes(normalized)) {
-    return "head_to_head";
-  }
-  return null;
-}
-
-function compareRoundRobinTieBreakRule(
-  left: RoundRobinStanding,
-  right: RoundRobinStanding,
-  rule: RoundRobinTieBreakRule,
-): number {
-  if (rule === "total_sets_won") {
-    return right.wins - left.wins;
-  }
-  if (rule === "game_wins") {
-    return right.gameWins - left.gameWins;
-  }
-  if (rule === "game_win_percentage") {
-    return roundRobinGameWinPercentage(right) - roundRobinGameWinPercentage(left);
-  }
-  return right.h2hPoints - left.h2hPoints;
 }
 
 function roundRobinTieBreakRuleValue(standing: RoundRobinStanding, rule: RoundRobinTieBreakRule): string {
@@ -2737,6 +2664,7 @@ function App() {
   const [bracketReportProgress, setBracketReportProgress] = useState<BracketReportProgressEvent | null>(null);
   const [workspace, setWorkspace] = useState<TournamentWorkspace | null>(null);
   const [selectedEventId, setSelectedEventId] = useState("");
+  const workspacePollingBlockedRef = useRef(false);
   const [selectedPhaseName, setSelectedPhaseName] = useState("");
   const [selectedPhasePoolKey, setSelectedPhasePoolKey] = useState("");
   const [activeMatchSetId, setActiveMatchSetId] = useState("");
@@ -2842,6 +2770,7 @@ function App() {
   const [selectedUserCardPreviewUrl, setSelectedUserCardPreviewUrl] = useState("");
   const [userCardBusy, setUserCardBusy] = useState(false);
   const [busy, setBusy] = useState(false);
+  workspacePollingBlockedRef.current = busy || createBusy || loadingLocalSnapshotEvents;
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const autoAssigningSidesRef = useRef(false);
@@ -3687,41 +3616,35 @@ function App() {
       return;
     }
 
-    const pollingMs = normalizeMobileInputPollingMs(mobileInputPollingMs);
+    const workspaceAlreadyLoaded = workspace
+      && toApiSlug(workspace.snapshot.slug) === normalizedSlug
+      && workspace.snapshot.events.some((event) => event.eventId === selectedEventId);
+    if (workspaceAlreadyLoaded) {
+      return;
+    }
+
+    if (workspacePollingBlockedRef.current) {
+      return;
+    }
 
     let disposed = false;
-    const refreshWorkspace = () => {
-      if (disposed || busy || createBusy || loadingLocalSnapshotEvents) {
-        return;
-      }
-
-      void invoke<TournamentWorkspace>("load_local_tournament_workspace", {
-        slug: normalizedSlug,
-        eventId: selectedEventId,
-      })
-        .then((result) => {
-          if (disposed) {
-            return;
-          }
+    void invoke<TournamentWorkspace>("load_local_tournament_workspace", {
+      slug: normalizedSlug,
+      eventId: selectedEventId,
+    })
+      .then((result) => {
+        if (!disposed) {
           setWorkspace(result);
-        })
-        .catch(() => {
-          // ignore polling errors
-        });
-    };
-
-    // タブ遷移直後に最新workspaceを反映し、GF/GF Reset列の表示判定を即時更新する。
-    refreshWorkspace();
-
-    const timer = window.setInterval(() => {
-      refreshWorkspace();
-    }, pollingMs);
+        }
+      })
+      .catch(() => {
+        // Ignore refresh failures when opening the bracket.
+      });
 
     return () => {
       disposed = true;
-      window.clearInterval(timer);
     };
-  }, [activeTab, busy, createBusy, loadingLocalSnapshotEvents, mobileInputPollingMs, selectedEventId, slug]);
+  }, [activeTab, selectedEventId, slug, workspace]);
 
   useEffect(() => {
     if (startupAutoRestoreDoneRef.current) {
@@ -3861,6 +3784,18 @@ function App() {
 
     return snapshot.events.find((event) => event.eventId === selectedEventId) ?? null;
   }, [snapshot, selectedEventId]);
+
+  const resolvedEventSetsById = useMemo(() => {
+    if (!selectedEvent) {
+      return new Map<string, SetSnapshot>();
+    }
+
+    const resolveSetEntrants = createSetEntrantResolver(
+      selectedEvent.sets,
+      selectedEvent.phaseGroups ?? [],
+    );
+    return new Map(selectedEvent.sets.map((set) => [set.setId, resolveSetEntrants(set)]));
+  }, [selectedEvent]);
 
   const selectedEventMeta = useMemo(() => {
     if (!localMeta || !selectedEvent) {
@@ -6500,7 +6435,7 @@ function App() {
     const updates: Array<{ setSnapshot: SetSnapshot; upperEntrantId: string; upperSide: PlaySide }> = [];
 
     for (const set of selectedEvent.sets.map((candidate) =>
-      resolveSetEntrantsForInput(candidate, selectedEvent.sets, selectedEvent.phaseGroups ?? []),
+      resolvedEventSetsById.get(candidate.setId) ?? candidate,
     )) {
       const isReadyForAutoAssign = !isCompletedSet(set) && isMatchupReady(set);
       const slots = set.slots.filter((slot) => slot.entrantId !== null);
@@ -6587,7 +6522,7 @@ function App() {
         autoAssigningSidesRef.current = false;
       }
     })();
-  }, [selectedEvent, setPlaySideMap, sideDecisionMethod, eventMgmtSettings, selectedEventSettingKey]);
+  }, [selectedEvent, resolvedEventSetsById, setPlaySideMap, sideDecisionMethod, eventMgmtSettings, selectedEventSettingKey]);
 
   function getMetaDraftKey(eventId: string, entrantId: string): string {
     return `${eventId}:${entrantId}`;
@@ -6724,7 +6659,7 @@ function App() {
       const updates: Array<{ setSnapshot: SetSnapshot; upperEntrantId: string; upperSide: PlaySide }> = [];
 
       for (const set of selectedEvent.sets.map((candidate) =>
-        resolveSetEntrantsForInput(candidate, selectedEvent.sets, selectedEvent.phaseGroups ?? []),
+        resolvedEventSetsById.get(candidate.setId) ?? candidate,
       )) {
         if (isCompletedSet(set) || !isMatchupReady(set)) {
           continue;
@@ -7636,9 +7571,9 @@ function App() {
 
     const set = selectedPhasePoolGroup.sets.find((candidate) => candidate.setId === activeMatchSetId);
     return set
-      ? resolveSetEntrantsForInput(set, selectedEvent?.sets ?? [], selectedEvent?.phaseGroups ?? [])
+      ? resolvedEventSetsById.get(set.setId) ?? set
       : null;
-  }, [selectedEvent, selectedPhasePoolGroup, activeMatchSetId]);
+  }, [resolvedEventSetsById, selectedEvent, selectedPhasePoolGroup, activeMatchSetId]);
 
   const activeObsOverlaySet = useMemo(() => {
     if (!obsOverlayState?.active || !obsOverlayState.currentSetId) {
@@ -8106,7 +8041,7 @@ function App() {
   }, [pendingGrandFinalResetResults, pendingSetResults]);
 
   const roundRobinBoardData = useMemo<RoundRobinBoardData>(() => {
-    if (selectedPhasePoolGroup?.bracketType !== "ROUND_ROBIN") {
+    if (getBracketProgressionModel(selectedPhasePoolGroup?.bracketType ?? null) !== "round_robin") {
       return {
         entrants: [],
         entrantNames: new Map(),
@@ -8749,28 +8684,13 @@ function App() {
         .map((group) => group.phaseOrder)
         .filter((order): order is number => order !== null && order > currentPhaseOrder)
         .sort((left, right) => left - right)[0] ?? null;
-    const advancingPlacements = new Set<number>();
-    if (currentPhaseOrder !== null && nextPhaseOrder !== null) {
-      for (const set of selectedEvent?.sets ?? []) {
-        if (set.phaseOrder !== nextPhaseOrder) {
-          continue;
-        }
-        for (const slot of set.slots) {
-          const samePool = slot.seedOriginPhaseGroupDisplayIdentifier === selectedPhasePoolGroup?.phaseGroupDisplayIdentifier;
-          if (slot.seedOriginPhaseOrder === currentPhaseOrder && samePool && slot.seedOriginPlacement !== null && slot.seedOriginPlacement !== undefined) {
-            advancingPlacements.add(slot.seedOriginPlacement);
-          }
-        }
-      }
-    }
-    const configuredAdvancingPlacements = new Set(
-      (selectedPhasePoolGroup?.progressionsOut ?? [])
-        .map((progression) => progression.originPlacement)
-        .filter((placement): placement is number => placement !== null),
-    );
-    const qualifyingCount = configuredAdvancingPlacements.size > 0
-      ? configuredAdvancingPlacements.size
-      : advancingPlacements.size;
+    const qualifyingCount = calculateRoundRobinQualifyingCount({
+      progressionsOut: selectedPhasePoolGroup?.progressionsOut ?? [],
+      currentPhaseOrder,
+      currentPhaseGroupDisplayIdentifier: selectedPhasePoolGroup?.phaseGroupDisplayIdentifier ?? null,
+      nextPhaseOrder,
+      downstreamSets: selectedEvent?.sets ?? [],
+    });
     const seedOrderById = new Map<string, number>(
       (selectedPhasePoolGroup?.seedOrder ?? []).map((seedId: string, index: number) => [seedId, index]),
     );
@@ -8871,31 +8791,12 @@ function App() {
     }
     const entrantOrder = new Map(fixedEntrants.map((entrantId, index) => [entrantId, index]));
 
-    const standings = [...standingByEntrantId.values()].sort((left, right) => {
-      for (const rule of tieBreakRules) {
-        const comparison = compareRoundRobinTieBreakRule(left, right, rule);
-        if (comparison !== 0) {
-          return comparison;
-        }
-      }
-
-      const leftSeedNumber = entrantSeedNumbers.get(left.entrantId);
-      const rightSeedNumber = entrantSeedNumbers.get(right.entrantId);
-      if (leftSeedNumber !== undefined || rightSeedNumber !== undefined) {
-        if (leftSeedNumber === undefined || rightSeedNumber === undefined) {
-          return leftSeedNumber === undefined ? 1 : -1;
-        }
-        if (leftSeedNumber !== rightSeedNumber) {
-          return leftSeedNumber - rightSeedNumber;
-        }
-      }
-
-      return (entrantOrder.get(left.entrantId) ?? Number.MAX_SAFE_INTEGER)
-        - (entrantOrder.get(right.entrantId) ?? Number.MAX_SAFE_INTEGER);
-    });
-
-    standings.forEach((standing, index) => {
-      standing.qualified = qualifyingCount > 0 && index < qualifyingCount;
+    const standings = rankRoundRobinStandings({
+      standings: [...standingByEntrantId.values()],
+      tieBreakRules,
+      entrantSeedNumbers,
+      entrantOrder,
+      qualifyingCount,
     });
 
     return {
@@ -9691,9 +9592,7 @@ function App() {
     if (!isDisplayableSet(set, selectedEvent)) {
       return;
     }
-    const inputSet = selectedEvent
-      ? resolveSetEntrantsForInput(set, selectedEvent.sets, selectedEvent.phaseGroups ?? [])
-      : set;
+    const inputSet = resolvedEventSetsById.get(set.setId) ?? set;
     setActiveMatchSetId(set.setId);
     setSetId(set.setId);
 
@@ -11421,7 +11320,7 @@ function App() {
                   <section className="phase-group" key={selectedPhasePoolGroup.key}>
                     <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
 
-                    {isRoundRobinBracketType(selectedPhasePoolGroup.bracketType) ? (
+                    {getBracketProgressionModel(selectedPhasePoolGroup.bracketType) === "round_robin" ? (
                       <div className="round-robin-board" style={bracketScaleStyle}>
                         <div className="round-robin-board-header">
                           <div>
@@ -11680,9 +11579,7 @@ function App() {
                                 <div className="column-sets positioned" style={{ height: `${column.height}px` }}>
                                   {column.positionedSets.map(({ set, y }) => (
                                     (() => {
-                                      const displaySet = selectedEvent
-                                        ? resolveSetEntrantsForInput(set, selectedEvent.sets, selectedEvent.phaseGroups ?? [])
-                                        : set;
+                                      const displaySet = resolvedEventSetsById.get(set.setId) ?? set;
                                       const pendingResult = pendingResultBySetId.get(set.setId);
                                       const displayCode = setDisplayCodeById.get(set.setId);
                                       const changeClass = pendingResult

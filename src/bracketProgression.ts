@@ -68,9 +68,187 @@ export type PhaseGroupSeedSnapshot = {
   placeholderName?: string | null;
 };
 
+export type PhaseGroupProgressionSnapshot = {
+  progressionId: string;
+  originOrder: number | null;
+  originPhaseId: string | null;
+  originPhaseOrder: number | null;
+  originPhaseGroupId: string | null;
+  originPhaseGroupDisplayIdentifier: string | null;
+  originPlacement: number | null;
+  placeholderName: string | null;
+};
+
+export type BracketProgressionModel =
+  | "single_elimination"
+  | "double_elimination"
+  | "round_robin"
+  | "source_directed";
+
+export type RoundRobinStanding = {
+  entrantId: string;
+  entrantName: string;
+  isPlaceholder: boolean;
+  wins: number;
+  losses: number;
+  gameWins: number;
+  gameLosses: number;
+  h2hPoints: number;
+  qualified: boolean;
+};
+
+export type RoundRobinTieBreakRule = "total_sets_won" | "game_wins" | "game_win_percentage" | "head_to_head";
+
+export const DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES: RoundRobinTieBreakRule[] = [
+  "total_sets_won",
+];
+
 type ProgressionPhaseGroup = {
   seeds?: PhaseGroupSeedSnapshot[];
 };
+
+export function getBracketProgressionModel(bracketType: string | null): BracketProgressionModel {
+  const normalized = bracketType?.trim().toUpperCase();
+  if (normalized === "SINGLE_ELIMINATION") {
+    return "single_elimination";
+  }
+  if (normalized === "DOUBLE_ELIMINATION") {
+    return "double_elimination";
+  }
+  if (normalized === "ROUND_ROBIN") {
+    return "round_robin";
+  }
+  return "source_directed";
+}
+
+export function parseRoundRobinGameScore(rawScore: string | number | undefined): number | null {
+  if (rawScore === undefined || rawScore === "✓") {
+    return null;
+  }
+
+  if (rawScore === "DQ" || rawScore === "W" || rawScore === "L") {
+    return 0;
+  }
+
+  const score = Number(rawScore);
+  if (!Number.isInteger(score)) {
+    return null;
+  }
+  return score === -1 ? 0 : score >= 0 ? score : null;
+}
+
+export function roundRobinTieBreakRuleFromApi(value: string): RoundRobinTieBreakRule | null {
+  const normalized = value.replace(/[^a-z0-9]/gi, "").toUpperCase();
+  if (["SETWINS", "SETSWON", "TOTALSETSWON", "WINS"].includes(normalized)) {
+    return "total_sets_won";
+  }
+  if (normalized === "GAMEWINS") {
+    return "game_wins";
+  }
+  if (["GAMERATIO", "GAMEWINPERCENTAGE", "GAMEPERCENTAGE", "WINPERCENTAGE"].includes(normalized)) {
+    return "game_win_percentage";
+  }
+  if (["HEADTOHEAD", "HEADTOHEADWINS"].includes(normalized)) {
+    return "head_to_head";
+  }
+  return null;
+}
+
+function roundRobinGameWinPercentage(standing: RoundRobinStanding): number {
+  const totalGames = standing.gameWins + standing.gameLosses;
+  return totalGames > 0 ? standing.gameWins / totalGames : 0;
+}
+
+export function compareRoundRobinTieBreakRule(
+  left: RoundRobinStanding,
+  right: RoundRobinStanding,
+  rule: RoundRobinTieBreakRule,
+): number {
+  if (rule === "total_sets_won") {
+    return right.wins - left.wins;
+  }
+  if (rule === "game_wins") {
+    return right.gameWins - left.gameWins;
+  }
+  if (rule === "game_win_percentage") {
+    return roundRobinGameWinPercentage(right) - roundRobinGameWinPercentage(left);
+  }
+  return right.h2hPoints - left.h2hPoints;
+}
+
+export function calculateRoundRobinQualifyingCount(input: {
+  progressionsOut: PhaseGroupProgressionSnapshot[];
+  currentPhaseOrder: number | null;
+  currentPhaseGroupDisplayIdentifier: string | null;
+  nextPhaseOrder: number | null;
+  downstreamSets: SetSnapshot[];
+}): number {
+  const configuredPlacements = new Set(
+    input.progressionsOut
+      .map((progression) => progression.originPlacement)
+      .filter((placement): placement is number => placement !== null),
+  );
+  if (configuredPlacements.size > 0) {
+    return configuredPlacements.size;
+  }
+
+  const inferredPlacements = new Set<number>();
+  if (input.currentPhaseOrder !== null && input.nextPhaseOrder !== null) {
+    for (const set of input.downstreamSets) {
+      if (set.phaseOrder !== input.nextPhaseOrder) {
+        continue;
+      }
+      for (const slot of set.slots) {
+        const samePool = slot.seedOriginPhaseGroupDisplayIdentifier
+          === input.currentPhaseGroupDisplayIdentifier;
+        if (slot.seedOriginPhaseOrder === input.currentPhaseOrder
+          && samePool
+          && slot.seedOriginPlacement !== null
+          && slot.seedOriginPlacement !== undefined) {
+          inferredPlacements.add(slot.seedOriginPlacement);
+        }
+      }
+    }
+  }
+  return inferredPlacements.size;
+}
+
+export function rankRoundRobinStandings(input: {
+  standings: RoundRobinStanding[];
+  tieBreakRules: RoundRobinTieBreakRule[];
+  entrantSeedNumbers: Map<string, number>;
+  entrantOrder: Map<string, number>;
+  qualifyingCount: number;
+}): RoundRobinStanding[] {
+  return input.standings
+    .map((standing) => ({ ...standing, qualified: false }))
+    .sort((left, right) => {
+      for (const rule of input.tieBreakRules) {
+        const comparison = compareRoundRobinTieBreakRule(left, right, rule);
+        if (comparison !== 0) {
+          return comparison;
+        }
+      }
+
+      const leftSeedNumber = input.entrantSeedNumbers.get(left.entrantId);
+      const rightSeedNumber = input.entrantSeedNumbers.get(right.entrantId);
+      if (leftSeedNumber !== undefined || rightSeedNumber !== undefined) {
+        if (leftSeedNumber === undefined || rightSeedNumber === undefined) {
+          return leftSeedNumber === undefined ? 1 : -1;
+        }
+        if (leftSeedNumber !== rightSeedNumber) {
+          return leftSeedNumber - rightSeedNumber;
+        }
+      }
+
+      return (input.entrantOrder.get(left.entrantId) ?? Number.MAX_SAFE_INTEGER)
+        - (input.entrantOrder.get(right.entrantId) ?? Number.MAX_SAFE_INTEGER);
+    })
+    .map((standing, index) => ({
+      ...standing,
+      qualified: input.qualifyingCount > 0 && index < input.qualifyingCount,
+    }));
+}
 
 function isPlaceholderEntrantName(name: string, placeholderName?: string | null): boolean {
   return placeholderName?.trim() !== "" && name.trim() === placeholderName?.trim();
@@ -78,8 +256,9 @@ function isPlaceholderEntrantName(name: string, placeholderName?: string | null)
 
 function resolveEntrantFromSource(
   source: SetEntrantSource | null | undefined,
-  sets: SetSnapshot[],
-  phaseGroups: ProgressionPhaseGroup[],
+  setsById: Map<string, SetSnapshot>,
+  phaseGroupSeedById: Map<string, PhaseGroupSeedSnapshot>,
+  progressionSourceById: Map<string | null, SetSnapshot>,
   visited: Set<string>,
 ): SetSlot | null {
   if (!source) {
@@ -87,9 +266,7 @@ function resolveEntrantFromSource(
   }
 
   if (source.sourceType?.trim().toLowerCase() === "seed") {
-    const seed = phaseGroups
-      .flatMap((group) => group.seeds ?? [])
-      .find((candidate) => candidate.seedId === source.typeId);
+    const seed = source.typeId ? phaseGroupSeedById.get(source.typeId) : undefined;
     if (seed?.entrantId) {
       return {
         entrantId: seed.entrantId,
@@ -101,12 +278,7 @@ function resolveEntrantFromSource(
       };
     }
 
-    const progressionSource = sets.find((candidate) => {
-      return candidate.winnerProgressionSeedId === source.typeId
-        || candidate.loserProgressionSeedId === source.typeId
-        || candidate.winnerProgressionId === source.typeId
-        || candidate.loserProgressionId === source.typeId;
-    });
+    const progressionSource = progressionSourceById.get(source.typeId);
     if (progressionSource?.winnerId) {
       const progressionRelation = progressionSource.winnerProgressionSeedId === source.typeId
         || progressionSource.winnerProgressionId === source.typeId
@@ -129,7 +301,7 @@ function resolveEntrantFromSource(
     return null;
   }
 
-  const sourceSet = sets.find((candidate) => candidate.setId === sourceSetId);
+  const sourceSet = setsById.get(sourceSetId);
   if (!sourceSet) {
     return null;
   }
@@ -150,7 +322,13 @@ function resolveEntrantFromSource(
 
   if (sourceSet.isIntermediate) {
     return [sourceSet.entrant1Source, sourceSet.entrant2Source]
-      .map((nestedSource) => resolveEntrantFromSource(nestedSource, sets, phaseGroups, nextVisited))
+      .map((nestedSource) => resolveEntrantFromSource(
+        nestedSource,
+        setsById,
+        phaseGroupSeedById,
+        progressionSourceById,
+        nextVisited,
+      ))
       .find((slot): slot is SetSlot => slot !== null)
       ?? null;
   }
@@ -180,54 +358,107 @@ export function isResolvedEntrantName(name: string): boolean {
   return true;
 }
 
+export function createSetEntrantResolver(
+  sets: SetSnapshot[],
+  phaseGroups: ProgressionPhaseGroup[],
+): (set: SetSnapshot) => SetSnapshot {
+  const setsById = new Map(sets.map((set) => [set.setId, set]));
+  const phaseGroupSeedById = new Map<string, PhaseGroupSeedSnapshot>();
+  const phaseGroupSeedByEntrantId = new Map<string, PhaseGroupSeedSnapshot>();
+  const knownEntrantNameById = new Map<string, string>();
+  const progressionSourceById = new Map<string | null, SetSnapshot>();
+
+  for (const phaseGroup of phaseGroups) {
+    for (const seed of phaseGroup.seeds ?? []) {
+      if (!phaseGroupSeedById.has(seed.seedId)) {
+        phaseGroupSeedById.set(seed.seedId, seed);
+      }
+      if (seed.entrantId
+        && !phaseGroupSeedByEntrantId.has(seed.entrantId)
+        && isResolvedEntrantName(seed.entrantName ?? "")
+        && !isPlaceholderEntrantName(seed.entrantName ?? "", seed.placeholderName)) {
+        phaseGroupSeedByEntrantId.set(seed.entrantId, seed);
+      }
+    }
+  }
+
+  for (const set of sets) {
+    const progressionSeedIds = [
+      set.winnerProgressionSeedId,
+      set.loserProgressionSeedId,
+      set.winnerProgressionId,
+      set.loserProgressionId,
+    ];
+    for (const progressionSeedId of progressionSeedIds) {
+      if (progressionSeedId !== undefined && !progressionSourceById.has(progressionSeedId)) {
+        progressionSourceById.set(progressionSeedId, set);
+      }
+    }
+
+    set.slots.forEach((slot, slotIndex) => {
+      const source = slotIndex === 0 ? set.entrant1Source : set.entrant2Source;
+      if (!slot.entrantId
+        || knownEntrantNameById.has(slot.entrantId)
+        || !isResolvedEntrantName(slot.entrantName)
+        || isPlaceholderEntrantName(slot.entrantName, slot.seedPlaceholderName)
+        || isPlaceholderEntrantName(slot.entrantName, source?.placeholderName)) {
+        return;
+      }
+      knownEntrantNameById.set(slot.entrantId, slot.entrantName);
+    });
+  }
+
+  const resolveKnownEntrantName = (entrantId: string, fallbackName: string): string => {
+    const knownName = knownEntrantNameById.get(entrantId);
+    if (knownName) {
+      return knownName;
+    }
+
+    const seed = phaseGroupSeedByEntrantId.get(entrantId);
+    return seed?.entrantName
+      ?? fallbackName;
+  };
+
+  return (set) => {
+    let changed = false;
+    const slots = set.slots.map((slot, slotIndex) => {
+      if (slot.entrantId) {
+        const entrantName = resolveKnownEntrantName(slot.entrantId, slot.entrantName);
+        if (entrantName === slot.entrantName) {
+          return slot;
+        }
+        changed = true;
+        return { ...slot, entrantName };
+      }
+
+      const source = slotIndex === 0 ? set.entrant1Source : set.entrant2Source;
+      const resolved = resolveEntrantFromSource(
+        source,
+        setsById,
+        phaseGroupSeedById,
+        progressionSourceById,
+        new Set([set.setId]),
+      );
+      if (!resolved?.entrantId) {
+        return slot;
+      }
+
+      changed = true;
+      return {
+        ...slot,
+        entrantId: resolved.entrantId,
+        entrantName: resolveKnownEntrantName(resolved.entrantId, resolved.entrantName),
+      };
+    });
+
+    return changed ? { ...set, slots } : set;
+  };
+}
+
 export function resolveSetEntrantsForInput(
   set: SetSnapshot,
   sets: SetSnapshot[],
   phaseGroups: ProgressionPhaseGroup[],
 ): SetSnapshot {
-  const resolveKnownEntrantName = (entrantId: string, fallbackName: string): string => {
-    const knownSlotName = sets.flatMap((candidate) => candidate.slots.map((slot, slotIndex) => ({
-      slot,
-      source: slotIndex === 0 ? candidate.entrant1Source : candidate.entrant2Source,
-    }))).find(({ slot, source }) => (
-      slot.entrantId === entrantId
-      && isResolvedEntrantName(slot.entrantName)
-      && !isPlaceholderEntrantName(slot.entrantName, slot.seedPlaceholderName)
-      && !isPlaceholderEntrantName(slot.entrantName, source?.placeholderName)
-    ))?.slot.entrantName;
-    if (knownSlotName) {
-      return knownSlotName;
-    }
-
-    return phaseGroups
-      .flatMap((group) => group.seeds ?? [])
-      .find((seed) => (
-        seed.entrantId === entrantId
-        && isResolvedEntrantName(seed.entrantName ?? "")
-        && !isPlaceholderEntrantName(seed.entrantName ?? "", seed.placeholderName)
-      ))
-      ?.entrantName
-      ?? fallbackName;
-  };
-
-  const slots = set.slots.map((slot, slotIndex) => {
-    if (slot.entrantId) {
-      return {
-        ...slot,
-        entrantName: resolveKnownEntrantName(slot.entrantId, slot.entrantName),
-      };
-    }
-
-    const source = slotIndex === 0 ? set.entrant1Source : set.entrant2Source;
-    const resolved = resolveEntrantFromSource(source, sets, phaseGroups, new Set([set.setId]));
-    return resolved?.entrantId
-      ? {
-        ...slot,
-        entrantId: resolved.entrantId,
-        entrantName: resolveKnownEntrantName(resolved.entrantId, resolved.entrantName),
-      }
-      : slot;
-  });
-
-  return slots === set.slots ? set : { ...set, slots };
+  return createSetEntrantResolver(sets, phaseGroups)(set);
 }

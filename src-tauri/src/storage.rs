@@ -1269,6 +1269,28 @@ pub fn save_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(
     Ok(())
 }
 
+fn save_event_graph_snapshot(
+    app: &AppHandle,
+    snapshot: &TournamentSnapshot,
+    event_id: &str,
+) -> Result<(), String> {
+    let event = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("ブラケットgraph保存対象のイベントがありません: {event_id}"))?;
+    let normalized_slug = normalize_slug_for_storage(&snapshot.slug);
+    let graph = build_bracket_graph(snapshot, event);
+    save_event_graph_file(
+        app,
+        &graph,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        &event.event_id,
+        &event.name,
+    )
+}
+
 fn build_bracket_graph(
     snapshot: &TournamentSnapshot,
     event: &EventSnapshot,
@@ -7382,7 +7404,7 @@ pub fn upsert_local_set_result(
     }
 
     save_local_meta(app, &applied_event_id, &local_meta)?;
-    save_snapshot(app, &snapshot)?;
+    save_event_graph_snapshot(app, &snapshot, &applied_event_id)?;
 
     Ok(TournamentWorkspace {
         snapshot,
@@ -7497,7 +7519,7 @@ pub fn upsert_local_set_scores(
     local_meta.updated_at = Utc::now();
 
     save_local_meta(app, &applied_event_id, &local_meta)?;
-    save_snapshot(app, &snapshot)?;
+    save_event_graph_snapshot(app, &snapshot, &applied_event_id)?;
 
     Ok(TournamentWorkspace {
         snapshot,
