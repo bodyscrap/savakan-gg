@@ -9,7 +9,7 @@ import { CreateSnapshot, type EventSnapshotProgress, type TournamentEventPreview
 import { SettingsScreen } from "./SettingMenu";
 import { StatusBoard, StatusBoardHero, type CallListEventGroup, type CallListEventSortStrategy } from "./StatusBoard";
 import { PlayerListInfo } from "./PlayerListInfo";
-import { MessageBox, type GenericMessage, type MailboxDeliveryMode, type MailboxFilterSetting } from "./MessageBox";
+import { MessageBox, type GenericMessage, type MailboxDeliveryMode } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
 import {
   clampNonNegativeInteger,
@@ -32,9 +32,11 @@ import { OverlayControl, type ObsOverlayState } from "./OverlayControl";
 import { EliminationBracket, type EliminationBracketSectionView } from "./EliminationBracket";
 import { RoundRobinBracket } from "./RoundRobinBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
+
 import { useBracketReport } from "./useBracketReport";
 import { useUserCards } from "./useUserCards";
 import { useItemLists } from "./useItemLists";
+import { useMailbox } from "./useMailbox";
 import { deriveEncryptedPlayerId } from "./userCardCanvas";
 import {
   buildRoundColumns,
@@ -57,30 +59,21 @@ import {
   buildScopedMessageMeta,
   compareCallListEventGroup,
   compareCallListEventGroupByMaxElapsed,
-  extractCallTargetIdentityFromMeta,
   extractCallEventMeta,
   extractCallThreadIdentity,
   extractPlayerIdFromBarcodeResults,
   extractPlayerIdFromQrRawValue,
   extractMetaString,
   getMailboxMethodLabel,
-  hasSameGenericMessageOrder,
   isLikelyPlayerId,
-  isMessageForScope,
   isDqRequestMessage,
-  isSameCallTargetIdentity,
   isSameGenericMessageIdentity,
   isValidIpv4,
-  isValidIpv4List,
   isValidSenderUserId,
-  normalizeGenericMessage,
-  normalizeGenericMessages,
-  normalizeMailboxFilterSetting,
   normalizeCallPhaseGroupName,
   normalizeCallPhaseName,
-  normalizePlayerId,
+  normalizeGenericMessage,
   parsePhasePoolKey,
-  splitIpv4List,
   type MessageScope,
 } from "./messageUtils";
 import {
@@ -306,19 +299,6 @@ type ResetSetResultCascadeResult = {
   workspace: TournamentWorkspace;
   affectedSetIds: string[];
   remoteResetApplied: boolean;
-};
-
-type DqRequestDialogState = {
-  threadId: string;
-  parentMessageId: string;
-  method: string;
-  subject: string;
-  replyTargetMode: MailboxDeliveryMode;
-  replyTargetIp: string;
-  expectedPlayerId: string;
-  callEntrantId: string;
-  callEntrantName: string;
-  setId: string;
 };
 
 type MatchSideRandomNotice = {
@@ -648,9 +628,6 @@ function isSameEventManagementSetting(
 
 const EVENT_MGMT_STORAGE_KEY = "savakan-gg.event-mgmt.v1";
 const SENDER_PROFILE_STORAGE_KEY = "savakan-gg.sender-profile.v1";
-const GENERIC_MESSAGE_STORAGE_KEY = "savakan-gg.generic-messages.v1";
-const MAILBOX_FILTER_STORAGE_KEY = "savakan-gg.mailbox-filter.v1";
-const MAILBOX_READ_IDS_STORAGE_KEY = "savakan-gg.mailbox-read-ids.v1";
 const CALL_LIST_ROTATE_SECONDS_STORAGE_KEY = "savakan-gg.call-list-rotate-seconds.v1";
 const CALL_LIST_COLOR_SECONDS_STORAGE_KEY = "savakan-gg.call-list-color-seconds.v1";
 const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
@@ -1172,22 +1149,7 @@ function App() {
   const [selectedSenderNetworkCandidateKey, setSelectedSenderNetworkCandidateKey] = useState("");
   const [senderNetworkCandidatesLoading, setSenderNetworkCandidatesLoading] = useState(false);
   const [senderIdentityChangedSinceMailboxClear, setSenderIdentityChangedSinceMailboxClear] = useState(false);
-  const [genericMessages, setGenericMessages] = useState<GenericMessage[]>([]);
-  const [genericMessagesReady, setGenericMessagesReady] = useState(false);
-  const [mailboxMethodDraft, setMailboxMethodDraft] = useState("generic");
-  const [mailboxSubjectDraft, setMailboxSubjectDraft] = useState("");
-  const [messageDeliveryMode, setMessageDeliveryMode] = useState<MailboxDeliveryMode>("broadcast");
-  const [messageDeliveryIpDraft, setMessageDeliveryIpDraft] = useState("");
-  const [composeFixedBodyDraft, setComposeFixedBodyDraft] = useState<string | null>(null);
-  const [genericMessageBodyDraft, setGenericMessageBodyDraft] = useState("");
-  const [replyBodyDraft, setReplyBodyDraft] = useState("");
-  const [dqDialog, setDqDialog] = useState<DqRequestDialogState | null>(null);
-  const [dqPlayerIdDraft, setDqPlayerIdDraft] = useState("");
-  const [dqReasonDraft, setDqReasonDraft] = useState("");
-  const [dqDialogError, setDqDialogError] = useState("");
-  const [dqSubmitting, setDqSubmitting] = useState(false);
   const [dqCameraActive, setDqCameraActive] = useState(false);
-  const [selectedThreadId, setSelectedThreadId] = useState("");
   const [callListPageIndex, setCallListPageIndex] = useState(0);
   const [callListPageRotateSeconds, setCallListPageRotateSeconds] = useState(CALL_LIST_ROTATE_SECONDS_DEFAULT);
   const [callListColorSeconds, setCallListColorSeconds] = useState(CALL_LIST_COLOR_SECONDS_DEFAULT);
@@ -1203,14 +1165,7 @@ function App() {
   const [callListDisplayGroups, setCallListDisplayGroups] = useState<CallListEventGroup[]>([]);
   const [callListRebuildToken, setCallListRebuildToken] = useState(0);
   const [callListCycleCount, setCallListCycleCount] = useState(0);
-  const [mailboxServiceStarted, setMailboxServiceStarted] = useState(false);
   const [callingEntrantId, setCallingEntrantId] = useState("");
-  const [composeMessageMeta, setComposeMessageMeta] = useState<Record<string, unknown> | null>(null);
-  const [mailboxFilterSetting, setMailboxFilterSetting] = useState<MailboxFilterSetting>({
-    unresolvedOnly: false,
-    unreadOnly: false,
-  });
-  const [mailboxReadMessageIds, setMailboxReadMessageIds] = useState<string[]>([]);
   const [disableLocalCommunication, setDisableLocalCommunication] = useState(false);
   const [sideDecisionMethod, setSideDecisionMethod] = useState<EventManagementSetting["sideDecisionMethod"]>("upper_1p");
   const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
@@ -1546,32 +1501,6 @@ function App() {
 
   useEffect(() => {
     try {
-      const rawFilter = window.localStorage.getItem(MAILBOX_FILTER_STORAGE_KEY);
-      if (rawFilter) {
-        const parsed = JSON.parse(rawFilter) as unknown;
-        setMailboxFilterSetting(normalizeMailboxFilterSetting(parsed));
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      const rawReadIds = window.localStorage.getItem(MAILBOX_READ_IDS_STORAGE_KEY);
-      if (rawReadIds) {
-        const parsed = JSON.parse(rawReadIds) as unknown;
-        if (Array.isArray(parsed)) {
-          const normalized = parsed
-            .filter((item): item is string => typeof item === "string")
-            .map((item) => item.trim())
-            .filter((item) => item !== "");
-          setMailboxReadMessageIds([...new Set(normalized)]);
-        }
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
       const rawRotateSeconds = window.localStorage.getItem(CALL_LIST_ROTATE_SECONDS_STORAGE_KEY);
       if (rawRotateSeconds !== null) {
         setCallListPageRotateSeconds(normalizeCallListRotateSeconds(rawRotateSeconds));
@@ -1763,40 +1692,6 @@ function App() {
 
     (async () => {
       try {
-        const fromRust = await invoke<GenericMessage[] | null>("load_generic_messages");
-        if (!alive) {
-          return;
-        }
-
-        if (fromRust) {
-          setGenericMessages(normalizeGenericMessages(fromRust));
-          return;
-        }
-
-        const raw = window.localStorage.getItem(GENERIC_MESSAGE_STORAGE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw) as unknown;
-          setGenericMessages(normalizeGenericMessages(parsed));
-        }
-      } catch {
-        // ignore
-      } finally {
-        if (alive) {
-          setGenericMessagesReady(true);
-        }
-      }
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-
-    (async () => {
-      try {
         const fromRust = await invoke<Record<string, unknown> | null>("load_event_mgmt_settings");
         if (!alive) {
           return;
@@ -1914,108 +1809,6 @@ function App() {
       setError(String(err));
     });
   }, [senderProfile, senderProfileReady]);
-
-  useEffect(() => {
-    if (!genericMessagesReady) {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(GENERIC_MESSAGE_STORAGE_KEY, JSON.stringify(genericMessages));
-    } catch {
-      // ignore
-    }
-
-    void invoke("save_generic_messages", { messages: genericMessages }).catch((err) => {
-      setError(String(err));
-    });
-  }, [genericMessages, genericMessagesReady]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(MAILBOX_FILTER_STORAGE_KEY, JSON.stringify(mailboxFilterSetting));
-    } catch {
-      // ignore
-    }
-  }, [mailboxFilterSetting]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(MAILBOX_READ_IDS_STORAGE_KEY, JSON.stringify(mailboxReadMessageIds));
-    } catch {
-      // ignore
-    }
-  }, [mailboxReadMessageIds]);
-
-  useEffect(() => {
-    setMailboxReadMessageIds((current) => {
-      const known = new Set(genericMessages.map((item) => item.messageId));
-      const next = current.filter((id) => known.has(id));
-      if (next.length === current.length) {
-        return current;
-      }
-      return next;
-    });
-  }, [genericMessages]);
-
-  useEffect(() => {
-    if (!senderProfileReady) {
-      return;
-    }
-
-    if (disableLocalCommunication) {
-      setMailboxServiceStarted(false);
-      void invoke("stop_udp_mailbox_service").catch(() => {
-        // ignore
-      });
-      return;
-    }
-
-    if (!isValidSenderUserId(senderProfile.senderUserId) || !isValidIpv4(senderProfile.bindIp)) {
-      return;
-    }
-
-    void invoke("start_udp_mailbox_service", { profile: senderProfile })
-      .then(() => {
-        setMailboxServiceStarted(true);
-      })
-      .catch((err) => {
-        setMailboxServiceStarted(false);
-        setError(String(err));
-      });
-  }, [disableLocalCommunication, senderProfile, senderProfileReady]);
-
-  useEffect(() => {
-    if (!genericMessagesReady) {
-      return;
-    }
-
-    let disposed = false;
-    const timer = window.setInterval(() => {
-      void invoke<GenericMessage[] | null>("load_generic_messages")
-        .then((rows) => {
-          if (disposed || !rows) {
-            return;
-          }
-
-          const normalized = normalizeGenericMessages(rows);
-          setGenericMessages((current) => {
-            if (hasSameGenericMessageOrder(current, normalized)) {
-              return current;
-            }
-            return normalized;
-          });
-        })
-        .catch(() => {
-          // ignore polling errors
-        });
-    }, 1200);
-
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [genericMessagesReady]);
 
   useEffect(() => {
     if (activeTab !== "home") {
@@ -2272,9 +2065,65 @@ function App() {
     };
   }, [selectedMessageScope]);
 
-  const scopedGenericMessages = useMemo(() => {
-    return genericMessages.filter((message) => isMessageForScope(message, selectedMailboxScope));
-  }, [genericMessages, selectedMailboxScope]);
+  const {
+    genericMessages,
+    setGenericMessages,
+    mailboxMethodDraft,
+    setMailboxMethodDraft,
+    mailboxSubjectDraft,
+    setMailboxSubjectDraft,
+    messageDeliveryMode,
+    setMessageDeliveryMode,
+    messageDeliveryIpDraft,
+    setMessageDeliveryIpDraft,
+    composeFixedBodyDraft,
+    setComposeFixedBodyDraft,
+    genericMessageBodyDraft,
+    setGenericMessageBodyDraft,
+    replyBodyDraft,
+    setReplyBodyDraft,
+    setSelectedThreadId,
+    mailboxServiceStarted,
+    setComposeMessageMeta,
+    mailboxFilterSetting,
+    setMailboxFilterSetting,
+    setMailboxReadMessageIds,
+    mailboxThreadSummaries,
+    unreadMessageCount,
+    mailboxThreads,
+    activeThread,
+    activeThreadMessages,
+    activeThreadResolved,
+    canResolveActiveThread,
+    canSendGenericMessage,
+    canReplyToThread,
+    canDeleteActiveThread,
+    canOpenDqDialog,
+    postGenericMessage,
+    replyToThread,
+    openDqRequestDialog,
+    closeDqRequestDialog,
+    resetDqRequestDialog,
+    submitDqRequest,
+    deleteActiveThread,
+    dqDialog,
+    dqPlayerIdDraft,
+    setDqPlayerIdDraft,
+    dqReasonDraft,
+    setDqReasonDraft,
+    dqDialogError,
+    setDqDialogError,
+    dqSubmitting,
+  } = useMailbox({
+    activeTab,
+    scope: selectedMailboxScope,
+    senderProfile,
+    senderProfileReady,
+    disableLocalCommunication,
+    onError: setError,
+    onMessage: setMessage,
+    onStopDqCameraScan: stopDqCameraScan,
+  });
 
   const selectedEventItemListSnapshots = useMemo(() => {
     if (!selectedEventMeta?.eventManagement?.itemListSnapshots) {
@@ -2347,7 +2196,6 @@ function App() {
     }
 
     lastPersistedEventMetaPhasePoolRef.current = persistKey;
-
     setLocalSnapshotEvents((current) => current.map((item) => {
       if (!sameSnapshotEventKey(item.slug, item.eventId, snapshot.slug, selectedEvent.eventId)) {
         return item;
@@ -2706,38 +2554,6 @@ function App() {
     onMessage: setMessage,
   });
 
-  const mailboxThreadSummaries = useMemo(() => {
-    const roots = scopedGenericMessages.filter((item) => item.parentMessageId === null);
-
-    return roots
-      .map((root) => {
-        const messages = scopedGenericMessages
-          .filter((item) => item.threadId === root.threadId)
-          .slice()
-          .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime());
-
-        const resolved = messages.some((item) => item.messageType === "resolve");
-        const unreadCount = messages.filter(
-          (item) => item.senderUserId !== senderProfile.senderUserId && !mailboxReadMessageIds.includes(item.messageId),
-        ).length;
-
-        return {
-          root,
-          messages,
-          resolved,
-          unreadCount,
-        };
-      })
-      .sort((left, right) => new Date(right.root.createdAt).getTime() - new Date(left.root.createdAt).getTime());
-  }, [mailboxReadMessageIds, scopedGenericMessages, senderProfile.senderUserId]);
-
-  const unreadMessageCount = useMemo(
-    () => mailboxThreadSummaries
-      .filter((summary) => summary.root.method !== "call_player")
-      .reduce((total, summary) => total + summary.unreadCount, 0),
-    [mailboxThreadSummaries],
-  );
-
   const unresolvedCallEventGroupsLatest = useMemo(() => {
     const roots = genericMessages.filter((item) =>
       item.parentMessageId === null
@@ -2984,62 +2800,6 @@ function App() {
     return (isReportSnapshotRefresh || isManualBracketRefresh) && createSnapshotProgress !== null;
   }, [activeTab, bracketReport.progress, busy, createSnapshotProgress]);
 
-  const mailboxThreads = useMemo(() => {
-    return mailboxThreadSummaries
-      .filter((summary) => {
-        if (mailboxFilterSetting.unresolvedOnly && summary.resolved) {
-          return false;
-        }
-        if (mailboxFilterSetting.unreadOnly && summary.unreadCount === 0) {
-          return false;
-        }
-        return true;
-      })
-      .map((summary) => summary.root);
-  }, [mailboxFilterSetting, mailboxThreadSummaries]);
-
-  const hasMailboxThreads = mailboxThreads.length > 0;
-
-  const activeThread = useMemo(() => {
-    if (selectedThreadId.trim() === "") {
-      return mailboxThreads[0] ?? null;
-    }
-
-    return mailboxThreads.find((item) => item.threadId === selectedThreadId) ?? mailboxThreads[0] ?? null;
-  }, [mailboxThreads, selectedThreadId]);
-
-  const activeThreadMessages = useMemo(() => {
-    if (!activeThread) {
-      return [] as GenericMessage[];
-    }
-
-    return mailboxThreadSummaries.find((summary) => summary.root.threadId === activeThread.threadId)?.messages ?? [];
-  }, [activeThread, mailboxThreadSummaries]);
-
-  const activeThreadResolved = useMemo(
-    () => activeThreadMessages.some((item) => item.messageType === "resolve"),
-    [activeThreadMessages],
-  );
-
-  const canResolveActiveThread = !!activeThread
-    && !activeThreadResolved
-    && !disableLocalCommunication
-    && activeThread.senderUserId === senderProfile.senderUserId;
-
-  useEffect(() => {
-    if (!hasMailboxThreads) {
-      setSelectedThreadId((current) => (current === "" ? current : ""));
-      return;
-    }
-
-    setSelectedThreadId((current) => {
-      if (current !== "" && mailboxThreads.some((item) => item.threadId === current)) {
-        return current;
-      }
-      return mailboxThreads[0].threadId;
-    });
-  }, [hasMailboxThreads, mailboxThreads]);
-
   useEffect(() => {
     if (callListCycleCount === 0) {
       return;
@@ -3132,37 +2892,6 @@ function App() {
     };
   }, [activeTab, callListRotateSeconds, unresolvedCallEventPages.length]);
 
-  useEffect(() => {
-    if (activeTab !== "message" || !activeThread) {
-      return;
-    }
-
-    const incomingIds = activeThreadMessages
-      .filter((item) => item.senderUserId !== senderProfile.senderUserId)
-      .map((item) => item.messageId);
-
-    if (incomingIds.length === 0) {
-      return;
-    }
-
-    setMailboxReadMessageIds((current) => {
-      const next = new Set(current);
-      let changed = false;
-      for (const messageId of incomingIds) {
-        if (!next.has(messageId)) {
-          next.add(messageId);
-          changed = true;
-        }
-      }
-
-      if (!changed) {
-        return current;
-      }
-
-      return [...next];
-    });
-  }, [activeTab, activeThread, activeThreadMessages, senderProfile.senderUserId]);
-
   const normalizedSenderNameDraft = senderNameDraft.trim();
   const normalizedSenderUserIdDraft = senderUserIdDraft.replace(/\D/g, "").slice(0, 8);
   const normalizedSenderBindIpDraft = senderBindIpDraft.trim();
@@ -3174,18 +2903,6 @@ function App() {
     [selectedSenderNetworkCandidateKey, senderNetworkCandidates],
   );
   const hasSelectedSenderNetworkDevice = selectedSenderNetworkCandidate !== null;
-  const normalizedMailboxMethod = mailboxMethodDraft.trim().toLowerCase();
-  const normalizedMailboxSubject = mailboxSubjectDraft.trim();
-  const normalizedMessageDeliveryIp = messageDeliveryIpDraft.trim();
-  const normalizedComposeFixedBody = composeFixedBodyDraft?.trim() ?? "";
-  const normalizedGenericMessageBody = genericMessageBodyDraft.trim();
-  const normalizedReplyBody = replyBodyDraft.trim();
-  const composedMessageBody = normalizedComposeFixedBody === ""
-    ? normalizedGenericMessageBody
-    : (normalizedGenericMessageBody === ""
-      ? normalizedComposeFixedBody
-      : `${normalizedComposeFixedBody}\n\n補足:\n${normalizedGenericMessageBody}`);
-
   const senderIdCollision = useMemo(() => {
     if (!isValidSenderUserId(normalizedSenderUserIdDraft)) {
       return false;
@@ -3225,36 +2942,11 @@ function App() {
     && isValidSenderUserId(senderProfile.senderUserId)
     && isValidIpv4(senderProfile.bindIp);
 
-  const canSendGenericMessage = isSenderProfileReadyForMessaging
-    && !disableLocalCommunication
-    && isValidIpv4(senderProfile.broadcastSubnetMask)
-    && normalizedMailboxMethod !== ""
-    && normalizedMailboxSubject !== ""
-    && composedMessageBody !== ""
-    && (messageDeliveryMode === "broadcast" || isValidIpv4List(normalizedMessageDeliveryIp));
-
-  const canReplyToThread = !!activeThread
-    && !activeThreadResolved
-    && !disableLocalCommunication
-    && isSenderProfileReadyForMessaging
-    && normalizedReplyBody !== "";
-  const isOwnActiveThread = !!activeThread
-    && activeThread.senderUserId.trim() === senderProfile.senderUserId.trim();
-  const canDeleteActiveThread = !!activeThread
-    && !disableLocalCommunication
-    && (!isOwnActiveThread || activeThreadResolved);
   const canBroadcastCallListSync = senderProfile.senderName.trim() !== ""
     && !disableLocalCommunication
     && isValidSenderUserId(senderProfile.senderUserId)
     && isValidIpv4(senderProfile.bindIp)
     && isValidIpv4(senderProfile.broadcastSubnetMask);
-
-  const activeCallThreadIdentity = useMemo(() => extractCallThreadIdentity(activeThread), [activeThread]);
-  const canOpenDqDialog = !!activeThread
-    && !activeThreadResolved
-    && !disableLocalCommunication
-    && activeThread.senderUserId !== senderProfile.senderUserId
-    && !!activeCallThreadIdentity;
 
   function fillRandomSenderUserId() {
     const usedIds = new Set(genericMessages.map((item) => item.senderUserId));
@@ -3392,263 +3084,6 @@ function App() {
     }
 
     setMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK)`);
-  }
-
-  async function postGenericMessage() {
-    setError("");
-    setMessage("");
-
-    if (disableLocalCommunication) {
-      setError("ローカル通信を行わない設定のため、メッセージ送信は無効です。設定タブで解除してください。");
-      return;
-    }
-
-    if (
-      senderProfile.senderName.trim() === ""
-      || !isValidSenderUserId(senderProfile.senderUserId)
-      || !isValidIpv4(senderProfile.bindIp)
-    ) {
-      setError("設定タブで送信者名・8桁ユーザーID・自分のIPを保存してから送信してください。");
-      return;
-    }
-
-    if (normalizedMailboxMethod === "") {
-      setError("メソッド名を入力してください。");
-      return;
-    }
-
-    if (normalizedMailboxSubject === "") {
-      setError("件名を入力してください。");
-      return;
-    }
-
-    if (messageDeliveryMode === "direct" && !isValidIpv4List(normalizedMessageDeliveryIp)) {
-      setError("送信先IPはIPv4形式で複数指定できます。例: 192.168.1.20, 192.168.1.21");
-      return;
-    }
-
-    if (composedMessageBody === "") {
-      setError("メッセージ本文または補足を入力してください。");
-      return;
-    }
-
-    const scopedMeta = buildScopedMessageMeta(composeMessageMeta, selectedMessageScope);
-
-    try {
-      if (normalizedMailboxMethod === "call_player") {
-        const targetIdentity = extractCallTargetIdentityFromMeta(scopedMeta);
-
-        if (targetIdentity) {
-          const duplicateRoots = genericMessages
-            .filter((item) =>
-              item.parentMessageId === null
-              && item.messageType === "normal"
-              && item.method === "call_player"
-            )
-            .filter((root) => {
-              const rootIdentity = extractCallTargetIdentityFromMeta(root.messageMeta);
-              if (!rootIdentity) {
-                return false;
-              }
-
-              const threadResolved = genericMessages.some(
-                (item) => item.threadId === root.threadId && item.messageType === "resolve",
-              );
-              if (threadResolved) {
-                return false;
-              }
-
-              return isSameCallTargetIdentity(rootIdentity, targetIdentity);
-            });
-
-          for (const root of duplicateRoots) {
-            const resolved = await invoke<GenericMessage>("send_mailbox_message", {
-              input: {
-                profile: senderProfile,
-                messageType: "resolve",
-                method: root.method,
-                subject: `Resolved: ${root.subject}`,
-                body: "同一セット・同一プレイヤーの再呼び出し前に自動解決しました。",
-                messageMeta: root.messageMeta,
-                deliveryTargetMode: "broadcast",
-                deliveryTargetIp: null,
-                threadId: root.threadId,
-                parentMessageId: root.messageId,
-              },
-            });
-
-            const normalizedResolved = normalizeGenericMessage(resolved);
-            if (normalizedResolved) {
-              setGenericMessages((current) => {
-                const next = [normalizedResolved, ...current.filter((item) => item.messageId !== normalizedResolved.messageId)];
-                return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-              });
-            }
-          }
-        }
-      }
-
-      const sent = await invoke<GenericMessage>("send_mailbox_message", {
-        input: {
-          profile: senderProfile,
-          messageType: "normal",
-          messageMeta: scopedMeta,
-          method: normalizedMailboxMethod,
-          subject: normalizedMailboxSubject,
-          body: composedMessageBody,
-          deliveryTargetMode: messageDeliveryMode,
-          deliveryTargetIp: messageDeliveryMode === "direct" ? splitIpv4List(normalizedMessageDeliveryIp).join(",") : null,
-          threadId: null,
-          parentMessageId: null,
-        },
-      });
-
-      const normalized = normalizeGenericMessage(sent);
-      if (normalized) {
-        setGenericMessages((current) => {
-          const next = [normalized, ...current.filter((item) => !isSameGenericMessageIdentity(item, normalized))];
-          return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-        });
-        setSelectedThreadId(normalized.threadId);
-      }
-
-      setGenericMessageBodyDraft("");
-      setMailboxSubjectDraft("");
-      setComposeFixedBodyDraft(null);
-      setComposeMessageMeta(null);
-      setMessage(`メソッド ${normalizedMailboxMethod} でスレッドを開始しました。`);
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
-  async function replyToThread() {
-    setError("");
-    setMessage("");
-
-    if (disableLocalCommunication) {
-      setError("ローカル通信を行わない設定のため、返信は無効です。設定タブで解除してください。");
-      return;
-    }
-
-    if (!activeThread) {
-      setError("返信先スレッドを選択してください。");
-      return;
-    }
-
-    if (activeThreadResolved) {
-      setError("解決済みスレッドには返信できません。必要な連絡は汎用メッセージで送信してください。");
-      return;
-    }
-
-    if (
-      senderProfile.senderName.trim() === ""
-      || !isValidSenderUserId(senderProfile.senderUserId)
-      || !isValidIpv4(senderProfile.bindIp)
-    ) {
-      setError("設定タブで送信者名・8桁ユーザーID・自分のIPを保存してから返信してください。");
-      return;
-    }
-
-    if (normalizedReplyBody === "") {
-      setError("返信本文を入力してください。");
-      return;
-    }
-
-    const replyTargetMode: MailboxDeliveryMode = activeThread.senderUserId === senderProfile.senderUserId ? "broadcast" : "direct";
-    const replyTargetIp = activeThread.senderIp.trim();
-
-    if (replyTargetMode === "direct" && !isValidIpv4(replyTargetIp)) {
-      setError("返信先メッセージの送信者IPが不正です。");
-      return;
-    }
-
-    try {
-      const sent = await invoke<GenericMessage>("send_mailbox_message", {
-        input: {
-          profile: senderProfile,
-          messageType: "normal",
-          method: activeThread.method,
-          subject: `Re: ${activeThread.subject}`,
-          body: normalizedReplyBody,
-          messageMeta: buildScopedMessageMeta(null, selectedMessageScope),
-          deliveryTargetMode: replyTargetMode,
-          deliveryTargetIp: replyTargetMode === "direct" ? replyTargetIp : null,
-          threadId: activeThread.threadId,
-          parentMessageId: activeThread.messageId,
-        },
-      });
-
-      const normalized = normalizeGenericMessage(sent);
-      if (normalized) {
-        setGenericMessages((current) => {
-          const next = [normalized, ...current.filter((item) => !isSameGenericMessageIdentity(item, normalized))];
-          return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-        });
-      }
-
-      setReplyBodyDraft("");
-      setMessage("返信を送信しました。スレッドに追加されます。");
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
-  function openDqRequestDialog() {
-    setError("");
-    setMessage("");
-
-    if (disableLocalCommunication) {
-      setError("ローカル通信を行わない設定のため、DQ申請は無効です。設定タブで解除してください。");
-      return;
-    }
-
-    if (!activeThread || !activeCallThreadIdentity) {
-      setError("プレイヤー呼び出しスレッドを選択してください。");
-      return;
-    }
-
-    if (activeThreadResolved) {
-      setError("解決済みスレッドではDQ申請できません。必要な連絡は汎用メッセージで送信してください。");
-      return;
-    }
-
-    const replyTargetMode: MailboxDeliveryMode = activeThread.senderUserId === senderProfile.senderUserId ? "broadcast" : "direct";
-    const replyTargetIp = activeThread.senderIp.trim();
-
-    if (replyTargetMode === "direct" && !isValidIpv4(replyTargetIp)) {
-      setError("返信先メッセージの送信者IPが不正です。DQ申請を開始できません。");
-      return;
-    }
-
-    setDqDialog({
-      threadId: activeThread.threadId,
-      parentMessageId: activeThread.messageId,
-      method: activeThread.method,
-      subject: activeThread.subject,
-      replyTargetMode,
-      replyTargetIp,
-      expectedPlayerId: activeCallThreadIdentity.expectedPlayerId,
-      callEntrantId: activeCallThreadIdentity.callEntrantId,
-      callEntrantName: activeCallThreadIdentity.callEntrantName,
-      setId: activeCallThreadIdentity.setId,
-    });
-    setDqPlayerIdDraft("");
-    setDqReasonDraft("");
-    setDqDialogError("");
-  }
-
-  function closeDqRequestDialog() {
-    if (dqSubmitting) {
-      return;
-    }
-
-    stopDqCameraScan();
-
-    setDqDialog(null);
-    setDqPlayerIdDraft("");
-    setDqReasonDraft("");
-    setDqDialogError("");
   }
 
   function stopDqCameraScan() {
@@ -3795,89 +3230,6 @@ function App() {
     };
   }, []);
 
-  async function submitDqRequest() {
-    setError("");
-    setMessage("");
-
-    if (disableLocalCommunication) {
-      setDqDialogError("ローカル通信を行わない設定のため、DQ申請は無効です。設定タブで解除してください。");
-      return;
-    }
-
-    if (!dqDialog) {
-      setDqDialogError("DQ申請対象が見つかりません。再度開き直してください。");
-      return;
-    }
-
-    if (
-      senderProfile.senderName.trim() === ""
-      || !isValidSenderUserId(senderProfile.senderUserId)
-      || !isValidIpv4(senderProfile.bindIp)
-    ) {
-      setDqDialogError("設定タブで送信者名・8桁ユーザーID・自分のIPを保存してから申請してください。");
-      return;
-    }
-
-    const normalizedPlayerId = normalizePlayerId(dqPlayerIdDraft);
-    if (!isLikelyPlayerId(normalizedPlayerId)) {
-      setDqDialogError("PLAYER IDを入力してください。プレイヤーカードの2次元コード読取にも対応しています。");
-      return;
-    }
-
-    if (normalizedPlayerId !== dqDialog.expectedPlayerId) {
-      setDqDialogError("入力したPLAYER IDが呼び出し対象と一致しません。なりすまし防止のため申請できません。");
-      return;
-    }
-
-    const reasonText = dqReasonDraft.trim();
-    const body = reasonText === ""
-      ? `DQ申請\n対象: ${dqDialog.callEntrantName || dqDialog.callEntrantId}`
-      : `DQ申請\n対象: ${dqDialog.callEntrantName || dqDialog.callEntrantId}\n理由: ${reasonText}`;
-
-    const messageMeta = buildScopedMessageMeta({
-      dqPlayerId: normalizedPlayerId,
-      dqCallEntrantId: dqDialog.callEntrantId,
-      dqCallEntrantName: dqDialog.callEntrantName,
-      dqSetId: dqDialog.setId,
-      dqRequestedByUserId: senderProfile.senderUserId,
-      dqRequestedAt: new Date().toISOString(),
-    }, selectedMessageScope);
-
-    setDqSubmitting(true);
-    setDqDialogError("");
-    try {
-      const sent = await invoke<GenericMessage>("send_mailbox_message", {
-        input: {
-          profile: senderProfile,
-          messageType: "dq_request",
-          method: dqDialog.method,
-          subject: `DQ申請: ${dqDialog.subject}`,
-          body,
-          messageMeta,
-          deliveryTargetMode: dqDialog.replyTargetMode,
-          deliveryTargetIp: dqDialog.replyTargetMode === "direct" ? dqDialog.replyTargetIp : null,
-          threadId: dqDialog.threadId,
-          parentMessageId: dqDialog.parentMessageId,
-        },
-      });
-
-      const normalized = normalizeGenericMessage(sent);
-      if (normalized) {
-        setGenericMessages((current) => {
-          const next = [normalized, ...current.filter((item) => !isSameGenericMessageIdentity(item, normalized))];
-          return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-        });
-      }
-
-      closeDqRequestDialog();
-      setMessage("DQ申請を送信しました。認証済みのPLAYER IDでのみ送信可能です。");
-    } catch (err) {
-      setDqDialogError(String(err));
-    } finally {
-      setDqSubmitting(false);
-    }
-  }
-
   async function resolveActiveThread() {
     setError("");
     setMessage("");
@@ -3999,43 +3351,6 @@ function App() {
     }
   }
 
-  function deleteActiveThread() {
-    if (disableLocalCommunication) {
-      setError("ローカル通信を行わない設定のため、スレッド削除は無効です。必要な場合は設定タブの強制クリアを利用してください。");
-      return;
-    }
-
-    if (!activeThread) {
-      setError("削除するスレッドを選択してください。");
-      return;
-    }
-
-    if (activeThread.senderUserId.trim() === senderProfile.senderUserId.trim() && !activeThreadResolved) {
-      const warningMessage = "自分が発行した未解決スレッドは削除できません。先に「解決」を送信してください。";
-      window.alert(warningMessage);
-      setError(warningMessage);
-      return;
-    }
-
-    const confirmed = window.confirm(`「${activeThread.subject}」のスレッドを削除しますか？\nこのスレッド内の全メッセージが削除されます。`);
-    if (!confirmed) {
-      return;
-    }
-
-    const targetThreadId = activeThread.threadId;
-    const deletedMessageIds = genericMessages
-      .filter((item) => item.threadId === targetThreadId)
-      .map((item) => item.messageId);
-
-    setError("");
-    setMessage("");
-    setGenericMessages((current) => current.filter((item) => item.threadId !== targetThreadId));
-    setMailboxReadMessageIds((current) => current.filter((messageId) => !deletedMessageIds.includes(messageId)));
-    setReplyBodyDraft("");
-    setSelectedThreadId("");
-    setMessage("スレッドを削除しました。");
-  }
-
   function clearCallListThreads() {
     const callRoots = genericMessages.filter((item) =>
       item.parentMessageId === null
@@ -4097,7 +3412,7 @@ function App() {
     setMailboxReadMessageIds([]);
     setSelectedThreadId("");
     setReplyBodyDraft("");
-    setDqDialog(null);
+    resetDqRequestDialog();
     setCallListDisplayGroups([]);
     setCallListFocusOwnUnresolved(false);
     setCallListPageIndex(0);
