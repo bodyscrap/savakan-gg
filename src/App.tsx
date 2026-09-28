@@ -17,6 +17,7 @@ import { OverlayControl, type ObsOverlayState } from "./OverlayControl";
 import { EliminationBracket, type EliminationBracketSectionView } from "./EliminationBracket";
 import { RoundRobinBracket } from "./RoundRobinBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
+import { useBracketReport } from "./useBracketReport";
 import {
   calculateRoundRobinQualifyingCount,
   compareRoundRobinTieBreakRule,
@@ -475,48 +476,10 @@ type TournamentWorkspace = {
   localMeta: TournamentLocalMeta;
 };
 
-type BracketBatchReportResult = {
-  workspace: TournamentWorkspace;
-  processedCount: number;
-  reportedCount: number;
-  skippedCount: number;
-  completed: boolean;
-  conflict: BracketBatchConflict | null;
-};
-
-type BracketBatchConflict = {
-  setId: string;
-  fullRoundText: string;
-  localWinnerId: string;
-  remoteWinnerId: string | null;
-  remoteState: number;
-  entrantNames: string[];
-};
-
-type BatchReportProgress = {
-  totalCount: number;
-  reportedCount: number;
-  skippedCount: number;
-};
-
-type BatchConflictDialogState = {
-  conflict: BracketBatchConflict;
-  progress: BatchReportProgress;
-};
-
 type ResultConfirmationState = {
   match: SetSnapshot;
   scoreDrafts: SetScoreDraft;
   directWinnerId: string | null;
-};
-
-type BracketReportProgressEvent = {
-  phase: string;
-  totalCount: number;
-  processedCount: number;
-  reportedCount: number;
-  skippedCount: number;
-  currentSetId: string | null;
 };
 
 type WorkspaceUpdatedEvent = {
@@ -594,7 +557,6 @@ type ObsOverlaySetInput = {
 };
 
 const EVENT_SNAPSHOT_PROGRESS_EVENT = "event_snapshot_progress";
-const BRACKET_REPORT_PROGRESS_EVENT = "bracket_report_progress";
 const WORKSPACE_UPDATED_EVENT = "workspace_updated";
 const OBS_OVERLAY_STATE_CHANGED_EVENT = "obs_overlay_state_changed";
 
@@ -2292,7 +2254,6 @@ function App() {
   const [eventAliasDraft, setEventAliasDraft] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
   const [createSnapshotProgress, setCreateSnapshotProgress] = useState<EventSnapshotProgress | null>(null);
-  const [bracketReportProgress, setBracketReportProgress] = useState<BracketReportProgressEvent | null>(null);
   const [workspace, setWorkspace] = useState<TournamentWorkspace | null>(null);
   const [selectedEventId, setSelectedEventId] = useState("");
   const workspacePollingBlockedRef = useRef(false);
@@ -2305,8 +2266,6 @@ function App() {
   const [activeMatchSideDrafts, setActiveMatchSideDrafts] = useState<Record<string, PlaySide | "">>({});
   const [setResultDrafts, setSetResultDrafts] = useState<Record<string, SetResultDraftState>>({});
   const [interimScoreDraftsBySetId, setInterimScoreDraftsBySetId] = useState<Record<string, SetScoreDraft>>({});
-  const [batchConflictDialog, setBatchConflictDialog] = useState<BatchConflictDialogState | null>(null);
-  const [batchForceOverwriteRemaining, setBatchForceOverwriteRemaining] = useState(false);
   const [metaDrafts, setMetaDrafts] = useState<Record<string, PlayerMetaDraft>>({});
   const [localSnapshotEvents, setLocalSnapshotEvents] = useState<LocalSnapshotEventListItem[]>([]);
   const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
@@ -2605,32 +2564,6 @@ function App() {
 
           setObsOverlayState(event.payload);
           setIsTestOverlayActive(event.payload.active && event.payload.currentSetId === "__test__");
-        });
-        unlisten = off;
-      } catch {
-        // ignore listener setup failure in non-Tauri environments
-      }
-    })();
-
-    return () => {
-      alive = false;
-      if (unlisten) {
-        unlisten();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    let unlisten: (() => void) | null = null;
-
-    void (async () => {
-      try {
-        const off = await listen<BracketReportProgressEvent>(BRACKET_REPORT_PROGRESS_EVENT, (event) => {
-          if (!alive) {
-            return;
-          }
-          setBracketReportProgress(event.payload);
         });
         unlisten = off;
       } catch {
@@ -3415,6 +3348,19 @@ function App() {
 
     return snapshot.events.find((event) => event.eventId === selectedEventId) ?? null;
   }, [snapshot, selectedEventId]);
+
+  const bracketReport = useBracketReport<TournamentWorkspace>({
+    slug: toApiSlug(slug),
+    eventId: selectedEvent?.eventId ?? null,
+    perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
+    reportableCount: confirmedReportableCount,
+    setWorkspace,
+    closeMatchDialog,
+    setBusy,
+    setError,
+    setMessage,
+    clearSnapshotProgress: () => setCreateSnapshotProgress(null),
+  });
 
   const resolvedEventSetsById = useMemo(() => {
     if (!selectedEvent) {
@@ -4223,61 +4169,11 @@ function App() {
     return "取得中...";
   }, [createSnapshotProgress]);
 
-  const bracketReportProgressPercent = useMemo(() => {
-    if (!bracketReportProgress) {
-      return 0;
-    }
-
-    if (bracketReportProgress.totalCount <= 0) {
-      return 100;
-    }
-
-    const raw = (bracketReportProgress.processedCount / bracketReportProgress.totalCount) * 100;
-    return Math.max(0, Math.min(100, raw));
-  }, [bracketReportProgress]);
-
-  const bracketReportProgressLabel = useMemo(() => {
-    if (!bracketReportProgress) {
-      return "";
-    }
-
-    const doneText = `${bracketReportProgress.processedCount}/${bracketReportProgress.totalCount} 件`;
-    const detailText = `送信 ${bracketReportProgress.reportedCount} / スキップ ${bracketReportProgress.skippedCount}`;
-
-    if (bracketReportProgress.phase === "starting") {
-      return `結果報告の準備中...（${doneText}）`;
-    }
-
-    if (bracketReportProgress.phase === "processing") {
-      if (bracketReportProgress.currentSetId) {
-        return `結果報告中 ${doneText} / ${detailText} / set ${bracketReportProgress.currentSetId}`;
-      }
-      return `結果報告中 ${doneText} / ${detailText}`;
-    }
-
-    if (bracketReportProgress.phase === "refreshingSnapshot") {
-      return `結果報告後のスナップショット更新中... ${doneText} / ${detailText}`;
-    }
-
-    if (bracketReportProgress.phase === "paused") {
-      if (bracketReportProgress.currentSetId) {
-        return `競合のため一時停止 ${doneText} / ${detailText} / set ${bracketReportProgress.currentSetId}`;
-      }
-      return `競合のため一時停止 ${doneText} / ${detailText}`;
-    }
-
-    if (bracketReportProgress.phase === "completed") {
-      return `結果報告が完了しました。${detailText}`;
-    }
-
-    return `結果報告中 ${doneText} / ${detailText}`;
-  }, [bracketReportProgress]);
-
   const shouldShowBracketSnapshotRefreshProgress = useMemo(() => {
-    const isReportSnapshotRefresh = bracketReportProgress?.phase === "refreshingSnapshot";
+    const isReportSnapshotRefresh = bracketReport.progress?.phase === "refreshingSnapshot";
     const isManualBracketRefresh = activeTab === "bracket" && busy && createSnapshotProgress !== null;
     return (isReportSnapshotRefresh || isManualBracketRefresh) && createSnapshotProgress !== null;
-  }, [activeTab, bracketReportProgress, busy, createSnapshotProgress]);
+  }, [activeTab, bracketReport.progress, busy, createSnapshotProgress]);
 
   const mailboxThreads = useMemo(() => {
     return mailboxThreadSummaries
@@ -10009,135 +9905,6 @@ function App() {
     }
   }
 
-  function cancelBracketBatchConflict() {
-    setBatchConflictDialog(null);
-    setBatchForceOverwriteRemaining(false);
-    setBracketReportProgress(null);
-    setMessage("一括報告を中断しました。未送信のsetはそのまま残しています。");
-  }
-
-  async function runBracketBatchReport(
-    progress: BatchReportProgress,
-    forceOverwriteCurrentConflict: boolean,
-    forceOverwriteRemainingConflicts: boolean,
-  ) {
-    if (!selectedEvent) {
-      throw new Error("先にイベントを選択してください。");
-    }
-
-    const normalizedSlug = toApiSlug(slug);
-    const result = await invoke<BracketBatchReportResult>("report_confirmed_sets_from_bracket", {
-      input: {
-        slug: normalizedSlug,
-        eventId: selectedEvent.eventId,
-        perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
-        forceOverwriteCurrentConflict,
-        forceOverwriteRemainingConflicts,
-      },
-    });
-
-    setWorkspace(result.workspace);
-    closeMatchDialog();
-
-    const nextProgress: BatchReportProgress = {
-      totalCount: progress.totalCount,
-      reportedCount: progress.reportedCount + result.reportedCount,
-      skippedCount: progress.skippedCount + result.skippedCount,
-    };
-
-    if (result.completed) {
-      setBatchConflictDialog(null);
-      setBatchForceOverwriteRemaining(false);
-      setBracketReportProgress(null);
-      const unsentCount = Math.max(0, nextProgress.totalCount - nextProgress.reportedCount - nextProgress.skippedCount);
-      setMessage(
-        `一括報告を実行しました。対象 ${nextProgress.totalCount} 件 / 送信 ${nextProgress.reportedCount} 件 / スキップ ${nextProgress.skippedCount} 件 / 未送信 ${unsentCount} 件`,
-      );
-      return;
-    }
-
-    if (result.conflict) {
-      setBatchConflictDialog({
-        conflict: result.conflict,
-        progress: nextProgress,
-      });
-      setMessage(
-        `一括報告を一時停止しました。${result.conflict.fullRoundText} で start.gg 側との競合を確認してください。`,
-      );
-      return;
-    }
-
-    throw new Error("一括報告の状態が不正です。競合情報を取得できませんでした。");
-  }
-
-  async function reportConfirmedSetsFromBracket() {
-    if (!selectedEvent) {
-      setError("先にイベントを選択してください。");
-      return;
-    }
-
-    const normalizedSlug = toApiSlug(slug);
-    if (normalizedSlug === "") {
-      setError("大会IDを入力してください。");
-      return;
-    }
-
-    setBusy(true);
-    setError("");
-    setMessage("");
-    setCreateSnapshotProgress(null);
-    setBracketReportProgress({
-      phase: "starting",
-      totalCount: confirmedReportableCount,
-      processedCount: 0,
-      reportedCount: 0,
-      skippedCount: 0,
-      currentSetId: null,
-    });
-    setBatchConflictDialog(null);
-    setBatchForceOverwriteRemaining(false);
-
-    try {
-      await runBracketBatchReport(
-        {
-          totalCount: confirmedReportableCount,
-          reportedCount: 0,
-          skippedCount: 0,
-        },
-        false,
-        false,
-      );
-    } catch (err) {
-      setError(String(err));
-      setBracketReportProgress(null);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function continueBracketBatchWithForceOverwrite() {
-    if (!batchConflictDialog) {
-      return;
-    }
-
-    setBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      await runBracketBatchReport(
-        batchConflictDialog.progress,
-        true,
-        batchForceOverwriteRemaining,
-      );
-    } catch (err) {
-      setError(String(err));
-      setBracketReportProgress(null);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function savePlayerMeta(
     eventSnapshot: EventSnapshot,
     entrantId: string,
@@ -11022,7 +10789,7 @@ function App() {
                 下書き: {draftPendingCount} / 確定済み: {confirmedReportableCount}
               </p>
             </div>
-            {(busy || bracketReportProgress) && (
+            {(busy || bracketReport.progress) && (
               <div className="create-snapshot-progress" role="status" aria-live="polite" style={{ marginTop: "0.7rem" }}>
                 <div
                   className="create-snapshot-progress-track"
@@ -11030,16 +10797,16 @@ function App() {
                   aria-label="結果報告の進捗"
                   aria-valuemin={0}
                   aria-valuemax={100}
-                  aria-valuenow={Math.round(bracketReportProgressPercent)}
+                  aria-valuenow={Math.round(bracketReport.progressPercent)}
                 >
                   <div
                     className="create-snapshot-progress-fill"
-                    style={{ width: `${bracketReportProgressPercent}%` }}
+                    style={{ width: `${bracketReport.progressPercent}%` }}
                   />
                 </div>
                 <p className="create-snapshot-progress-meta">
-                  {bracketReportProgressLabel}
-                  {bracketReportProgress ? ` (${Math.round(bracketReportProgressPercent)}%)` : ""}
+                  {bracketReport.progressLabel}
+                  {bracketReport.progress ? ` (${Math.round(bracketReport.progressPercent)}%)` : ""}
                 </p>
               </div>
             )}
@@ -11149,7 +10916,7 @@ function App() {
                   <button
                     type="button"
                     disabled={busy || toApiSlug(slug) === "" || confirmedReportableCount === 0}
-                    onClick={reportConfirmedSetsFromBracket}
+                    onClick={() => void bracketReport.startReport()}
                   >
                     確定済みを一括報告
                   </button>
@@ -11770,12 +11537,12 @@ function App() {
               </section>
             </div>
           )}
-          {batchConflictDialog && (
+          {bracketReport.conflictDialog && (
             <div
               className="dialog-backdrop"
               onClick={() => {
                 if (!busy) {
-                  cancelBracketBatchConflict();
+                  bracketReport.cancelConflict();
                 }
               }}
             >
@@ -11791,37 +11558,37 @@ function App() {
                     <h3>一括報告の競合</h3>
                     <p className="meta">このsetは start.gg 側の状態が進んでいるため、そのままでは更新できません。</p>
                   </div>
-                  <button type="button" className="ghost" disabled={busy} onClick={cancelBracketBatchConflict}>中止</button>
+                  <button type="button" className="ghost" disabled={busy} onClick={bracketReport.cancelConflict}>中止</button>
                 </div>
 
                 <div className="dialog-body">
                   <div className="dialog-summary-box">
                     <p className="dialog-summary-title">対象set</p>
-                    <p className="dialog-summary-value">{batchConflictDialog.conflict.fullRoundText}</p>
-                    <p className="meta">{batchConflictDialog.conflict.entrantNames.filter((name) => name.trim() !== "").join(" vs ") || batchConflictDialog.conflict.setId}</p>
-                    <p className="meta">remote state: {batchConflictDialog.conflict.remoteState} / remote winner: {batchConflictDialog.conflict.remoteWinnerId ?? "-"}</p>
+                    <p className="dialog-summary-value">{bracketReport.conflictDialog.conflict.fullRoundText}</p>
+                    <p className="meta">{bracketReport.conflictDialog.conflict.entrantNames.filter((name) => name.trim() !== "").join(" vs ") || bracketReport.conflictDialog.conflict.setId}</p>
+                    <p className="meta">remote state: {bracketReport.conflictDialog.conflict.remoteState} / remote winner: {bracketReport.conflictDialog.conflict.remoteWinnerId ?? "-"}</p>
                   </div>
 
                   <div className="dialog-summary-box">
                     <p className="dialog-summary-title">ここまでの進捗</p>
                     <p className="dialog-summary-value">
-                      対象 {batchConflictDialog.progress.totalCount} 件 / 送信 {batchConflictDialog.progress.reportedCount} 件 / スキップ {batchConflictDialog.progress.skippedCount} 件
+                      対象 {bracketReport.conflictDialog.progress.totalCount} 件 / 送信 {bracketReport.conflictDialog.progress.reportedCount} 件 / スキップ {bracketReport.conflictDialog.progress.skippedCount} 件
                     </p>
                   </div>
 
                   <label className="checkbox-row">
                     <input
                       type="checkbox"
-                      checked={batchForceOverwriteRemaining}
-                      onChange={(event) => setBatchForceOverwriteRemaining(event.currentTarget.checked)}
+                      checked={bracketReport.forceOverwriteRemaining}
+                      onChange={(event) => bracketReport.setForceOverwriteRemaining(event.currentTarget.checked)}
                     />
                     この一括報告の残りでも、競合したsetは自動で reset して強制上書きする
                   </label>
                 </div>
 
                 <div className="dialog-actions dialog-actions-split">
-                  <button type="button" className="ghost" disabled={busy} onClick={cancelBracketBatchConflict}>この時点で止める</button>
-                  <button type="button" disabled={busy} onClick={() => void continueBracketBatchWithForceOverwrite()}>
+                  <button type="button" className="ghost" disabled={busy} onClick={bracketReport.cancelConflict}>この時点で止める</button>
+                  <button type="button" disabled={busy} onClick={() => void bracketReport.continueWithForceOverwrite()}>
                     このsetを reset して続行
                   </button>
                 </div>
