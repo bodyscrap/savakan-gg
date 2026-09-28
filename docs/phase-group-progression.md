@@ -198,3 +198,13 @@ DEでは、phaseGroup間進出と同一bracket内のwinner/loser移動を分け�
 結果確定時に、確定入力のslotScoresから重複を除いたentrant IDを元setの空slotへ復元してから進行処理を行います。ゲーム単位で同一entrant IDが複数行あるスコア入力でも、2人分の一意IDとslot数が一致するときだけ復元します。pending結果の再読込にも同じ復元処理を使い、アプリ再起動後の再構築でもIDを失わないようにします。復元は既存のincremental進行前に行うため、結果確定時に全bracketを再構築する必要はありません。
 
 Set A確定後に勝者がC、敗者がIへ進み、IDと名前も維持されることを実機で確認しました。回帰テスト `advances_first_finals_winners_losers_to_their_source_slots` は空slotとゲーム別に重複するscore行を使い、AからIへの敗者進行を確認します。`cargo test --lib`（31件）と `cargo check` も成功しています。
+
+### 2026-09-28: DEから次phaseのROUND ROBINへ進出しない
+
+「SE 4 Pool（各Pool上位2名）→ DE 2 Pool（各Pool上位2名）→ ROUND ROBIN」の3 phase構成で、DEから最終ROUND ROBINへentrantが進出しない事象を確認しました。対象event-1ではDE各PoolのWinners Final / Losers Finalに確定結果がありましたが、ROUND ROBINの4 seedはentrant未設定のままでした。保存graphにもDE最終setからROUND ROBIN setへのedgeがありませんでした。
+
+原因は、`build_bracket_graph`内でsource情報を書き換える対象とedge生成が参照する対象の不一致です。ROUND ROBIN setのprogression seed sourceは`graph_event`側で、該当するDE setのIDとwinner/loser条件へ解決されます。しかしedge生成ループは書き換え前のraw `event.sets`を参照していたため、`sourceType: seed`のままのsourceからsource set IDを解決できず、cross-phase edgeが作られませんでした。その結果、後続のprogression targetにもRR seedが登録されず、DE結果からのentrant伝播が止まっていました。
+
+edge生成では、書き換え済みの`graph_event`に同じset IDがあればそのsourceを使い、graphから除外されたintermediate setはraw setへfallbackするようにしました。これにより、DEの各Poolで確定した上位2名を対応するROUND ROBIN seedとset slotへ伝播できます。phaseの順序は`phaseOrder`の数値ではなく`event.phases`配列順を引き続き使います。
+
+回帰テスト `progresses_middle_pool_placements_to_round_robin_seed_slots` はDE 2 Poolの4進出枠について、cross-phase edgeの生成、RR slotへのentrant ID伝播、seedへのentrant反映を確認します。修正後は `cargo test --lib`（32件）と `cargo check` が成功し、event-1で正常に進行することも実機確認済みです。

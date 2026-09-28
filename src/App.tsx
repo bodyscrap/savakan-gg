@@ -14,6 +14,9 @@ import { ItemListEditor, type ItemListConfig } from "./ItemListEditor";
 import { EventSelector, localSnapshotAliasLabel, localSnapshotItemKey, type LocalSnapshotEventListItem } from "./EventSelector";
 import { EventSetting } from "./EventSetting";
 import { OverlayControl, type ObsOverlayState } from "./OverlayControl";
+import { EliminationBracket, type EliminationBracketSectionView } from "./EliminationBracket";
+import { RoundRobinBracket } from "./RoundRobinBracket";
+import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
 import {
   calculateRoundRobinQualifyingCount,
   compareRoundRobinTieBreakRule,
@@ -1642,42 +1645,6 @@ function roundRobinPlaceholderId(slot: SetSlot, source?: SetEntrantSource | null
     || slot.entrantName
     || "unknown";
   return `placeholder:${identity}`;
-}
-
-function roundRobinGameWinPercentage(standing: RoundRobinStanding): number {
-  const totalGames = standing.gameWins + standing.gameLosses;
-  return totalGames > 0 ? standing.gameWins / totalGames : 0;
-}
-
-function roundRobinSetWinPercentage(standing: RoundRobinStanding): number {
-  const totalSets = standing.wins + standing.losses;
-  return totalSets > 0 ? standing.wins / totalSets : 0;
-}
-
-function roundRobinTieBreakRuleLabel(rule: RoundRobinTieBreakRule): string {
-  if (rule === "total_sets_won") {
-    return "Total sets won";
-  }
-  if (rule === "game_wins") {
-    return "Game wins";
-  }
-  if (rule === "game_win_percentage") {
-    return "Game win %";
-  }
-  return "Head-to-head";
-}
-
-function roundRobinTieBreakRuleValue(standing: RoundRobinStanding, rule: RoundRobinTieBreakRule): string {
-  if (rule === "total_sets_won") {
-    return `${standing.wins}-${standing.losses}(${(roundRobinSetWinPercentage(standing) * 100).toFixed(2)}%)`;
-  }
-  if (rule === "game_wins") {
-    return `${standing.gameWins}-${standing.gameLosses}(${(roundRobinGameWinPercentage(standing) * 100).toFixed(2)}%)`;
-  }
-  if (rule === "game_win_percentage") {
-    return `${standing.gameWins}-${standing.gameLosses}(${(roundRobinGameWinPercentage(standing) * 100).toFixed(2)}%)`;
-  }
-  return String(standing.h2hPoints);
 }
 
 function toIntegerScore(value: number | null): number | null {
@@ -8487,6 +8454,206 @@ function App() {
     };
   }, [interimScoreDraftsBySetId, pendingResultBySetId, selectedEvent, selectedPhasePoolGroup]);
 
+  const roundRobinMatrixRows = useMemo<RoundRobinMatrixRowView[]>(() => {
+    return roundRobinBoardData.entrants.map((rowEntrantId) => {
+      const rowSeedId = rowEntrantId.startsWith("seed:")
+        ? rowEntrantId.slice("seed:".length)
+        : roundRobinBoardData.entrantSeedIds.get(rowEntrantId);
+      const rowColumnEntrantId = roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId);
+      const standing = roundRobinBoardData.standings.find((item) =>
+        item.entrantId === rowColumnEntrantId
+        || (rowSeedId !== undefined
+          && roundRobinBoardData.entrantSeedIds.get(item.entrantId) === rowSeedId)
+        || (!rowEntrantId.startsWith("seed:") && item.entrantId === rowEntrantId),
+      );
+
+      const cells = roundRobinBoardData.entrants.map((columnEntrantId) => {
+        const isDiagonal = rowEntrantId === columnEntrantId;
+        const columnSeedId = columnEntrantId.startsWith("seed:")
+          ? columnEntrantId.slice("seed:".length)
+          : roundRobinBoardData.entrantSeedIds.get(columnEntrantId);
+        const set = isDiagonal
+          ? null
+          : roundRobinBoardData.setsByPair.get(roundRobinPairKey(
+            roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId) ?? rowEntrantId,
+            roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId) ?? columnEntrantId,
+          ))
+            ?? roundRobinBoardData.setsByPair.get(roundRobinPairKey(
+              rowSeedId ?? rowEntrantId,
+              columnSeedId ?? columnEntrantId,
+            ));
+
+        if (!set) {
+          return {
+            key: columnEntrantId,
+            kind: isDiagonal ? "diagonal" as const : "empty" as const,
+          };
+        }
+
+        const setDisplay = getSetScoresForDisplay(set);
+        const pendingResult = pendingResultBySetId.get(set.setId);
+        const resultStatus = getSetResultVisualStatus(set);
+        const resultStatusClass = resultStatus ? `set-card-status-${resultStatus}` : "";
+        const resultStatusLabel = resultStatus === "confirmed"
+          ? "確定"
+          : resultStatus === "draft"
+            ? "下書き"
+            : resultStatus === "inprogress"
+              ? "進行中"
+              : "";
+        const winnerId = setDisplay.winnerId ?? set.winnerId;
+        const columnColumnEntrantId = roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId);
+        const rowSlot = set.slots.find((slot) =>
+          rowColumnEntrantId !== null && rowColumnEntrantId !== undefined
+          && slot.entrantId === rowColumnEntrantId,
+        ) ?? set.slots.find((slot) => rowSeedId && slot.seedId === rowSeedId);
+        const columnSlot = set.slots.find((slot) =>
+          columnColumnEntrantId !== null && columnColumnEntrantId !== undefined
+          && slot.entrantId === columnColumnEntrantId,
+        ) ?? set.slots.find((slot) => columnSeedId && slot.seedId === columnSeedId);
+        const rowEntrantIdForSet = rowSlot?.entrantId ?? null;
+        const columnEntrantIdForSet = columnSlot?.entrantId ?? null;
+        const rowGameScore = rowEntrantIdForSet
+          ? setDisplay.scores[rowEntrantIdForSet]
+            ?? (rowSlot?.score !== null && rowSlot?.score !== undefined ? String(rowSlot.score) : "-")
+          : "-";
+        const columnGameScore = columnEntrantIdForSet
+          ? setDisplay.scores[columnEntrantIdForSet]
+            ?? (columnSlot?.score !== null && columnSlot?.score !== undefined ? String(columnSlot.score) : "-")
+          : "-";
+        const changeClass = pendingResult
+          ? (isConfirmedSetResult(pendingResult) ? "set-card-changed-confirmed" : "set-card-changed-draft")
+          : "";
+        const outcomeClass = winnerId === null
+          ? ""
+          : winnerId === rowEntrantIdForSet
+            ? "round-robin-match-win"
+            : winnerId === columnEntrantIdForSet
+              ? "round-robin-match-loss"
+              : "";
+        const isLiveOverlaySet = Boolean(
+          obsOverlayState?.active
+          && obsOverlayState.currentSetId === set.setId
+          && obsOverlayState.currentSetId !== "__test__",
+        );
+        const roundLabel = set.fullRoundText.trim() || `Round ${set.round ?? "-"}`;
+        const setLabel = `Set ${setDisplayCodeById.get(set.setId) ?? set.identifier?.trim() ?? "-"}`;
+
+        return {
+          key: columnEntrantId,
+          kind: "match" as const,
+          match: {
+            set,
+            className: `round-robin-match ${outcomeClass} ${changeClass} ${resultStatusClass} ${isLiveOverlaySet ? "set-card-live" : ""}`,
+            title: `${roundLabel} / ${setLabel}: ${roundRobinBoardData.entrantNames.get(rowEntrantId) || "-"} vs ${roundRobinBoardData.entrantNames.get(columnEntrantId) || "-"}`,
+            roundLabel,
+            setLabel,
+            resultStatus,
+            resultStatusLabel,
+            isLiveOverlaySet,
+            rowGameScore,
+            columnGameScore,
+          },
+        };
+      });
+
+      return {
+        key: rowEntrantId,
+        entrantName: roundRobinBoardData.entrantNames.get(rowEntrantId) || "-",
+        cells,
+        setSummary: standing ? `${standing.wins}-${standing.losses}` : "-",
+        gameSummary: standing ? `${standing.gameWins}-${standing.gameLosses}` : "-",
+      };
+    });
+  }, [
+    getSetResultVisualStatus,
+    getSetScoresForDisplay,
+    interimScoreDraftsBySetId,
+    obsOverlayState,
+    pendingResultBySetId,
+    roundRobinBoardData,
+    setDisplayCodeById,
+  ]);
+
+  const eliminationBracketSections: EliminationBracketSectionView[] = renderedBracketSectionsForView.map((section) => ({
+    key: section.key,
+    title: section.title,
+    setCount: section.setCount,
+    columns: section.columns.map((column) => ({
+      key: column.key,
+      title: column.title,
+      round: column.round,
+      height: column.height,
+      hidden: column.hidden,
+      cards: column.positionedSets.map(({ set, y }) => {
+        const displaySet = resolvedEventSetsById.get(set.setId) ?? set;
+        const pendingResult = pendingResultBySetId.get(set.setId);
+        const resultStatus = getSetResultVisualStatus(set);
+        const resultStatusLabel = resultStatus === "confirmed"
+          ? "確定"
+          : resultStatus === "draft"
+            ? "下書き"
+            : resultStatus === "inprogress"
+              ? "途中"
+              : "";
+        const finishedSet = isCompletedSet(set);
+        const matchupReady = isMatchupReady(displaySet);
+        const setDisplay = getSetScoresForDisplay(displaySet);
+        const winnerId = setDisplay.winnerId ?? set.winnerId;
+
+        return {
+          set,
+          positionY: y,
+          displayCode: setDisplayCodeById.get(set.setId),
+          changeClass: pendingResult
+            ? (isConfirmedSetResult(pendingResult) ? "set-card-changed-confirmed" : "set-card-changed-draft")
+            : "",
+          resultStatus,
+          resultStatusLabel,
+          isLiveOverlaySet: Boolean(
+            obsOverlayState?.active
+            && obsOverlayState.currentSetId === set.setId
+            && obsOverlayState.currentSetId !== "__test__",
+          ),
+          slots: displaySet.slots.map((slot, index) => {
+            const entrantId = slot.entrantId;
+            const tbdSourceLabel = resolveTbdSourceLabel(set, index, slot);
+            const entrantName = !entrantId && tbdSourceLabel ? tbdSourceLabel : slot.entrantName;
+            const isWinner = entrantId && winnerId ? entrantId === winnerId : false;
+            const sideLabel = getSetSlotSideLabel(set.setId, entrantId, {
+              fallbackBySlotIndex: index,
+              finishedSet,
+              matchupReady,
+            });
+            const sideBadgeClass = sideLabel === "1P"
+              ? (finishedSet ? "side-1p-finished" : "side-1p")
+              : sideLabel === "2P"
+                ? (finishedSet ? "side-2p-finished" : "side-2p")
+                : "side-none";
+            const gameWins = entrantId
+              ? (setDisplay.scores[entrantId]
+                ?? (slot.score !== null
+                  ? (isDqScoreValue(slot.score) ? "DQ" : formatScoreValue(slot.score))
+                  : (winnerId ? (isWinner ? "✓" : "-") : "-")))
+              : "-";
+            const scoreClass = (isDqScoreValue(slot.score) || setDisplay.isDq)
+              ? (isWinner ? "win" : "dq")
+              : (isWinner ? "win" : "lose");
+
+            return {
+              key: `${set.setId}-${index}`,
+              sideLabel,
+              sideBadgeClass,
+              entrantName,
+              gameWins,
+              scoreClass,
+            };
+          }),
+        };
+      }),
+    })),
+  }));
+
   useEffect(() => {
     if (phaseNames.length === 0) {
       if (selectedPhaseName !== "") {
@@ -10996,384 +11163,69 @@ function App() {
                     <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
 
                     {getBracketProgressionModel(selectedPhasePoolGroup.bracketType) === "round_robin" ? (
-                      <div className="round-robin-board" style={bracketScaleStyle}>
-                        <div className="round-robin-board-header">
-                          <div>
-                            <h3>Round Robin</h3>
-                            <p className="meta">set間の接続を持たないため、ラウンド順に一覧表示しています。</p>
-                            {selectedPhasePoolGroup.seeds.length > 0 && (
-                              <details className="meta">
-                                <summary>対象PhaseGroup seedsを確認</summary>
-                                <div>phaseGroupId: {selectedPhasePoolGroup.phaseGroupId ?? "-"}</div>
-                                <div>progressionsOut: {selectedPhasePoolGroup.progressionsOut.length}</div>
-                                <pre style={{ whiteSpace: "pre-wrap", maxHeight: "12rem", overflow: "auto" }}>
-                                  {JSON.stringify(selectedPhasePoolGroup.progressionsOut, null, 2)}
-                                </pre>
-                                <pre style={{ whiteSpace: "pre-wrap", maxHeight: "16rem", overflow: "auto" }}>
-                                  {JSON.stringify(selectedPhasePoolGroup.seeds, null, 2)}
-                                </pre>
-                              </details>
-                            )}
-                          </div>
-                          <span className="round-robin-set-count">{selectedPhasePoolGroup.sets.length} sets</span>
-                        </div>
-                        <div className="round-robin-layout">
-                          <div className="round-robin-matrix-wrap">
-                            <table className="round-robin-matrix">
-                              <thead>
-                                <tr>
-                                  <th scope="col">対戦表</th>
-                                  {roundRobinBoardData.entrants.map((entrantId) => (
-                                    <th scope="col" key={entrantId} title={roundRobinBoardData.entrantNames.get(entrantId)}>
-                                      {roundRobinBoardData.entrantNames.get(entrantId) || "-"}
-                                    </th>
-                                  ))}
-                                  <th scope="col">set/game</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {roundRobinBoardData.entrants.map((rowEntrantId) => (
-                                  <tr key={rowEntrantId}>
-                                    <th scope="row" title={roundRobinBoardData.entrantNames.get(rowEntrantId)}>
-                                      {roundRobinBoardData.entrantNames.get(rowEntrantId) || "-"}
-                                    </th>
-                                    {roundRobinBoardData.entrants.map((columnEntrantId) => {
-                                      const isDiagonal = rowEntrantId === columnEntrantId;
-                                      const rowSeedId = rowEntrantId.startsWith("seed:")
-                                        ? rowEntrantId.slice("seed:".length)
-                                        : roundRobinBoardData.entrantSeedIds.get(rowEntrantId);
-                                      const columnSeedId = columnEntrantId.startsWith("seed:")
-                                        ? columnEntrantId.slice("seed:".length)
-                                        : roundRobinBoardData.entrantSeedIds.get(columnEntrantId);
-                                      const set = isDiagonal
-                                        ? null
-                                        : roundRobinBoardData.setsByPair.get(roundRobinPairKey(
-                                          roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId) ?? rowEntrantId,
-                                          roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId) ?? columnEntrantId,
-                                        ))
-                                          ?? roundRobinBoardData.setsByPair.get(roundRobinPairKey(
-                                            rowSeedId ?? rowEntrantId,
-                                            columnSeedId ?? columnEntrantId,
-                                          ));
-                                      if (!set) {
-                                        return <td className={`round-robin-cell ${isDiagonal ? "diagonal" : "empty"}`} key={columnEntrantId}>-</td>;
-                                      }
-
-                                      const setDisplay = getSetScoresForDisplay(set);
-                                      const pendingResult = pendingResultBySetId.get(set.setId);
-                                      const resultStatus = getSetResultVisualStatus(set);
-                                      const resultStatusClass = resultStatus ? `set-card-status-${resultStatus}` : "";
-                                      const resultStatusLabel = resultStatus === "confirmed"
-                                        ? "確定"
-                                        : resultStatus === "draft"
-                                          ? "下書き"
-                                          : resultStatus === "inprogress"
-                                            ? "進行中"
-                                            : "";
-                                      const winnerId = setDisplay.winnerId ?? set.winnerId;
-                                      const rowColumnEntrantId = roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId);
-                                      const columnColumnEntrantId = roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId);
-                                      const rowSlot = set.slots.find((slot) =>
-                                        rowColumnEntrantId !== null && rowColumnEntrantId !== undefined
-                                        && slot.entrantId === rowColumnEntrantId,
-                                      ) ?? set.slots.find((slot) => rowSeedId && slot.seedId === rowSeedId);
-                                      const columnSlot = set.slots.find((slot) =>
-                                        columnColumnEntrantId !== null && columnColumnEntrantId !== undefined
-                                        && slot.entrantId === columnColumnEntrantId,
-                                      ) ?? set.slots.find((slot) => columnSeedId && slot.seedId === columnSeedId);
-                                      const rowEntrantIdForSet = rowSlot?.entrantId ?? null;
-                                      const columnEntrantIdForSet = columnSlot?.entrantId ?? null;
-                                        const rowGameScore = rowEntrantIdForSet
-                                          ? setDisplay.scores[rowEntrantIdForSet]
-                                            ?? (rowSlot?.score !== null && rowSlot?.score !== undefined ? String(rowSlot.score) : "-")
-                                          : "-";
-                                        const columnGameScore = columnEntrantIdForSet
-                                          ? setDisplay.scores[columnEntrantIdForSet]
-                                            ?? (columnSlot?.score !== null && columnSlot?.score !== undefined ? String(columnSlot.score) : "-")
-                                          : "-";
-                                      const changeClass = pendingResult
-                                        ? (isConfirmedSetResult(pendingResult) ? "set-card-changed-confirmed" : "set-card-changed-draft")
-                                        : "";
-                                      const outcomeClass = winnerId === null
-                                        ? ""
-                                        : winnerId === rowEntrantIdForSet
-                                          ? "round-robin-match-win"
-                                          : winnerId === columnEntrantIdForSet
-                                            ? "round-robin-match-loss"
-                                            : "";
-                                      const isLiveOverlaySet = Boolean(
-                                        obsOverlayState?.active
-                                        && obsOverlayState.currentSetId === set.setId
-                                        && obsOverlayState.currentSetId !== "__test__",
-                                      );
-                                      const roundLabel = set.fullRoundText.trim() || `Round ${set.round ?? "-"}`;
-                                      const setLabel = `Set ${setDisplayCodeById.get(set.setId) ?? set.identifier?.trim() ?? "-"}`;
-
-                                      return (
-                                        <td key={columnEntrantId} className="round-robin-cell">
-                                          <button
-                                            type="button"
-                                            className={`round-robin-match ${outcomeClass} ${changeClass} ${resultStatusClass} ${isLiveOverlaySet ? "set-card-live" : ""}`}
-                                            title={`${roundLabel} / ${setLabel}: ${roundRobinBoardData.entrantNames.get(rowEntrantId) || "-"} vs ${roundRobinBoardData.entrantNames.get(columnEntrantId) || "-"}`}
-                                            onClick={(event) => {
-                                              if (event.altKey) {
-                                                event.preventDefault();
-                                                if (!busy && !obsOverlayBusy) void setObsOverlayFullyStopped(true);
-                                                return;
-                                              }
-                                              if (event.ctrlKey) {
-                                                event.preventDefault();
-                                                if (!busy && !obsOverlayBusy) void toggleActiveMatchOverlay(set);
-                                                return;
-                                              }
-                                              openMatchDialog(set);
-                                            }}
-                                          >
-                                            <span className="round-robin-match-code" title={roundLabel}>{roundLabel}</span>
-                                            <span className="round-robin-match-result">{setLabel}</span>
-                                            {(resultStatusLabel !== "" || isLiveOverlaySet) && (
-                                              <span className="round-robin-match-status">
-                                                {resultStatusLabel !== "" && (
-                                                  <span className={`set-status-badge status-${resultStatus}`}>
-                                                    {resultStatusLabel}
-                                                  </span>
-                                                )}
-                                                {isLiveOverlaySet && <span className="set-live-badge">配信中</span>}
-                                              </span>
-                                            )}
-                                            <strong>{rowGameScore} - {columnGameScore}</strong>
-                                          </button>
-                                        </td>
-                                      );
-                                    })}
-                                    {(() => {
-                                      const rowEntrantIdForColumn = roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId);
-                                      const rowSeedId = rowEntrantId.startsWith("seed:")
-                                        ? rowEntrantId.slice("seed:".length)
-                                        : roundRobinBoardData.entrantSeedIds.get(rowEntrantId);
-                                      const standing = roundRobinBoardData.standings.find((item) =>
-                                        item.entrantId === rowEntrantIdForColumn
-                                        || (rowSeedId !== undefined
-                                          && roundRobinBoardData.entrantSeedIds.get(item.entrantId) === rowSeedId)
-                                        || (!rowEntrantId.startsWith("seed:") && item.entrantId === rowEntrantId),
-                                      );
-                                      return (
-                                        <>
-                                          <td className="round-robin-row-summary">
-                                            <span>{standing ? `${standing.wins}-${standing.losses}` : "-"}</span>
-                                            <span>{standing ? `${standing.gameWins}-${standing.gameLosses}` : "-"}</span>
-                                          </td>
-                                        </>
-                                      );
-                                    })()}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          <details className="meta">
-                            <summary>ROUND ROBIN set解決状況</summary>
-                            <div>
-                              <div>phaseGroup set: {roundRobinBoardData.candidateSetCount}</div>
-                              <div>2 slot: {roundRobinBoardData.twoSlotSetCount}</div>
-                              <div>entrant pair解決: {roundRobinBoardData.resolvedSetCount}</div>
-                              <div>表示登録: {roundRobinBoardData.registeredSetCount}</div>
-                              {roundRobinBoardData.unresolvedSetIds.length > 0 && (
-                                <div>
-                                  未解決set:
-                                  <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>
-                                    {roundRobinBoardData.unresolvedSetReasons.join("\n")}
-                                  </pre>
-                                </div>
-                              )}
-                            </div>
-                          </details>
-                        </div>
-                        <aside className="round-robin-standings">
-                            <div className="round-robin-standings-head">
-                              <h4>現在順位</h4>
-                              <span>{roundRobinBoardData.qualifyingCount > 0 ? `${roundRobinBoardData.qualifyingCount}位まで次フェーズ` : "次フェーズ枠未取得"}</span>
-                            </div>
-                            <table>
-                              <thead>
-                                <tr>
-                                  <th>順位</th>
-                                  <th className="round-robin-player-column">プレイヤー</th>
-                                  {roundRobinBoardData.tieBreakRules.map((rule, index) => (
-                                    <th key={rule}>{index + 1}. {roundRobinTieBreakRuleLabel(rule)}</th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {roundRobinBoardData.standings.map((standing, index) => {
-                                  if (standing.isPlaceholder) {
-                                    return null;
-                                  }
-
-                                  return (
-                                    <tr className={standing.qualified ? "round-robin-qualified" : ""} key={standing.entrantId}>
-                                      <th scope="row">{index + 1}</th>
-                                      <td className="round-robin-player-column" title={standing.entrantName}>{standing.entrantName}</td>
-                                      {roundRobinBoardData.tieBreakRules.map((rule) => (
-                                        <td key={rule}>{roundRobinTieBreakRuleValue(standing, rule)}</td>
-                                      ))}
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                        </aside>
-                      </div>
+                      <RoundRobinBracket
+                        scaleStyle={bracketScaleStyle}
+                        setCount={selectedPhasePoolGroup.sets.length}
+                        phaseGroupId={selectedPhasePoolGroup.phaseGroupId}
+                        seeds={selectedPhasePoolGroup.seeds}
+                        progressionsOut={selectedPhasePoolGroup.progressionsOut}
+                        entrantNames={roundRobinBoardData.entrants.map((entrantId) =>
+                          roundRobinBoardData.entrantNames.get(entrantId) ?? "",
+                        )}
+                        rows={roundRobinMatrixRows}
+                        standings={roundRobinBoardData.standings}
+                        tieBreakRules={roundRobinBoardData.tieBreakRules}
+                        qualifyingCount={roundRobinBoardData.qualifyingCount}
+                        diagnostics={{
+                          candidateSetCount: roundRobinBoardData.candidateSetCount,
+                          twoSlotSetCount: roundRobinBoardData.twoSlotSetCount,
+                          resolvedSetCount: roundRobinBoardData.resolvedSetCount,
+                          registeredSetCount: roundRobinBoardData.registeredSetCount,
+                          unresolvedSetIds: roundRobinBoardData.unresolvedSetIds,
+                          unresolvedSetReasons: roundRobinBoardData.unresolvedSetReasons,
+                        }}
+                        onMatchClick={(set, event) => {
+                          if (event.altKey) {
+                            event.preventDefault();
+                            if (!busy && !obsOverlayBusy) void setObsOverlayFullyStopped(true);
+                            return;
+                          }
+                          if (event.ctrlKey) {
+                            event.preventDefault();
+                            if (!busy && !obsOverlayBusy) void toggleActiveMatchOverlay(set);
+                            return;
+                          }
+                          openMatchDialog(set);
+                        }}
+                      />
                     ) : (
-                    <div className="bracket-split-stack" style={bracketScaleStyle}>
-                      <details className="meta bracket-debug-seeds">
-                        <summary>対象PhaseGroup seeds / seedMapを確認</summary>
-                        <h4>seeds</h4>
-                        <pre style={{ whiteSpace: "pre-wrap", maxHeight: "16rem", overflow: "auto" }}>
-                          {JSON.stringify(selectedPhasePoolGroup.seeds, null, 2)}
-                        </pre>
-                        <h4>seedMap</h4>
-                        <pre style={{ whiteSpace: "pre-wrap", maxHeight: "20rem", overflow: "auto" }}>
-                          {JSON.stringify(selectedPhasePoolGroup.seedMap, null, 2)}
-                        </pre>
-                      </details>
-                      {renderedBracketSectionsForView.map((section) => (
-                        <section className="bracket-subgroup" key={`${selectedPhasePoolGroup.key}-${section.key}`}>
-                          <h4>{section.title}</h4>
-                          <p className="meta">sets: {section.setCount}</p>
-                          <div className="bracket-board">
-                            {section.columns.map((column) => (
-                              <section
-                                className={`bracket-column ${column.hidden ? "bracket-column-hidden" : ""}`}
-                                key={`${selectedPhasePoolGroup.key}-${section.key}-${column.key}`}
-                                aria-hidden={column.hidden}
-                              >
-                                <h4>{column.title}</h4>
-                                {column.round !== null && <p className="meta">round: {column.round}</p>}
-
-                                <div className="column-sets positioned" style={{ height: `${column.height}px` }}>
-                                  {column.positionedSets.map(({ set, y }) => (
-                                    (() => {
-                                      const displaySet = resolvedEventSetsById.get(set.setId) ?? set;
-                                      const pendingResult = pendingResultBySetId.get(set.setId);
-                                      const displayCode = setDisplayCodeById.get(set.setId);
-                                      const changeClass = pendingResult
-                                        ? (isConfirmedSetResult(pendingResult) ? "set-card-changed-confirmed" : "set-card-changed-draft")
-                                        : "";
-                                      const resultStatus = getSetResultVisualStatus(set);
-                                      const resultStatusClass = resultStatus ? `set-card-status-${resultStatus}` : "";
-                                      const resultStatusLabel = resultStatus === "confirmed"
-                                        ? "確定"
-                                        : resultStatus === "draft"
-                                          ? "下書き"
-                                          : resultStatus === "inprogress"
-                                            ? "途中"
-                                            : "";
-                                      const isLiveOverlaySet = Boolean(
-                                        obsOverlayState?.active
-                                        && obsOverlayState.currentSetId === set.setId
-                                        && obsOverlayState.currentSetId !== "__test__",
-                                      );
-
-                                      return (
-                                    <article
-                                      className={`set-card simple-match-card ${changeClass} ${resultStatusClass} ${isLiveOverlaySet ? "set-card-live" : ""}`}
-                                      key={set.setId}
-                                      style={{ top: `${Math.round(y)}px` }}
-                                      role="button"
-                                      tabIndex={0}
-                                      onClick={(event) => {
-                                        if (event.altKey && event.button === 0) {
-                                          event.preventDefault();
-                                          if (busy || obsOverlayBusy) {
-                                            return;
-                                          }
-                                          void setObsOverlayFullyStopped(true);
-                                          return;
-                                        }
-                                        if (event.ctrlKey) {
-                                          event.preventDefault();
-                                          if (busy || obsOverlayBusy) {
-                                            return;
-                                          }
-                                          void toggleActiveMatchOverlay(set);
-                                          return;
-                                        }
-                                        openMatchDialog(set);
-                                      }}
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter" || e.key === " ") {
-                                          e.preventDefault();
-                                          openMatchDialog(set);
-                                        }
-                                      }}
-                                    >
-                                      {(displayCode || isLiveOverlaySet || resultStatusLabel !== "") && (
-                                        <div className="set-header-row">
-                                          {displayCode ? <p className="set-identifier">Set {displayCode}</p> : <span />}
-                                          <div className="set-header-badges">
-                                            {resultStatusLabel !== "" && (
-                                              <span className={`set-status-badge status-${resultStatus}`}>
-                                                {resultStatusLabel}
-                                              </span>
-                                            )}
-                                            {isLiveOverlaySet && <span className="set-live-badge">配信中</span>}
-                                          </div>
-                                        </div>
-                                      )}
-                                      {displaySet.slots.map((slot, idx) => {
-                                        const entrantId = slot.entrantId;
-                                        const tbdSourceLabel = resolveTbdSourceLabel(set, idx, slot);
-                                        const displayEntrantName = !entrantId && tbdSourceLabel
-                                          ? tbdSourceLabel
-                                          : slot.entrantName;
-                                        const finishedSet = isCompletedSet(set);
-                                        const matchupReady = isMatchupReady(displaySet);
-                                        const setDisplay = getSetScoresForDisplay(displaySet);
-                                        const scoreMap = setDisplay.scores;
-                                        const winnerId = setDisplay.winnerId ?? set.winnerId;
-                                        const isWinner = entrantId && winnerId ? entrantId === winnerId : false;
-                                        const sideLabel = getSetSlotSideLabel(set.setId, entrantId, {
-                                          fallbackBySlotIndex: idx,
-                                          finishedSet,
-                                          matchupReady,
-                                        });
-                                        const sideBadgeClass = sideLabel === "1P"
-                                          ? (finishedSet ? "side-1p-finished" : "side-1p")
-                                          : sideLabel === "2P"
-                                            ? (finishedSet ? "side-2p-finished" : "side-2p")
-                                            : "side-none";
-                                        const gameWins = entrantId
-                                          ? (scoreMap[entrantId]
-                                            ?? (slot.score !== null
-                                              ? (isDqScoreValue(slot.score) ? "DQ" : formatScoreValue(slot.score))
-                                              : (winnerId ? (isWinner ? "✓" : "-") : "-")))
-                                          : "-";
-                                        const scoreClass = (isDqScoreValue(slot.score) || setDisplay.isDq)
-                                          ? (isWinner ? "win" : "dq")
-                                          : (isWinner ? "win" : "lose");
-
-                                        return (
-                                          <div className="simple-match-row" key={`${set.setId}-${idx}`}>
-                                            <span className={`side-badge ${sideBadgeClass}`}>
-                                              {sideLabel}
-                                            </span>
-                                            <span className="simple-player-name">{displayEntrantName}</span>
-                                            <span className={`simple-games ${scoreClass}`}>{gameWins}</span>
-                                          </div>
-                                        );
-                                      })}
-                                    </article>
-                                      );
-                                    })()
-                                  ))}
-                                </div>
-                              </section>
-                            ))}
-                          </div>
-                        </section>
-                      ))}
-                    </div>
+                      <EliminationBracket
+                        scaleStyle={bracketScaleStyle}
+                        phaseGroupKey={selectedPhasePoolGroup.key}
+                        seeds={selectedPhasePoolGroup.seeds}
+                        seedMap={selectedPhasePoolGroup.seedMap}
+                        sections={eliminationBracketSections}
+                        onActivateSet={(set, event) => {
+                          if (event.altKey && event.button === 0) {
+                            event.preventDefault();
+                            if (busy || obsOverlayBusy) {
+                              return;
+                            }
+                            void setObsOverlayFullyStopped(true);
+                            return;
+                          }
+                          if (event.ctrlKey) {
+                            event.preventDefault();
+                            if (busy || obsOverlayBusy) {
+                              return;
+                            }
+                            void toggleActiveMatchOverlay(set);
+                            return;
+                          }
+                          openMatchDialog(set);
+                        }}
+                        onOpenSet={openMatchDialog}
+                      />
                     )}
                   </section>
                 )}

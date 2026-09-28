@@ -1396,10 +1396,15 @@ fn build_bracket_graph(
             .iter()
             .filter(|candidate| phase_group_key(candidate) == target_phase_group_key)
             .collect::<Vec<_>>();
+        let edge_target = graph_event
+            .sets
+            .iter()
+            .find(|graph_set| graph_set.set_id == target.set_id)
+            .unwrap_or(target);
 
         for (target_slot_index, source) in [
-            target.entrant1_source.as_ref(),
-            target.entrant2_source.as_ref(),
+            edge_target.entrant1_source.as_ref(),
+            edge_target.entrant2_source.as_ref(),
         ]
         .into_iter()
         .enumerate()
@@ -8952,6 +8957,213 @@ mod progression_source_tests {
         assert_eq!(
             super::next_phase_id_and_order(&event, Some("middle"), 3),
             Some((Some("finals".to_owned()), 2))
+        );
+    }
+
+    #[test]
+    fn progresses_middle_pool_placements_to_round_robin_seed_slots() {
+        let event: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Event",
+            "phases": [
+                { "phaseId": "qualifiers", "phaseOrder": 1 },
+                { "phaseId": "middle", "phaseOrder": 3 },
+                { "phaseId": "finals", "phaseOrder": 2 }
+            ],
+            "phaseGroups": [
+                {
+                    "phaseGroupId": "middle-1",
+                    "phaseId": "middle",
+                    "phaseOrder": 3,
+                    "displayIdentifier": "1",
+                    "setIds": ["middle-winner-1", "middle-loser-1"]
+                },
+                {
+                    "phaseGroupId": "middle-2",
+                    "phaseId": "middle",
+                    "phaseOrder": 3,
+                    "displayIdentifier": "2",
+                    "setIds": ["middle-winner-2", "middle-loser-2"]
+                },
+                {
+                    "phaseGroupId": "finals",
+                    "phaseId": "finals",
+                    "phaseOrder": 2,
+                    "displayIdentifier": "1",
+                    "bracketType": "ROUND_ROBIN",
+                    "setIds": ["round-robin-1", "round-robin-2"],
+                    "seeds": [
+                        { "seedId": "winner-seed-1", "progressionId": "winner-progression-1" },
+                        { "seedId": "winner-seed-2", "progressionId": "winner-progression-2" },
+                        { "seedId": "loser-seed-1", "progressionId": "loser-progression-1" },
+                        { "seedId": "loser-seed-2", "progressionId": "loser-progression-2" }
+                    ]
+                }
+            ],
+            "sets": [
+                {
+                    "setId": "middle-winner-1",
+                    "phaseGroupId": "middle-1",
+                    "phaseOrder": 3,
+                    "phaseName": "Middle",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Winners Final",
+                    "state": 3,
+                    "winnerId": "winner-1",
+                    "winnerProgressionSeedId": "winner-seed-1",
+                    "winnerProgressionId": "winner-progression-1",
+                    "slots": [
+                        { "entrantId": "winner-1", "entrantName": "Winner 1" },
+                        { "entrantId": "other-1", "entrantName": "Other 1" }
+                    ]
+                },
+                {
+                    "setId": "middle-loser-1",
+                    "phaseGroupId": "middle-1",
+                    "phaseOrder": 3,
+                    "phaseName": "Middle",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Losers Final",
+                    "state": 3,
+                    "winnerId": "loser-1",
+                    "winnerProgressionSeedId": "loser-seed-1",
+                    "winnerProgressionId": "loser-progression-1",
+                    "slots": [
+                        { "entrantId": "loser-1", "entrantName": "Loser 1" },
+                        { "entrantId": "other-loser-1", "entrantName": "Other Loser 1" }
+                    ]
+                },
+                {
+                    "setId": "middle-winner-2",
+                    "phaseGroupId": "middle-2",
+                    "phaseOrder": 3,
+                    "phaseName": "Middle",
+                    "phaseGroupDisplayIdentifier": "2",
+                    "fullRoundText": "Winners Final",
+                    "state": 3,
+                    "winnerId": "winner-2",
+                    "winnerProgressionSeedId": "winner-seed-2",
+                    "winnerProgressionId": "winner-progression-2",
+                    "slots": [
+                        { "entrantId": "winner-2", "entrantName": "Winner 2" },
+                        { "entrantId": "other-2", "entrantName": "Other 2" }
+                    ]
+                },
+                {
+                    "setId": "middle-loser-2",
+                    "phaseGroupId": "middle-2",
+                    "phaseOrder": 3,
+                    "phaseName": "Middle",
+                    "phaseGroupDisplayIdentifier": "2",
+                    "fullRoundText": "Losers Final",
+                    "state": 3,
+                    "winnerId": "loser-2",
+                    "winnerProgressionSeedId": "loser-seed-2",
+                    "winnerProgressionId": "loser-progression-2",
+                    "slots": [
+                        { "entrantId": "loser-2", "entrantName": "Loser 2" },
+                        { "entrantId": "other-loser-2", "entrantName": "Other Loser 2" }
+                    ]
+                },
+                {
+                    "setId": "round-robin-1",
+                    "phaseGroupId": "finals",
+                    "phaseOrder": 2,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Round 1",
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "winner-seed-1" },
+                    "entrant2Source": { "sourceType": "seed", "typeId": "winner-seed-2" },
+                    "slots": [
+                        { "seedId": "winner-seed-1", "entrantName": "TBD" },
+                        { "seedId": "winner-seed-2", "entrantName": "TBD" }
+                    ]
+                },
+                {
+                    "setId": "round-robin-2",
+                    "phaseGroupId": "finals",
+                    "phaseOrder": 2,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Round 1",
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "loser-seed-1" },
+                    "entrant2Source": { "sourceType": "seed", "typeId": "loser-seed-2" },
+                    "slots": [
+                        { "seedId": "loser-seed-1", "entrantName": "TBD" },
+                        { "seedId": "loser-seed-2", "entrantName": "TBD" }
+                    ]
+                }
+            ]
+        }))
+        .expect("test event should deserialize");
+        let mut snapshot = TournamentSnapshot {
+            tournament_id: "tournament".to_owned(),
+            slug: "tournament".to_owned(),
+            name: "Tournament".to_owned(),
+            events: vec![event.clone()],
+            updated_at: Utc::now(),
+        };
+
+        let graph = build_bracket_graph(&snapshot, &event);
+        let mut progression_edges = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.to_set_id.starts_with("round-robin"))
+            .map(|edge| (edge.from_set_id.as_str(), edge.to_set_id.as_str()))
+            .collect::<Vec<_>>();
+        progression_edges.sort_unstable();
+        assert_eq!(
+            progression_edges,
+            vec![
+                ("middle-loser-1", "round-robin-2"),
+                ("middle-loser-2", "round-robin-2"),
+                ("middle-winner-1", "round-robin-1"),
+                ("middle-winner-2", "round-robin-1")
+            ]
+        );
+
+        let targets = progression_targets_for(&event);
+        for (source_set_id, winner_id) in [
+            ("middle-winner-1", "winner-1"),
+            ("middle-winner-2", "winner-2"),
+            ("middle-loser-1", "loser-1"),
+            ("middle-loser-2", "loser-2"),
+        ] {
+            apply_local_progression_incremental(
+                &mut snapshot,
+                "event",
+                source_set_id,
+                winner_id,
+                &targets,
+            );
+        }
+
+        let event = &snapshot.events[0];
+        assert_eq!(
+            event.sets[4].slots[0].entrant_id.as_deref(),
+            Some("winner-1")
+        );
+        assert_eq!(
+            event.sets[4].slots[1].entrant_id.as_deref(),
+            Some("winner-2")
+        );
+        assert_eq!(
+            event.sets[5].slots[0].entrant_id.as_deref(),
+            Some("loser-1")
+        );
+        assert_eq!(
+            event.sets[5].slots[1].entrant_id.as_deref(),
+            Some("loser-2")
+        );
+        assert_eq!(
+            event.phase_groups[2].seeds[0].entrant_id.as_deref(),
+            Some("winner-1")
+        );
+        assert_eq!(
+            event.phase_groups[2].seeds[3].entrant_id.as_deref(),
+            Some("loser-2")
         );
     }
 
