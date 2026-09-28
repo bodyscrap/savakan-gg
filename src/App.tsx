@@ -6,6 +6,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import QRCode from "qrcode";
 import jsQR from "jsqr";
 import { CreateSnapshot, type EventSnapshotProgress, type TournamentEventPreviewItem, type TournamentPreview } from "./CreateSnapshot";
+import { SettingsScreen } from "./SettingMenu";
 import "./App.css";
 
 type SetSlot = {
@@ -12451,268 +12452,100 @@ function App() {
       )}
 
         {activeTab === "settings" && (
-        <>
-          <section className="panel">
-            <h2>送信者設定</h2>
-            <p className="meta">各クライアントを識別するための送信者名と8桁ユーザーIDを設定します。</p>
-            <p className="meta">IPとサブネットマスクは選択したネットワークデバイスから自動反映されます。個別調整はOS側のネットワーク設定で行ってください。</p>
-            <p className="meta">ユーザーIDはクライアント間で重複しないよう運用してください。ランダム決定ボタンで簡単に採番できます。</p>
-            <p className="meta">注意: 運用開始後（メッセージ履歴あり）に送信者名/IDを変更する場合は、先にメッセージボックスの強制クリア実行を推奨します（最終実行はユーザー操作）。</p>
-
-            <label className="checkbox-row" style={{ marginTop: "0.6rem" }}>
-              <input
-                type="checkbox"
-                checked={disableLocalCommunication}
-                onChange={(event) => {
-                  const checked = event.currentTarget.checked;
-                  setDisableLocalCommunication(checked);
-                  if (checked) {
-                    setMessage("ローカル通信を無効化しました。メッセージ機能とプレイヤーリストは閲覧のみになります。");
-                  } else {
-                    setMessage("ローカル通信を有効化しました。メッセージ機能とプレイヤーリストを再開できます。");
-                  }
-                }}
-              />
-              ローカル通信を行わない
-            </label>
-            <p className="meta">
-              ON中はメッセージ機能とプレイヤーリストの送受信系操作を無効化します。既存データの閲覧は可能です。解決・スレッド削除は不可ですが、下部の「メッセージボックスを強制クリア」は実行できます。
-            </p>
-
-            <div className="form" style={{ marginTop: "0.65rem" }}>
-              <label htmlFor="sender-name-input" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">送信者名</span>
-                <input
-                  id="sender-name-input"
-                  value={senderNameDraft}
-                  onChange={(e) => setSenderNameDraft(e.currentTarget.value)}
-                  placeholder="例: 配信PC-A"
-                />
-              </label>
-              <label htmlFor="sender-user-id-input" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">ユーザーID (8桁数字)</span>
-                <input
-                  id="sender-user-id-input"
-                  value={senderUserIdDraft}
-                  onChange={(e) => setSenderUserIdDraft(e.currentTarget.value.replace(/\D/g, "").slice(0, 8))}
-                  placeholder="例: 12345678"
-                  inputMode="numeric"
-                  maxLength={8}
-                />
-              </label>
-              <label htmlFor="sender-network-device-select" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">ネットワークデバイス</span>
-                <select
-                  id="sender-network-device-select"
-                  value={selectedSenderNetworkCandidateKey}
-                  onChange={(e) => {
-                    setSelectedSenderNetworkCandidateKey(e.currentTarget.value);
-                  }}
-                  disabled={senderNetworkCandidatesLoading || senderNetworkCandidates.length === 0}
-                >
-                  {senderNetworkCandidates.length === 0 ? (
-                    <option value="">利用可能なデバイスがありません</option>
-                  ) : (
-                    senderNetworkCandidates.map((candidate) => {
-                      const key = localNetworkCandidateKey(candidate);
-                      const label = `${candidate.interfaceName} / ${candidate.source} / ${candidate.bindIp} / ${candidate.broadcastSubnetMask}`;
-                      return (
-                        <option key={key} value={key}>{label}</option>
-                      );
-                    })
-                  )}
-                </select>
-              </label>
-              <p className="meta" style={{ margin: 0 }}>
-                適用中IP: {normalizedSenderBindIpDraft || "(未選択)"} / サブネット: {normalizedBroadcastSubnetMaskDraft || "(未選択)"}
-              </p>
-            </div>
-
-            <div className="panel-toolbar compact">
-              <p className="meta">
-                {senderIdCollision
-                  ? "既存履歴で同一IDが別名義に使われています。"
-                  : shouldRecommendMailboxClearForIdentityChange
-                    ? "履歴メッセージあり: 送信者名/ID変更前にメッセージボックス強制クリアを推奨します。"
-                  : !hasSelectedSenderNetworkDevice
-                    ? "ネットワークデバイスを選択してください。"
-                    : !isValidIpv4(normalizedSenderBindIpDraft)
-                      ? "選択デバイスのIPが不正です。"
+          <SettingsScreen
+            disableLocalCommunication={disableLocalCommunication}
+            onDisableLocalCommunicationChange={(checked) => {
+              setDisableLocalCommunication(checked);
+              setMessage(checked
+                ? "ローカル通信を無効化しました。メッセージ機能とプレイヤーリストは閲覧のみになります。"
+                : "ローカル通信を有効化しました。メッセージ機能とプレイヤーリストを再開できます。");
+            }}
+            senderNameDraft={senderNameDraft}
+            onSenderNameChange={setSenderNameDraft}
+            senderUserIdDraft={senderUserIdDraft}
+            onSenderUserIdChange={(value) => setSenderUserIdDraft(value.replace(/\D/g, "").slice(0, 8))}
+            networkCandidates={senderNetworkCandidates.map((candidate) => ({
+              key: localNetworkCandidateKey(candidate),
+              label: `${candidate.interfaceName} / ${candidate.source} / ${candidate.bindIp} / ${candidate.broadcastSubnetMask}`,
+            }))}
+            selectedNetworkCandidateKey={selectedSenderNetworkCandidateKey}
+            onNetworkCandidateChange={setSelectedSenderNetworkCandidateKey}
+            networkCandidatesLoading={senderNetworkCandidatesLoading}
+            normalizedBindIp={normalizedSenderBindIpDraft}
+            normalizedSubnetMask={normalizedBroadcastSubnetMaskDraft}
+            senderSettingsStatus={senderIdCollision
+              ? "既存履歴で同一IDが別名義に使われています。"
+              : shouldRecommendMailboxClearForIdentityChange
+                ? "履歴メッセージあり: 送信者名/ID変更前にメッセージボックス強制クリアを推奨します。"
+                : !hasSelectedSenderNetworkDevice
+                  ? "ネットワークデバイスを選択してください。"
+                  : !isValidIpv4(normalizedSenderBindIpDraft)
+                    ? "選択デバイスのIPが不正です。"
                     : !isValidIpv4(normalizedBroadcastSubnetMaskDraft)
                       ? "選択デバイスのサブネットマスクが不正です。"
                       : "デバイス選択後、IP/サブネットは自動適用されます。"}
-              </p>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => void refreshLocalNetworkSettingsCandidates(true)}
-                  disabled={senderNetworkCandidatesLoading}
-                >
-                  {senderNetworkCandidatesLoading ? "デバイス検索中..." : "デバイス再検索"}
-                </button>
-                <button type="button" className="ghost" onClick={fillRandomSenderUserId}>
-                  ランダム決定
-                </button>
-                <button type="button" onClick={() => void saveSenderProfileSettings()} disabled={!canSaveSenderProfile}>
-                  保存
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <section className="panel">
-            <h2>start.gg取得設定</h2>
-            <p className="meta">イベント取得・更新時の1ページあたり件数です。通常は既定値のままで問題ありません。</p>
-
-            <div className="form" style={{ marginTop: "0.6rem" }}>
-              <label htmlFor="startgg-fetch-per-page-input" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">1ページ件数 (1以上 / 既定値: 50)</span>
-                <input
-                  id="startgg-fetch-per-page-input"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={startggFetchPerPage}
-                  onChange={(e) => {
-                    const next = normalizeStartggFetchPerPage(e.currentTarget.value, startggFetchPerPage);
-                    setStartggFetchPerPage(next);
-                  }}
-                  onBlur={(e) => {
-                    const normalized = normalizeStartggFetchPerPage(e.currentTarget.value);
-                    if (normalized !== startggFetchPerPage) {
-                      setStartggFetchPerPage(normalized);
-                    }
-                  }}
-                />
-              </label>
-            </div>
-
-            <p className="meta">現在値: {normalizeStartggFetchPerPage(startggFetchPerPage)} 件</p>
-          </section>
-
-          <section className="panel">
-            <h2>スマホ入力同期設定</h2>
-            <p className="meta">スマホ入力画面とブラケット画面の自動更新間隔をミリ秒で設定します。</p>
-
-            <div className="form" style={{ marginTop: "0.6rem" }}>
-              <label htmlFor="mobile-input-polling-ms-input" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">ポーリング周期 (ms / 500-10000 / 既定値: 1500)</span>
-                <input
-                  id="mobile-input-polling-ms-input"
-                  type="number"
-                  min={MOBILE_INPUT_POLLING_MS_MIN}
-                  max={MOBILE_INPUT_POLLING_MS_MAX}
-                  step={100}
-                  value={mobileInputPollingMs}
-                  onChange={(e) => {
-                    const next = normalizeMobileInputPollingMs(e.currentTarget.value, mobileInputPollingMs);
-                    setMobileInputPollingMs(next);
-                  }}
-                  onBlur={(e) => {
-                    const normalized = normalizeMobileInputPollingMs(e.currentTarget.value);
-                    if (normalized !== mobileInputPollingMs) {
-                      setMobileInputPollingMs(normalized);
-                    }
-                  }}
-                />
-              </label>
-            </div>
-
-            <p className="meta">現在値: {normalizeMobileInputPollingMs(mobileInputPollingMs)} ms</p>
-            <p className="meta">次回URL発行時にスマホ側へ同じ周期を配布します。</p>
-          </section>
-
-          <section className="panel">
-            <h2>呼び出しリスト表示設定</h2>
-            <p className="meta">呼び出しリストのページ切替間隔と、カード色が赤になるまでの時間を秒単位で設定します。</p>
-
-            <div className="form" style={{ marginTop: "0.6rem" }}>
-              <label htmlFor="call-list-rotate-seconds-input" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">切替間隔 (秒 / 1-180)</span>
-                <input
-                  id="call-list-rotate-seconds-input"
-                  type="number"
-                  min={CALL_LIST_ROTATE_SECONDS_MIN}
-                  max={CALL_LIST_ROTATE_SECONDS_MAX}
-                  step={1}
-                  value={callListPageRotateSeconds}
-                  onChange={(e) => {
-                    const next = normalizeCallListRotateSeconds(e.currentTarget.value, callListPageRotateSeconds);
-                    setCallListPageRotateSeconds(next);
-                  }}
-                  onBlur={(e) => {
-                    const normalized = normalizeCallListRotateSeconds(e.currentTarget.value);
-                    if (normalized !== callListPageRotateSeconds) {
-                      setCallListPageRotateSeconds(normalized);
-                    }
-                  }}
-                />
-              </label>
-              <label htmlFor="call-list-color-seconds-input" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">赤化までの時間 (秒 / 30-3600)</span>
-                <input
-                  id="call-list-color-seconds-input"
-                  type="number"
-                  min={CALL_LIST_COLOR_SECONDS_MIN}
-                  max={CALL_LIST_COLOR_SECONDS_MAX}
-                  step={1}
-                  value={callListColorSeconds}
-                  onChange={(e) => {
-                    const next = normalizeCallListColorSeconds(e.currentTarget.value, callListColorSeconds);
-                    setCallListColorSeconds(next);
-                  }}
-                  onBlur={(e) => {
-                    const normalized = normalizeCallListColorSeconds(e.currentTarget.value);
-                    if (normalized !== callListColorSeconds) {
-                      setCallListColorSeconds(normalized);
-                    }
-                  }}
-                />
-              </label>
-            </div>
-
-            <p className="meta">現在値: {normalizeCallListRotateSeconds(callListPageRotateSeconds)} 秒</p>
-            <p className="meta">赤化まで: {callListColorToRedSeconds} 秒</p>
-          </section>
-
-          <section className="panel">
-            <h2>呼び出しリスト管理</h2>
-            <p className="meta">他PCの切断や大会切替に備えて、表示中の呼び出しリストを初期化できます。</p>
-            <p className="meta">全クリア後は現在保持している呼び出しデータから再描画します（メッセージは削除しません）。</p>
-
-            <div className="panel-toolbar compact">
-              <p className="meta">過去大会の呼び出し残りが表示される場合に実行してください。</p>
-              <button
-                type="button"
-                className="ghost"
-                onClick={clearCallListThreads}
-                disabled={callListDisplayGroups.length === 0 && !genericMessages.some((item) => item.parentMessageId === null && item.method === "call_player")}
-              >
-                呼び出し一覧を全クリア
-              </button>
-            </div>
-          </section>
-
-          <section className="panel">
-            <h2>メッセージボックス管理</h2>
-            <p className="meta">危険操作: 保存済みメッセージを含む全メッセージを強制削除します。</p>
-            <p className="meta">確認ダイアログと確認文字入力の後に実行され、元に戻せません。</p>
-
-            <div className="panel-toolbar compact">
-              <p className="meta">不整合解消や初期化が必要な場合のみ実行してください。</p>
-              <button
-                type="button"
-                className="ghost"
-                onClick={forceClearMailboxMessages}
-                disabled={genericMessages.length === 0}
-              >
-                メッセージボックスを強制クリア
-              </button>
-            </div>
-          </section>
-        </>
-      )}
+            onRefreshNetworkCandidates={() => void refreshLocalNetworkSettingsCandidates(true)}
+            onRandomizeSenderUserId={fillRandomSenderUserId}
+            onSaveSenderProfile={() => void saveSenderProfileSettings()}
+            canSaveSenderProfile={canSaveSenderProfile}
+            startggFetchPerPage={normalizeStartggFetchPerPage(startggFetchPerPage)}
+            onStartggFetchPerPageChange={(value) => {
+              const next = normalizeStartggFetchPerPage(value, startggFetchPerPage);
+              setStartggFetchPerPage(next);
+            }}
+            onStartggFetchPerPageBlur={(value) => {
+              const normalized = normalizeStartggFetchPerPage(value);
+              if (normalized !== startggFetchPerPage) {
+                setStartggFetchPerPage(normalized);
+              }
+            }}
+            mobileInputPollingMs={normalizeMobileInputPollingMs(mobileInputPollingMs)}
+            mobileInputPollingMsMin={MOBILE_INPUT_POLLING_MS_MIN}
+            mobileInputPollingMsMax={MOBILE_INPUT_POLLING_MS_MAX}
+            onMobileInputPollingMsChange={(value) => {
+              const next = normalizeMobileInputPollingMs(value, mobileInputPollingMs);
+              setMobileInputPollingMs(next);
+            }}
+            onMobileInputPollingMsBlur={(value) => {
+              const normalized = normalizeMobileInputPollingMs(value);
+              if (normalized !== mobileInputPollingMs) {
+                setMobileInputPollingMs(normalized);
+              }
+            }}
+            callListPageRotateSeconds={callListPageRotateSeconds}
+            callListRotateSecondsMin={CALL_LIST_ROTATE_SECONDS_MIN}
+            callListRotateSecondsMax={CALL_LIST_ROTATE_SECONDS_MAX}
+            onCallListPageRotateSecondsChange={(value) => {
+              const next = normalizeCallListRotateSeconds(value, callListPageRotateSeconds);
+              setCallListPageRotateSeconds(next);
+            }}
+            onCallListPageRotateSecondsBlur={(value) => {
+              const normalized = normalizeCallListRotateSeconds(value);
+              if (normalized !== callListPageRotateSeconds) {
+                setCallListPageRotateSeconds(normalized);
+              }
+            }}
+            callListColorSeconds={callListColorSeconds}
+            callListColorSecondsMin={CALL_LIST_COLOR_SECONDS_MIN}
+            callListColorSecondsMax={CALL_LIST_COLOR_SECONDS_MAX}
+            onCallListColorSecondsChange={(value) => {
+              const next = normalizeCallListColorSeconds(value, callListColorSeconds);
+              setCallListColorSeconds(next);
+            }}
+            onCallListColorSecondsBlur={(value) => {
+              const normalized = normalizeCallListColorSeconds(value);
+              if (normalized !== callListColorSeconds) {
+                setCallListColorSeconds(normalized);
+              }
+            }}
+            callListRotateSecondsDisplay={normalizeCallListRotateSeconds(callListPageRotateSeconds)}
+            callListColorToRedSeconds={callListColorToRedSeconds}
+            hasCallListMessages={callListDisplayGroups.length > 0 || genericMessages.some((item) => item.parentMessageId === null && item.method === "call_player")}
+            onClearCallList={clearCallListThreads}
+            hasMessages={genericMessages.length > 0}
+            onForceClearMessages={forceClearMailboxMessages}
+          />
+        )}
 
         {activeTab === "users" && (
         <>
