@@ -7,7 +7,7 @@ import QRCode from "qrcode";
 import jsQR from "jsqr";
 import { CreateSnapshot, type EventSnapshotProgress, type TournamentEventPreviewItem, type TournamentPreview } from "./CreateSnapshot";
 import { SettingsScreen } from "./SettingMenu";
-import { callElapsedSeconds, StatusBoard, StatusBoardHero, type CallListEventGroup, type CallListEventSortStrategy } from "./StatusBoard";
+import { StatusBoard, StatusBoardHero, type CallListEventGroup, type CallListEventSortStrategy } from "./StatusBoard";
 import { PlayerListInfo, type UserCardPlayer } from "./PlayerListInfo";
 import { MessageBox, type GenericMessage, type MailboxDeliveryMode, type MailboxFilterSetting } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
@@ -32,6 +32,53 @@ import { EliminationBracket, type EliminationBracketSectionView } from "./Elimin
 import { RoundRobinBracket } from "./RoundRobinBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
 import { useBracketReport } from "./useBracketReport";
+import {
+  buildRoundColumns,
+  isCompletedSet,
+  isDisplayableSet,
+  isGrandFinalResetSet,
+  isGrandFinalText,
+  isInactiveGrandFinalReset,
+  isLosersBracketSet,
+  isLosersFinalText,
+  isMatchupReady,
+  isSlotTbd,
+  isWinnersFinalText,
+  shouldShowGrandFinalResetColumn,
+  type EventSnapshot,
+} from "./bracketDisplay";
+import {
+  buildCallListDedupKey,
+  buildCallSyncStatusTargets,
+  buildScopedMessageMeta,
+  compareCallListEventGroup,
+  compareCallListEventGroupByMaxElapsed,
+  extractCallTargetIdentityFromMeta,
+  extractCallEventMeta,
+  extractCallThreadIdentity,
+  extractPlayerIdFromBarcodeResults,
+  extractPlayerIdFromQrRawValue,
+  extractMetaString,
+  getMailboxMethodLabel,
+  hasSameGenericMessageOrder,
+  isLikelyPlayerId,
+  isMessageForScope,
+  isDqRequestMessage,
+  isSameCallTargetIdentity,
+  isSameGenericMessageIdentity,
+  isValidIpv4,
+  isValidIpv4List,
+  isValidSenderUserId,
+  normalizeGenericMessage,
+  normalizeGenericMessages,
+  normalizeMailboxFilterSetting,
+  normalizeCallPhaseGroupName,
+  normalizeCallPhaseName,
+  normalizePlayerId,
+  parsePhasePoolKey,
+  splitIpv4List,
+  type MessageScope,
+} from "./messageUtils";
 import {
   calculateRoundRobinQualifyingCount,
   compareRoundRobinTieBreakRule,
@@ -153,256 +200,6 @@ function normalizeSourceText(kind: "winners" | "losers", setCode: string): strin
   return `${kind === "winners" ? "winner" : "loser"} of ${setCode}`;
 }
 
-function isGrandFinalText(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  if (normalized.includes("grand final") || normalized.includes("grand finals") || normalized.includes("グランド")) {
-    return true;
-  }
-  return /(^|\s|\()gf(\s|\)|$)/i.test(text);
-}
-
-function isGrandFinalResetText(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  if (normalized.includes("reset") || normalized.includes("リセット")) {
-    return true;
-  }
-  return /(^|\s|\()gfr(\s|\)|$)/i.test(text);
-}
-
-function isGrandFinalResetSet(set: SetSnapshot): boolean {
-  return isGrandFinalText(set.fullRoundText) && isGrandFinalResetText(set.fullRoundText);
-}
-
-function isVirtualGrandFinalResetSet(set: SetSnapshot): boolean {
-  return set.setId.startsWith("virtual_gf_reset_");
-}
-
-function samePhaseGroup(left: SetSnapshot, right: SetSnapshot): boolean {
-  if (left.phaseGroupId && right.phaseGroupId) {
-    return left.phaseGroupId === right.phaseGroupId;
-  }
-  if (left.phaseOrder !== null && right.phaseOrder !== null && left.phaseOrder !== right.phaseOrder) {
-    return false;
-  }
-
-  const leftGroup = (left.phaseGroupDisplayIdentifier ?? left.phaseGroupName ?? "").trim().toLowerCase();
-  const rightGroup = (right.phaseGroupDisplayIdentifier ?? right.phaseGroupName ?? "").trim().toLowerCase();
-  const sameGroup = leftGroup !== "" && rightGroup !== "" && leftGroup === rightGroup;
-  const leftPhase = (left.phaseName ?? "").trim().toLowerCase();
-  const rightPhase = (right.phaseName ?? "").trim().toLowerCase();
-  return sameGroup && (leftPhase === "" || rightPhase === "" || leftPhase === rightPhase);
-}
-
-function grandFinalWinnerIsFromLosersSide(
-  event: EventSnapshot,
-  grandFinal: SetSnapshot,
-): boolean {
-  if (!grandFinal.winnerId) {
-    return false;
-  }
-
-  const winnerSlotIndex = grandFinal.slots.findIndex((slot) => slot.entrantId === grandFinal.winnerId);
-  const winnerSource = winnerSlotIndex === 0
-    ? grandFinal.entrant1Source
-    : winnerSlotIndex === 1
-      ? grandFinal.entrant2Source
-      : null;
-  const sourceSetId = winnerSource?.resolvedSetId ?? winnerSource?.typeId;
-  const sourceSet = sourceSetId
-    ? event.sets.find((set) => set.setId === sourceSetId)
-    : undefined;
-  if (sourceSet && samePhaseGroup(sourceSet, grandFinal)) {
-    return isLosersBracketSet(sourceSet);
-  }
-
-  return event.sets.some((set) =>
-    isLosersBracketSet(set)
-    && samePhaseGroup(set, grandFinal)
-    && set.slots.some((slot) => slot.entrantId === grandFinal.winnerId),
-  );
-}
-
-function isInactiveGrandFinalReset(set: SetSnapshot, event: EventSnapshot | null): boolean {
-  if (!event || !isGrandFinalResetSet(set)) {
-    return false;
-  }
-  const grandFinal = event.sets.find((candidate) =>
-    isGrandFinalText(candidate.fullRoundText)
-    && !isGrandFinalResetSet(candidate)
-    && isCompletedSet(candidate)
-    && samePhaseGroup(candidate, set),
-  );
-  return grandFinal !== undefined && !grandFinalWinnerIsFromLosersSide(event, grandFinal);
-}
-
-function shouldShowGrandFinalResetColumn(
-  column: RoundColumn,
-  phaseGroupSets: SetSnapshot[],
-  event: EventSnapshot | null,
-  pendingGrandFinalResetSetIds: Set<string>,
-): boolean {
-  const hasResetSet = column.sets.some((set) => isGrandFinalResetSet(set));
-  if (!hasResetSet) {
-    return true;
-  }
-
-  const grandFinal = phaseGroupSets.find((set) =>
-    isGrandFinalText(set.fullRoundText)
-    && !isGrandFinalResetSet(set)
-    && isCompletedSet(set)
-    && column.sets.some((resetSet) => isGrandFinalResetSet(resetSet) && samePhaseGroup(resetSet, set)),
-  );
-  if (!grandFinal) {
-    return false;
-  }
-  if (!event || !grandFinalWinnerIsFromLosersSide(event, grandFinal)) {
-    return false;
-  }
-
-  const hasVirtualResetSet = column.sets.some((set) => isVirtualGrandFinalResetSet(set));
-  if (hasVirtualResetSet || pendingGrandFinalResetSetIds.has(grandFinal.setId)) {
-    return true;
-  }
-
-  return column.sets.some((set) => {
-    if (set.winnerId !== null) {
-      return true;
-    }
-
-    return set.slots.some((slot) => slot.entrantId !== null || slot.score !== null);
-  });
-}
-
-function isWinnersFinalText(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  return normalized.includes("winners final") || normalized.includes("winners finals") || normalized.includes("勝者決勝");
-}
-
-function isLosersFinalText(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  return normalized.includes("losers final") || normalized.includes("losers finals") || normalized.includes("敗者決勝");
-}
-
-function isSlotTbd(slot: SetSlot): boolean {
-  if (slot.entrantId !== null) {
-    return false;
-  }
-
-  const normalized = slot.entrantName.trim().toUpperCase();
-  if (normalized === "") {
-    return true;
-  }
-
-  const unresolvedLabel = slot.entrantName.trim().toLowerCase();
-  return normalized === "TBD"
-    || normalized === "TBA"
-    || normalized === "UNKNOWN"
-    || unresolvedLabel.startsWith("winner of ")
-    || unresolvedLabel.startsWith("loser of ")
-    || slot.entrantName.trim().startsWith("勝者")
-    || slot.entrantName.trim().startsWith("敗者");
-}
-
-function isDisplayableSet(set: SetSnapshot, event: EventSnapshot | null): boolean {
-  if (!event?.phaseGroups) {
-    return set.isIntermediate !== true;
-  }
-
-  const phaseGroupSetIds = event.phaseGroups.flatMap((phaseGroup) => phaseGroup.setIds ?? []);
-  if (phaseGroupSetIds.length === 0) {
-    return set.isIntermediate !== true;
-  }
-
-  return phaseGroupSetIds.includes(set.setId);
-}
-
-function compareSetsForStableLane(left: SetSnapshot, right: SetSnapshot): number {
-  return left.setId.localeCompare(right.setId, "ja");
-}
-
-function buildRoundColumns(sets: SetSnapshot[]): RoundColumn[] {
-  const map = new Map<string, RoundColumn>();
-  let seq = 0;
-
-  for (const set of sets) {
-    const normalizedRoundTitle = set.fullRoundText.trim().toLowerCase();
-    const roundKey = set.round !== null
-      ? `round-${set.round}-title-${normalizedRoundTitle}`
-      : `text-${normalizedRoundTitle}`;
-    const found = map.get(roundKey);
-
-    if (found) {
-      found.sets.push(set);
-      found.sets.sort(compareSetsForStableLane);
-      continue;
-    }
-
-    map.set(roundKey, {
-      key: roundKey,
-      title: set.fullRoundText,
-      round: set.round,
-      seq,
-      sets: [set],
-    });
-    seq += 1;
-  }
-
-  return [...map.values()].sort((a, b) => {
-    if (a.round !== null && b.round !== null) {
-      const byRound = a.round - b.round;
-      if (byRound !== 0) {
-        return byRound;
-      }
-
-      const leftIsReset = a.sets.some((set) => isGrandFinalResetSet(set));
-      const rightIsReset = b.sets.some((set) => isGrandFinalResetSet(set));
-      if (leftIsReset !== rightIsReset) {
-        return leftIsReset ? 1 : -1;
-      }
-
-      return a.seq - b.seq;
-    }
-
-    if (a.round !== null) {
-      return -1;
-    }
-
-    if (b.round !== null) {
-      return 1;
-    }
-
-    return a.seq - b.seq;
-  });
-}
-
-type EventSnapshot = {
-  eventId: string;
-  name: string;
-  phases?: PhaseSnapshot[];
-  phaseGroups?: PhaseGroupSnapshot[];
-  sets: SetSnapshot[];
-};
-
-type PhaseSnapshot = {
-  phaseId: string;
-  name: string | null;
-  phaseOrder: number | null;
-};
-
-type PhaseGroupSnapshot = {
-  phaseGroupId?: string;
-  setIds?: string[];
-  tiebreakOrder?: string[];
-  phaseName: string | null;
-  phaseOrder: number | null;
-  displayIdentifier: string | null;
-  bracketType: string | null;
-  progressionsOut?: PhaseGroupProgressionSnapshot[];
-  seedMap?: unknown;
-  seedOrder?: string[];
-  seeds?: PhaseGroupSeedSnapshot[];
-};
-
 type TournamentSnapshot = {
   tournamentId: string;
   slug: string;
@@ -505,33 +302,6 @@ type ResetSetResultCascadeResult = {
   workspace: TournamentWorkspace;
   affectedSetIds: string[];
   remoteResetApplied: boolean;
-};
-
-type CallThreadIdentity = {
-  expectedPlayerId: string;
-  callEntrantId: string;
-  callEntrantName: string;
-  setId: string;
-};
-
-type CallTargetIdentity = {
-  tournamentId: string;
-  eventId: string;
-  phaseName: string;
-  phaseGroupName: string;
-  setId: string;
-  callEntrantId: string;
-};
-
-type CallSyncStatusTarget = {
-  threadId: string;
-  senderUserId: string;
-  tournamentId: string;
-  eventId: string;
-  phaseName: string;
-  phaseGroupName: string;
-  setId: string;
-  callEntrantId: string;
 };
 
 type DqRequestDialogState = {
@@ -651,14 +421,6 @@ function withMobileInputPollMsParam(url: string, pollMs: number): string {
     return trimmed;
   }
 }
-
-type MessageScope = {
-  tournamentId: string;
-  slug: string;
-  eventId: string;
-  phaseName: string;
-  phaseGroupName: string;
-};
 
 type AppTab = "home" | "create" | "tournament" | "message" | "call-list" | "bracket" | "item-list" | "users" | "settings" | "overlay";
 
@@ -794,246 +556,11 @@ function normalizeSenderProfile(rawValue: unknown): SenderProfile {
   };
 }
 
-function normalizeGenericMessage(rawValue: unknown): GenericMessage | null {
-  const source = rawValue && typeof rawValue === "object"
-    ? (rawValue as Partial<GenericMessage>)
-    : null;
-  if (!source) {
-    return null;
-  }
-
-  const messageId = typeof source.messageId === "string" ? source.messageId.trim() : "";
-  const threadId = typeof source.threadId === "string" ? source.threadId.trim() : messageId;
-  const parentMessageId = typeof source.parentMessageId === "string"
-    ? source.parentMessageId.trim()
-    : null;
-  const messageType = source.messageType === "resolve"
-    ? "resolve"
-    : source.messageType === "dq_request"
-      ? "dq_request"
-      : "normal";
-  const messageMeta = source.messageMeta && typeof source.messageMeta === "object"
-    ? (source.messageMeta as Record<string, unknown>)
-    : null;
-  const method = typeof source.method === "string" ? source.method.trim().toLowerCase() : "generic";
-  const subject = typeof source.subject === "string" ? source.subject.trim() : "汎用メッセージ";
-  const senderName = typeof source.senderName === "string" ? source.senderName.trim() : "";
-  const senderUserId = typeof source.senderUserId === "string"
-    ? source.senderUserId.replace(/\D/g, "").slice(0, 8)
-    : "";
-  const senderIp = typeof source.senderIp === "string" ? source.senderIp.trim() : "";
-  const body = typeof source.body === "string" ? source.body.trim() : "";
-  const createdAt = typeof source.createdAt === "string" ? source.createdAt : "";
-
-  if (
-    messageId === ""
-    || threadId === ""
-    || method === ""
-    || subject === ""
-    || senderName === ""
-    || senderUserId.length !== 8
-    || body === ""
-    || createdAt === ""
-  ) {
-    return null;
-  }
-
-  return {
-    messageId,
-    threadId,
-    parentMessageId,
-    messageType,
-    messageMeta,
-    method,
-    subject,
-    senderName,
-    senderUserId,
-    senderIp,
-    body,
-    createdAt,
-  };
-}
-
-function normalizeMailboxFilterSetting(rawValue: unknown): MailboxFilterSetting {
-  const source = rawValue && typeof rawValue === "object"
-    ? (rawValue as Partial<MailboxFilterSetting>)
-    : {};
-
-  return {
-    unresolvedOnly: Boolean(source.unresolvedOnly),
-    unreadOnly: Boolean(source.unreadOnly),
-  };
-}
-
-function normalizeGenericMessages(rawValue: unknown): GenericMessage[] {
-  if (!Array.isArray(rawValue)) {
-    return [];
-  }
-
-  return rawValue
-    .map((item) => normalizeGenericMessage(item))
-    .filter((item): item is GenericMessage => item !== null)
-    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-}
-
-function hasSameGenericMessageOrder(left: GenericMessage[], right: GenericMessage[]): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index].messageId !== right[index].messageId) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function isValidSenderUserId(value: string): boolean {
-  return /^\d{8}$/.test(value.trim());
-}
-
-function isValidIpv4(value: string): boolean {
-  const trimmed = value.trim();
-  const parts = trimmed.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-
-  return parts.every((part) => {
-    if (!/^\d+$/.test(part)) {
-      return false;
-    }
-    const num = Number(part);
-    return Number.isInteger(num) && num >= 0 && num <= 255;
-  });
-}
-
-function splitIpv4List(value: string): string[] {
-  return value
-    .split(/[\s,;\n\r]+/)
-    .map((item) => item.trim())
-    .filter((item) => item !== "");
-}
-
-function isValidIpv4List(value: string): boolean {
-  const values = splitIpv4List(value);
-  return values.length > 0 && values.every((item) => isValidIpv4(item));
-}
-
 function generateRandomSenderUserId(): string {
   const array = new Uint32Array(1);
   window.crypto.getRandomValues(array);
   const value = 10_000_000 + (array[0] % 90_000_000);
   return String(value);
-}
-
-function getMailboxMethodLabel(method: string): string {
-  const normalized = method.trim().toLowerCase();
-  if (normalized === "generic") {
-    return "汎用";
-  }
-  if (normalized === "call_player") {
-    return "プレイヤー呼び出し";
-  }
-  if (normalized === "call_player_sync") {
-    return "呼び出しの同期";
-  }
-  if (normalized === "call_player_sync_request") {
-    return "呼び出しの同期";
-  }
-  return normalized === "" ? "不明" : normalized;
-}
-
-function buildScopedMessageMeta(
-  baseMeta: Record<string, unknown> | null,
-  scope: MessageScope | null,
-): Record<string, unknown> | null {
-  const merged: Record<string, unknown> = { ...(baseMeta ?? {}) };
-
-  if (scope) {
-    merged.scopeTournamentId = scope.tournamentId;
-    merged.scopeSlug = scope.slug;
-    merged.scopeEventId = scope.eventId;
-    merged.scopePhaseName = scope.phaseName;
-    merged.scopePhaseGroupName = scope.phaseGroupName;
-  }
-
-  return Object.keys(merged).length > 0 ? merged : null;
-}
-
-function isMessageForScope(message: GenericMessage, scope: MessageScope | null): boolean {
-  if (!scope) {
-    return true;
-  }
-
-  const meta = message.messageMeta;
-  if (!meta || typeof meta !== "object") {
-    return true;
-  }
-
-  const source = meta as Record<string, unknown>;
-  const scopeTournamentId = typeof source.scopeTournamentId === "string" ? source.scopeTournamentId.trim() : "";
-  const scopeSlug = typeof source.scopeSlug === "string" ? source.scopeSlug.trim() : "";
-  const scopeEventId = typeof source.scopeEventId === "string" ? source.scopeEventId.trim() : "";
-  const scopePhaseName = typeof source.scopePhaseName === "string"
-    ? source.scopePhaseName.trim()
-    : (typeof source.phaseName === "string" ? source.phaseName.trim() : "");
-  const scopePhaseGroupName = typeof source.scopePhaseGroupName === "string"
-    ? source.scopePhaseGroupName.trim()
-    : (typeof source.phaseGroupName === "string" ? source.phaseGroupName.trim() : "");
-
-  const hasScopePhase = scope.phaseName.trim() !== "";
-  const hasScopePhaseGroup = scope.phaseGroupName.trim() !== "";
-  const phaseMatches = !hasScopePhase || scopePhaseName === "" || scopePhaseName === scope.phaseName;
-  const phaseGroupMatches = !hasScopePhaseGroup || scopePhaseGroupName === "" || scopePhaseGroupName === scope.phaseGroupName;
-
-  if (
-    scopeEventId !== ""
-    && scopeEventId === scope.eventId
-    && (scopeTournamentId === "" || scopeTournamentId === scope.tournamentId)
-    && (scopeSlug === "" || scopeSlug === scope.slug)
-  ) {
-    return phaseMatches && phaseGroupMatches;
-  }
-
-  const legacyTournamentId = typeof source.tournamentId === "string" ? source.tournamentId.trim() : "";
-  const legacyEventId = typeof source.eventId === "string" ? source.eventId.trim() : "";
-
-  if (legacyEventId !== "" && legacyEventId === scope.eventId) {
-    return (legacyTournamentId === "" || legacyTournamentId === scope.tournamentId)
-      && phaseMatches
-      && phaseGroupMatches;
-  }
-
-  if (scopeEventId !== "" || legacyEventId !== "") {
-    return false;
-  }
-
-  return true;
-}
-
-function normalizePlayerId(value: string): string {
-  return value.trim().toUpperCase().replace(/\s+/g, "");
-}
-
-function isLikelyPlayerId(value: string): boolean {
-  return /^PG-[A-Z2-7]+$/.test(normalizePlayerId(value));
-}
-
-function extractMetaString(meta: Record<string, unknown> | null, key: string): string {
-  if (!meta) {
-    return "";
-  }
-
-  const value = meta[key];
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeCallPhaseName(rawValue: string): string {
-  const trimmed = rawValue.trim();
-  return trimmed === "" ? "Phase 未設定" : trimmed;
 }
 
 function resolveCallPhaseName(event: EventSnapshot | null, rawValue: string, phaseOrder: number | null): string {
@@ -1055,265 +582,6 @@ function resolveCallPhaseName(event: EventSnapshot | null, rawValue: string, pha
   return set?.phaseName?.trim() || normalized;
 }
 
-function normalizeCallPhaseGroupName(rawValue: string): string {
-  const trimmed = rawValue.trim();
-  return trimmed === "" ? "Pool 未設定" : trimmed;
-}
-
-function parsePhasePoolKey(rawKey: string): { phaseName: string; phaseGroupName: string } | null {
-  const trimmed = rawKey.trim();
-  if (trimmed === "") {
-    return null;
-  }
-
-  const separatorIndex = trimmed.indexOf("::");
-  if (separatorIndex < 0) {
-    return null;
-  }
-
-  const phaseName = trimmed.slice(0, separatorIndex).trim();
-  const phaseGroupName = trimmed.slice(separatorIndex + 2).trim();
-  if (phaseName === "" || phaseGroupName === "") {
-    return null;
-  }
-
-  return {
-    phaseName,
-    phaseGroupName,
-  };
-}
-
-function extractCallPhasePoolMeta(meta: Record<string, unknown> | null): {
-  phaseName: string;
-  phaseGroupName: string;
-} {
-  const phaseName = extractMetaString(meta, "scopePhaseName") || extractMetaString(meta, "phaseName");
-  const phaseGroupName = extractMetaString(meta, "scopePhaseGroupName") || extractMetaString(meta, "phaseGroupName");
-
-  return {
-    phaseName: normalizeCallPhaseName(phaseName),
-    phaseGroupName: normalizeCallPhaseGroupName(phaseGroupName),
-  };
-}
-
-function extractCallThreadIdentity(rootMessage: GenericMessage | null): CallThreadIdentity | null {
-  if (!rootMessage || rootMessage.method !== "call_player") {
-    return null;
-  }
-
-  const expectedPlayerId = normalizePlayerId(extractMetaString(rootMessage.messageMeta, "playerId"));
-  const callEntrantId = extractMetaString(rootMessage.messageMeta, "callEntrantId");
-  const callEntrantName = extractMetaString(rootMessage.messageMeta, "callEntrantName");
-  const setId = extractMetaString(rootMessage.messageMeta, "setId");
-
-  if (expectedPlayerId === "" || callEntrantId === "" || setId === "") {
-    return null;
-  }
-
-  return {
-    expectedPlayerId,
-    callEntrantId,
-    callEntrantName,
-    setId,
-  };
-}
-
-function extractCallEventMeta(
-  rootMessage: GenericMessage,
-): {
-  tournamentId: string;
-  tournamentName: string;
-  eventId: string;
-  eventName: string;
-  eventAlias: string;
-  phaseName: string;
-  phaseGroupName: string;
-} {
-  const tournamentId = extractMetaString(rootMessage.messageMeta, "scopeTournamentId") || extractMetaString(rootMessage.messageMeta, "tournamentId");
-  const tournamentName = extractMetaString(rootMessage.messageMeta, "tournamentName");
-  const eventId = extractMetaString(rootMessage.messageMeta, "scopeEventId") || extractMetaString(rootMessage.messageMeta, "eventId");
-  const eventName = extractMetaString(rootMessage.messageMeta, "eventName");
-  const eventAlias = extractMetaString(rootMessage.messageMeta, "eventAlias");
-  const { phaseName, phaseGroupName } = extractCallPhasePoolMeta(rootMessage.messageMeta);
-
-  return {
-    tournamentId,
-    tournamentName,
-    eventId,
-    eventName,
-    eventAlias,
-    phaseName,
-    phaseGroupName,
-  };
-}
-
-function buildCallListDedupKey(rootMessage: GenericMessage): string {
-  const targetIdentity = extractCallTargetIdentityFromMeta(rootMessage.messageMeta);
-  if (!targetIdentity) {
-    return rootMessage.threadId;
-  }
-
-  return `${targetIdentity.tournamentId}::${targetIdentity.eventId}::${targetIdentity.phaseName}::${targetIdentity.phaseGroupName}::${targetIdentity.setId}::${targetIdentity.callEntrantId}`;
-}
-
-function extractCallTargetIdentityFromMeta(meta: Record<string, unknown> | null): CallTargetIdentity | null {
-  const callEntrantId = extractMetaString(meta, "callEntrantId");
-  const setId = extractMetaString(meta, "setId");
-  const eventId = extractMetaString(meta, "scopeEventId") || extractMetaString(meta, "eventId");
-  const tournamentId = extractMetaString(meta, "scopeTournamentId") || extractMetaString(meta, "tournamentId");
-  const { phaseName, phaseGroupName } = extractCallPhasePoolMeta(meta);
-
-  if (tournamentId === "" || eventId === "" || callEntrantId === "" || setId === "") {
-    return null;
-  }
-
-  return {
-    tournamentId,
-    eventId,
-    phaseName,
-    phaseGroupName,
-    setId,
-    callEntrantId,
-  };
-}
-
-function buildCallSyncStatusTargets(
-  displayGroups: CallListEventGroup[],
-  messages: GenericMessage[],
-): CallSyncStatusTarget[] {
-  const rootByThreadId = new Map(
-    messages
-      .filter((item) => item.parentMessageId === null && item.method === "call_player" && item.messageType === "normal")
-      .map((item) => [item.threadId, item] as const),
-  );
-  const dedupMap = new Map<string, CallSyncStatusTarget>();
-
-  for (const group of displayGroups) {
-    for (const player of group.players) {
-      const root = rootByThreadId.get(player.threadId);
-      if (!root) {
-        continue;
-      }
-
-      const identity = extractCallTargetIdentityFromMeta(root.messageMeta);
-      if (!identity) {
-        continue;
-      }
-
-      const dedupKey = `${root.senderUserId}::${identity.tournamentId}::${identity.eventId}::${identity.phaseName}::${identity.phaseGroupName}::${identity.setId}::${identity.callEntrantId}`;
-      if (dedupMap.has(dedupKey)) {
-        continue;
-      }
-
-      dedupMap.set(dedupKey, {
-        threadId: root.threadId,
-        senderUserId: root.senderUserId,
-        tournamentId: identity.tournamentId,
-        eventId: identity.eventId,
-        phaseName: identity.phaseName,
-        phaseGroupName: identity.phaseGroupName,
-        setId: identity.setId,
-        callEntrantId: identity.callEntrantId,
-      });
-    }
-  }
-
-  return [...dedupMap.values()];
-}
-
-function isSameCallTargetIdentity(left: CallTargetIdentity, right: CallTargetIdentity): boolean {
-  return left.tournamentId === right.tournamentId
-    && left.eventId === right.eventId
-    && left.phaseName === right.phaseName
-    && left.phaseGroupName === right.phaseGroupName
-    && left.setId === right.setId
-    && left.callEntrantId === right.callEntrantId;
-}
-
-function compareCallListEventGroup(left: CallListEventGroup, right: CallListEventGroup): number {
-  const byAlias = left.eventAlias.localeCompare(right.eventAlias, "ja");
-  if (byAlias !== 0) {
-    return byAlias;
-  }
-
-  const byEventName = left.eventName.localeCompare(right.eventName, "ja");
-  if (byEventName !== 0) {
-    return byEventName;
-  }
-
-  const byPhaseName = left.phaseName.localeCompare(right.phaseName, "ja");
-  if (byPhaseName !== 0) {
-    return byPhaseName;
-  }
-
-  const byPhaseGroupName = left.phaseGroupName.localeCompare(right.phaseGroupName, "ja");
-  if (byPhaseGroupName !== 0) {
-    return byPhaseGroupName;
-  }
-
-  return left.tournamentName.localeCompare(right.tournamentName, "ja");
-}
-
-function compareCallListEventGroupByMaxElapsed(
-  left: CallListEventGroup,
-  right: CallListEventGroup,
-  referenceMs: number,
-): number {
-  const leftMaxElapsed = left.players.reduce(
-    (maxElapsed, player) => Math.max(maxElapsed, callElapsedSeconds(player.createdAt, referenceMs)),
-    0,
-  );
-  const rightMaxElapsed = right.players.reduce(
-    (maxElapsed, player) => Math.max(maxElapsed, callElapsedSeconds(player.createdAt, referenceMs)),
-    0,
-  );
-
-  if (leftMaxElapsed !== rightMaxElapsed) {
-    return rightMaxElapsed - leftMaxElapsed;
-  }
-
-  return compareCallListEventGroup(left, right);
-}
-
-function isDqRequestMessage(message: GenericMessage): boolean {
-  if (message.messageType === "dq_request") {
-    return true;
-  }
-
-  if (message.method !== "call_player") {
-    return false;
-  }
-
-  const hasLegacyMeta = extractMetaString(message.messageMeta, "dqCallEntrantId") !== ""
-    || extractMetaString(message.messageMeta, "dqSetId") !== "";
-  if (hasLegacyMeta) {
-    return true;
-  }
-
-  return message.body.includes("DQ申請");
-}
-
-function extractPlayerIdFromQrRawValue(rawValue: string): string {
-  const trimmed = rawValue.trim();
-  if (trimmed === "") {
-    return "";
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    if (parsed && typeof parsed === "object") {
-      const maybePlayerId = (parsed as { playerId?: unknown }).playerId;
-      if (typeof maybePlayerId === "string") {
-        return normalizePlayerId(maybePlayerId);
-      }
-    }
-  } catch {
-    // Non-JSON payload is allowed.
-  }
-
-  return normalizePlayerId(trimmed);
-}
-
 function createQrBarcodeDetector(): {
   detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
 } | null {
@@ -1328,23 +596,6 @@ function createQrBarcodeDetector(): {
   }
 
   return new barcodeDetectorCtor({ formats: ["qr_code"] });
-}
-
-function extractPlayerIdFromBarcodeResults(results: Array<{ rawValue?: string }>): string {
-  for (const result of results) {
-    const rawValue = typeof result.rawValue === "string" ? result.rawValue : "";
-    const playerId = extractPlayerIdFromQrRawValue(rawValue);
-    if (isLikelyPlayerId(playerId)) {
-      return playerId;
-    }
-  }
-
-  return "";
-}
-
-function isSameGenericMessageIdentity(left: GenericMessage, right: GenericMessage): boolean {
-  // Message identity is messageId only; sender IP changes must not affect equality.
-  return left.messageId === right.messageId;
 }
 
 function arraysShallowEqual<T>(left: T[], right: T[]): boolean {
@@ -1450,27 +701,6 @@ function sameSnapshotEventKey(
 ): boolean {
   return toSlugInput(leftSlug) === toSlugInput(rightSlug)
     && leftEventId.trim() === rightEventId.trim();
-}
-
-function isMatchupReady(set: SetSnapshot): boolean {
-  if (set.slots.length < 2) {
-    return false;
-  }
-
-  return set.slots.every((slot) => slot.entrantId !== null);
-}
-
-function isCompletedSet(set: SetSnapshot): boolean {
-  return set.state === 3;
-}
-
-function isLosersBracketSet(set: SetSnapshot): boolean {
-  if (set.round !== null && set.round < 0) {
-    return true;
-  }
-
-  const roundText = set.fullRoundText.toLowerCase();
-  return roundText.includes("losers") || roundText.includes("loser") || roundText.includes("敗者");
 }
 
 function roundRobinPairKey(leftEntrantId: string, rightEntrantId: string): string {
