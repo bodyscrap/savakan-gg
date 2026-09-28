@@ -1,4 +1,4 @@
-import { type CSSProperties, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
@@ -8,7 +8,7 @@ import jsQR from "jsqr";
 import { CreateSnapshot, type EventSnapshotProgress, type TournamentEventPreviewItem, type TournamentPreview } from "./CreateSnapshot";
 import { SettingsScreen } from "./SettingMenu";
 import { StatusBoard, StatusBoardHero, type CallListEventGroup, type CallListEventSortStrategy } from "./StatusBoard";
-import { PlayerListInfo, type UserCardPlayer } from "./PlayerListInfo";
+import { PlayerListInfo } from "./PlayerListInfo";
 import { MessageBox, type GenericMessage, type MailboxDeliveryMode, type MailboxFilterSetting } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
 import {
@@ -32,6 +32,8 @@ import { EliminationBracket, type EliminationBracketSectionView } from "./Elimin
 import { RoundRobinBracket } from "./RoundRobinBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
 import { useBracketReport } from "./useBracketReport";
+import { useUserCards } from "./useUserCards";
+import { deriveEncryptedPlayerId } from "./userCardCanvas";
 import {
   buildRoundColumns,
   isCompletedSet,
@@ -434,7 +436,6 @@ type EventManagementMeta = {
   totalMaxCount?: number;
 };
 
-const USER_CARD_PAGE_SIZE = 10;
 const CALL_LIST_EVENT_PAGE_SIZE = 3;
 const CALL_LIST_ROTATE_SECONDS_MIN = 1;
 const CALL_LIST_ROTATE_SECONDS_MAX = 180;
@@ -936,231 +937,6 @@ function resolveCreatePreviewSelection(
   return preview.events[0] ?? null;
 }
 
-function bytesToBase32(bytes: Uint8Array): string {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  let buffer = 0;
-  let bitsLeft = 0;
-  let output = "";
-
-  for (const byte of bytes) {
-    buffer = (buffer << 8) | byte;
-    bitsLeft += 8;
-
-    while (bitsLeft >= 5) {
-      const index = (buffer >>> (bitsLeft - 5)) & 31;
-      output += alphabet[index];
-      bitsLeft -= 5;
-    }
-  }
-
-  if (bitsLeft > 0) {
-    const index = (buffer << (5 - bitsLeft)) & 31;
-    output += alphabet[index];
-  }
-
-  return output;
-}
-
-async function deriveEncryptedPlayerId(tournamentId: string, eventId: string, entrantId: string): Promise<string> {
-  const source = `${tournamentId}:${eventId}:${entrantId}`;
-  const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
-  const token = bytesToBase32(new Uint8Array(digest).slice(0, 12));
-  return `PG-${token}`;
-}
-
-function sanitizeFileSegment(value: string): string {
-  const normalized = value
-    .trim()
-    .replace(/[<>:"/\\|?*\u0000-\u001F]+/g, "-")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/[.]+$/g, "")
-    .replace(/^-+|-+$/g, "");
-  return normalized === "" ? "untitled" : normalized;
-}
-
-function buildPlayerCardFileName(player: UserCardPlayer): string {
-  const eventAlias = sanitizeFileSegment(player.eventAlias?.trim() || player.eventName || "event");
-  const entrantName = sanitizeFileSegment(player.entrantName || "player");
-  return `${eventAlias}_${entrantName}.png`;
-}
-
-function buildPrintedPlayerCardPageFileName(eventAlias: string, pageNumber: number, totalPages: number): string {
-  const safeEventAlias = sanitizeFileSegment(eventAlias || "event");
-  return `${safeEventAlias}_${pageNumber}of${totalPages}.png`;
-}
-
-function triggerBlobDownload(blob: Blob, fileName: string): void {
-  const href = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = href;
-  anchor.download = fileName;
-  anchor.click();
-  URL.revokeObjectURL(href);
-}
-
-function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        reject(new Error("画像の生成に失敗しました。"));
-        return;
-      }
-      resolve(blob);
-    }, "image/png");
-  });
-}
-
-function drawRoundedRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number,
-): void {
-  const r = Math.max(0, Math.min(radius, Math.min(width, height) / 2));
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + width - r, y);
-  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
-  ctx.lineTo(x + width, y + height - r);
-  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
-  ctx.lineTo(x + r, y + height);
-  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-}
-
-async function renderPlayerCardCanvas(
-  player: UserCardPlayer,
-  options?: { width?: number; height?: number },
-): Promise<HTMLCanvasElement> {
-  const width = Math.max(700, Math.trunc(options?.width ?? 1200));
-  const height = Math.max(420, Math.trunc(options?.height ?? 680));
-  const pad = Math.round(width * 0.04);
-  const qrSize = Math.round(Math.min(width * 0.44, height * 0.66));
-  const infoX = pad + 30;
-  const infoMaxWidth = Math.max(220, width - qrSize - pad * 2 - 96);
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("Canvasを初期化できませんでした。ブラウザ設定を確認してください。");
-  }
-
-  const bg = ctx.createLinearGradient(0, 0, width, height);
-  bg.addColorStop(0, "#f8fafc");
-  bg.addColorStop(1, "#dbeafe");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.fillStyle = "#93c5fd";
-  ctx.globalAlpha = 0.18;
-  ctx.beginPath();
-  ctx.ellipse(width * 0.83, height * 0.18, width * 0.21, height * 0.24, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-
-  drawRoundedRect(ctx, pad, pad, width - pad * 2, height - pad * 2, 24);
-  ctx.fillStyle = "#ffffff";
-  ctx.strokeStyle = "#cbd5e1";
-  ctx.lineWidth = 2;
-  ctx.fill();
-  ctx.stroke();
-
-  const titleY = pad + 44;
-  ctx.fillStyle = "#1e3a8a";
-  ctx.font = "700 32px 'Noto Sans JP', sans-serif";
-  ctx.fillText("PLAYER CARD", infoX, titleY);
-
-  ctx.fillStyle = "#475569";
-  ctx.font = "500 19px 'Noto Sans JP', sans-serif";
-  ctx.fillText("savakan-gg tournament manager", infoX, titleY + 32);
-
-  const aliasLabel = player.eventAlias && player.eventAlias.trim() !== ""
-    ? player.eventAlias.trim()
-    : "未設定";
-
-  let cursorY = titleY + 110;
-
-  ctx.fillStyle = "#0f172a";
-  ctx.font = "700 46px 'Noto Sans JP', sans-serif";
-  ctx.fillText(player.entrantName, infoX, cursorY, infoMaxWidth);
-
-  cursorY += 48;
-  drawRoundedRect(ctx, infoX - 2, cursorY - 24, infoMaxWidth, 50, 12);
-  ctx.fillStyle = "#dbeafe";
-  ctx.fill();
-  ctx.strokeStyle = "#93c5fd";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  ctx.fillStyle = "#1d4ed8";
-  ctx.font = "700 24px 'Noto Sans JP', sans-serif";
-  ctx.fillText(`大会通称: ${aliasLabel}`, infoX + 12, cursorY + 10, infoMaxWidth - 18);
-
-  cursorY += 56;
-  ctx.fillStyle = "#334155";
-  ctx.font = "600 21px 'Noto Sans JP', sans-serif";
-  ctx.fillText(`正式名称: ${player.tournamentName} / ${player.eventName}`, infoX, cursorY, infoMaxWidth);
-
-  cursorY += 52;
-  drawRoundedRect(ctx, infoX - 2, cursorY - 34, infoMaxWidth, 84, 12);
-  ctx.fillStyle = "#eff6ff";
-  ctx.fill();
-  ctx.strokeStyle = "#bfdbfe";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  ctx.fillStyle = "#1d4ed8";
-  ctx.font = "600 21px 'Noto Sans JP', sans-serif";
-  ctx.fillText("PLAYER ID", infoX + 16, cursorY - 4);
-
-  ctx.fillStyle = "#0f172a";
-  ctx.font = "700 29px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-  ctx.fillText(player.playerId, infoX + 16, cursorY + 32, infoMaxWidth - 26);
-
-  const qrCanvas = document.createElement("canvas");
-  const qrPayload = JSON.stringify({
-    playerId: player.playerId,
-    tournamentId: player.tournamentId,
-    eventId: player.eventId,
-    entrantId: player.entrantId,
-  });
-  await QRCode.toCanvas(qrCanvas, qrPayload, {
-    errorCorrectionLevel: "M",
-    margin: 1,
-    width: qrSize,
-    color: {
-      dark: "#0f172a",
-      light: "#ffffff",
-    },
-  });
-
-  const qrX = width - pad - qrSize - 20;
-  const qrY = Math.round((height - qrSize) / 2) - 8;
-  drawRoundedRect(ctx, qrX - 16, qrY - 16, qrSize + 32, qrSize + 32, 14);
-  ctx.fillStyle = "#ffffff";
-  ctx.strokeStyle = "#cbd5e1";
-  ctx.lineWidth = 1.5;
-  ctx.fill();
-  ctx.stroke();
-  ctx.drawImage(qrCanvas, qrX, qrY, qrSize, qrSize);
-
-  ctx.fillStyle = "#475569";
-  ctx.font = "500 18px 'Noto Sans JP', sans-serif";
-  ctx.fillText("2D code", qrX + qrSize / 2 - 34, qrY + qrSize + 36);
-
-  ctx.fillStyle = "#64748b";
-  ctx.font = "500 18px 'Noto Sans JP', sans-serif";
-  ctx.fillText("Use this ID for remote DQ request identity verification.", infoX, height - pad - 24, infoMaxWidth);
-
-  return canvas;
-}
-
 function buildScoreDraftsFromSet(set: SetSnapshot): SetScoreDraft {
   const drafts: SetScoreDraft = {};
 
@@ -1465,11 +1241,6 @@ function App() {
   const [totalItemMinCount, setTotalItemMinCount] = useState(0);
   const [totalItemMaxCount, setTotalItemMaxCount] = useState(3);
   const [selectedTournamentEntrantId, setSelectedTournamentEntrantId] = useState("");
-  const [userCardPlayers, setUserCardPlayers] = useState<UserCardPlayer[]>([]);
-  const [selectedUserCardPlayerIds, setSelectedUserCardPlayerIds] = useState<string[]>([]);
-  const [selectedUserCardPlayerId, setSelectedUserCardPlayerId] = useState("");
-  const [selectedUserCardPreviewUrl, setSelectedUserCardPreviewUrl] = useState("");
-  const [userCardBusy, setUserCardBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   workspacePollingBlockedRef.current = busy || createBusy || loadingLocalSnapshotEvents;
   const [message, setMessage] = useState("");
@@ -2968,45 +2739,28 @@ function App() {
     return selectedEventEntrants.find((entrant) => entrant.entrantId === selectedTournamentEntrantId) ?? selectedEventEntrants[0] ?? null;
   }, [selectedEventEntrants, selectedTournamentEntrantId]);
 
-  const selectedUserCardPlayer = useMemo(() => {
-    if (selectedUserCardPlayerId === "") {
-      return userCardPlayers[0] ?? null;
-    }
-
-    return userCardPlayers.find((player) => player.playerId === selectedUserCardPlayerId) ?? userCardPlayers[0] ?? null;
-  }, [selectedUserCardPlayerId, userCardPlayers]);
-
-  const handleUserCardPlayerSelect = useCallback((player: UserCardPlayer, multiSelect: boolean) => {
-    const selectedId = player.playerId;
-    setSelectedUserCardPlayerId(selectedId);
-
-    if (!multiSelect) {
-      setSelectedUserCardPlayerIds([selectedId]);
-      return;
-    }
-
-    setSelectedUserCardPlayerIds((current) => {
-      if (current.includes(selectedId)) {
-        const next = current.filter((id) => id !== selectedId);
-        return next.length > 0 ? next : [selectedId];
-      }
-      return [...current, selectedId];
-    });
-  }, []);
-
-  const selectAllUserCardPlayers = useCallback(() => {
-    if (userCardPlayers.length === 0) {
-      return;
-    }
-
-    const selectedIds = userCardPlayers.map((player) => player.playerId);
-    setSelectedUserCardPlayerIds(selectedIds);
-    setSelectedUserCardPlayerId(selectedIds[selectedIds.length - 1]);
-  }, [userCardPlayers]);
-
-  const clearAllUserCardPlayersSelection = useCallback(() => {
-    setSelectedUserCardPlayerIds([]);
-  }, []);
+  const {
+    players: userCardPlayers,
+    selectedPlayerIds: selectedUserCardPlayerIds,
+    selectedPlayer: selectedUserCardPlayer,
+    selectedPlayerPreviewUrl: selectedUserCardPreviewUrl,
+    busy: userCardBusy,
+    handlePlayerSelect: handleUserCardPlayerSelect,
+    selectAllPlayers: selectAllUserCardPlayers,
+    clearPlayerSelection: clearAllUserCardPlayersSelection,
+    saveSelectedCards: saveSelectedUserCardImage,
+    exportSelectedCardsAsA4Sheet: exportSelectedPlayerCardsAsA4Sheet,
+  } = useUserCards({
+    tournamentId: snapshot?.tournamentId ?? null,
+    tournamentName: snapshot?.name ?? "",
+    eventId: selectedEvent?.eventId ?? null,
+    eventName: selectedEvent?.name ?? "",
+    eventAlias: selectedEventMeta?.eventAlias ?? null,
+    entrants: selectedEventEntrants,
+    disableLocalCommunication,
+    onError: setError,
+    onMessage: setMessage,
+  });
 
   const mailboxThreadSummaries = useMemo(() => {
     const roots = scopedGenericMessages.filter((item) => item.parentMessageId === null);
@@ -4474,229 +4228,6 @@ function App() {
       setError(String(err));
     } finally {
       setCallingEntrantId("");
-    }
-  }
-
-  useEffect(() => {
-    let alive = true;
-
-    if (!snapshot || !selectedEvent) {
-      setUserCardPlayers([]);
-      setSelectedUserCardPlayerId("");
-      return () => {
-        alive = false;
-      };
-    }
-
-    (async () => {
-      try {
-        const rows = await Promise.all(
-          selectedEventEntrants.map(async (entrant) => ({
-            tournamentId: snapshot.tournamentId,
-            tournamentName: snapshot.name,
-            eventId: selectedEvent.eventId,
-            eventName: selectedEvent.name,
-            eventAlias: selectedEventMeta?.eventAlias?.trim() ? selectedEventMeta.eventAlias.trim() : null,
-            entrantId: entrant.entrantId,
-            entrantName: entrant.entrantName,
-            playerId: await deriveEncryptedPlayerId(snapshot.tournamentId, selectedEvent.eventId, entrant.entrantId),
-          })),
-        );
-
-        if (!alive) {
-          return;
-        }
-
-        setUserCardPlayers(rows);
-        setSelectedUserCardPlayerIds((current) => {
-          const validIds = current.filter((id) => rows.some((row) => row.playerId === id));
-          if (validIds.length > 0) {
-            return validIds;
-          }
-          return rows.length > 0 ? [rows[0].playerId] : [];
-        });
-        setSelectedUserCardPlayerId((current) => {
-          if (current !== "" && rows.some((row) => row.playerId === current)) {
-            return current;
-          }
-          return rows[0]?.playerId ?? "";
-        });
-      } catch (err) {
-        if (alive) {
-          setError(String(err));
-        }
-      }
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, [selectedEvent, selectedEventEntrants, selectedEventMeta, snapshot]);
-
-  useEffect(() => {
-    let alive = true;
-
-    if (!selectedUserCardPlayer) {
-      setSelectedUserCardPreviewUrl((current) => {
-        if (current) {
-          URL.revokeObjectURL(current);
-        }
-        return "";
-      });
-      return () => {
-        alive = false;
-      };
-    }
-
-    (async () => {
-      try {
-        const canvas = await renderPlayerCardCanvas(selectedUserCardPlayer);
-        const blob = await canvasToBlob(canvas);
-        if (!alive) {
-          return;
-        }
-
-        const previewUrl = URL.createObjectURL(blob);
-        setSelectedUserCardPreviewUrl((current) => {
-          if (current) {
-            URL.revokeObjectURL(current);
-          }
-          return previewUrl;
-        });
-      } catch (err) {
-        if (alive) {
-          setError(String(err));
-        }
-      }
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, [selectedUserCardPlayer]);
-
-  async function saveSelectedUserCardImage() {
-    if (disableLocalCommunication) {
-      setError("ローカル通信を行わない設定のため、プレイヤーリスト機能は無効です。設定タブで解除してください。");
-      return;
-    }
-
-    const selectedIds = selectedUserCardPlayerIds.length > 0
-      ? selectedUserCardPlayerIds
-      : selectedUserCardPlayer
-        ? [selectedUserCardPlayer.playerId]
-        : [];
-
-    if (selectedIds.length === 0) {
-      setError("保存するプレイヤーカードがありません。");
-      return;
-    }
-
-    const selectedPlayers = userCardPlayers.filter((player) => selectedIds.includes(player.playerId));
-
-    if (selectedPlayers.length === 0) {
-      setError("保存対象のプレイヤーカードが見つかりませんでした。");
-      return;
-    }
-
-    setUserCardBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      for (const player of selectedPlayers) {
-        const canvas = await renderPlayerCardCanvas(player);
-        const blob = await canvasToBlob(canvas);
-        const fileName = buildPlayerCardFileName(player);
-        triggerBlobDownload(blob, fileName);
-      }
-      setMessage(`${selectedPlayers.length} 枚のプレイヤーカードを保存しました。`);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setUserCardBusy(false);
-    }
-  }
-
-  async function exportSelectedPlayerCardsAsA4Sheet() {
-    if (disableLocalCommunication) {
-      setError("ローカル通信を行わない設定のため、プレイヤーリスト機能は無効です。設定タブで解除してください。");
-      return;
-    }
-
-    const selectedIds = selectedUserCardPlayerIds.length > 0
-      ? selectedUserCardPlayerIds
-      : selectedUserCardPlayer
-        ? [selectedUserCardPlayer.playerId]
-        : [];
-    const selectedPlayers = userCardPlayers.filter((player) => selectedIds.includes(player.playerId));
-
-    if (selectedPlayers.length === 0) {
-      setError("出力対象の選択カードがありません。");
-      return;
-    }
-
-    setUserCardBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const pageWidth = 2480;
-      const pageHeight = 3508;
-      const marginX = 110;
-      const marginY = 120;
-      const colGap = 44;
-      const rowGap = 34;
-      const cols = 2;
-      const rows = 5;
-      const cardWidth = Math.floor((pageWidth - marginX * 2 - colGap) / cols);
-      const cardHeight = Math.floor((pageHeight - marginY * 2 - rowGap * (rows - 1)) / rows);
-      const totalPages = Math.ceil(selectedPlayers.length / USER_CARD_PAGE_SIZE);
-
-      for (let page = 0; page < totalPages; page += 1) {
-        const pagePlayers = selectedPlayers.slice(page * USER_CARD_PAGE_SIZE, (page + 1) * USER_CARD_PAGE_SIZE);
-        const canvas = document.createElement("canvas");
-        canvas.width = pageWidth;
-        canvas.height = pageHeight;
-        const ctx = canvas.getContext("2d");
-
-        if (!ctx) {
-          throw new Error("A4画像の生成に失敗しました。");
-        }
-
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, pageWidth, pageHeight);
-        ctx.fillStyle = "#0f172a";
-        ctx.font = "700 40px 'Noto Sans JP', sans-serif";
-        ctx.fillText("savakan-gg PLAYER CARDS", marginX, 70);
-        ctx.font = "500 24px 'Noto Sans JP', sans-serif";
-        ctx.fillText(`Page ${page + 1}/${totalPages}`, pageWidth - 260, 70);
-
-        for (let index = 0; index < pagePlayers.length; index += 1) {
-          const player = pagePlayers[index];
-          const row = Math.floor(index / cols);
-          const col = index % cols;
-          const x = marginX + col * (cardWidth + colGap);
-          const y = marginY + row * (cardHeight + rowGap);
-          const cardCanvas = await renderPlayerCardCanvas(player, {
-            width: cardWidth,
-            height: cardHeight,
-          });
-
-          ctx.drawImage(cardCanvas, x, y, cardWidth, cardHeight);
-        }
-
-        const blob = await canvasToBlob(canvas);
-        const eventAlias = selectedEventMeta?.eventAlias?.trim() || selectedEvent?.name || "event";
-        const fileName = buildPrintedPlayerCardPageFileName(eventAlias, page + 1, totalPages);
-        triggerBlobDownload(blob, fileName);
-      }
-
-      setMessage(`選択中のカードを A4 シートにまとめて出力しました。${selectedPlayers.length} 枚 / ${totalPages} ページ`);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setUserCardBusy(false);
     }
   }
 

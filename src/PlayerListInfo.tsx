@@ -1,13 +1,6 @@
-export type UserCardPlayer = {
-  tournamentId: string;
-  tournamentName: string;
-  eventId: string;
-  eventName: string;
-  eventAlias: string | null;
-  entrantId: string;
-  entrantName: string;
-  playerId: string;
-};
+import type { UserCardPlayer } from "./userCardCanvas";
+
+export type { UserCardPlayer } from "./userCardCanvas";
 
 type PlayerListInfoProps = {
   disableLocalCommunication: boolean;
