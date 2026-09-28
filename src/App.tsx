@@ -13,6 +13,7 @@ import { MessageBox, type GenericMessage, type MailboxDeliveryMode, type Mailbox
 import { ItemListEditor, type ItemListConfig } from "./ItemListEditor";
 import { EventSelector, localSnapshotAliasLabel, localSnapshotItemKey, type LocalSnapshotEventListItem } from "./EventSelector";
 import { EventSetting } from "./EventSetting";
+import { OverlayControl, type ObsOverlayState } from "./OverlayControl";
 import "./App.css";
 
 type SetSlot = {
@@ -991,24 +992,6 @@ type MatchSideRandomNotice = {
   lowerSide: PlaySide;
   changed: boolean;
   triggeredAt: number;
-};
-
-type ObsOverlayState = {
-  active: boolean;
-  fullyStopped: boolean;
-  currentSetId: string | null;
-  eventName: string | null;
-  eventAlias: string | null;
-  roundText: string | null;
-  redPlayerName: string;
-  bluePlayerName: string;
-  redSetWins: number;
-  blueSetWins: number;
-  fontScale: number;
-  nameFitMode: "truncate" | "shrink";
-  showSetInfo: boolean;
-  showEventAlias: boolean;
-  overlayUrl: string;
 };
 
 type ObsOverlaySetInput = {
@@ -11349,176 +11332,50 @@ function App() {
       )}
 
       {activeTab === "overlay" && (
-        <>
-          <section className="panel">
-            <h2>オーバーレイ</h2>
-            <p className="meta">配信中セット、またはテスト表示を オーバーレイ画面に出力します。</p>
-            <p className="meta">
-              URL: {obsOverlayState?.overlayUrl
-                ? (
-                    <a
-                      href={obsOverlayState.overlayUrl}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        void openUrl(obsOverlayState.overlayUrl).catch((err) => {
-                          setError(`URLをブラウザで開けませんでした: ${String(err)}`);
-                        });
-                      }}
-                    >
-                      {obsOverlayState.overlayUrl}
-                    </a>
-                  )
-                : "読み込み中..."}
-            </p>
-          </section>
-
-          <section className="panel overlay-preview-panel">
-            {!obsOverlayState ? (
-              <p className="meta">オーバーレイ状態を読み込んでいます...</p>
-            ) : (
-              <>
-                <div className="overlay-preview-controls">
-                  <p className="meta">
-                    状態: {obsOverlayState.active
-                      ? (isTestOverlayActive ? "テスト配信中" : `配信中 (${obsOverlayState.currentSetId ?? "-"})`)
-                      : (obsOverlayState.fullyStopped ? "完全停止中" : "停止中")}
-                  </p>
-                  {activeObsOverlaySet && (
-                    <p className="meta">配信中set: {activeObsOverlaySet.set.fullRoundText}</p>
-                  )}
-
-                  <div className="obs-overlay-grid">
-                    <label className="checkbox-row">
-                      <input
-                        type="checkbox"
-                        checked={obsOverlayState.nameFitMode === "shrink"}
-                        onChange={(e) => {
-                          void updateObsOverlayNameFitMode(e.currentTarget.checked ? "shrink" : "truncate");
-                        }}
-                        disabled={obsOverlayBusy}
-                      />
-                      プレイヤー名を縮小表示
-                    </label>
-                    <label className="checkbox-row">
-                      <input
-                        type="checkbox"
-                        checked={obsOverlayState.showSetInfo}
-                        onChange={(e) => {
-                          void updateObsOverlayShowSetInfo(e.currentTarget.checked);
-                        }}
-                        disabled={obsOverlayBusy}
-                      />
-                      中央のセット情報を表示
-                    </label>
-                    <label className="checkbox-row">
-                      <input
-                        type="checkbox"
-                        checked={obsOverlayState.showEventAlias}
-                        onChange={(e) => {
-                          void updateObsOverlayShowEventAlias(e.currentTarget.checked);
-                        }}
-                        disabled={obsOverlayBusy}
-                      />
-                      下部中央にイベントエイリアスを表示
-                    </label>
-                  </div>
-
-                  <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--line)" }}>
-                    <p className="meta">テスト配信（タブ離脱で自動停止）</p>
-                    <div className="obs-overlay-grid">
-                      <label>
-                        1P プレイヤー名
-                        <input
-                          type="text"
-                          value={testOverlayRedName}
-                          onChange={(e) => setTestOverlayRedName(e.currentTarget.value)}
-                          disabled={obsOverlayBusy}
-                        />
-                      </label>
-                      <label>
-                        1P 取得ゲーム数
-                        <input
-                          type="number"
-                          min={0}
-                          value={testOverlayRedWins}
-                          onChange={(e) => setTestOverlayRedWins(normalizeObsSetWins(Number(e.currentTarget.value)))}
-                          disabled={obsOverlayBusy}
-                        />
-                      </label>
-                      <label>
-                        2P プレイヤー名
-                        <input
-                          type="text"
-                          value={testOverlayBlueName}
-                          onChange={(e) => setTestOverlayBlueName(e.currentTarget.value)}
-                          disabled={obsOverlayBusy}
-                        />
-                      </label>
-                      <label>
-                        2P 取得ゲーム数
-                        <input
-                          type="number"
-                          min={0}
-                          value={testOverlayBlueWins}
-                          onChange={(e) => setTestOverlayBlueWins(normalizeObsSetWins(Number(e.currentTarget.value)))}
-                          disabled={obsOverlayBusy}
-                        />
-                      </label>
-                    </div>
-                    <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (isTestOverlayActive) {
-                            void stopTestOverlay();
-                          } else {
-                            void startTestOverlay();
-                          }
-                        }}
-                        disabled={obsOverlayBusy}
-                      >
-                        {isTestOverlayActive ? "テスト配信停止" : "テスト配信開始"}
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => {
-                          void setObsOverlayFullyStopped(true);
-                        }}
-                        disabled={obsOverlayBusy || obsOverlayState.fullyStopped}
-                      >
-                        完全停止
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {(obsOverlayState.active || isTestOverlayActive) && (
-                  <div className="overlay-preview-frame-wrap" ref={overlayPreviewWrapRef}>
-                    <iframe
-                      ref={overlayPreviewIframeRef}
-                      className="overlay-preview-frame"
-                      title="オーバーレイプレビュー"
-                      src={`${obsOverlayState.overlayUrl}?preview=1`}
-                      onLoad={() => {
-                        const width = overlayPreviewWrapRef.current?.clientWidth ?? 0;
-                        const height = overlayPreviewWrapRef.current?.clientHeight ?? 0;
-                        if (width <= 0 || height <= 0) {
-                          return;
-                        }
-                        overlayPreviewIframeRef.current?.contentWindow?.postMessage({
-                          type: "preview-container-width",
-                          width,
-                          height,
-                        }, "*");
-                      }}
-                    />
-                  </div>
-                )}
-              </>
-            )}
-          </section>
-        </>
+        <OverlayControl
+          overlayState={obsOverlayState}
+          isTestOverlayActive={isTestOverlayActive}
+          activeSetLabel={activeObsOverlaySet?.set.fullRoundText ?? null}
+          busy={obsOverlayBusy}
+          testRedName={testOverlayRedName}
+          testBlueName={testOverlayBlueName}
+          testRedWins={testOverlayRedWins}
+          testBlueWins={testOverlayBlueWins}
+          previewWrapRef={overlayPreviewWrapRef}
+          previewIframeRef={overlayPreviewIframeRef}
+          onOpenUrl={(url) => {
+            void openUrl(url).catch((err) => {
+              setError(`URLをブラウザで開けませんでした: ${String(err)}`);
+            });
+          }}
+          onNameFitModeChange={(mode) => void updateObsOverlayNameFitMode(mode)}
+          onShowSetInfoChange={(checked) => void updateObsOverlayShowSetInfo(checked)}
+          onShowEventAliasChange={(checked) => void updateObsOverlayShowEventAlias(checked)}
+          onTestRedNameChange={setTestOverlayRedName}
+          onTestBlueNameChange={setTestOverlayBlueName}
+          onTestRedWinsChange={(value) => setTestOverlayRedWins(normalizeObsSetWins(value))}
+          onTestBlueWinsChange={(value) => setTestOverlayBlueWins(normalizeObsSetWins(value))}
+          onToggleTestOverlay={() => {
+            if (isTestOverlayActive) {
+              void stopTestOverlay();
+            } else {
+              void startTestOverlay();
+            }
+          }}
+          onFullyStop={() => void setObsOverlayFullyStopped(true)}
+          onPreviewLoad={() => {
+            const width = overlayPreviewWrapRef.current?.clientWidth ?? 0;
+            const height = overlayPreviewWrapRef.current?.clientHeight ?? 0;
+            if (width <= 0 || height <= 0) {
+              return;
+            }
+            overlayPreviewIframeRef.current?.contentWindow?.postMessage({
+              type: "preview-container-width",
+              width,
+              height,
+            }, "*");
+          }}
+        />
       )}
 
         {activeTab === "settings" && (
