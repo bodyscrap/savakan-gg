@@ -454,11 +454,3 @@ export function createSetEntrantResolver(
     return changed ? { ...set, slots } : set;
   };
 }
-
-export function resolveSetEntrantsForInput(
-  set: SetSnapshot,
-  sets: SetSnapshot[],
-  phaseGroups: ProgressionPhaseGroup[],
-): SetSnapshot {
-  return createSetEntrantResolver(sets, phaseGroups)(set);
-}
