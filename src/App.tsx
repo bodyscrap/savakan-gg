@@ -8,6 +8,7 @@ import jsQR from "jsqr";
 import { CreateSnapshot, type EventSnapshotProgress, type TournamentEventPreviewItem, type TournamentPreview } from "./CreateSnapshot";
 import { SettingsScreen } from "./SettingMenu";
 import { callElapsedSeconds, StatusBoard, StatusBoardHero, type CallListEventGroup, type CallListEventSortStrategy } from "./StatusBoard";
+import { PlayerListInfo, type UserCardPlayer } from "./PlayerListInfo";
 import "./App.css";
 
 type SetSlot = {
@@ -1146,17 +1147,6 @@ type MailboxFilterSetting = {
 };
 
 type AppTab = "home" | "create" | "tournament" | "message" | "call-list" | "bracket" | "item-list" | "users" | "settings" | "overlay";
-
-type UserCardPlayer = {
-  tournamentId: string;
-  tournamentName: string;
-  eventId: string;
-  eventName: string;
-  eventAlias: string | null;
-  entrantId: string;
-  entrantName: string;
-  playerId: string;
-};
 
 type ItemListConfig = {
   id: string;
@@ -12377,110 +12367,21 @@ function App() {
         )}
 
         {activeTab === "users" && (
-        <>
-          <section className="panel">
-            <h2>プレイヤーリストの出力</h2>
-            {disableLocalCommunication && (
-              <p className="meta meta-attention">ローカル通信OFF中のため、プレイヤーリスト機能は停止中です。</p>
-            )}
-            {!snapshot || !selectedEvent ? (
-              <p className="meta">ホームの大会一覧からイベントを選択してください。</p>
-            ) : (
-              <>
-                <p className="meta">対象イベント: {selectedEventMeta?.eventAlias?.trim() || "未設定"} / プレイヤー数: {userCardPlayers.length}</p>
-
-                <div className="form" style={{ marginTop: "0.65rem" }}>
-                  <button
-                    type="button"
-                    disabled={disableLocalCommunication || userCardBusy || !selectedUserCardPlayer}
-                    onClick={() => void saveSelectedUserCardImage()}
-                  >
-                    選択カードを保存
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={disableLocalCommunication || userCardBusy || userCardPlayers.length === 0}
-                    onClick={() => void exportSelectedPlayerCardsAsA4Sheet()}
-                  >
-                    A4シートを作成
-                  </button>
-                </div>
-              </>
-            )}
-          </section>
-
-          {snapshot && selectedEvent && (
-            <section className="panel users-grid-panel">
-              <section className="users-player-list">
-                <div className="users-player-list-head">
-                  <h3>プレイヤー一覧</h3>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={disableLocalCommunication || userCardBusy || userCardPlayers.length === 0}
-                    onClick={selectAllUserCardPlayers}
-                  >
-                    全選択
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={disableLocalCommunication || userCardBusy || selectedUserCardPlayerIds.length === 0}
-                    onClick={clearAllUserCardPlayersSelection}
-                  >
-                    全解除
-                  </button>
-                </div>
-                {userCardPlayers.length === 0 ? (
-                  <p className="meta">プレイヤーが存在しません。</p>
-                ) : (
-                  <div className="event-list player-list-scroll enabled">
-                    {userCardPlayers.map((player) => {
-                      const selected = selectedUserCardPlayerIds.includes(player.playerId);
-                      return (
-                        <article
-                          key={`${player.eventId}-${player.entrantId}`}
-                          className={`event-list-item user-card-entry ${selected ? "selected" : ""}`}
-                          role="button"
-                          tabIndex={0}
-                          onClick={(event) => {
-                            handleUserCardPlayerSelect(player, event.ctrlKey || event.metaKey);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              handleUserCardPlayerSelect(player, false);
-                            }
-                          }}
-                        >
-                          <h4>{player.entrantName}</h4>
-                          <p className="meta user-id">playerId: {player.playerId}</p>
-                        </article>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-
-              <section className="users-card-preview">
-                <h3>プレイヤーカードプレビュー</h3>
-                {!selectedUserCardPlayer || selectedUserCardPreviewUrl === "" ? (
-                  <p className="meta">プレイヤーを選択してください。</p>
-                ) : (
-                  <>
-                    <p className="meta">{selectedUserCardPlayer.entrantName} / {selectedUserCardPlayer.playerId}</p>
-                    <img
-                      className="player-card-preview-image"
-                      src={selectedUserCardPreviewUrl}
-                      alt={`${selectedUserCardPlayer.entrantName} player card`}
-                    />
-                  </>
-                )}
-              </section>
-            </section>
-          )}
-        </>
+          <PlayerListInfo
+            disableLocalCommunication={disableLocalCommunication}
+            userCardBusy={userCardBusy}
+            hasSelectedEvent={Boolean(snapshot && selectedEvent)}
+            selectedEventLabel={selectedEventMeta?.eventAlias?.trim() || "未設定"}
+            players={userCardPlayers}
+            selectedPlayerIds={selectedUserCardPlayerIds}
+            selectedPlayer={selectedUserCardPlayer}
+            selectedPlayerPreviewUrl={selectedUserCardPreviewUrl}
+            onSaveSelectedCard={() => void saveSelectedUserCardImage()}
+            onExportA4Sheet={() => void exportSelectedPlayerCardsAsA4Sheet()}
+            onSelectAllPlayers={selectAllUserCardPlayers}
+            onClearPlayerSelection={clearAllUserCardPlayersSelection}
+            onSelectPlayer={handleUserCardPlayerSelect}
+          />
       )}
 
         {activeTab === "bracket" && (
