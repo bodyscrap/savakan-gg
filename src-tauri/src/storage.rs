@@ -2,6 +2,8 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -31,6 +33,13 @@ const TEMP_TOKEN_FILE: &str = "token.txt";
 const SETTINGS_DIR_NAME: &str = "settings";
 const SNAPSHOTS_DIR_NAME: &str = "snapshots";
 const EVENT_SETTING_CATEGORY_SLOT_COUNT: usize = 3;
+
+fn storage_perf_log(message: impl FnOnce() -> String) {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    if *ENABLED.get_or_init(|| std::env::var_os("SAVAKAN_STORAGE_PERF").is_some()) {
+        eprintln!("[storage-perf] {}", message());
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1274,13 +1283,17 @@ fn save_event_graph_snapshot(
     snapshot: &TournamentSnapshot,
     event_id: &str,
 ) -> Result<(), String> {
+    let started_at = Instant::now();
     let event = snapshot
         .events
         .iter()
         .find(|event| event.event_id == event_id)
         .ok_or_else(|| format!("ブラケットgraph保存対象のイベントがありません: {event_id}"))?;
     let normalized_slug = normalize_slug_for_storage(&snapshot.slug);
+    let build_started_at = Instant::now();
     let graph = build_bracket_graph(snapshot, event);
+    let build_elapsed_us = build_started_at.elapsed().as_micros();
+    let set_count = graph.event.sets.len();
     save_event_graph_file(
         app,
         &graph,
@@ -1288,7 +1301,17 @@ fn save_event_graph_snapshot(
         &normalized_slug,
         &event.event_id,
         &event.name,
-    )
+    )?;
+    storage_perf_log(|| {
+        format!(
+            "save_event_graph_snapshot event={} sets={} build_us={} total_us={}",
+            event_id,
+            set_count,
+            build_elapsed_us,
+            started_at.elapsed().as_micros()
+        )
+    });
+    Ok(())
 }
 
 fn build_bracket_graph(
@@ -1681,10 +1704,26 @@ fn save_event_graph_file(
     event_id: &str,
     event_name: &str,
 ) -> Result<(), String> {
+    let started_at = Instant::now();
     let path = event_graph_path_with_keys(app, tournament_id, slug_key, event_id, event_name)?;
+    let serialize_started_at = Instant::now();
     let json = serde_json::to_string_pretty(graph)
         .map_err(|e| format!("ブラケットグラフのJSON変換に失敗しました: {e}"))?;
-    fs::write(path, json).map_err(|e| format!("ブラケットグラフ保存に失敗しました: {e}"))
+    let serialize_elapsed_us = serialize_started_at.elapsed().as_micros();
+    let bytes = json.len();
+    let write_started_at = Instant::now();
+    fs::write(path, json).map_err(|e| format!("ブラケットグラフ保存に失敗しました: {e}"))?;
+    storage_perf_log(|| {
+        format!(
+            "write_event_graph event={} bytes={} serialize_us={} write_us={} total_us={}",
+            event_id,
+            bytes,
+            serialize_elapsed_us,
+            write_started_at.elapsed().as_micros(),
+            started_at.elapsed().as_micros()
+        )
+    });
+    Ok(())
 }
 
 fn remove_stale_event_graph_files(
@@ -1820,6 +1859,7 @@ fn load_event_snapshot_files(
     slug: &str,
     pristine: bool,
 ) -> Result<Vec<TournamentSnapshot>, String> {
+    let started_at = Instant::now();
     let dir = snapshots_dir(app)?;
     let slug_key = normalize_slug_for_storage(slug);
     let suffix = if pristine {
@@ -1828,6 +1868,8 @@ fn load_event_snapshot_files(
         "-snapshot.json"
     };
     let mut snapshots = Vec::new();
+    let mut scanned_files = 0;
+    let mut read_bytes = 0;
     for entry in
         fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
     {
@@ -1838,6 +1880,7 @@ fn load_event_snapshot_files(
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
+        scanned_files += 1;
         if !file_name.ends_with(suffix) {
             continue;
         }
@@ -1845,6 +1888,7 @@ fn load_event_snapshot_files(
             Ok(value) => value,
             Err(_) => continue,
         };
+        read_bytes += raw.len();
         if let Ok(mut snapshot) = serde_json::from_str::<TournamentSnapshot>(&raw) {
             if normalize_slug_for_storage(&snapshot.slug) != slug_key {
                 continue;
@@ -1857,6 +1901,16 @@ fn load_event_snapshot_files(
             snapshots.push(snapshot);
         }
     }
+    storage_perf_log(|| {
+        format!(
+            "load_event_snapshot_files slug={} scanned_files={} parsed_snapshots={} read_bytes={} elapsed_us={}",
+            slug_key,
+            scanned_files,
+            snapshots.len(),
+            read_bytes,
+            started_at.elapsed().as_micros()
+        )
+    });
     Ok(snapshots)
 }
 
@@ -2075,11 +2129,22 @@ pub fn reconcile_local_event_snapshot_names(
 }
 
 pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, String> {
+    let started_at = Instant::now();
     let (mut snapshot, should_rebuild_progression) =
         load_snapshot_without_progression_rebuild(app, slug)?;
     if should_rebuild_progression {
         rebuild_progression_from_completed_sets(&mut snapshot);
     }
+    storage_perf_log(|| {
+        format!(
+            "load_snapshot slug={} events={} sets={} pending={} elapsed_us={}",
+            normalize_slug_for_storage(slug),
+            snapshot.events.len(),
+            snapshot.events.iter().map(|event| event.sets.len()).sum::<usize>(),
+            should_rebuild_progression,
+            started_at.elapsed().as_micros()
+        )
+    });
     Ok(snapshot)
 }
 
@@ -2127,6 +2192,7 @@ fn restore_pending_local_results(
     slug: &str,
     snapshot: &mut TournamentSnapshot,
 ) -> Result<bool, String> {
+    let started_at = Instant::now();
     let pending_results = snapshot
         .events
         .iter()
@@ -2135,17 +2201,20 @@ fn restore_pending_local_results(
                 (
                     event.event_id.clone(),
                     meta.pending_set_results,
-                    !meta.pending_grand_final_reset_results.is_empty(),
+                    meta.pending_grand_final_reset_results.len(),
                 )
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let has_pending_results =
-        pending_results
-            .iter()
-            .any(|(_, results, has_grand_final_reset_results)| {
-                !results.is_empty() || *has_grand_final_reset_results
-            });
+    let pending_set_count = pending_results
+        .iter()
+        .map(|(_, results, _)| results.len())
+        .sum::<usize>();
+    let pending_reset_count = pending_results
+        .iter()
+        .map(|(_, _, resets)| resets)
+        .sum::<usize>();
+    let has_pending_results = pending_set_count > 0 || pending_reset_count > 0;
 
     for (event_id, results, _) in pending_results {
         let Some(event) = snapshot
@@ -2159,6 +2228,16 @@ fn restore_pending_local_results(
             restore_pending_result_to_event(event, &result);
         }
     }
+    storage_perf_log(|| {
+        format!(
+            "restore_pending slug={} events={} pending_sets={} pending_resets={} elapsed_us={}",
+            normalize_slug_for_storage(slug),
+            snapshot.events.len(),
+            pending_set_count,
+            pending_reset_count,
+            started_at.elapsed().as_micros()
+        )
+    });
     Ok(has_pending_results)
 }
 
@@ -2326,6 +2405,9 @@ fn build_progression_targets_by_source(
 }
 
 fn rebuild_progression_from_completed_sets(snapshot: &mut TournamentSnapshot) {
+    let started_at = Instant::now();
+    let event_count = snapshot.events.len();
+    let set_count = snapshot.events.iter().map(|event| event.sets.len()).sum::<usize>();
     let progression_targets_by_event = snapshot
         .events
         .iter()
@@ -2370,6 +2452,7 @@ fn rebuild_progression_from_completed_sets(snapshot: &mut TournamentSnapshot) {
             })
         })
         .collect::<Vec<_>>();
+    let completed_set_count = completed_sets.len();
     completed_sets.sort_by_key(|item| {
         snapshot
             .events
@@ -2443,6 +2526,15 @@ fn rebuild_progression_from_completed_sets(snapshot: &mut TournamentSnapshot) {
             }
         }
     }
+    storage_perf_log(|| {
+        format!(
+            "rebuild_progression events={} sets={} completed_sets={} elapsed_us={}",
+            event_count,
+            set_count,
+            completed_set_count,
+            started_at.elapsed().as_micros()
+        )
+    });
 }
 
 fn normalize_completed_source_slots(event: &mut EventSnapshot) {
@@ -7402,6 +7494,7 @@ pub fn save_local_meta(
     event_id: &str,
     meta: &TournamentLocalMeta,
 ) -> Result<(), String> {
+    let started_at = Instant::now();
     let mut normalized = meta.clone();
     normalized.events.retain(|event| event.event_id == event_id);
     if normalized.events.is_empty() {
@@ -7435,9 +7528,16 @@ pub fn save_local_meta(
         event_id,
         event_name,
     )?;
+    let serialize_started_at = Instant::now();
     let json = serde_json::to_string_pretty(&normalized)
         .map_err(|e| format!("ローカルメタのJSON変換に失敗しました: {e}"))?;
+    let serialize_elapsed_us = serialize_started_at.elapsed().as_micros();
+    let bytes = json.len();
+    let pending_set_count = normalized.pending_set_results.len();
+    let pending_reset_count = normalized.pending_grand_final_reset_results.len();
+    let write_started_at = Instant::now();
     fs::write(&path, json).map_err(|e| format!("ローカルメタ保存に失敗しました: {e}"))?;
+    let write_elapsed_us = write_started_at.elapsed().as_micros();
 
     let meta_prefix = format!(
         "{}-{}-{}-",
@@ -7445,6 +7545,8 @@ pub fn save_local_meta(
         sanitize_slug(&normalize_slug_for_storage(&normalized.slug)),
         sanitize_slug(event_id)
     );
+    let cleanup_started_at = Instant::now();
+    let mut scanned_files = 0;
     for entry in fs::read_dir(snapshots_dir(app)?)
         .map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
     {
@@ -7455,6 +7557,7 @@ pub fn save_local_meta(
         let Some(file_name) = candidate.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
+        scanned_files += 1;
         if candidate != path
             && file_name.starts_with(&meta_prefix)
             && file_name.ends_with("-meta.json")
@@ -7462,6 +7565,20 @@ pub fn save_local_meta(
             let _ = fs::remove_file(candidate);
         }
     }
+    storage_perf_log(|| {
+        format!(
+            "save_local_meta event={} bytes={} pending_sets={} pending_resets={} serialize_us={} write_us={} cleanup_scan_files={} cleanup_us={} total_us={}",
+            event_id,
+            bytes,
+            pending_set_count,
+            pending_reset_count,
+            serialize_elapsed_us,
+            write_elapsed_us,
+            scanned_files,
+            cleanup_started_at.elapsed().as_micros(),
+            started_at.elapsed().as_micros()
+        )
+    });
 
     Ok(())
 }
@@ -7693,6 +7810,7 @@ pub fn upsert_local_set_result(
     app: &AppHandle,
     input: LocalSetResultInput,
 ) -> Result<TournamentWorkspace, String> {
+    let started_at = Instant::now();
     if input.set_id.starts_with("preview_") {
         return Err(
             "preview setは結果報告できません。スナップショットを更新して実setを取得してください。"
@@ -7818,6 +7936,13 @@ pub fn upsert_local_set_result(
     save_local_meta(app, &applied_event_id, &local_meta)?;
     save_event_graph_snapshot(app, &snapshot, &applied_event_id)?;
 
+    storage_perf_log(|| {
+        format!(
+            "upsert_local_set_result event={} elapsed_us={}",
+            applied_event_id,
+            started_at.elapsed().as_micros()
+        )
+    });
     Ok(TournamentWorkspace {
         snapshot,
         local_meta,
@@ -7828,6 +7953,7 @@ pub fn upsert_local_set_scores(
     app: &AppHandle,
     input: LocalSetScoreUpdateInput,
 ) -> Result<TournamentWorkspace, String> {
+    let started_at = Instant::now();
     let mut snapshot = load_snapshot(app, &input.slug)?;
     if snapshot
         .events
@@ -7948,6 +8074,13 @@ pub fn upsert_local_set_scores(
     save_local_meta(app, &applied_event_id, &local_meta)?;
     save_event_graph_snapshot(app, &snapshot, &applied_event_id)?;
 
+    storage_perf_log(|| {
+        format!(
+            "upsert_local_set_scores event={} elapsed_us={}",
+            applied_event_id,
+            started_at.elapsed().as_micros()
+        )
+    });
     Ok(TournamentWorkspace {
         snapshot,
         local_meta,
