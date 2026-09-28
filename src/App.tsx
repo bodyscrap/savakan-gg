@@ -11,6 +11,7 @@ import { callElapsedSeconds, StatusBoard, StatusBoardHero, type CallListEventGro
 import { PlayerListInfo, type UserCardPlayer } from "./PlayerListInfo";
 import { MessageBox, type GenericMessage, type MailboxDeliveryMode, type MailboxFilterSetting } from "./MessageBox";
 import { ItemListEditor, type ItemListConfig } from "./ItemListEditor";
+import { EventSelector, localSnapshotAliasLabel, localSnapshotItemKey, type LocalSnapshotEventListItem } from "./EventSelector";
 import "./App.css";
 
 type SetSlot = {
@@ -884,19 +885,6 @@ type TournamentLocalMeta = {
 type TournamentWorkspace = {
   snapshot: TournamentSnapshot;
   localMeta: TournamentLocalMeta;
-};
-
-type LocalSnapshotEventListItem = {
-  tournamentId: string;
-  slug: string;
-  tournamentName: string;
-  updatedAt: string;
-  eventId: string;
-  eventName: string;
-  eventAlias: string | null;
-  lastSelectedPhaseName?: string | null;
-  lastSelectedPhaseGroupName?: string | null;
-  setCount: number;
 };
 
 type BracketBatchReportResult = {
@@ -2553,20 +2541,6 @@ function resolveCreatePreviewSelection(
   }
 
   return preview.events[0] ?? null;
-}
-
-function localSnapshotItemKey(item: LocalSnapshotEventListItem): string {
-  return `${item.slug}:${item.eventId}`;
-}
-
-function localSnapshotAliasLabel(item: LocalSnapshotEventListItem): string {
-  if (item.eventAlias && item.eventAlias.trim() !== "") {
-    return item.eventAlias.trim();
-  }
-  if (item.eventName && item.eventName.trim() !== "") {
-    return item.eventName.trim();
-  }
-  return item.eventId;
 }
 
 function bytesToBase32(bytes: Uint8Array): string {
@@ -11012,111 +10986,20 @@ function App() {
         </section>
 
         {activeTab === "home" && (
-          <section className="panel">
-            <div className="panel-toolbar compact">
-              <p className="meta">件数: {homeFilteredSnapshotEvents.length} / 全{localSnapshotEvents.length}</p>
-              <button
-                type="button"
-                className="ghost"
-                disabled={loadingLocalSnapshotEvents}
-                onClick={() => void refreshLocalSnapshotEvents()}
-              >
-                {loadingLocalSnapshotEvents ? "更新中..." : "一覧を更新"}
-              </button>
-            </div>
-
-            {loadingLocalSnapshotEvents ? (
-              <p className="meta">ローカルイベント一覧を読み込んでいます...</p>
-            ) : localSnapshotEvents.length === 0 ? (
-              <p className="meta">保存済みイベントがありません。大会管理タブから start.gg 同期を実行してください。</p>
-            ) : (
-              <>
-                <div className="home-selector-grid">
-                  <label htmlFor="home-snapshot-search-input" style={{ display: "grid", gap: "0.3rem" }}>
-                    <span className="meta">大会検索</span>
-                    <input
-                      id="home-snapshot-search-input"
-                      type="search"
-                      value={homeSnapshotSearchInput}
-                      onChange={(e) => setHomeSnapshotSearchInput(e.currentTarget.value)}
-                      placeholder="エイリアス名 / tournament名 / event名 で検索"
-                      autoComplete="off"
-                    />
-                  </label>
-                  <label htmlFor="home-snapshot-select" style={{ display: "grid", gap: "0.3rem" }}>
-                    <span className="meta">大会選択</span>
-                    <select
-                      id="home-snapshot-select"
-                      value={homeSelectedSnapshotItem ? localSnapshotItemKey(homeSelectedSnapshotItem) : ""}
-                      onChange={(e) => setHomeSelectedSnapshotKey(e.currentTarget.value)}
-                    >
-                      <option value="" disabled>
-                        {homeFilteredSnapshotEvents.length === 0 ? "一致する大会がありません" : "大会を選択"}
-                      </option>
-                      {homeFilteredSnapshotEvents.map((item) => (
-                        <option key={localSnapshotItemKey(item)} value={localSnapshotItemKey(item)}>
-                          {localSnapshotAliasLabel(item)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                {homeSelectedSnapshotItem ? (() => {
-                  const item = homeSelectedSnapshotItem;
-                  const itemKey = localSnapshotItemKey(item);
-                  const isDeleting = deletingSnapshotKey === itemKey;
-                  const selectedPhaseName = typeof item.lastSelectedPhaseName === "string"
-                    ? item.lastSelectedPhaseName.trim()
-                    : "";
-                  const selectedPhaseGroupName = typeof item.lastSelectedPhaseGroupName === "string"
-                    ? item.lastSelectedPhaseGroupName.trim()
-                    : "";
-                  const selectedPhasePoolLabel = selectedPhaseName !== "" && selectedPhaseGroupName !== ""
-                    ? `${selectedPhaseName} / Pool ${selectedPhaseGroupName}`
-                    : "-";
-
-                  return (
-                    <>
-                      <article className="event-list-item home-detail-card">
-                        <div className="event-list-head">
-                          <h3>{localSnapshotAliasLabel(item)}</h3>
-                          <span className="meta">{new Date(item.updatedAt).toLocaleString()}</span>
-                        </div>
-                        <p className="meta">start.ggのtournament名: {item.tournamentName}</p>
-                        <p className="meta">start.ggのevent名: {item.eventName}</p>
-                        <p className="meta">前回選択Phase/Pool: {selectedPhasePoolLabel}</p>
-                      </article>
-                      <div className="home-detail-actions">
-                        <button
-                          type="button"
-                          className="ghost"
-                          disabled={busy || isDeleting}
-                          onClick={() => {
-                            void selectLocalSnapshotEvent(item);
-                          }}
-                        >
-                          イベントを選択
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost"
-                          disabled={busy || isDeleting}
-                          onClick={() => {
-                            void deleteLocalSnapshotEvent(item);
-                          }}
-                        >
-                          {isDeleting ? "削除中..." : "スナップショットの削除"}
-                        </button>
-                      </div>
-                    </>
-                  );
-                })() : (
-                  <p className="meta" style={{ marginTop: "0.7rem" }}>一致する大会がありません。</p>
-                )}
-              </>
-            )}
-          </section>
+          <EventSelector
+            items={localSnapshotEvents}
+            filteredItems={homeFilteredSnapshotEvents}
+            loading={loadingLocalSnapshotEvents}
+            searchInput={homeSnapshotSearchInput}
+            onSearchInputChange={setHomeSnapshotSearchInput}
+            selectedItem={homeSelectedSnapshotItem}
+            onSelectedKeyChange={setHomeSelectedSnapshotKey}
+            deletingKey={deletingSnapshotKey}
+            busy={busy}
+            onRefresh={() => void refreshLocalSnapshotEvents()}
+            onSelectEvent={(item) => void selectLocalSnapshotEvent(item)}
+            onDeleteEvent={(item) => void deleteLocalSnapshotEvent(item)}
+          />
         )}
 
         {activeTab === "create" && (
