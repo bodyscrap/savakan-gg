@@ -6991,15 +6991,32 @@ async fn report_confirmed_sets_from_bracket(
             continue;
         }
 
-        if let Err(err) = startgg::report_set_result(
-            &token,
-            &item.set_id,
-            &item.winner_id,
-            &item.score_csv,
-            should_force_overwrite,
-        )
-        .await
-        {
+        let remote_entrant_ids = remote_set
+            .slots
+            .iter()
+            .filter_map(|slot| slot.entrant_id.clone())
+            .collect::<Vec<_>>();
+        let report_result = if remote_entrant_ids.len() >= 2 {
+            startgg::report_set_result_with_entrant_ids(
+                &token,
+                &item.set_id,
+                &item.winner_id,
+                &item.score_csv,
+                should_force_overwrite,
+                &remote_entrant_ids,
+            )
+            .await
+        } else {
+            startgg::report_set_result(
+                &token,
+                &item.set_id,
+                &item.winner_id,
+                &item.score_csv,
+                should_force_overwrite,
+            )
+            .await
+        };
+        if let Err(err) = report_result {
             if reported_count == 0 {
                 return Err(err);
             }

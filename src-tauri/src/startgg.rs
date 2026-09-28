@@ -2191,6 +2191,31 @@ pub async fn report_set_result(
     }
 
     let entrant_ids = fetch_set_entrant_ids_until_ready(token, set_id).await?;
+    report_set_result_using_entrant_ids(token, set_id, winner_id, score_csv, &entrant_ids).await
+}
+
+pub async fn report_set_result_with_entrant_ids(
+    token: &str,
+    set_id: &str,
+    winner_id: &str,
+    score_csv: &str,
+    force_overwrite: bool,
+    entrant_ids: &[String],
+) -> Result<(), String> {
+    if force_overwrite {
+        reset_set_if_needed(token, set_id).await?;
+    }
+
+    report_set_result_using_entrant_ids(token, set_id, winner_id, score_csv, entrant_ids).await
+}
+
+async fn report_set_result_using_entrant_ids(
+    token: &str,
+    set_id: &str,
+    winner_id: &str,
+    score_csv: &str,
+    entrant_ids: &[String],
+) -> Result<(), String> {
     if entrant_ids.len() < 2 {
         return Err("対戦の組み合わせが確定していないsetは報告できません。".to_owned());
     }
