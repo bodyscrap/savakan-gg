@@ -12,6 +12,7 @@ import { PlayerListInfo, type UserCardPlayer } from "./PlayerListInfo";
 import { MessageBox, type GenericMessage, type MailboxDeliveryMode, type MailboxFilterSetting } from "./MessageBox";
 import { ItemListEditor, type ItemListConfig } from "./ItemListEditor";
 import { EventSelector, localSnapshotAliasLabel, localSnapshotItemKey, type LocalSnapshotEventListItem } from "./EventSelector";
+import { EventSetting } from "./EventSetting";
 import "./App.css";
 
 type SetSlot = {
@@ -11032,434 +11033,121 @@ function App() {
         )}
 
         {activeTab === "tournament" && (
-        <>
-          <section className="panel">
-            {selectedEvent ? (
-              <>
-                <div className="stats-grid">
-                  <article className="stat-card">
-                    <p className="meta">エイリアス名</p>
-                    <h3>{selectedEventMeta?.eventAlias?.trim() ? selectedEventMeta.eventAlias : "未設定"}</h3>
-                  </article>
-                  <article className="stat-card">
-                    <p className="meta">tournament名 (start.gg)</p>
-                    <h3>{snapshot?.name ?? "-"}</h3>
-                  </article>
-                  <article className="stat-card">
-                    <p className="meta">event名 (start.gg)</p>
-                    <h3>{selectedEvent.name}</h3>
-                  </article>
-                </div>
-
-                <div className="panel-toolbar compact">
-                  <button type="button" className="ghost" disabled={busy || toApiSlug(slug) === ""} onClick={updateSnapshot}>
-                    スナップショットを更新
-                  </button>
-                </div>
-
-                <div className="tournament-settings" style={{ marginTop: "0.9rem" }}>
-                  <div className="setting-row">
-                    <p className="setting-row-title">エイリアス名</p>
-                    <div className="setting-row-fields single" style={{ gridTemplateColumns: "minmax(220px, 420px) auto" }}>
-                      <input
-                        type="text"
-                        value={eventAliasDraft}
-                        onChange={(e) => setEventAliasDraft(e.currentTarget.value)}
-                        placeholder="大会一覧に表示する表示名"
-                        autoComplete="off"
-                      />
-                      <button
-                        type="button"
-                        className="ghost"
-                        disabled={busy}
-                        onClick={() => void saveSelectedEventAlias()}
-                      >
-                        エイリアスを変更
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="setting-row">
-                    <p className="setting-row-title">1P/2P決定方法</p>
-                    <div className="setting-row-fields single" style={{ gridTemplateColumns: "minmax(220px, 340px) auto" }}>
-                      <select
-                        id="side-method"
-                        value={sideDecisionMethod}
-                        onChange={(e) => setSideDecisionMethod(e.currentTarget.value as EventManagementSetting["sideDecisionMethod"])}
-                      >
-                        <option value="upper_1p">上側を1P</option>
-                        <option value="upper_2p">上側を2P</option>
-                        <option value="random">ランダム</option>
-                      </select>
-                      <button
-                        type="button"
-                        className="ghost"
-                        disabled={busy}
-                        onClick={() => {
-                          void applySideDecisionMethodToAllUnconfirmedSets();
-                        }}
-                      >
-                        全未確定試合に適用
-                      </button>
-                    </div>
-                  </div>
-
-                  {Array.from({ length: MAX_CATEGORY_SLOTS }, (_, slotIndex) => {
-                    const listId = categorySlotListIds[slotIndex] ?? "";
-                    const minCount = categorySlotMinCounts[slotIndex] ?? 0;
-                    const maxCount = categorySlotMaxCounts[slotIndex] ?? 0;
-                    const allowDuplicates = categorySlotAllowDuplicates[slotIndex] ?? false;
-                    const disabledSlot = listId.trim() === "";
-
-                    return (
-                      <div className="setting-row" key={`category-setting-${slotIndex}`}>
-                        <p className="setting-row-title">カテゴリ{slotIndex + 1}</p>
-                        <div className="setting-row-fields">
-                          <label htmlFor={`item-list-slot-${slotIndex}`}>使用リスト</label>
-                          <select
-                            id={`item-list-slot-${slotIndex}`}
-                            value={listId}
-                            onChange={(e) => setCategoryListSlot(slotIndex, e.currentTarget.value)}
-                          >
-                            <option value="">未選択</option>
-                            {itemLists
-                              .slice()
-                              .sort((a, b) => a.name.localeCompare(b.name, "ja"))
-                              .map((itemList) => (
-                                <option key={`slot-${slotIndex}-${itemList.id}`} value={itemList.id}>
-                                  {itemList.name} / {itemList.categoryName} ({itemList.items.length})
-                                </option>
-                              ))}
-                          </select>
-
-                          <label htmlFor={`item-list-slot-min-${slotIndex}`}>カテゴリ下限</label>
-                          <input
-                            id={`item-list-slot-min-${slotIndex}`}
-                            type="number"
-                            min={0}
-                            step={1}
-                            value={minCount}
-                            disabled={disabledSlot}
-                            onChange={(e) => {
-                              const nextMin = clampNonNegativeInteger(Number(e.currentTarget.value), 0);
-                              setCategorySlotMinCounts((current) => {
-                                const next = [...current];
-                                next[slotIndex] = nextMin;
-                                return next;
-                              });
-                              setCategorySlotMaxCounts((current) => {
-                                const next = [...current];
-                                if ((next[slotIndex] ?? 0) < nextMin) {
-                                  next[slotIndex] = nextMin;
-                                }
-                                return next;
-                              });
-                            }}
-                          />
-
-                          <label htmlFor={`item-list-slot-max-${slotIndex}`}>カテゴリ上限</label>
-                          <input
-                            id={`item-list-slot-max-${slotIndex}`}
-                            type="number"
-                            min={0}
-                            step={1}
-                            value={maxCount}
-                            disabled={disabledSlot}
-                            onChange={(e) => {
-                              const rawMax = clampNonNegativeInteger(Number(e.currentTarget.value), 0);
-                              const ensuredMax = Math.max(rawMax, categorySlotMinCounts[slotIndex] ?? 0);
-                              setCategorySlotMaxCounts((current) => {
-                                const next = [...current];
-                                next[slotIndex] = ensuredMax;
-                                return next;
-                              });
-                            }}
-                          />
-
-                          <label htmlFor={`item-list-slot-allow-dup-${slotIndex}`}>重複可否</label>
-                          <label className="setting-checkbox" htmlFor={`item-list-slot-allow-dup-${slotIndex}`}>
-                            <input
-                              id={`item-list-slot-allow-dup-${slotIndex}`}
-                              type="checkbox"
-                              checked={allowDuplicates}
-                              disabled={disabledSlot}
-                              onChange={(e) => {
-                                const checked = e.currentTarget.checked;
-                                setCategorySlotAllowDuplicates((current) => {
-                                  const next = [...current];
-                                  next[slotIndex] = checked;
-                                  return next;
-                                });
-                              }}
-                            />
-                            許可
-                          </label>
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  <div className="setting-row">
-                    <p className="setting-row-title">アイテム全体選択</p>
-                    <div className="setting-row-fields total">
-                      <label htmlFor="total-item-min">下限</label>
-                      <input
-                        id="total-item-min"
-                        type="number"
-                        min={0}
-                        step={1}
-                        value={totalItemMinCount}
-                        onChange={(e) => {
-                          const nextMin = clampNonNegativeInteger(Number(e.currentTarget.value), 0);
-                          setTotalItemMinCount(nextMin);
-                          setTotalItemMaxCount((current) => Math.max(current, nextMin));
-                        }}
-                      />
-
-                      <label htmlFor="total-item-max">上限</label>
-                      <input
-                        id="total-item-max"
-                        type="number"
-                        min={0}
-                        step={1}
-                        value={totalItemMaxCount}
-                        onChange={(e) => {
-                          const nextMax = clampNonNegativeInteger(Number(e.currentTarget.value), 0);
-                          setTotalItemMaxCount(Math.max(nextMax, totalItemMinCount));
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="setting-row save">
-                    <button type="button" className="ghost" onClick={saveEventManagementSetting}>
-                      大会設定を保存
-                    </button>
-                  </div>
-                </div>
-                <p className="meta">カテゴリは最大3つまで設定できます。カテゴリ重複は不可で、カテゴリごとの件数条件と全体件数条件を設定します。</p>
-
-                {selectedEventEntrants.length === 0 ? (
-                  <p className="meta" style={{ marginTop: "0.75rem" }}>参加者が見つかりません。</p>
-                ) : (
-                  <div className="tournament-manager-grid" style={{ marginTop: "0.8rem" }}>
-                    <div className="tournament-manager-left-stack">
-                      <section className="panel" style={{ padding: "0.75rem" }}>
-                        <h3>プレイヤー一覧 (seed順)</h3>
-                        <p className="meta">参加人数: {selectedEventEntrants.length}</p>
-                        <p className="meta">メタ情報の保存数: {selectedEventMeta?.entrants.length ?? 0}</p>
-                        <div className={`event-list player-list-scroll ${selectedEventEntrants.length > 8 ? "enabled" : ""}`}>
-                          {selectedEventEntrants.map((entrant) => {
-                            const isSelected = selectedTournamentEntrant?.entrantId === entrant.entrantId;
-                            return (
-                              <article
-                                key={`${selectedEvent.eventId}-${entrant.entrantId}`}
-                                className={`event-list-item ${isSelected ? "selected" : ""}`}
-                                role="button"
-                                tabIndex={0}
-                                onClick={() => setSelectedTournamentEntrantId(entrant.entrantId)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter" || e.key === " ") {
-                                    e.preventDefault();
-                                    setSelectedTournamentEntrantId(entrant.entrantId);
-                                  }
-                                }}
-                              >
-                                <h4>{entrant.entrantName}</h4>
-                              </article>
-                            );
-                          })}
-                        </div>
-                      </section>
-
-                      <section className="panel" style={{ padding: "0.75rem" }}>
-                        <h3>使用率一覧</h3>
-                        <div className="usage-board">
-                          {configuredCategorySlots.length === 0 ? (
-                            <p className="meta">カテゴリ設定後に表示されます。</p>
-                          ) : (
-                            <div className="usage-category-list">
-                              {selectedCategoryUsageList.map((categoryUsage) => (
-                                <article className="usage-category" key={`usage-${categoryUsage.slotIndex}`}>
-                                  <p className="usage-category-title">
-                                    {categoryUsage.categoryName} ({categoryUsage.listName})
-                                  </p>
-
-                                  {categoryUsage.entries.length === 0 ? (
-                                    <p className="meta">このカテゴリの選択データはまだありません。</p>
-                                  ) : (
-                                    <ul className="usage-item-list">
-                                      {categoryUsage.entries.map((entry) => {
-                                        const rate = Math.max(0, Math.min(100, entry.rate));
-                                        const rateText = `${rate.toFixed(1)}%`;
-                                        const palette = categoryUsage.slotIndex % 3;
-                                        const fillColor = palette === 0
-                                          ? "#2563eb"
-                                          : palette === 1
-                                            ? "#16a34a"
-                                            : "#d97706";
-                                        const complementColor = palette === 0
-                                          ? "#f59e0b"
-                                          : palette === 1
-                                            ? "#a855f7"
-                                            : "#2563eb";
-
-                                        return (
-                                          <li className="usage-item-row" key={`usage-item-${categoryUsage.slotIndex}-${entry.itemName}`}>
-                                            <span className="usage-item-name">{entry.itemName}</span>
-                                            <div className="usage-bar-track">
-                                              <div
-                                                className="usage-bar-fill"
-                                                style={{
-                                                  width: `${rate}%`,
-                                                  backgroundColor: fillColor,
-                                                }}
-                                              >
-                                                {rate >= 50 && (
-                                                  <span
-                                                    className="usage-rate-text in-bar"
-                                                    style={{ color: complementColor }}
-                                                  >
-                                                    {rateText}
-                                                  </span>
-                                                )}
-                                              </div>
-                                              {rate < 50 && (
-                                                <span
-                                                  className="usage-rate-text out-bar"
-                                                  style={{
-                                                    left: `calc(${rate}% + 0.35rem)`,
-                                                    color: fillColor,
-                                                  }}
-                                                >
-                                                  {rateText}
-                                                </span>
-                                              )}
-                                            </div>
-                                          </li>
-                                        );
-                                      })}
-                                    </ul>
-                                  )}
-                                </article>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </section>
-                    </div>
-
-                    <section className="panel" style={{ padding: "0.75rem" }}>
-                      <h3>選択プレイヤー設定</h3>
-                      {!selectedTournamentEntrant ? (
-                        <p className="meta">プレイヤーを選択してください。</p>
-                      ) : (
-                        (() => {
-                          const draft = getMetaDraft(selectedEvent.eventId, selectedTournamentEntrant.entrantId);
-                          const validated = buildValidatedSelections(draft, configuredCategorySlots);
-
-                          return (
-                            <>
-                              <p className="meta">{selectedTournamentEntrant.entrantName}</p>
-
-                              {configuredCategorySlots.length === 0 ? (
-                                <p className="meta">先に上部でカテゴリ(最大3つ)を選択してください。</p>
-                              ) : (
-                                <div className="entrant-meta-editor">
-                                  {configuredCategorySlots.map((slot) => {
-                                    const currentSelections = getDraftCategorySelections(draft, slot.slotIndex);
-                                    const canAddMore = currentSelections.length < slot.maxCount;
-                                    const selectableItems = slot.allowDuplicates
-                                      ? slot.list.items
-                                      : slot.list.items.filter((itemName) => !currentSelections.includes(itemName));
-
-                                    return (
-                                    <div key={`${selectedTournamentEntrant.entrantId}-${slot.list.id}-${slot.slotIndex}`} style={{ border: "1px solid var(--line)", borderRadius: "10px", padding: "0.55rem" }}>
-                                      <p className="meta" style={{ marginBottom: "0.35rem" }}>
-                                        {slot.list.categoryName} ({slot.list.name}) / {currentSelections.length} 件
-                                        {` / 下限 ${slot.minCount} / 上限 ${slot.maxCount} / 重複 ${slot.allowDuplicates ? "可" : "不可"}`}
-                                      </p>
-
-                                      <select
-                                        value=""
-                                        disabled={!canAddMore || selectableItems.length === 0}
-                                        onChange={(e) =>
-                                          addDraftCategorySelection(
-                                            selectedEvent.eventId,
-                                            selectedTournamentEntrant.entrantId,
-                                            slot.slotIndex,
-                                            slot.list,
-                                            slot.allowDuplicates,
-                                            slot.maxCount,
-                                            e.currentTarget.value,
-                                          )
-                                        }
-                                      >
-                                        <option value="">アイテムを追加</option>
-                                        {selectableItems.map((itemName) => (
-                                          <option key={`${slot.list.id}-${slot.slotIndex}-${itemName}`} value={itemName}>
-                                            {itemName}
-                                          </option>
-                                        ))}
-                                      </select>
-
-                                      {currentSelections.length > 0 && (
-                                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.45rem" }}>
-                                          {currentSelections.map((itemName, index) => (
-                                            <button
-                                              key={`${slot.list.id}-${slot.slotIndex}-${itemName}-${index}`}
-                                              type="button"
-                                              className="ghost tiny"
-                                              onClick={() =>
-                                                removeDraftCategorySelection(
-                                                  selectedEvent.eventId,
-                                                  selectedTournamentEntrant.entrantId,
-                                                  slot.slotIndex,
-                                                  index,
-                                                )
-                                              }
-                                            >
-                                              {itemName} ×
-                                            </button>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-
-                              {validated.errors.length > 0 && (
-                                <p className="meta error-text" style={{ marginTop: "0.45rem" }}>
-                                  {validated.errors.join(" ")}
-                                </p>
-                              )}
-
-                              <div className="entrant-meta-actions" style={{ marginTop: "0.6rem" }}>
-                                <button
-                                  type="button"
-                                  disabled={busy || toApiSlug(slug) === ""}
-                                  onClick={() => savePlayerMeta(selectedEvent, selectedTournamentEntrant.entrantId, selectedTournamentEntrant.entrantName)}
-                                >
-                                  このプレイヤーを保存
-                                </button>
-                              </div>
-                            </>
-                          );
-                        })()
-                      )}
-                    </section>
-                  </div>
-                )}
-              </>
-            ) : (
-              <p className="meta">ホームの大会一覧からイベントを選択してください。</p>
-            )}
-          </section>
-        </>
-      )}
-
+          <EventSetting
+            hasSelectedEvent={Boolean(selectedEvent)}
+            eventAlias={selectedEventMeta?.eventAlias ?? ""}
+            tournamentName={snapshot?.name ?? "-"}
+            eventName={selectedEvent?.name ?? ""}
+            busy={busy}
+            canUpdateSnapshot={toApiSlug(slug) !== ""}
+            onUpdateSnapshot={() => void updateSnapshot()}
+            eventAliasDraft={eventAliasDraft}
+            onEventAliasDraftChange={setEventAliasDraft}
+            onSaveEventAlias={() => void saveSelectedEventAlias()}
+            sideDecisionMethod={sideDecisionMethod}
+            onSideDecisionMethodChange={(method) => setSideDecisionMethod(method as EventManagementSetting["sideDecisionMethod"])}
+            onApplySideDecisionMethod={() => void applySideDecisionMethodToAllUnconfirmedSets()}
+            itemLists={itemLists}
+            categorySlotListIds={categorySlotListIds}
+            categorySlotMinCounts={categorySlotMinCounts}
+            categorySlotMaxCounts={categorySlotMaxCounts}
+            categorySlotAllowDuplicates={categorySlotAllowDuplicates}
+            onCategoryListChange={setCategoryListSlot}
+            onCategoryMinChange={(slotIndex, value) => {
+              const nextMin = clampNonNegativeInteger(Number(value), 0);
+              setCategorySlotMinCounts((current) => {
+                const next = [...current];
+                next[slotIndex] = nextMin;
+                return next;
+              });
+              setCategorySlotMaxCounts((current) => {
+                const next = [...current];
+                if ((next[slotIndex] ?? 0) < nextMin) {
+                  next[slotIndex] = nextMin;
+                }
+                return next;
+              });
+            }}
+            onCategoryMaxChange={(slotIndex, value) => {
+              const rawMax = clampNonNegativeInteger(Number(value), 0);
+              const ensuredMax = Math.max(rawMax, categorySlotMinCounts[slotIndex] ?? 0);
+              setCategorySlotMaxCounts((current) => {
+                const next = [...current];
+                next[slotIndex] = ensuredMax;
+                return next;
+              });
+            }}
+            onCategoryAllowDuplicatesChange={(slotIndex, allowed) => {
+              setCategorySlotAllowDuplicates((current) => {
+                const next = [...current];
+                next[slotIndex] = allowed;
+                return next;
+              });
+            }}
+            totalItemMinCount={totalItemMinCount}
+            totalItemMaxCount={totalItemMaxCount}
+            onTotalItemMinChange={(value) => {
+              const nextMin = clampNonNegativeInteger(Number(value), 0);
+              setTotalItemMinCount(nextMin);
+              setTotalItemMaxCount((current) => Math.max(current, nextMin));
+            }}
+            onTotalItemMaxChange={(value) => {
+              const nextMax = clampNonNegativeInteger(Number(value), 0);
+              setTotalItemMaxCount(Math.max(nextMax, totalItemMinCount));
+            }}
+            onSaveEventManagementSetting={saveEventManagementSetting}
+            selectedEventEntrants={selectedEventEntrants}
+            selectedEventMetaEntrantCount={selectedEventMeta?.entrants.length ?? 0}
+            selectedEntrantId={selectedTournamentEntrant?.entrantId ?? ""}
+            selectedEntrantName={selectedTournamentEntrant?.entrantName ?? ""}
+            onSelectEntrant={setSelectedTournamentEntrantId}
+            configuredCategorySlots={configuredCategorySlots}
+            selectedCategoryUsageList={selectedCategoryUsageList}
+            draftSelectionsBySlot={selectedEvent && selectedTournamentEntrant
+              ? configuredCategorySlots.map((slot) => getDraftCategorySelections(
+                getMetaDraft(selectedEvent.eventId, selectedTournamentEntrant.entrantId),
+                slot.slotIndex,
+              ))
+              : []}
+            validationErrors={selectedEvent && selectedTournamentEntrant
+              ? buildValidatedSelections(
+                getMetaDraft(selectedEvent.eventId, selectedTournamentEntrant.entrantId),
+                configuredCategorySlots,
+              ).errors
+              : []}
+            onAddDraftSelection={(slot, itemName) => {
+              if (!selectedEvent || !selectedTournamentEntrant) {
+                return;
+              }
+              addDraftCategorySelection(
+                selectedEvent.eventId,
+                selectedTournamentEntrant.entrantId,
+                slot.slotIndex,
+                slot.list,
+                slot.allowDuplicates,
+                slot.maxCount,
+                itemName,
+              );
+            }}
+            onRemoveDraftSelection={(slotIndex, selectionIndex) => {
+              if (!selectedEvent || !selectedTournamentEntrant) {
+                return;
+              }
+              removeDraftCategorySelection(
+                selectedEvent.eventId,
+                selectedTournamentEntrant.entrantId,
+                slotIndex,
+                selectionIndex,
+              );
+            }}
+            canSavePlayerMeta={!busy && toApiSlug(slug) !== ""}
+            onSavePlayerMeta={() => {
+              if (selectedEvent && selectedTournamentEntrant) {
+                void savePlayerMeta(selectedEvent, selectedTournamentEntrant.entrantId, selectedTournamentEntrant.entrantName);
+              }
+            }}
+          />
+        )}
         {activeTab === "message" && (
           <MessageBox
             senderLabel={`${senderProfile.senderName.trim() === "" ? "未設定" : senderProfile.senderName} / ${isValidSenderUserId(senderProfile.senderUserId) ? senderProfile.senderUserId : "未設定"} / IP: ${isValidIpv4(senderProfile.bindIp) ? senderProfile.bindIp : "未設定"}`}
