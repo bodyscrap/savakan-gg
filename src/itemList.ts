@@ -43,3 +43,18 @@ export function parseLinesToUniqueList(value: string): string[] {
   }
   return items;
 }
+
+export function resolveEventItemList(
+  listId: string,
+  eventSnapshots: ItemListConfig[],
+  itemLists: ItemListConfig[],
+): ItemListConfig | null {
+  const normalizedId = listId.trim();
+  if (normalizedId === "") {
+    return null;
+  }
+
+  return eventSnapshots.find((item) => item.id === normalizedId)
+    ?? itemLists.find((item) => item.id === normalizedId)
+    ?? null;
+}

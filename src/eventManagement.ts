@@ -91,6 +91,38 @@ export function normalizeEventManagementSetting(rawValue: unknown): EventManagem
   };
 }
 
+export function removeItemListFromEventManagementSettings(
+  settings: Record<string, EventManagementSetting>,
+  itemListId: string,
+): Record<string, EventManagementSetting> {
+  const next: Record<string, EventManagementSetting> = {};
+  for (const [key, value] of Object.entries(settings)) {
+    const normalized = normalizeEventManagementSetting(value);
+    const itemListIds = [...normalized.itemListIds];
+    const categoryMinCounts = normalizeSelectionCountArrays(normalized.categoryMinCounts, 0);
+    const categoryMaxCounts = normalizeSelectionCountArrays(normalized.categoryMaxCounts, 1);
+    const categoryAllowDuplicates = normalizeAllowDuplicatesArray(normalized.categoryAllowDuplicates);
+
+    for (let index = 0; index < MAX_CATEGORY_SLOTS; index += 1) {
+      if (itemListIds[index] === itemListId) {
+        itemListIds[index] = "";
+        categoryMinCounts[index] = 0;
+        categoryMaxCounts[index] = 0;
+        categoryAllowDuplicates[index] = false;
+      }
+    }
+
+    next[key] = normalizeEventManagementSetting({
+      ...normalized,
+      itemListIds,
+      categoryMinCounts,
+      categoryMaxCounts,
+      categoryAllowDuplicates,
+    });
+  }
+  return next;
+}
+
 export function emptyCategorySelections(): string[][] {
   return Array.from({ length: MAX_CATEGORY_SLOTS }, () => [] as string[]);
 }

@@ -17,12 +17,13 @@ import {
   normalizeAllowDuplicatesArray,
   normalizeEventManagementSetting,
   normalizeSelectionCountArrays,
+  removeItemListFromEventManagementSettings,
   type EventManagementSetting,
 } from "./eventManagement";
 import {
   MAX_CATEGORY_SLOTS,
   normalizeItemListConfig,
-  parseLinesToUniqueList,
+  resolveEventItemList,
   type ItemListConfig,
 } from "./itemList";
 import { EventSelector, localSnapshotAliasLabel, localSnapshotItemKey, type LocalSnapshotEventListItem } from "./EventSelector";
@@ -33,6 +34,7 @@ import { RoundRobinBracket } from "./RoundRobinBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
 import { useBracketReport } from "./useBracketReport";
 import { useUserCards } from "./useUserCards";
+import { useItemLists } from "./useItemLists";
 import { deriveEncryptedPlayerId } from "./userCardCanvas";
 import {
   buildRoundColumns,
@@ -644,7 +646,6 @@ function isSameEventManagementSetting(
       === clampNonNegativeInteger(Number(right.totalMaxCount ?? 0), 0);
 }
 
-const ITEM_LIST_STORAGE_KEY = "savakan-gg.item-lists.v1";
 const EVENT_MGMT_STORAGE_KEY = "savakan-gg.event-mgmt.v1";
 const SENDER_PROFILE_STORAGE_KEY = "savakan-gg.sender-profile.v1";
 const GENERIC_MESSAGE_STORAGE_KEY = "savakan-gg.generic-messages.v1";
@@ -1159,13 +1160,6 @@ function App() {
   const [homeSelectedSnapshotKey, setHomeSelectedSnapshotKey] = useState("");
   const [loadingLocalSnapshotEvents, setLoadingLocalSnapshotEvents] = useState(false);
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
-  const [itemLists, setItemLists] = useState<ItemListConfig[]>([]);
-  const [itemListsReady, setItemListsReady] = useState(false);
-  const [editingItemListId, setEditingItemListId] = useState<string | null>(null);
-  const [itemListName, setItemListName] = useState("");
-  const [itemCategoryName, setItemCategoryName] = useState("");
-  const [itemListText, setItemListText] = useState("");
-  const [itemListSearchInput, setItemListSearchInput] = useState("");
   const [eventMgmtSettings, setEventMgmtSettings] = useState<Record<string, EventManagementSetting>>({});
   const [eventMgmtSettingsReady, setEventMgmtSettingsReady] = useState(false);
   const [senderProfile, setSenderProfile] = useState<SenderProfile>({ senderName: "", senderUserId: "", bindIp: "0.0.0.0", broadcastSubnetMask: "255.255.255.0" });
@@ -1245,6 +1239,23 @@ function App() {
   workspacePollingBlockedRef.current = busy || createBusy || loadingLocalSnapshotEvents;
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const {
+    itemLists,
+    itemListName,
+    setItemListName,
+    itemCategoryName,
+    setItemCategoryName,
+    itemListText,
+    setItemListText,
+    itemListSearchInput,
+    setItemListSearchInput,
+    editingItemListId,
+    filteredItemLists,
+    resetItemListEditor,
+    editItemList,
+    saveItemList,
+    removeItemList,
+  } = useItemLists({ onError: setError, onMessage: setMessage });
   const autoAssigningSidesRef = useRef(false);
   const standbyReadinessRef = useRef<Record<string, string>>({});
   const startupSavedSlugRef = useRef("");
@@ -1517,27 +1528,6 @@ function App() {
           setSlug(toSlugInput(savedRawSlug));
         }
 
-        const savedItemLists = await invoke<ItemListConfig[] | null>("load_item_lists");
-        if (!alive) {
-          return;
-        }
-
-        if (savedItemLists !== null) {
-          setItemLists(savedItemLists);
-          return;
-        }
-
-        try {
-          const raw = window.localStorage.getItem(ITEM_LIST_STORAGE_KEY);
-          if (raw) {
-            const parsed = JSON.parse(raw) as ItemListConfig[];
-            if (Array.isArray(parsed)) {
-              setItemLists(parsed);
-            }
-          }
-        } catch {
-          // ignore
-        }
       } catch (err) {
         if (alive) {
           setError(String(err));
@@ -1545,7 +1535,6 @@ function App() {
       } finally {
         if (alive) {
           startupRestoreReadyRef.current = true;
-          setItemListsReady(true);
         }
       }
     })();
@@ -1847,22 +1836,6 @@ function App() {
       alive = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (!itemListsReady) {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(ITEM_LIST_STORAGE_KEY, JSON.stringify(itemLists));
-    } catch {
-      // ignore
-    }
-
-    void invoke("save_item_lists", { itemLists }).catch((err) => {
-      setError(String(err));
-    });
-  }, [itemLists]);
 
   useEffect(() => {
     if (!eventMgmtSettingsReady) {
@@ -2314,17 +2287,7 @@ function App() {
   }, [selectedEventMeta]);
 
   function resolveItemListForSelectedEvent(listId: string): ItemListConfig | null {
-    const normalizedId = listId.trim();
-    if (normalizedId === "") {
-      return null;
-    }
-
-    const snapshotItem = selectedEventItemListSnapshots.find((item) => item.id === normalizedId);
-    if (snapshotItem) {
-      return snapshotItem;
-    }
-
-    return itemLists.find((item) => item.id === normalizedId) ?? null;
+    return resolveEventItemList(listId, selectedEventItemListSnapshots, itemLists);
   }
 
   useEffect(() => {
@@ -2582,25 +2545,6 @@ function App() {
       }
     })();
   }, [activeTab, busy, loadingLocalSnapshotEvents, selectedSidebarItem, workspace]);
-
-  const filteredItemLists = useMemo(() => {
-    const normalizedQuery = itemListSearchInput.trim().toLocaleLowerCase();
-    if (normalizedQuery === "") {
-      return [...itemLists].sort((a, b) => a.name.localeCompare(b.name, "ja"));
-    }
-
-    return [...itemLists]
-      .filter((itemList) => {
-        const listName = itemList.name.toLocaleLowerCase();
-        const categoryName = itemList.categoryName.toLocaleLowerCase();
-        const itemNames = itemList.items.map((itemName) => itemName.toLocaleLowerCase()).join(" ");
-
-        return listName.includes(normalizedQuery)
-          || categoryName.includes(normalizedQuery)
-          || itemNames.includes(normalizedQuery);
-      })
-      .sort((a, b) => a.name.localeCompare(b.name, "ja"));
-  }, [itemListSearchInput, itemLists]);
 
   const selectedCategoryUsageList = useMemo(() => {
     if (!selectedEventMeta) {
@@ -5054,91 +4998,14 @@ function App() {
     });
   }
 
-  function resetItemListEditor() {
-    setEditingItemListId(null);
-    setItemListName("");
-    setItemCategoryName("");
-    setItemListText("");
-  }
-
-  function editItemList(itemList: ItemListConfig) {
-    setEditingItemListId(itemList.id);
-    setItemListName(itemList.name);
-    setItemCategoryName(itemList.categoryName);
-    setItemListText(itemList.items.join("\n"));
-  }
-
-  function saveItemList() {
-    const name = itemListName.trim();
-    const categoryName = itemCategoryName.trim();
-    if (name === "" || categoryName === "") {
-      setError("アイテムリスト名とカテゴリ名を入力してください。");
-      return;
-    }
-
-    const items = parseLinesToUniqueList(itemListText);
-    setError("");
-
-    if (editingItemListId) {
-      setItemLists((current) =>
-        current.map((list) =>
-          list.id === editingItemListId ? { ...list, name, categoryName, items } : list,
-        ),
-      );
-      setMessage("アイテムリストを更新しました。");
-      resetItemListEditor();
-      return;
-    }
-
-    const next: ItemListConfig = {
-      id: crypto.randomUUID(),
-      name,
-      categoryName,
-      items,
-    };
-    setItemLists((current) => [...current, next]);
-    setMessage("アイテムリストを作成しました。");
-    resetItemListEditor();
-  }
-
   function deleteItemList(itemListId: string) {
-    setItemLists((current) => current.filter((list) => list.id !== itemListId));
+    removeItemList(itemListId);
     const nextListIds = categorySlotListIds.map((id) => (id === itemListId ? "" : id));
     setCategorySlotListIds(nextListIds);
     setCategorySlotMinCounts((current) => current.map((value, index) => (nextListIds[index] === "" && categorySlotListIds[index] === itemListId ? 0 : value)));
     setCategorySlotMaxCounts((current) => current.map((value, index) => (nextListIds[index] === "" && categorySlotListIds[index] === itemListId ? 0 : value)));
     setCategorySlotAllowDuplicates((current) => current.map((value, index) => (nextListIds[index] === "" && categorySlotListIds[index] === itemListId ? false : value)));
-    if (editingItemListId === itemListId) {
-      resetItemListEditor();
-    }
-    setEventMgmtSettings((current) => {
-      const next: Record<string, EventManagementSetting> = {};
-      for (const [key, value] of Object.entries(current)) {
-        const normalized = normalizeEventManagementSetting(value);
-        const ids = [...normalized.itemListIds];
-        const mins = normalizeSelectionCountArrays(normalized.categoryMinCounts, 0);
-        const maxes = normalizeSelectionCountArrays(normalized.categoryMaxCounts, 1);
-        const allows = normalizeAllowDuplicatesArray(normalized.categoryAllowDuplicates);
-
-        for (let i = 0; i < MAX_CATEGORY_SLOTS; i += 1) {
-          if (ids[i] === itemListId) {
-            ids[i] = "";
-            mins[i] = 0;
-            maxes[i] = 0;
-            allows[i] = false;
-          }
-        }
-
-        next[key] = normalizeEventManagementSetting({
-          ...normalized,
-          itemListIds: ids,
-          categoryMinCounts: mins,
-          categoryMaxCounts: maxes,
-          categoryAllowDuplicates: allows,
-        });
-      }
-      return next;
-    });
+    setEventMgmtSettings((current) => removeItemListFromEventManagementSettings(current, itemListId));
     setMessage("アイテムリストを削除しました。");
   }
 
