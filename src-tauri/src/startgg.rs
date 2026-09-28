@@ -1708,7 +1708,7 @@ pub async fn fetch_event_snapshot_by_slug(
     let mut tournament_slug = String::new();
     let mut event_id = String::new();
     let mut event_name = String::new();
-    let mut phases: Vec<PhaseSnapshot> = Vec::new();
+    let mut phases: Vec<PhaseSnapshot>;
     let mut phase_groups;
     let mut completed_sets = 0_usize;
 

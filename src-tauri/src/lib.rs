@@ -4,7 +4,7 @@ mod startgg;
 mod startgg_scalars;
 mod storage;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -308,38 +308,6 @@ fn format_alphabet_sequence(index: usize) -> String {
     }
 
     label
-}
-
-fn build_round_columns_set_ids(sets: &[SetSnapshot], losers: bool) -> Vec<Vec<String>> {
-    let mut grouped: BTreeMap<i64, Vec<String>> = BTreeMap::new();
-    let mut no_round = Vec::new();
-
-    for set in sets {
-        if is_losers_set(set) != losers {
-            continue;
-        }
-
-        if let Some(round) = set.round {
-            grouped
-                .entry(round.abs())
-                .or_default()
-                .push(set.set_id.clone());
-        } else {
-            no_round.push(set.set_id.clone());
-        }
-    }
-
-    let mut columns = grouped.into_values().collect::<Vec<Vec<String>>>();
-    for column in &mut columns {
-        column.sort();
-    }
-    no_round.sort();
-
-    if !no_round.is_empty() {
-        columns.push(no_round);
-    }
-
-    columns
 }
 
 fn build_set_display_code_by_id(sets: &[SetSnapshot]) -> HashMap<String, String> {
@@ -3754,15 +3722,6 @@ fn build_mobile_set_detail_local_only(
         direct_win: pending.direct_win,
         slots,
     })
-}
-
-fn mobile_detail_has_entrant_ids(detail: &MobileSetDetailItem) -> bool {
-    detail
-        .slots
-        .iter()
-        .filter(|slot| slot.entrant_id.is_some())
-        .count()
-        >= 2
 }
 
 fn load_target_workspace(
