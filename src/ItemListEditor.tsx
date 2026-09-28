@@ -1,9 +1,4 @@
-export type ItemListConfig = {
-  id: string;
-  name: string;
-  categoryName: string;
-  items: string[];
-};
+import type { ItemListConfig } from "./itemList";
 
 type ItemListEditorProps = {
   itemListName: string;

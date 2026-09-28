@@ -10,7 +10,21 @@ import { SettingsScreen } from "./SettingMenu";
 import { callElapsedSeconds, StatusBoard, StatusBoardHero, type CallListEventGroup, type CallListEventSortStrategy } from "./StatusBoard";
 import { PlayerListInfo, type UserCardPlayer } from "./PlayerListInfo";
 import { MessageBox, type GenericMessage, type MailboxDeliveryMode, type MailboxFilterSetting } from "./MessageBox";
-import { ItemListEditor, type ItemListConfig } from "./ItemListEditor";
+import { ItemListEditor } from "./ItemListEditor";
+import {
+  clampNonNegativeInteger,
+  emptyCategorySelections,
+  normalizeAllowDuplicatesArray,
+  normalizeEventManagementSetting,
+  normalizeSelectionCountArrays,
+  type EventManagementSetting,
+} from "./eventManagement";
+import {
+  MAX_CATEGORY_SLOTS,
+  normalizeItemListConfig,
+  parseLinesToUniqueList,
+  type ItemListConfig,
+} from "./itemList";
 import { EventSelector, localSnapshotAliasLabel, localSnapshotItemKey, type LocalSnapshotEventListItem } from "./EventSelector";
 import { EventSetting } from "./EventSetting";
 import { OverlayControl, type ObsOverlayState } from "./OverlayControl";
@@ -658,17 +672,6 @@ type EventManagementMeta = {
   totalMaxCount?: number;
 };
 
-type EventManagementSetting = {
-  sideDecisionMethod: "upper_1p" | "upper_2p" | "random";
-  itemListIds: string[];
-  categoryMinCounts?: number[];
-  categoryMaxCounts?: number[];
-  categoryAllowDuplicates?: boolean[];
-  totalMinCount?: number;
-  totalMaxCount?: number;
-};
-
-const MAX_CATEGORY_SLOTS = 3;
 const USER_CARD_PAGE_SIZE = 10;
 const CALL_LIST_EVENT_PAGE_SIZE = 3;
 const CALL_LIST_ROTATE_SECONDS_MIN = 1;
@@ -767,110 +770,6 @@ function normalizeMobileInputPollingMs(rawValue: unknown, fallback = MOBILE_INPU
   }
 
   return rounded;
-}
-
-function clampNonNegativeInteger(value: number, fallback: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-
-  const rounded = Math.trunc(value);
-  if (rounded < 0) {
-    return 0;
-  }
-
-  return rounded;
-}
-
-function normalizeSelectionCountArrays(
-  value: unknown,
-  fallbackValue: number,
-): number[] {
-  const source = Array.isArray(value) ? value : [];
-  const normalized = source
-    .slice(0, MAX_CATEGORY_SLOTS)
-    .map((item) => clampNonNegativeInteger(Number(item), fallbackValue));
-
-  while (normalized.length < MAX_CATEGORY_SLOTS) {
-    normalized.push(fallbackValue);
-  }
-
-  return normalized;
-}
-
-function normalizeAllowDuplicatesArray(value: unknown): boolean[] {
-  const source = Array.isArray(value) ? value : [];
-  const normalized = source
-    .slice(0, MAX_CATEGORY_SLOTS)
-    .map((item) => Boolean(item));
-
-  while (normalized.length < MAX_CATEGORY_SLOTS) {
-    normalized.push(false);
-  }
-
-  return normalized;
-}
-
-function normalizeEventManagementSetting(rawValue: unknown): EventManagementSetting {
-  const source = rawValue && typeof rawValue === "object"
-    ? (rawValue as Partial<EventManagementSetting>)
-    : {};
-
-  const sideDecisionMethod = source.sideDecisionMethod === "upper_2p" || source.sideDecisionMethod === "random"
-    ? source.sideDecisionMethod
-    : "upper_1p";
-
-  const ids = Array.isArray(source.itemListIds)
-    ? source.itemListIds.filter((id): id is string => typeof id === "string").slice(0, MAX_CATEGORY_SLOTS)
-    : [];
-  while (ids.length < MAX_CATEGORY_SLOTS) {
-    ids.push("");
-  }
-
-  const categoryMinCounts = normalizeSelectionCountArrays(source.categoryMinCounts, 0);
-  const categoryMaxCounts = normalizeSelectionCountArrays(source.categoryMaxCounts, 1)
-    .map((maxCount, index) => Math.max(maxCount, categoryMinCounts[index]));
-  const categoryAllowDuplicates = normalizeAllowDuplicatesArray(source.categoryAllowDuplicates);
-
-  const enabledSlotCount = ids.filter((id) => id.trim() !== "").length;
-  const totalMinCount = clampNonNegativeInteger(Number(source.totalMinCount ?? 0), 0);
-  const totalMaxCount = Math.max(
-    clampNonNegativeInteger(Number(source.totalMaxCount ?? enabledSlotCount), enabledSlotCount),
-    totalMinCount,
-  );
-
-  return {
-    sideDecisionMethod,
-    itemListIds: ids,
-    categoryMinCounts,
-    categoryMaxCounts,
-    categoryAllowDuplicates,
-    totalMinCount,
-    totalMaxCount,
-  };
-}
-
-function normalizeItemListConfig(rawValue: unknown): ItemListConfig {
-  const source = rawValue && typeof rawValue === "object"
-    ? (rawValue as Partial<ItemListConfig>)
-    : {};
-
-  const id = typeof source.id === "string" ? source.id.trim() : "";
-  const name = typeof source.name === "string" ? source.name.trim() : "";
-  const categoryName = typeof source.categoryName === "string" ? source.categoryName.trim() : "";
-  const items = Array.isArray(source.items)
-    ? source.items
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => item.trim())
-      .filter((item) => item !== "")
-    : [];
-
-  return {
-    id,
-    name,
-    categoryName,
-    items: [...new Set(items)],
-  };
 }
 
 function normalizeSenderProfile(rawValue: unknown): SenderProfile {
@@ -1493,10 +1392,6 @@ function isSameEventManagementSetting(
       === clampNonNegativeInteger(Number(right.totalMaxCount ?? 0), 0);
 }
 
-function emptyCategorySelections(): string[][] {
-  return Array.from({ length: MAX_CATEGORY_SLOTS }, () => [] as string[]);
-}
-
 const ITEM_LIST_STORAGE_KEY = "savakan-gg.item-lists.v1";
 const EVENT_MGMT_STORAGE_KEY = "savakan-gg.event-mgmt.v1";
 const SENDER_PROFILE_STORAGE_KEY = "savakan-gg.sender-profile.v1";
@@ -1542,20 +1437,6 @@ const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: bo
   { id: "users", label: "プレイヤーリスト", icon: "👥", implemented: true },
   { id: "settings", label: "設定", icon: "🔧", implemented: true },
 ];
-
-function parseLinesToUniqueList(value: string): string[] {
-  const seen = new Set<string>();
-  const items: string[] = [];
-  for (const line of value.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed === "" || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    items.push(trimmed);
-  }
-  return items;
-}
 
 function eventSettingKey(slug: string, eventId: string): string {
   return `${normalizeSlugForSettingKey(slug)}::${eventId}`;

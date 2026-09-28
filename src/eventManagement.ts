@@ -1,0 +1,96 @@
+import { MAX_CATEGORY_SLOTS } from "./itemList";
+
+export type EventManagementSetting = {
+  sideDecisionMethod: "upper_1p" | "upper_2p" | "random";
+  itemListIds: string[];
+  categoryMinCounts?: number[];
+  categoryMaxCounts?: number[];
+  categoryAllowDuplicates?: boolean[];
+  totalMinCount?: number;
+  totalMaxCount?: number;
+};
+
+export function clampNonNegativeInteger(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  const rounded = Math.trunc(value);
+  if (rounded < 0) {
+    return 0;
+  }
+
+  return rounded;
+}
+
+export function normalizeSelectionCountArrays(
+  value: unknown,
+  fallbackValue: number,
+): number[] {
+  const source = Array.isArray(value) ? value : [];
+  const normalized = source
+    .slice(0, MAX_CATEGORY_SLOTS)
+    .map((item) => clampNonNegativeInteger(Number(item), fallbackValue));
+
+  while (normalized.length < MAX_CATEGORY_SLOTS) {
+    normalized.push(fallbackValue);
+  }
+
+  return normalized;
+}
+
+export function normalizeAllowDuplicatesArray(value: unknown): boolean[] {
+  const source = Array.isArray(value) ? value : [];
+  const normalized = source
+    .slice(0, MAX_CATEGORY_SLOTS)
+    .map((item) => Boolean(item));
+
+  while (normalized.length < MAX_CATEGORY_SLOTS) {
+    normalized.push(false);
+  }
+
+  return normalized;
+}
+
+export function normalizeEventManagementSetting(rawValue: unknown): EventManagementSetting {
+  const source = rawValue && typeof rawValue === "object"
+    ? (rawValue as Partial<EventManagementSetting>)
+    : {};
+
+  const sideDecisionMethod = source.sideDecisionMethod === "upper_2p" || source.sideDecisionMethod === "random"
+    ? source.sideDecisionMethod
+    : "upper_1p";
+
+  const ids = Array.isArray(source.itemListIds)
+    ? source.itemListIds.filter((id): id is string => typeof id === "string").slice(0, MAX_CATEGORY_SLOTS)
+    : [];
+  while (ids.length < MAX_CATEGORY_SLOTS) {
+    ids.push("");
+  }
+
+  const categoryMinCounts = normalizeSelectionCountArrays(source.categoryMinCounts, 0);
+  const categoryMaxCounts = normalizeSelectionCountArrays(source.categoryMaxCounts, 1)
+    .map((maxCount, index) => Math.max(maxCount, categoryMinCounts[index]));
+  const categoryAllowDuplicates = normalizeAllowDuplicatesArray(source.categoryAllowDuplicates);
+
+  const enabledSlotCount = ids.filter((id) => id.trim() !== "").length;
+  const totalMinCount = clampNonNegativeInteger(Number(source.totalMinCount ?? 0), 0);
+  const totalMaxCount = Math.max(
+    clampNonNegativeInteger(Number(source.totalMaxCount ?? enabledSlotCount), enabledSlotCount),
+    totalMinCount,
+  );
+
+  return {
+    sideDecisionMethod,
+    itemListIds: ids,
+    categoryMinCounts,
+    categoryMaxCounts,
+    categoryAllowDuplicates,
+    totalMinCount,
+    totalMaxCount,
+  };
+}
+
+export function emptyCategorySelections(): string[][] {
+  return Array.from({ length: MAX_CATEGORY_SLOTS }, () => [] as string[]);
+}

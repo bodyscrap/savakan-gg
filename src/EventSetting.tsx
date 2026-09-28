@@ -1,4 +1,4 @@
-import type { ItemListConfig } from "./ItemListEditor";
+import type { ItemListConfig } from "./itemList";
 
 export type EventSettingEntrant = {
   entrantId: string;
