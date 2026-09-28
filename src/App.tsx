@@ -552,25 +552,90 @@ function isVirtualGrandFinalResetSet(set: SetSnapshot): boolean {
   return set.setId.startsWith("virtual_gf_reset_");
 }
 
+function samePhaseGroup(left: SetSnapshot, right: SetSnapshot): boolean {
+  if (left.phaseGroupId && right.phaseGroupId) {
+    return left.phaseGroupId === right.phaseGroupId;
+  }
+  if (left.phaseOrder !== null && right.phaseOrder !== null && left.phaseOrder !== right.phaseOrder) {
+    return false;
+  }
+
+  const leftGroup = (left.phaseGroupDisplayIdentifier ?? left.phaseGroupName ?? "").trim().toLowerCase();
+  const rightGroup = (right.phaseGroupDisplayIdentifier ?? right.phaseGroupName ?? "").trim().toLowerCase();
+  const sameGroup = leftGroup !== "" && rightGroup !== "" && leftGroup === rightGroup;
+  const leftPhase = (left.phaseName ?? "").trim().toLowerCase();
+  const rightPhase = (right.phaseName ?? "").trim().toLowerCase();
+  return sameGroup && (leftPhase === "" || rightPhase === "" || leftPhase === rightPhase);
+}
+
+function grandFinalWinnerIsFromLosersSide(
+  event: EventSnapshot,
+  grandFinal: SetSnapshot,
+): boolean {
+  if (!grandFinal.winnerId) {
+    return false;
+  }
+
+  const winnerSlotIndex = grandFinal.slots.findIndex((slot) => slot.entrantId === grandFinal.winnerId);
+  const winnerSource = winnerSlotIndex === 0
+    ? grandFinal.entrant1Source
+    : winnerSlotIndex === 1
+      ? grandFinal.entrant2Source
+      : null;
+  const sourceSetId = winnerSource?.resolvedSetId ?? winnerSource?.typeId;
+  const sourceSet = sourceSetId
+    ? event.sets.find((set) => set.setId === sourceSetId)
+    : undefined;
+  if (sourceSet && samePhaseGroup(sourceSet, grandFinal)) {
+    return isLosersBracketSet(sourceSet);
+  }
+
+  return event.sets.some((set) =>
+    isLosersBracketSet(set)
+    && samePhaseGroup(set, grandFinal)
+    && set.slots.some((slot) => slot.entrantId === grandFinal.winnerId),
+  );
+}
+
+function isInactiveGrandFinalReset(set: SetSnapshot, event: EventSnapshot | null): boolean {
+  if (!event || !isGrandFinalResetSet(set)) {
+    return false;
+  }
+  const grandFinal = event.sets.find((candidate) =>
+    isGrandFinalText(candidate.fullRoundText)
+    && !isGrandFinalResetSet(candidate)
+    && isCompletedSet(candidate)
+    && samePhaseGroup(candidate, set),
+  );
+  return grandFinal !== undefined && !grandFinalWinnerIsFromLosersSide(event, grandFinal);
+}
+
 function shouldShowGrandFinalResetColumn(
   column: RoundColumn,
-  allColumns: RoundColumn[],
-  hasPendingGrandFinalReset: boolean,
+  phaseGroupSets: SetSnapshot[],
+  event: EventSnapshot | null,
+  pendingGrandFinalResetSetIds: Set<string>,
 ): boolean {
   const hasResetSet = column.sets.some((set) => isGrandFinalResetSet(set));
   if (!hasResetSet) {
     return true;
   }
 
-  const hasCompletedGrandFinal = allColumns
-    .flatMap((item) => item.sets)
-    .some((set) => isGrandFinalText(set.fullRoundText) && !isGrandFinalResetSet(set) && isCompletedSet(set));
-  if (!hasCompletedGrandFinal) {
+  const grandFinal = phaseGroupSets.find((set) =>
+    isGrandFinalText(set.fullRoundText)
+    && !isGrandFinalResetSet(set)
+    && isCompletedSet(set)
+    && column.sets.some((resetSet) => isGrandFinalResetSet(resetSet) && samePhaseGroup(resetSet, set)),
+  );
+  if (!grandFinal) {
+    return false;
+  }
+  if (!event || !grandFinalWinnerIsFromLosersSide(event, grandFinal)) {
     return false;
   }
 
   const hasVirtualResetSet = column.sets.some((set) => isVirtualGrandFinalResetSet(set));
-  if (hasVirtualResetSet || hasPendingGrandFinalReset) {
+  if (hasVirtualResetSet || pendingGrandFinalResetSetIds.has(grandFinal.setId)) {
     return true;
   }
 
@@ -7631,13 +7696,17 @@ function App() {
   }, [selectedPhasePoolGroup]);
 
   const selectedBracketSectionsForView = useMemo(() => {
+    const pendingResetSetIds = new Set(
+      pendingGrandFinalResetResults.map((result) => result.sourceGrandFinalSetId),
+    );
     return selectedBracketSections.map((section) => {
       const preparedColumns = section.columns.map((column) => ({
         column,
         hidden: !shouldShowGrandFinalResetColumn(
           column,
-          section.columns,
-          pendingGrandFinalResetResults.length > 0,
+          selectedPhasePoolGroup?.sets ?? [],
+          selectedEvent,
+          pendingResetSetIds,
         ),
       }));
 
@@ -7677,7 +7746,7 @@ function App() {
         columns: positionedColumns,
       };
     });
-  }, [pendingGrandFinalResetResults.length, selectedBracketSections]) as BracketSectionForView[];
+  }, [pendingGrandFinalResetResults, selectedEvent, selectedPhasePoolGroup, selectedBracketSections]) as BracketSectionForView[];
 
   const bracketScaleStyle = useMemo(() => ({
     ["--bracket-scale" as string]: String(bracketZoomLevel),
@@ -9592,6 +9661,9 @@ function App() {
     if (!isDisplayableSet(set, selectedEvent)) {
       return;
     }
+    if (isInactiveGrandFinalReset(set, selectedEvent)) {
+      return;
+    }
     const inputSet = resolvedEventSetsById.get(set.setId) ?? set;
     setActiveMatchSetId(set.setId);
     setSetId(set.setId);
@@ -9909,6 +9981,10 @@ function App() {
 
     if (isCompletedSet(activeMatch)) {
       setError("確定済みsetの結果は変更できません。修正する場合は「影響setを取消」からやり直してください。");
+      return;
+    }
+    if (isInactiveGrandFinalReset(activeMatch, selectedEvent)) {
+      setError("Winners側のプレイヤーがGrand Finalに勝利したため、Grand Final Resetは行われません。");
       return;
     }
 
