@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use chrono::Utc;
@@ -17,6 +17,7 @@ use crate::models::{
     LocalSetScoreMeta, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
     MobileResultRequestInput, MobileResultRequestItem, PhaseGroupGraphSeedSnapshot,
     PhaseGroupSeedSnapshot, SaveEventManagementMetaInput, SenderProfile, SetPlaySideMeta,
+    SetSnapshot,
     TournamentEventPreviewItem, TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
 };
 
@@ -1257,6 +1258,7 @@ pub fn load_token(app: &AppHandle) -> Result<String, String> {
 }
 
 pub fn save_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(), String> {
+    invalidate_progression_cache(&snapshot.slug);
     let normalized_slug = normalize_slug_for_storage(&snapshot.slug);
     for event in &snapshot.events {
         save_event_graph_file(
@@ -1686,6 +1688,9 @@ fn save_event_snapshot_file(
     event_name: &str,
     pristine: bool,
 ) -> Result<(), String> {
+    if !pristine {
+        invalidate_progression_cache(&snapshot.slug);
+    }
     let path = if pristine {
         pristine_event_snapshot_path_with_keys(app, tournament_id, slug_key, event_id, event_name)?
     } else {
@@ -1693,7 +1698,11 @@ fn save_event_snapshot_file(
     };
     let json = serde_json::to_string_pretty(snapshot)
         .map_err(|e| format!("スナップショットのJSON変換に失敗しました: {e}"))?;
-    fs::write(path, json).map_err(|e| format!("スナップショット保存に失敗しました: {e}"))
+    fs::write(path, json).map_err(|e| format!("スナップショット保存に失敗しました: {e}"))?;
+    if !pristine {
+        invalidate_progression_cache(&snapshot.slug);
+    }
+    Ok(())
 }
 
 fn save_event_graph_file(
@@ -2130,17 +2139,38 @@ pub fn reconcile_local_event_snapshot_names(
 
 pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, String> {
     let started_at = Instant::now();
+    if let Some(snapshot) = cached_progression_snapshot(slug) {
+        storage_perf_log(|| {
+            format!(
+                "load_snapshot slug={} events={} sets={} cache=hit elapsed_us={}",
+                normalize_slug_for_storage(slug),
+                snapshot.events.len(),
+                snapshot
+                    .events
+                    .iter()
+                    .map(|event| event.sets.len())
+                    .sum::<usize>(),
+                started_at.elapsed().as_micros()
+            )
+        });
+        return Ok(snapshot);
+    }
     let (mut snapshot, should_rebuild_progression) =
         load_snapshot_without_progression_rebuild(app, slug)?;
     if should_rebuild_progression {
         rebuild_progression_from_completed_sets(&mut snapshot);
     }
+    cache_progression_snapshot(&snapshot);
     storage_perf_log(|| {
         format!(
-            "load_snapshot slug={} events={} sets={} pending={} elapsed_us={}",
+            "load_snapshot slug={} events={} sets={} pending={} cache=miss elapsed_us={}",
             normalize_slug_for_storage(slug),
             snapshot.events.len(),
-            snapshot.events.iter().map(|event| event.sets.len()).sum::<usize>(),
+            snapshot
+                .events
+                .iter()
+                .map(|event| event.sets.len())
+                .sum::<usize>(),
             should_rebuild_progression,
             started_at.elapsed().as_micros()
         )
@@ -2242,6 +2272,41 @@ fn restore_pending_local_results(
 }
 
 fn restore_pending_result_to_event(event: &mut EventSnapshot, result: &LocalSetResultMeta) {
+    let known_entrant_names = known_resolved_entrant_names(event);
+
+    let Some(set) = event
+        .sets
+        .iter_mut()
+        .find(|set| set.set_id == result.set_id)
+    else {
+        return;
+    };
+    set.winner_id = result.confirmed.then_some(result.winner_id.clone());
+    set.state = if result.confirmed { 3 } else { 2 };
+
+    if result.confirmed {
+        restore_missing_slot_entrants(
+            set,
+            result
+                .slot_scores
+                .iter()
+                .map(|score| score.entrant_id.clone()),
+            &known_entrant_names,
+        );
+    }
+
+    for slot in &mut set.slots {
+        if let Some(score) = result
+            .slot_scores
+            .iter()
+            .find(|score| score.entrant_id == slot.entrant_id.as_deref().unwrap_or_default())
+        {
+            slot.score = Some(score.score as f64);
+        }
+    }
+}
+
+fn known_resolved_entrant_names(event: &EventSnapshot) -> HashMap<String, String> {
     let mut known_entrant_names = HashMap::new();
     for (entrant_id, entrant_name) in event
         .sets
@@ -2269,25 +2334,19 @@ fn restore_pending_result_to_event(event: &mut EventSnapshot, result: &LocalSetR
             }
         }
     }
+    known_entrant_names
+}
 
-    let Some(set) = event
-        .sets
-        .iter_mut()
-        .find(|set| set.set_id == result.set_id)
-    else {
-        return;
-    };
-    set.winner_id = result.confirmed.then_some(result.winner_id.clone());
-    set.state = if result.confirmed { 3 } else { 2 };
-
+fn restore_missing_slot_entrants(
+    set: &mut SetSnapshot,
+    entrant_ids: impl IntoIterator<Item = String>,
+    known_entrant_names: &HashMap<String, String>,
+) {
     let mut seen_entrant_ids = HashSet::new();
-    let ordered_entrant_ids = result
-        .slot_scores
-        .iter()
-        .filter_map(|score| {
-            (!score.entrant_id.trim().is_empty()
-                && seen_entrant_ids.insert(score.entrant_id.as_str()))
-            .then_some(score.entrant_id.clone())
+    let ordered_entrant_ids = entrant_ids
+        .into_iter()
+        .filter(|entrant_id| {
+            !entrant_id.trim().is_empty() && seen_entrant_ids.insert(entrant_id.clone())
         })
         .collect::<Vec<_>>();
     let existing_entrant_ids = set
@@ -2305,32 +2364,23 @@ fn restore_pending_result_to_event(event: &mut EventSnapshot, result: &LocalSetR
         .iter()
         .filter(|slot| slot.entrant_id.is_none())
         .count();
-    let can_restore_slot_entrants = result.confirmed
-        && ordered_entrant_ids.len() == set.slots.len()
-        && missing_entrant_ids.len() == empty_slot_count;
 
-    if can_restore_slot_entrants {
-        let mut entrants_to_restore = missing_entrant_ids.into_iter();
-        for slot in &mut set.slots {
-            if slot.entrant_id.is_none() {
-                let Some(entrant_id) = entrants_to_restore.next() else {
-                    break;
-                };
-                slot.entrant_id = Some(entrant_id.clone());
-                if let Some(entrant_name) = known_entrant_names.get(&entrant_id) {
-                    slot.entrant_name = entrant_name.clone();
-                }
-            }
-        }
+    if ordered_entrant_ids.len() != set.slots.len()
+        || missing_entrant_ids.len() != empty_slot_count
+    {
+        return;
     }
 
+    let mut entrants_to_restore = missing_entrant_ids.into_iter();
     for slot in &mut set.slots {
-        if let Some(score) = result
-            .slot_scores
-            .iter()
-            .find(|score| score.entrant_id == slot.entrant_id.as_deref().unwrap_or_default())
-        {
-            slot.score = Some(score.score as f64);
+        if slot.entrant_id.is_none() {
+            let Some(entrant_id) = entrants_to_restore.next() else {
+                break;
+            };
+            slot.entrant_id = Some(entrant_id.clone());
+            if let Some(entrant_name) = known_entrant_names.get(&entrant_id) {
+                slot.entrant_name = entrant_name.clone();
+            }
         }
     }
 }
@@ -2340,8 +2390,107 @@ struct ProgressionTarget {
     set_index: usize,
     slot_index: usize,
     relation: String,
-    progression_id: Option<String>,
     is_progression: bool,
+    seed_targets: Vec<ProgressionSeedTarget>,
+}
+
+#[derive(Clone)]
+struct ProgressionSeedTarget {
+    group_index: usize,
+    seed_index: usize,
+    seed_id: String,
+    seed_num: Option<i64>,
+    placeholder_name: Option<String>,
+    dependent_slots: Vec<(usize, usize)>,
+}
+
+type ProgressionTargetsByEvent = HashMap<String, HashMap<String, Vec<ProgressionTarget>>>;
+
+struct CachedProgressionSnapshot {
+    slug_key: String,
+    snapshot: TournamentSnapshot,
+    event_set_ids: HashMap<String, Vec<String>>,
+    targets_by_event: ProgressionTargetsByEvent,
+}
+
+static PROGRESSION_CACHE: OnceLock<Mutex<Option<CachedProgressionSnapshot>>> = OnceLock::new();
+
+fn cached_progression_snapshot(slug: &str) -> Option<TournamentSnapshot> {
+    let slug_key = normalize_slug_for_storage(slug);
+    let cache = PROGRESSION_CACHE.get_or_init(|| Mutex::new(None));
+    let guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+    guard
+        .as_ref()
+        .filter(|entry| entry.slug_key == slug_key)
+        .map(|entry| entry.snapshot.clone())
+}
+
+fn cache_progression_snapshot(snapshot: &TournamentSnapshot) {
+    let slug_key = normalize_slug_for_storage(&snapshot.slug);
+    let event_set_ids = snapshot
+        .events
+        .iter()
+        .map(|event| {
+            (
+                event.event_id.clone(),
+                event.sets.iter().map(|set| set.set_id.clone()).collect(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let cache = PROGRESSION_CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+
+    if let Some(entry) = guard.as_mut().filter(|entry| entry.slug_key == slug_key) {
+        if entry.event_set_ids == event_set_ids {
+            entry.snapshot = snapshot.clone();
+            return;
+        }
+    }
+
+    let targets_by_event = snapshot
+        .events
+        .iter()
+        .map(|event| {
+            (
+                event.event_id.clone(),
+                build_progression_targets_by_source(snapshot, event),
+            )
+        })
+        .collect();
+    *guard = Some(CachedProgressionSnapshot {
+        slug_key,
+        snapshot: snapshot.clone(),
+        event_set_ids,
+        targets_by_event,
+    });
+}
+
+fn cached_progression_targets(
+    slug: &str,
+    event_id: &str,
+    source_set_id: &str,
+) -> Option<Vec<ProgressionTarget>> {
+    let slug_key = normalize_slug_for_storage(slug);
+    let cache = PROGRESSION_CACHE.get_or_init(|| Mutex::new(None));
+    let guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+    guard
+        .as_ref()
+        .filter(|entry| entry.slug_key == slug_key)
+        .and_then(|entry| entry.targets_by_event.get(event_id))
+        .and_then(|targets| targets.get(source_set_id))
+        .cloned()
+}
+
+fn invalidate_progression_cache(slug: &str) {
+    let slug_key = normalize_slug_for_storage(slug);
+    let cache = PROGRESSION_CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
+    if guard
+        .as_ref()
+        .is_some_and(|entry| entry.slug_key == slug_key)
+    {
+        *guard = None;
+    }
 }
 
 fn build_progression_targets_by_source(
@@ -2381,6 +2530,92 @@ fn build_progression_targets_by_source(
         if graph_phase_group_key(source) != graph_phase_group_key(target) && !is_progression {
             continue;
         }
+        let target_seed_id = target
+            .slots
+            .get(edge.target_slot_index)
+            .and_then(|slot| slot.seed_id.as_deref());
+        let seed_targets = if is_progression {
+            let matching_groups = event
+                .phase_groups
+                .iter()
+                .enumerate()
+                .filter(|(_, group)| {
+                    if let Some(phase_group_id) = target.phase_group_id.as_deref() {
+                        return group.phase_group_id == phase_group_id;
+                    }
+                    group.phase_order == target.phase_order
+                        && normalize_group_key(group.display_identifier.as_ref())
+                            == normalize_group_key(target.phase_group_display_identifier.as_ref())
+                })
+                .collect::<Vec<_>>();
+            let seed_id_targets = matching_groups
+                .iter()
+                .flat_map(|&(group_index, group)| {
+                    group
+                        .seeds
+                        .iter()
+                        .position(|seed| target_seed_id == Some(seed.seed_id.as_str()))
+                        .map(|seed_index| (group_index, seed_index, &group.seeds[seed_index]))
+                })
+                .collect::<Vec<_>>();
+            let selected_seed_nodes = if !seed_id_targets.is_empty() {
+                seed_id_targets
+            } else if let Some(progression_id) = edge.progression_id.as_deref() {
+                let progression_targets = matching_groups
+                    .iter()
+                    .flat_map(|&(group_index, group)| {
+                        group
+                            .seeds
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, seed)| {
+                                seed.progression_id.as_deref() == Some(progression_id)
+                            })
+                            .map(move |(seed_index, seed)| (group_index, seed_index, seed))
+                    })
+                    .collect::<Vec<_>>();
+                if progression_targets.len() == 1 {
+                    progression_targets
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+            selected_seed_nodes
+                .into_iter()
+                .map(|(group_index, seed_index, seed)| {
+                    let seed_id = seed.seed_id.clone();
+                    let mut dependent_slots = Vec::new();
+                    for (dependent_set_index, dependent_set) in event.sets.iter().enumerate() {
+                        for dependent_slot_index in 0..dependent_set.slots.len() {
+                            let source = match dependent_slot_index {
+                                0 => dependent_set.entrant1_source.as_ref(),
+                                1 => dependent_set.entrant2_source.as_ref(),
+                                _ => None,
+                            };
+                            if source.is_some_and(|source| {
+                                source.source_type.as_deref() == Some("seed")
+                                    && source.type_id.as_deref() == Some(seed_id.as_str())
+                            }) {
+                                dependent_slots
+                                    .push((dependent_set_index, dependent_slot_index));
+                            }
+                        }
+                    }
+                    ProgressionSeedTarget {
+                        group_index,
+                        seed_index,
+                        seed_id,
+                        seed_num: seed.seed_num,
+                        placeholder_name: seed.placeholder_name.clone(),
+                        dependent_slots,
+                    }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         targets_by_source
             .entry(edge.from_set_id)
             .or_default()
@@ -2388,8 +2623,8 @@ fn build_progression_targets_by_source(
                 set_index: target_index,
                 slot_index: edge.target_slot_index,
                 relation: edge.relation,
-                progression_id: edge.progression_id,
                 is_progression,
+                seed_targets,
             });
     }
 
@@ -2407,7 +2642,11 @@ fn build_progression_targets_by_source(
 fn rebuild_progression_from_completed_sets(snapshot: &mut TournamentSnapshot) {
     let started_at = Instant::now();
     let event_count = snapshot.events.len();
-    let set_count = snapshot.events.iter().map(|event| event.sets.len()).sum::<usize>();
+    let set_count = snapshot
+        .events
+        .iter()
+        .map(|event| event.sets.len())
+        .sum::<usize>();
     let progression_targets_by_event = snapshot
         .events
         .iter()
@@ -4612,43 +4851,35 @@ fn build_api_tbd_source_labels(event: &EventSnapshot) -> HashMap<String, String>
             let Some(source) = entrant_source_for_slot(set, slot_index) else {
                 continue;
             };
-            if let Some(placeholder_name) = source
+            let source_label = source_set_id_and_code_from_api_source(
+                source,
+                &set_display_code_by_id,
+            )
+            .map(|(source_set_id, source_set_code)| {
+                let kind = if target_is_losers {
+                    // Losers側は「Winners由来なら loser of / Losers由来なら winner of」を優先する。
+                    let source_is_losers = source_is_losers_by_set_id
+                        .get(&source_set_id)
+                        .copied()
+                        .unwrap_or(false);
+                    if source_is_losers {
+                        "winner"
+                    } else {
+                        "loser"
+                    }
+                } else {
+                    source_kind_from_api_source(source).unwrap_or("winner")
+                };
+                normalize_source_text(kind, &source_set_code)
+            });
+            let placeholder_name = source
                 .placeholder_name
                 .as_deref()
                 .map(str::trim)
-                .filter(|name| !name.is_empty())
-            {
-                labels.insert(
-                    format!("{}:{}", set.set_id, slot_index),
-                    placeholder_name.to_owned(),
-                );
-                continue;
+                .filter(|name| !name.is_empty());
+            if let Some(label) = source_label.or_else(|| placeholder_name.map(str::to_owned)) {
+                labels.insert(format!("{}:{}", set.set_id, slot_index), label);
             }
-            let Some((source_set_id, source_set_code)) =
-                source_set_id_and_code_from_api_source(source, &set_display_code_by_id)
-            else {
-                continue;
-            };
-
-            let kind = if target_is_losers {
-                // Losers側は「Winners由来なら loser of / Losers由来なら winner of」を優先する。
-                let source_is_losers = source_is_losers_by_set_id
-                    .get(&source_set_id)
-                    .copied()
-                    .unwrap_or(false);
-                if source_is_losers {
-                    "winner"
-                } else {
-                    "loser"
-                }
-            } else {
-                source_kind_from_api_source(source).unwrap_or("winner")
-            };
-
-            labels.insert(
-                format!("{}:{}", set.set_id, slot_index),
-                normalize_source_text(kind, &source_set_code),
-            );
         }
     }
 
@@ -4691,15 +4922,18 @@ fn apply_source_based_tbd_labels(event: &mut EventSnapshot) {
 
             let target_is_losers = is_losers_set(&event.sets[set_index]);
             let source = entrant_source_for_slot(&event.sets[set_index], slot_index).cloned();
-            let placeholder_name = event.sets[set_index].slots[slot_index]
-                .seed_placeholder_name
-                .clone()
+            let placeholder_name = label
+                .cloned()
+                .or_else(|| {
+                    event.sets[set_index].slots[slot_index]
+                        .seed_placeholder_name
+                        .clone()
+                })
                 .or_else(|| {
                     source
                         .as_ref()
                         .and_then(|source| source.placeholder_name.clone())
-                })
-                .or_else(|| label.cloned());
+                });
             let source_entrant = source.as_ref().and_then(|source| {
                 let source_set_id =
                     source_set_id_and_code_from_api_source(source, &set_display_code_by_id)
@@ -6959,6 +7193,26 @@ fn apply_local_progression(
     winner_id: &str,
     targets_by_source: &HashMap<String, Vec<ProgressionTarget>>,
 ) {
+    apply_local_progression_inner(snapshot, event_id, source_set_id, winner_id, targets_by_source);
+}
+
+fn apply_local_progression_incremental(
+    snapshot: &mut TournamentSnapshot,
+    event_id: &str,
+    source_set_id: &str,
+    winner_id: &str,
+    targets_by_source: &HashMap<String, Vec<ProgressionTarget>>,
+) {
+    apply_local_progression_inner(snapshot, event_id, source_set_id, winner_id, targets_by_source);
+}
+
+fn apply_local_progression_inner(
+    snapshot: &mut TournamentSnapshot,
+    event_id: &str,
+    source_set_id: &str,
+    winner_id: &str,
+    targets_by_source: &HashMap<String, Vec<ProgressionTarget>>,
+) {
     let Some(event) = snapshot
         .events
         .iter_mut()
@@ -7013,8 +7267,6 @@ fn apply_local_progression(
         }),
         targets_by_source,
     );
-
-    apply_source_based_tbd_labels(event);
 }
 
 fn apply_indexed_progression_targets(
@@ -7053,9 +7305,6 @@ fn apply_indexed_progression_targets(
         let Some(target_set) = event.sets.get_mut(target.set_index) else {
             continue;
         };
-        let target_group_id = target_set.phase_group_id.clone();
-        let target_phase_order = target_set.phase_order;
-        let target_group_display_identifier = target_set.phase_group_display_identifier.clone();
         let Some(slot) = target_set.slots.get_mut(target.slot_index) else {
             continue;
         };
@@ -7069,28 +7318,32 @@ fn apply_indexed_progression_targets(
         }
 
         if target.is_progression {
-            let target_seed_id = slot.seed_id.clone();
-            for group in &mut event.phase_groups {
-                if target_group_id
-                    .as_deref()
-                    .is_some_and(|group_id| group.phase_group_id != group_id)
-                    || (target_group_id.is_none() && group.phase_order != target_phase_order)
+            for seed_target in &target.seed_targets {
+                if let Some(seed) = event
+                    .phase_groups
+                    .get_mut(seed_target.group_index)
+                    .and_then(|group| group.seeds.get_mut(seed_target.seed_index))
                 {
-                    continue;
+                    seed.entrant_id = Some(entrant_id.to_owned());
+                    seed.entrant_name = Some(entrant_name.to_owned());
                 }
-                if target_group_id.is_none()
-                    && normalize_group_key(group.display_identifier.as_ref())
-                        != normalize_group_key(target_group_display_identifier.as_ref())
+                for &(dependent_set_index, dependent_slot_index) in
+                    &seed_target.dependent_slots
                 {
-                    continue;
-                }
-                for seed in &mut group.seeds {
-                    if target_seed_id.as_deref() == Some(seed.seed_id.as_str())
-                        || target.progression_id.as_deref() == seed.progression_id.as_deref()
-                    {
-                        seed.entrant_id = Some(entrant_id.to_owned());
-                        seed.entrant_name = Some(entrant_name.to_owned());
-                    }
+                    let Some(dependent_set) = event.sets.get_mut(dependent_set_index) else {
+                        continue;
+                    };
+                    let Some(dependent_slot) = dependent_set.slots.get_mut(dependent_slot_index)
+                    else {
+                        continue;
+                    };
+                    dependent_slot.entrant_id = Some(entrant_id.to_owned());
+                    dependent_slot.entrant_name = entrant_name.to_owned();
+                    dependent_slot.seed_id = Some(seed_target.seed_id.clone());
+                    dependent_slot.seed_num = seed_target.seed_num;
+                    dependent_slot.seed_placeholder_name = seed_target.placeholder_name.clone();
+                    dependent_slot.score = None;
+                    affected_targets.insert(dependent_set_index);
                 }
             }
         }
@@ -7818,8 +8071,7 @@ pub fn upsert_local_set_result(
         );
     }
 
-    let (mut snapshot, has_pending_results) =
-        load_snapshot_without_progression_rebuild(app, &input.slug)?;
+    let mut snapshot = load_snapshot(app, &input.slug)?;
     if snapshot
         .events
         .iter()
@@ -7833,7 +8085,10 @@ pub fn upsert_local_set_result(
         })
         .unwrap_or(false)
     {
-        return Err("Winners側のプレイヤーがGrand Finalに勝利したため、Grand Final Resetは行われません。".to_owned());
+        return Err(
+            "Winners側のプレイヤーがGrand Finalに勝利したため、Grand Final Resetは行われません。"
+                .to_owned(),
+        );
     }
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
 
@@ -7848,8 +8103,28 @@ pub fn upsert_local_set_result(
                 .then(|| event.name.clone())
         })
         .unwrap_or_else(|| "Unnamed event".to_owned());
+    let existing_set_state = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == input.event_id)
+        .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
+        .map(|set| {
+            (
+                set.state >= 3 && set.winner_id.is_some(),
+                is_round_robin_set(&snapshot, &input.event_id, set),
+            )
+        })
+        .ok_or_else(|| {
+            "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned()
+        })?;
 
     let (applied_event_id, should_advance) = {
+        let known_entrant_names = snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == input.event_id)
+            .map(known_resolved_entrant_names)
+            .unwrap_or_default();
         let (event_id, set_snapshot) = find_set_in_snapshot_mut(&mut snapshot, &input.set_id)
             .ok_or_else(|| {
                 "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned()
@@ -7857,6 +8132,16 @@ pub fn upsert_local_set_result(
 
         set_snapshot.winner_id = input.confirmed.then_some(input.winner_id.clone());
         set_snapshot.state = if input.confirmed { 3 } else { 2 };
+        if input.confirmed {
+            restore_missing_slot_entrants(
+                set_snapshot,
+                input
+                    .slot_scores
+                    .iter()
+                    .map(|score| score.entrant_id.clone()),
+                &known_entrant_names,
+            );
+        }
 
         for slot in &mut set_snapshot.slots {
             if let Some(entrant_id) = slot.entrant_id.as_ref() {
@@ -7880,6 +8165,8 @@ pub fn upsert_local_set_result(
     };
     let source_grand_final_set_id =
         source_grand_final_set_id_from_virtual_reset_set_id(&input.set_id);
+    let progression_slug = input.slug.clone();
+    let progression_winner_id = input.winner_id.clone();
 
     let slot_scores = input
         .slot_scores
@@ -7929,11 +8216,46 @@ pub fn upsert_local_set_result(
     local_meta.tournament_id = snapshot.tournament_id.clone();
     local_meta.updated_at = Utc::now();
 
-    if should_advance || has_pending_results {
+    if should_advance && !existing_set_state.0 && !existing_set_state.1 {
+        let progression_started_at = Instant::now();
+        let cached_targets =
+            cached_progression_targets(&progression_slug, &applied_event_id, &input.set_id);
+        let target_index_cache_hit = cached_targets.is_some();
+        let targets = cached_targets
+            .or_else(|| {
+                snapshot
+                    .events
+                    .iter()
+                    .find(|event| event.event_id == applied_event_id)
+                    .and_then(|event| {
+                        build_progression_targets_by_source(&snapshot, event).remove(&input.set_id)
+                    })
+            })
+            .unwrap_or_default();
+        let targets_by_source = HashMap::from([(input.set_id.clone(), targets)]);
+        apply_local_progression_incremental(
+            &mut snapshot,
+            &applied_event_id,
+            &input.set_id,
+            &progression_winner_id,
+            &targets_by_source,
+        );
+        storage_perf_log(|| {
+            format!(
+                "apply_progression_incremental event={} set={} target_count={} target_index_cache_hit={} elapsed_us={}",
+                applied_event_id,
+                input.set_id,
+                targets_by_source.get(&input.set_id).map_or(0, Vec::len),
+                target_index_cache_hit,
+                progression_started_at.elapsed().as_micros()
+            )
+        });
+    } else if should_advance || existing_set_state.0 {
         rebuild_progression_from_completed_sets(&mut snapshot);
     }
 
     save_local_meta(app, &applied_event_id, &local_meta)?;
+    cache_progression_snapshot(&snapshot);
     save_event_graph_snapshot(app, &snapshot, &applied_event_id)?;
 
     storage_perf_log(|| {
@@ -8072,6 +8394,7 @@ pub fn upsert_local_set_scores(
     local_meta.updated_at = Utc::now();
 
     save_local_meta(app, &applied_event_id, &local_meta)?;
+    cache_progression_snapshot(&snapshot);
     save_event_graph_snapshot(app, &snapshot, &applied_event_id)?;
 
     storage_perf_log(|| {
@@ -8100,6 +8423,7 @@ pub fn remove_pending_set_results(
         .retain(|item| !remove_ids.contains(&item.set_id));
     local_meta.updated_at = Utc::now();
     save_local_meta(app, event_id, &local_meta)?;
+    invalidate_progression_cache(slug);
     Ok(local_meta)
 }
 
@@ -8205,6 +8529,7 @@ pub fn discard_pending_set_results_for_snapshot_refresh(
         .retain(|item| item.event_id != event_id);
     local_meta.updated_at = Utc::now();
     save_local_meta(app, event_id, &local_meta)?;
+    invalidate_progression_cache(slug);
     Ok(local_meta)
 }
 
@@ -8332,6 +8657,7 @@ pub fn remove_pending_grand_final_reset_results(
         .retain(|item| !remove_ids.contains(&item.source_grand_final_set_id));
     local_meta.updated_at = Utc::now();
     save_local_meta(app, event_id, &local_meta)?;
+    invalidate_progression_cache(slug);
     Ok(local_meta)
 }
 
@@ -8586,9 +8912,11 @@ pub fn set_event_last_phase_pool_selection(
 mod progression_source_tests {
     use super::{
         advance_completed_set_by_placement, advance_completed_set_to_next_real_sets,
-        apply_indexed_progression_targets, apply_seed_sources_to_set_slots, build_bracket_graph,
-        build_progression_targets_by_source, rebuild_progression_from_completed_sets,
-        restore_pending_result_to_event, ProgressionTarget,
+        apply_indexed_progression_targets, apply_local_progression_incremental,
+        apply_seed_sources_to_set_slots, apply_source_based_tbd_labels, build_bracket_graph,
+        build_progression_targets_by_source,
+        rebuild_progression_from_completed_sets, restore_pending_result_to_event,
+        restore_missing_slot_entrants, ProgressionTarget,
     };
     use crate::models::{EventSnapshot, LocalSetResultMeta, LocalSetScoreMeta, TournamentSnapshot};
     use chrono::Utc;
@@ -8629,7 +8957,7 @@ mod progression_source_tests {
 
     #[test]
     fn advances_middle_winner_to_final_phase_group_seed() {
-        let mut event: EventSnapshot = serde_json::from_value(serde_json::json!({
+        let event: EventSnapshot = serde_json::from_value(serde_json::json!({
             "eventId": "event",
             "name": "Event",
             "phases": [
@@ -8649,15 +8977,23 @@ mod progression_source_tests {
                     "phaseId": "finals",
                     "phaseOrder": 2,
                     "displayIdentifier": "1",
-                    "seeds": [{
-                        "seedId": "41953885",
-                        "originPhaseOrder": 3,
-                        "originPhaseGroupDisplayIdentifier": "1",
-                        "originPhaseGroupId": "3470753",
-                        "originPlacement": 2,
-                        "originOrder": 1,
-                        "placeholderName": "Middle 1: Losers"
-                    }]
+                    "seeds": [
+                        {
+                            "seedId": "41953885",
+                            "progressionId": "progression-winner",
+                            "originPhaseOrder": 3,
+                            "originPhaseGroupDisplayIdentifier": "1",
+                            "originPhaseGroupId": "3470753",
+                            "originPlacement": 2,
+                            "originOrder": 1,
+                            "placeholderName": "Middle 1: Losers"
+                        },
+                        {
+                            "seedId": "other-seed",
+                            "progressionId": "progression-winner",
+                            "placeholderName": "Other progression seed"
+                        }
+                    ]
                 }
             ],
             "sets": [
@@ -8673,6 +9009,7 @@ mod progression_source_tests {
                     "winnerId": "losers-winner",
                     "winnerPlacement": 2,
                     "winnerProgressionSeedId": "41953885",
+                    "winnerProgressionId": "progression-winner",
                     "winnerProgressionOriginOrder": 1,
                     "slots": [
                         { "entrantId": "losers-winner", "entrantName": "Losers Winner" },
@@ -8683,7 +9020,7 @@ mod progression_source_tests {
                     "setId": "finals-round-one",
                     "phaseGroupId": "3470701",
                     "phaseOrder": 2,
-                    "phaseName": "Finals",
+                    "phaseName": "Middle",
                     "phaseGroupName": "Pool 1",
                     "phaseGroupDisplayIdentifier": "1",
                     "fullRoundText": "Finals Round 1",
@@ -8696,6 +9033,24 @@ mod progression_source_tests {
                     },
                     "slots": [
                         { "seedId": "41953885", "entrantName": "Middle 1: Losers" },
+                        { "entrantName": "TBD" }
+                    ]
+                },
+                {
+                    "setId": "finals-seed-dependent",
+                    "phaseGroupId": "3470701",
+                    "phaseOrder": 2,
+                    "phaseName": "Middle",
+                    "phaseGroupName": "Pool 1",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Finals Round 2",
+                    "state": 1,
+                    "entrant1Source": {
+                        "sourceType": "seed",
+                        "typeId": "41953885"
+                    },
+                    "slots": [
+                        { "entrantName": "Middle 1: Losers" },
                         { "entrantName": "TBD" }
                     ]
                 }
@@ -8717,23 +9072,264 @@ mod progression_source_tests {
             Some("losers-winner")
         );
 
-        let targets = progression_targets_for(&event);
-        apply_indexed_progression_targets(
-            &mut event,
+        let mut snapshot = TournamentSnapshot {
+            tournament_id: "tournament".to_owned(),
+            slug: "tournament".to_owned(),
+            name: "Tournament".to_owned(),
+            events: vec![event],
+            updated_at: Utc::now(),
+        };
+        let targets = build_progression_targets_by_source(&snapshot, &snapshot.events[0]);
+        apply_local_progression_incremental(
+            &mut snapshot,
+            "event",
             "middle-losers-final",
             "losers-winner",
-            "Losers Winner",
-            None,
             &targets,
         );
         assert_eq!(
-            event.phase_groups[1].seeds[0].entrant_id.as_deref(),
+            snapshot.events[0].phase_groups[1].seeds[0]
+                .entrant_id
+                .as_deref(),
+            Some("losers-winner")
+        );
+        assert_eq!(snapshot.events[0].phase_groups[1].seeds[1].entrant_id, None);
+        assert_eq!(
+            snapshot.events[0].sets[1].slots[0].entrant_id.as_deref(),
             Some("losers-winner")
         );
         assert_eq!(
-            event.sets[1].slots[0].entrant_id.as_deref(),
+            snapshot.events[0].sets[2].slots[0].entrant_id.as_deref(),
             Some("losers-winner")
         );
+    }
+
+    #[test]
+    fn advances_middle_loser_to_exact_finals_losers_seed() {
+        let event: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Event",
+            "phases": [
+                { "phaseId": "middle", "phaseOrder": 1 },
+                { "phaseId": "finals", "phaseOrder": 2 }
+            ],
+            "phaseGroups": [
+                { "phaseGroupId": "middle-group", "phaseId": "middle", "phaseOrder": 1 },
+                {
+                    "phaseGroupId": "finals-group",
+                    "phaseId": "finals",
+                    "phaseOrder": 2,
+                    "seeds": [
+                        {
+                            "seedId": "finals-losers-seed",
+                            "progressionId": "shared-loser-progression",
+                            "placeholderName": "Middle: Loser"
+                        },
+                        {
+                            "seedId": "unrelated-seed",
+                            "progressionId": "shared-loser-progression",
+                            "placeholderName": "Unrelated seed"
+                        }
+                    ]
+                }
+            ],
+            "sets": [
+                {
+                    "setId": "middle-source",
+                    "phaseGroupId": "middle-group",
+                    "phaseOrder": 1,
+                    "fullRoundText": "Winners Round 1",
+                    "state": 3,
+                    "winnerId": "middle-winner",
+                    "loserProgressionSeedId": "finals-losers-seed",
+                    "loserProgressionId": "shared-loser-progression",
+                    "slots": [
+                        { "entrantId": "middle-winner", "entrantName": "Middle Winner" },
+                        { "entrantId": "middle-loser", "entrantName": "Middle Loser" }
+                    ]
+                },
+                {
+                    "setId": "finals-losers-r1",
+                    "phaseGroupId": "finals-group",
+                    "phaseOrder": 2,
+                    "fullRoundText": "Finals Losers Round 1",
+                    "round": -1,
+                    "state": 1,
+                    "entrant1Source": {
+                        "sourceType": "seed",
+                        "typeId": "finals-losers-seed",
+                        "resolvedSetId": "middle-source",
+                        "condition": "loser"
+                    },
+                    "slots": [
+                        { "seedId": "finals-losers-seed", "entrantName": "Middle: Loser" },
+                        { "entrantName": "TBD" }
+                    ]
+                },
+                {
+                    "setId": "finals-losers-r2",
+                    "phaseGroupId": "finals-group",
+                    "phaseOrder": 2,
+                    "fullRoundText": "Finals Losers Round 2",
+                    "round": -2,
+                    "state": 1,
+                    "entrant1Source": {
+                        "sourceType": "seed",
+                        "typeId": "finals-losers-seed"
+                    },
+                    "slots": [
+                        { "entrantName": "Middle: Loser" },
+                        { "entrantName": "TBD" }
+                    ]
+                }
+            ]
+        }))
+        .expect("test event should deserialize");
+        let mut snapshot = TournamentSnapshot {
+            tournament_id: "tournament".to_owned(),
+            slug: "tournament".to_owned(),
+            name: "Tournament".to_owned(),
+            events: vec![event],
+            updated_at: Utc::now(),
+        };
+
+        let targets = build_progression_targets_by_source(&snapshot, &snapshot.events[0]);
+        apply_local_progression_incremental(
+            &mut snapshot,
+            "event",
+            "middle-source",
+            "middle-winner",
+            &targets,
+        );
+
+        let event = &snapshot.events[0];
+        assert_eq!(
+            event.phase_groups[1].seeds[0].entrant_id.as_deref(),
+            Some("middle-loser")
+        );
+        assert_eq!(event.phase_groups[1].seeds[1].entrant_id, None);
+        assert_eq!(
+            event.sets[1].slots[0].entrant_id.as_deref(),
+            Some("middle-loser")
+        );
+        assert_eq!(event.sets[1].slots[0].entrant_name, "Middle Loser");
+        assert_eq!(
+            event.sets[2].slots[0].entrant_id.as_deref(),
+            Some("middle-loser")
+        );
+    }
+
+    #[test]
+    fn advances_first_finals_winners_losers_to_their_source_slots() {
+        let event: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Event",
+            "phaseGroups": [{
+                "phaseGroupId": "finals",
+                "phaseOrder": 2,
+                "setIds": ["A", "B", "H", "I"]
+            }],
+            "sets": [
+                {
+                    "setId": "A",
+                    "identifier": "A",
+                    "phaseGroupId": "finals",
+                    "phaseOrder": 2,
+                    "phaseName": "Finals",
+                    "fullRoundText": "Winners Semi-Final",
+                    "round": 1,
+                    "state": 3,
+                    "winnerId": "a-winner",
+                    "slots": [
+                        { "entrantName": "TBD" },
+                        { "entrantName": "TBD" }
+                    ]
+                },
+                {
+                    "setId": "B",
+                    "identifier": "B",
+                    "phaseGroupId": "finals",
+                    "phaseOrder": 2,
+                    "phaseName": "Finals",
+                    "fullRoundText": "Winners Semi-Final",
+                    "round": 1,
+                    "state": 3,
+                    "winnerId": "b-winner",
+                    "slots": [
+                        { "entrantId": "b-winner", "entrantName": "B Winner" },
+                        { "entrantId": "b-loser", "entrantName": "B Loser" }
+                    ]
+                },
+                {
+                    "setId": "H",
+                    "identifier": "H",
+                    "phaseGroupId": "finals",
+                    "phaseOrder": 2,
+                    "phaseName": "Finals",
+                    "fullRoundText": "Losers Quarter-Final",
+                    "round": -4,
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "set", "typeId": "B", "condition": "loser" },
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "I",
+                    "identifier": "I",
+                    "phaseGroupId": "finals",
+                    "phaseOrder": 2,
+                    "phaseName": "Finals",
+                    "fullRoundText": "Losers Quarter-Final",
+                    "round": -4,
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "set", "typeId": "A", "condition": "loser" },
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                }
+            ]
+        }))
+        .expect("test event should deserialize");
+        let mut snapshot = TournamentSnapshot {
+            tournament_id: "tournament".to_owned(),
+            slug: "tournament".to_owned(),
+            name: "Tournament".to_owned(),
+            events: vec![event.clone()],
+            updated_at: Utc::now(),
+        };
+        let graph = build_bracket_graph(&snapshot, &event);
+        let mut loser_edges = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.relation == "loser")
+            .map(|edge| (edge.from_set_id.as_str(), edge.to_set_id.as_str()))
+            .collect::<Vec<_>>();
+        loser_edges.sort_unstable();
+        assert_eq!(loser_edges, vec![("A", "I"), ("B", "H")]);
+        let targets = build_progression_targets_by_source(&snapshot, &event);
+        let known_names = std::collections::HashMap::from([
+            ("a-winner".to_owned(), "A Winner".to_owned()),
+            ("a-loser".to_owned(), "A Loser".to_owned()),
+        ]);
+        restore_missing_slot_entrants(
+            &mut snapshot.events[0].sets[0],
+            ["a-winner", "a-loser", "a-winner", "a-loser"]
+                .into_iter()
+                .map(str::to_owned),
+            &known_names,
+        );
+
+        for (source_set_id, winner_id) in [("A", "a-winner"), ("B", "b-winner")] {
+            apply_local_progression_incremental(
+                &mut snapshot,
+                "event",
+                source_set_id,
+                winner_id,
+                &targets,
+            );
+        }
+
+        let event = &snapshot.events[0];
+        assert_eq!(event.sets[2].slots[0].entrant_id.as_deref(), Some("b-loser"));
+        assert_eq!(event.sets[3].slots[0].entrant_id.as_deref(), Some("a-loser"));
+        assert_eq!(event.sets[3].slots[0].entrant_name, "A Loser");
     }
 
     #[test]
@@ -9038,6 +9634,153 @@ mod progression_source_tests {
     }
 
     #[test]
+    fn incremental_elimination_progression_updates_only_direct_targets() {
+        let mut snapshot: TournamentSnapshot = serde_json::from_value(serde_json::json!({
+            "tournamentId": "tournament",
+            "slug": "tournament",
+            "name": "Tournament",
+            "events": [{
+                "eventId": "event",
+                "name": "Event",
+                "phaseGroups": [{ "phaseGroupId": "pool" }],
+                "sets": [
+                    {
+                        "setId": "source",
+                        "phaseGroupId": "pool",
+                        "fullRoundText": "Winners Round 1",
+                        "state": 3,
+                        "winnerId": "winner",
+                        "slots": [
+                            { "entrantId": "winner", "entrantName": "Winner" },
+                            { "entrantId": "loser", "entrantName": "Loser" }
+                        ]
+                    },
+                    {
+                        "setId": "winner-target",
+                        "phaseGroupId": "pool",
+                        "fullRoundText": "Winners Round 2",
+                        "state": 1,
+                        "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                    },
+                    {
+                        "setId": "loser-target",
+                        "phaseGroupId": "pool",
+                        "fullRoundText": "Losers Round 1",
+                        "state": 1,
+                        "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                    },
+                    {
+                        "setId": "unrelated",
+                        "phaseGroupId": "pool",
+                        "fullRoundText": "Winners Round 3",
+                        "state": 1,
+                        "entrant1Source": {
+                            "sourceType": "set",
+                            "typeId": "set-b",
+                            "condition": "loser",
+                            "placeholderName": "予選 2: Winners"
+                        },
+                        "entrant2Source": {
+                            "sourceType": "set",
+                            "typeId": "set-f",
+                            "condition": "winner",
+                            "placeholderName": "予選 2: Winners"
+                        },
+                        "slots": [
+                            { "entrantName": "loser of B" },
+                            { "entrantName": "winner of F" }
+                        ]
+                    }
+                ]
+            }],
+            "updatedAt": "2026-01-01T00:00:00Z"
+        }))
+        .expect("test snapshot should deserialize");
+        let mut rebuilt_snapshot = snapshot.clone();
+        rebuild_progression_from_completed_sets(&mut rebuilt_snapshot);
+        assert_eq!(
+            rebuilt_snapshot.events[0].sets[3].slots[0].entrant_name,
+            "loser of B"
+        );
+        assert_eq!(
+            rebuilt_snapshot.events[0].sets[3].slots[1].entrant_name,
+            "winner of F"
+        );
+
+        let targets = std::collections::HashMap::from([(
+            "source".to_owned(),
+            vec![
+                ProgressionTarget {
+                    set_index: 1,
+                    slot_index: 0,
+                    relation: "winner".to_owned(),
+                    is_progression: false,
+                    seed_targets: Vec::new(),
+                },
+                ProgressionTarget {
+                    set_index: 2,
+                    slot_index: 0,
+                    relation: "loser".to_owned(),
+                    is_progression: false,
+                    seed_targets: Vec::new(),
+                },
+            ],
+        )]);
+
+        apply_local_progression_incremental(&mut snapshot, "event", "source", "winner", &targets);
+
+        let event = &snapshot.events[0];
+        assert_eq!(event.sets[1].slots[0].entrant_id.as_deref(), Some("winner"));
+        assert_eq!(event.sets[2].slots[0].entrant_id.as_deref(), Some("loser"));
+        assert_eq!(event.sets[3].slots[0].entrant_id, None);
+        assert_eq!(event.sets[3].slots[1].entrant_id, None);
+        assert_eq!(event.sets[3].slots[0].entrant_name, "loser of B");
+        assert_eq!(event.sets[3].slots[1].entrant_name, "winner of F");
+    }
+
+    #[test]
+    fn source_set_label_takes_priority_over_progression_seed_placeholder() {
+        let mut event: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Event",
+            "sets": [
+                {
+                    "setId": "winners-b",
+                    "identifier": "B",
+                    "fullRoundText": "Winners Round 1",
+                    "state": 3,
+                    "slots": [
+                        { "entrantId": "one", "entrantName": "One" },
+                        { "entrantId": "two", "entrantName": "Two" }
+                    ]
+                },
+                {
+                    "setId": "finals-losers",
+                    "fullRoundText": "Finals Losers Round 1",
+                    "round": -1,
+                    "state": 1,
+                    "entrant1Source": {
+                        "sourceType": "seed",
+                        "typeId": "progression-seed",
+                        "condition": "loser",
+                        "conditionString": "Loser of B",
+                        "placeholderName": "予選 2: Winners"
+                    },
+                    "slots": [
+                        { "entrantName": "予選 2: Winners" },
+                        { "entrantName": "TBD" }
+                    ]
+                }
+            ]
+        }))
+        .expect("test event should deserialize");
+
+        apply_source_based_tbd_labels(&mut event);
+
+        assert_eq!(event.sets[1].slots[0].entrant_name, "loser of B");
+    }
+
+    #[test]
     fn seed_source_reapplication_preserves_advanced_entrant_name() {
         let mut event: EventSnapshot = serde_json::from_value(serde_json::json!({
             "eventId": "event",
@@ -9079,12 +9822,18 @@ mod progression_source_tests {
 
     #[test]
     fn bracket_graph_preserves_losers_round_one_sources_through_intermediate_sets() {
-        let mut event: EventSnapshot = serde_json::from_value(serde_json::json!({
+        let event: EventSnapshot = serde_json::from_value(serde_json::json!({
             "eventId": "event",
             "name": "event",
+            "phases": [
+                { "phaseId": "qualifiers", "phaseOrder": 1 },
+                { "phaseId": "middle", "phaseOrder": 3 },
+                { "phaseId": "finals", "phaseOrder": 2 }
+            ],
             "phaseGroups": [
                 {
-                    "phaseGroupId": "middle-pool-1",
+                    "phaseGroupId": "finals-pool-1",
+                    "phaseId": "finals",
                     "setIds": ["winner-z-a", "winner-a-b", "losers-f"],
                     "phaseOrder": 2,
                     "displayIdentifier": "1"
@@ -9093,12 +9842,12 @@ mod progression_source_tests {
             "sets": [
                 {
                     "setId": "winner-z-a",
-                    "phaseGroupId": "middle-pool-1",
+                    "phaseGroupId": "finals-pool-1",
                     "isIntermediate": true,
                     "fullRoundText": "Winners Round 1",
                     "round": 1,
                     "phaseOrder": 2,
-                    "phaseName": "Middle",
+                    "phaseName": "Finals",
                     "phaseGroupName": "Pool 1",
                     "phaseGroupDisplayIdentifier": "1",
                     "state": 3,
@@ -9110,12 +9859,12 @@ mod progression_source_tests {
                 },
                 {
                     "setId": "winner-a-b",
-                    "phaseGroupId": "middle-pool-1",
+                    "phaseGroupId": "finals-pool-1",
                     "isIntermediate": true,
                     "fullRoundText": "Winners Round 1",
                     "round": 1,
                     "phaseOrder": 2,
-                    "phaseName": "Middle",
+                    "phaseName": "Finals",
                     "phaseGroupName": "Pool 1",
                     "phaseGroupDisplayIdentifier": "1",
                     "state": 3,
@@ -9129,7 +9878,7 @@ mod progression_source_tests {
                     "setId": "pipe-a",
                     "fullRoundText": "Intermediate",
                     "phaseOrder": 2,
-                    "phaseName": "Middle",
+                    "phaseName": "Finals",
                     "phaseGroupName": "Pool 1",
                     "phaseGroupDisplayIdentifier": "1",
                     "isIntermediate": false,
@@ -9137,7 +9886,6 @@ mod progression_source_tests {
                     "entrant1Source": {
                         "sourceType": "set",
                         "typeId": "winner-z-a",
-                        "condition": "loser",
                         "conditionString": "Loser of Winners Round 1"
                     },
                     "entrant2Source": {
@@ -9150,7 +9898,7 @@ mod progression_source_tests {
                     "setId": "pipe-b",
                     "fullRoundText": "Intermediate",
                     "phaseOrder": 2,
-                    "phaseName": "Middle",
+                    "phaseName": "Finals",
                     "phaseGroupName": "Pool 1",
                     "phaseGroupDisplayIdentifier": "1",
                     "isIntermediate": false,
@@ -9158,7 +9906,6 @@ mod progression_source_tests {
                     "entrant1Source": {
                         "sourceType": "set",
                         "typeId": "winner-a-b",
-                        "condition": "loser",
                         "conditionString": "Loser of Winners Round 1"
                     },
                     "entrant2Source": {
@@ -9169,12 +9916,12 @@ mod progression_source_tests {
                 },
                 {
                     "setId": "losers-f",
-                    "phaseGroupId": "middle-pool-1",
+                    "phaseGroupId": "finals-pool-1",
                     "isIntermediate": true,
                     "fullRoundText": "Losers Round 1",
                     "round": -1,
                     "phaseOrder": 2,
-                    "phaseName": "Middle",
+                    "phaseName": "Finals",
                     "phaseGroupName": "Pool 1",
                     "phaseGroupDisplayIdentifier": "1",
                     "state": 1,
@@ -9237,22 +9984,23 @@ mod progression_source_tests {
             vec![(0, "winner-z-a", "loser"), (1, "winner-a-b", "loser")]
         );
 
-        for (source_index, winner_id, winner_name, loser_id, loser_name) in [
-            (0, "winner-a", "Winner A", "loser-a", "Loser A"),
-            (1, "winner-b", "Winner B", "loser-b", "Loser B"),
+        let targets = progression_targets_for(&event);
+        let mut snapshot = snapshot;
+        for (source_index, winner_id) in [
+            (0, "winner-a"),
+            (1, "winner-b"),
         ] {
-            let targets = progression_targets_for(&event);
-            let source_set_id = event.sets[source_index].set_id.clone();
-            apply_indexed_progression_targets(
-                &mut event,
+            let source_set_id = snapshot.events[0].sets[source_index].set_id.clone();
+            apply_local_progression_incremental(
+                &mut snapshot,
+                "event",
                 &source_set_id,
                 winner_id,
-                winner_name,
-                Some((loser_id, loser_name)),
                 &targets,
             );
         }
 
+        let event = &snapshot.events[0];
         assert_eq!(
             event.sets[4].slots[0].entrant_id.as_deref(),
             Some("loser-a")

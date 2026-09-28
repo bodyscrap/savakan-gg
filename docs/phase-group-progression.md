@@ -190,3 +190,11 @@ DEでは、phaseGroup間進出と同一bracket内のwinner/loser移動を分け�
 5. 表示だけでなく、seed補完後のsnapshot値も確認し、保存データとUIの名前解決のどちらでplaceholderが優先されたかを切り分ける。
 
 この経路の回帰テストは [storage.rs](../src-tauri/src/storage.rs) の `restores_pending_slot_ids_before_rebuilding_loser_progression`、`seed_source_reapplication_preserves_advanced_entrant_name`、`bracket_graph_preserves_losers_round_one_sources_through_intermediate_sets` を基準にします。少なくとも「AのwinnerはBへ、loserはJを経由してFへ進む」「entrant IDを維持する」「seed再適用後も実名を維持する」を一連で確認してください。
+
+### 2026-09-28: 確定時の空slot復元とLosers進行
+
+決勝Set Aの確定後、winnerはWinners側へ進んだ一方、loserのIDと名前がSet Iに反映されない事象を確認しました。保存データではAの確定winnerとpending結果のslotScoresに両entrant IDがあり、graphにもA loserからIへのsource edgeがありましたが、Aのslot entrant ID自体は空で、Iはsource由来のplaceholder表示のままでした。表示だけの問題ではなく、進行計算に渡るsnapshot上で敗者を特定できていませんでした。
+
+結果確定時に、確定入力のslotScoresから重複を除いたentrant IDを元setの空slotへ復元してから進行処理を行います。ゲーム単位で同一entrant IDが複数行あるスコア入力でも、2人分の一意IDとslot数が一致するときだけ復元します。pending結果の再読込にも同じ復元処理を使い、アプリ再起動後の再構築でもIDを失わないようにします。復元は既存のincremental進行前に行うため、結果確定時に全bracketを再構築する必要はありません。
+
+Set A確定後に勝者がC、敗者がIへ進み、IDと名前も維持されることを実機で確認しました。回帰テスト `advances_first_finals_winners_losers_to_their_source_slots` は空slotとゲーム別に重複するscore行を使い、AからIへの敗者進行を確認します。`cargo test --lib`（31件）と `cargo check` も成功しています。
