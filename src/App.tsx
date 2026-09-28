@@ -7,6 +7,7 @@ import QRCode from "qrcode";
 import jsQR from "jsqr";
 import { CreateSnapshot, type EventSnapshotProgress, type TournamentEventPreviewItem, type TournamentPreview } from "./CreateSnapshot";
 import { SettingsScreen } from "./SettingMenu";
+import { callElapsedSeconds, StatusBoard, StatusBoardHero, type CallListEventGroup, type CallListEventSortStrategy } from "./StatusBoard";
 import "./App.css";
 
 type SetSlot = {
@@ -977,26 +978,6 @@ type CallSyncStatusTarget = {
   callEntrantId: string;
 };
 
-type CallListPlayer = {
-  threadId: string;
-  entrantName: string;
-  createdAt: string;
-  senderName: string;
-};
-
-type CallListEventGroup = {
-  key: string;
-  eventAlias: string;
-  tournamentName: string;
-  eventName: string;
-  eventId: string;
-  phaseName: string;
-  phaseGroupName: string;
-  players: CallListPlayer[];
-};
-
-type CallListEventSortStrategy = "alias" | "max-elapsed";
-
 type DqRequestDialogState = {
   threadId: string;
   parentMessageId: string;
@@ -1303,40 +1284,6 @@ function normalizeMobileInputPollingMs(rawValue: unknown, fallback = MOBILE_INPU
   }
 
   return rounded;
-}
-
-function formatCallElapsedTime(createdAt: string, referenceMs: number): string {
-  const createdMs = Date.parse(createdAt);
-  if (!Number.isFinite(createdMs)) {
-    return "00時間00分経過";
-  }
-
-  const elapsedMs = Math.max(0, referenceMs - createdMs);
-  const totalMinutes = Math.floor(elapsedMs / 60000);
-  const elapsedHours = Math.floor(totalMinutes / 60);
-  const elapsedMinutes = totalMinutes % 60;
-
-  return `${String(elapsedHours).padStart(2, "0")}時間${String(elapsedMinutes).padStart(2, "0")}分経過`;
-}
-
-function callElapsedSeconds(createdAt: string, referenceMs: number): number {
-  const createdMs = Date.parse(createdAt);
-  if (!Number.isFinite(createdMs)) {
-    return 0;
-  }
-  return Math.max(0, (referenceMs - createdMs) / 1000);
-}
-
-function buildCallListPlayerChipStyle(elapsedSeconds: number, redAfterSeconds: number) {
-  const threshold = Math.max(1, redAfterSeconds);
-  const progress = Math.min(Math.max(elapsedSeconds / threshold, 0), 1);
-  const hue = Math.round((1 - progress) * 120);
-
-  return {
-    backgroundColor: `hsl(${hue} 82% 91%)`,
-    borderColor: `hsl(${hue} 74% 43%)`,
-    color: `hsl(${hue} 66% 20%)`,
-  };
 }
 
 function clampNonNegativeInteger(value: number, fallback: number): number {
@@ -11065,68 +11012,25 @@ function App() {
       <main className={`content ${activeTab === "call-list" ? "call-list-mode" : ""}`}>
         <section className="hero">
           {activeTab === "call-list" ? (
-            <>
-              <div className="hero-call-list-head">
-                <h2 className="call-list-hero-title">プレイヤー呼び出し(イベント名/フェーズ名/プール名)</h2>
-                <p className="call-list-page-big">{callListCurrentPage}/{callListTotalPages}</p>
-              </div>
-              <div className="hero-call-list-toolbar">
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => {
-                      setCallListEventSortStrategy((current) => (current === "alias" ? "max-elapsed" : "alias"));
-                    }}
-                  >
-                    並び替え: {callListEventSortStrategy === "alias" ? "エイリアス順" : "最大経過時間順"}
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={!canBroadcastCallListSync}
-                    onClick={() => void requestUnresolvedCallSyncBroadcast()}
-                  >
-                    呼び出しの同期
-                  </button>
-                  {unresolvedCallEventPages.length > 1 && (
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => {
-                        setCallListPageSwitchedAtMs(Date.now());
-                        setCallListPageIndex((current) => {
-                          const next = (current + 1) % unresolvedCallEventPages.length;
-                          if (next === 0) {
-                            setCallListCycleCount((cycle) => cycle + 1);
-                          }
-                          return next;
-                        });
-                      }}
-                    >
-                      次ページ
-                    </button>
-                  )}
-                </div>
-              </div>
-              {unresolvedCallEventPages.length > 1 && (
-                <div
-                  className="call-list-rotate-progress"
-                  role="progressbar"
-                  aria-label="次ページ切替までの進捗"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(normalizedCallListPageProgressPercent)}
-                >
-                  <div className="call-list-rotate-progress-track">
-                    <div
-                      className="call-list-rotate-progress-fill"
-                      style={{ width: `${normalizedCallListPageProgressPercent}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-            </>
+            <StatusBoardHero
+              currentPage={callListCurrentPage}
+              totalPages={callListTotalPages}
+              sortStrategy={callListEventSortStrategy}
+              onToggleSort={() => setCallListEventSortStrategy((current) => (current === "alias" ? "max-elapsed" : "alias"))}
+              canBroadcastSync={canBroadcastCallListSync}
+              onBroadcastSync={() => void requestUnresolvedCallSyncBroadcast()}
+              onNextPage={() => {
+                setCallListPageSwitchedAtMs(Date.now());
+                setCallListPageIndex((current) => {
+                  const next = (current + 1) % unresolvedCallEventPages.length;
+                  if (next === 0) {
+                    setCallListCycleCount((cycle) => cycle + 1);
+                  }
+                  return next;
+                });
+              }}
+              pageProgressPercent={normalizedCallListPageProgressPercent}
+            />
           ) : (
             <>
               <h2>{activeTab === "create" ? "新規作成" : (APP_TABS.find((tab) => tab.id === activeTab)?.label ?? "大会管理")}</h2>
@@ -11973,103 +11877,28 @@ function App() {
       )}
 
       {activeTab === "call-list" && (
-        <>
-          <section className="panel call-list-panel">
-            {unresolvedCallEventGroups.length === 0 ? (
-              <div style={{ display: "grid", gap: "0.5rem" }}>
-                <p className="meta">現在未解決の呼び出しはありません。</p>
-                {callListFocusOwnUnresolved && unresolvedCallRootCounts.hidden > 0 && (
-                  <>
-                    <p className="meta">
-                      他ユーザー起点の未解決呼び出し {unresolvedCallRootCounts.hidden} 件は、全クリア後の自分起点フィルタにより非表示です。
-                    </p>
-                    <div>
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => {
-                          setCallListFocusOwnUnresolved(false);
-                          setCallListDisplayGroups([]);
-                          setCallListPageIndex(0);
-                          setCallListCycleCount(0);
-                          setCallListPageSwitchedAtMs(Date.now());
-                          setCallListProgressNowMs(Date.now());
-                          setMessage("呼び出しリストを全未解決表示に戻しました。");
-                        }}
-                      >
-                        全未解決を表示する
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ) : (
-              <div className="call-list-event-grid">
-                {activeUnresolvedCallEventPage.map((group) => (
-                  <article className="event-list-item" key={`call-list-${group.key}`}>
-                    <div className="event-list-head">
-                      <p className="call-list-event-summary">
-                        <span className="call-list-event-alias">
-                          {group.eventAlias !== "" ? group.eventAlias : "(イベントエイリアス未設定)"}
-                          {"("}
-                          {resolveCallPhaseName(
-                            snapshot?.events.find((event) => event.eventId === group.eventId) ?? null,
-                            group.phaseName,
-                            null,
-                          )}
-                          {"/"}
-                          {group.phaseGroupName !== "" ? group.phaseGroupName : "-"}
-                          {")"}
-                        </span>
-                        <span className="call-list-event-detail">
-                          {group.tournamentName !== "" ? group.tournamentName : "-"}
-                          {" / "}
-                          {group.eventName !== "" ? group.eventName : "-"}
-                          {" [eventId:"}
-                          {group.eventId !== "" ? group.eventId : "-"}
-                          {"]"}
-                        </span>
-                      </p>
-                      <span className="meta">{group.players.length} 件</span>
-                    </div>
-                    <div className="call-list-player-tags">
-                      {group.players
-                        .slice()
-                        .sort((left, right) => {
-                          const leftElapsed = callElapsedSeconds(left.createdAt, callListPageSwitchedAtMs);
-                          const rightElapsed = callElapsedSeconds(right.createdAt, callListPageSwitchedAtMs);
-                          if (leftElapsed !== rightElapsed) {
-                            return rightElapsed - leftElapsed;
-                          }
-
-                          const leftMs = Date.parse(left.createdAt);
-                          const rightMs = Date.parse(right.createdAt);
-                          if (Number.isFinite(leftMs) && Number.isFinite(rightMs) && leftMs !== rightMs) {
-                            return leftMs - rightMs;
-                          }
-
-                          return left.threadId.localeCompare(right.threadId, "ja");
-                        })
-                        .map((player) => {
-                        const elapsedSeconds = callElapsedSeconds(player.createdAt, callListPageSwitchedAtMs);
-                        const chipStyle = buildCallListPlayerChipStyle(elapsedSeconds, callListColorToRedSeconds);
-
-                        return (
-                        <span className="call-list-player-chip" key={`${group.key}-${player.threadId}`} style={chipStyle}>
-                          <span className="call-list-player-chip-name">{player.entrantName}</span>
-                          <span className="call-list-player-chip-elapsed">
-                            {formatCallElapsedTime(player.createdAt, callListPageSwitchedAtMs)}
-                          </span>
-                        </span>
-                        );
-                      })}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
-        </>
+        <StatusBoard
+          eventGroups={unresolvedCallEventGroups}
+          activePage={activeUnresolvedCallEventPage}
+          hiddenUnresolvedCount={unresolvedCallRootCounts.hidden}
+          focusOwnUnresolved={callListFocusOwnUnresolved}
+          onShowAllUnresolved={() => {
+            setCallListFocusOwnUnresolved(false);
+            setCallListDisplayGroups([]);
+            setCallListPageIndex(0);
+            setCallListCycleCount(0);
+            setCallListPageSwitchedAtMs(Date.now());
+            setCallListProgressNowMs(Date.now());
+            setMessage("呼び出しリストを全未解決表示に戻しました。");
+          }}
+          resolvePhaseName={(eventId, phaseName) => resolveCallPhaseName(
+            snapshot?.events.find((event) => event.eventId === eventId) ?? null,
+            phaseName,
+            null,
+          )}
+          pageSwitchedAtMs={callListPageSwitchedAtMs}
+          colorToRedSeconds={callListColorToRedSeconds}
+        />
       )}
 
       {dqDialog && (
