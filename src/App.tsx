@@ -29,8 +29,10 @@ import {
 import { EventSelector, localSnapshotAliasLabel, localSnapshotItemKey, type LocalSnapshotEventListItem } from "./EventSelector";
 import { EventSetting } from "./EventSetting";
 import { OverlayControl, type ObsOverlayState } from "./OverlayControl";
-import { EliminationBracket, type EliminationBracketSectionView } from "./EliminationBracket";
-import { RoundRobinBracket } from "./RoundRobinBracket";
+import { BracketTab } from "./BracketTab";
+import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
+import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDialog";
+import type { EliminationBracketSectionView } from "./EliminationBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
 
 import { useBracketReport } from "./useBracketReport";
@@ -247,25 +249,9 @@ type TournamentWorkspace = {
   localMeta: TournamentLocalMeta;
 };
 
-type ResultConfirmationState = {
-  match: SetSnapshot;
-  scoreDrafts: SetScoreDraft;
-  directWinnerId: string | null;
-};
-
 type WorkspaceUpdatedEvent = {
   slug: string;
   eventId: string;
-};
-
-type MatchSideRandomNotice = {
-  setId: string;
-  upperEntrantName: string;
-  lowerEntrantName: string;
-  upperSide: PlaySide;
-  lowerSide: PlaySide;
-  changed: boolean;
-  triggeredAt: number;
 };
 
 type ObsOverlaySetInput = {
@@ -8137,821 +8123,263 @@ function App() {
 
         {activeTab === "bracket" && (
         <>
-          <section className="panel">
-            <h2>使用方法</h2>
-            <p className="meta">試合setのカードをクリックすると詳細ダイアログが開き、各種入力が可能です。</p>
-            <p className="meta">カードを Ctrl+クリックで配信画面のON/OFF(最大1set)。Alt+左クリックで完全停止します。</p>
-            <div className="panel-toolbar compact">
-              <p className="meta">
-                下書き: {draftPendingCount} / 確定済み: {confirmedReportableCount}
-              </p>
-            </div>
-            {(busy || bracketReport.progress) && (
-              <div className="create-snapshot-progress" role="status" aria-live="polite" style={{ marginTop: "0.7rem" }}>
-                <div
-                  className="create-snapshot-progress-track"
-                  role="progressbar"
-                  aria-label="結果報告の進捗"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(bracketReport.progressPercent)}
-                >
-                  <div
-                    className="create-snapshot-progress-fill"
-                    style={{ width: `${bracketReport.progressPercent}%` }}
-                  />
-                </div>
-                <p className="create-snapshot-progress-meta">
-                  {bracketReport.progressLabel}
-                  {bracketReport.progress ? ` (${Math.round(bracketReport.progressPercent)}%)` : ""}
-                </p>
-              </div>
-            )}
-            {shouldShowBracketSnapshotRefreshProgress && (
-              <div className="create-snapshot-progress" role="status" aria-live="polite" style={{ marginTop: "0.45rem" }}>
-                <div
-                  className="create-snapshot-progress-track"
-                  role="progressbar"
-                  aria-label="報告後スナップショット更新の進捗"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(createSnapshotProgressPercent)}
-                >
-                  <div
-                    className="create-snapshot-progress-fill"
-                    style={{ width: `${createSnapshotProgressPercent}%` }}
-                  />
-                </div>
-                <p className="create-snapshot-progress-meta">
-                  {`報告後スナップショット更新: ${createSnapshotProgressLabel}`}
-                  {createSnapshotProgress?.totalSets !== null ? ` (${Math.round(createSnapshotProgressPercent)}%)` : ""}
-                </p>
-              </div>
-            )}
-            <p className="meta">カード枠が黄色の試合は、現在のスナップショットからローカル変更があります。</p>
-          </section>
-
-          {snapshot && (
-            <section className="panel">
-              <h2>{selectedEventMeta?.eventAlias?.trim() ? selectedEventMeta.eventAlias : "未設定"}</h2>
-              <p className="meta">start.ggのtournament名: {snapshot.name}</p>
-              <p className="meta">start.ggのevent名: {selectedEvent?.name ?? "-"}</p>
-
-              <div className="event-toolbar">
-                <label htmlFor="phase-select">対象フェーズ</label>
-                <select
-                  id="phase-select"
-                  value={selectedPhaseName}
-                  onChange={(e) => setSelectedPhaseName(e.currentTarget.value)}
-                  disabled={phaseNames.length === 0}
-                >
-                  {phaseNames.length === 0 ? (
-                    <option value="">フェーズがありません</option>
-                  ) : (
-                    phaseNames.map((phaseName) => (
-                      <option key={phaseName} value={phaseName}>
-                        {phaseName}
-                      </option>
-                    ))
-                  )}
-                </select>
-
-                <label htmlFor="phase-pool-select">対象プール</label>
-                <select
-                  id="phase-pool-select"
-                  value={selectedPhasePoolGroup?.key ?? ""}
-                  onChange={(e) => setSelectedPhasePoolKey(e.currentTarget.value)}
-                  disabled={phaseScopedPoolGroups.length === 0}
-                >
-                  {phaseScopedPoolGroups.length === 0 ? (
-                    <option value="">フェーズ/プールがありません</option>
-                  ) : (
-                    phaseScopedPoolGroups.map((group) => (
-                      <option key={group.key} value={group.key}>
-                        {group.phaseName} / Pool {group.phaseGroupName} ({group.sets.length} sets)
-                      </option>
-                    ))
-                  )}
-                </select>
-
-                <div className="bracket-view-tools" style={bracketScaleStyle}>
-                  <label htmlFor="bracket-zoom-select">
-                    表示倍率
-                    <select
-                      id="bracket-zoom-select"
-                      value={String(bracketZoomLevel)}
-                      onChange={(event) => setBracketZoomLevel(normalizeBracketZoomLevel(event.currentTarget.value))}
-                    >
-                      {BRACKET_ZOOM_LEVELS.map((level) => (
-                        <option key={level} value={String(level)}>
-                          {level.toFixed(2)}x
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                <div style={{ display: "flex", gap: "0.5rem" }}>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy || mobileInputPortalBusy || toApiSlug(slug) === "" || !selectedEvent}
-                    onClick={() => {
-                      void openMobileInputPortalDialog();
-                    }}
-                  >
-                    スマートフォンでアクセス
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy || toApiSlug(slug) === "" || !selectedEvent}
-                    onClick={() => setRestoreDialogOpen(true)}
-                  >
-                    復元
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy || toApiSlug(slug) === "" || confirmedReportableCount === 0}
-                    onClick={() => void bracketReport.startReport()}
-                  >
-                    確定済みを一括報告
-                  </button>
-                </div>
-              </div>
-              <div className="phase-groups">
-                {!selectedPhasePoolGroup ? (
-                  <p className="meta">選択中イベントにフェーズ/プール情報がありません。</p>
-                ) : (
-                  <section className="phase-group" key={selectedPhasePoolGroup.key}>
-                    <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
-
-                    {getBracketProgressionModel(selectedPhasePoolGroup.bracketType) === "round_robin" ? (
-                      <RoundRobinBracket
-                        scaleStyle={bracketScaleStyle}
-                        setCount={selectedPhasePoolGroup.sets.length}
-                        phaseGroupId={selectedPhasePoolGroup.phaseGroupId}
-                        seeds={selectedPhasePoolGroup.seeds}
-                        progressionsOut={selectedPhasePoolGroup.progressionsOut}
-                        entrantNames={roundRobinBoardData.entrants.map((entrantId) =>
-                          roundRobinBoardData.entrantNames.get(entrantId) ?? "",
-                        )}
-                        rows={roundRobinMatrixRows}
-                        standings={roundRobinBoardData.standings}
-                        tieBreakRules={roundRobinBoardData.tieBreakRules}
-                        qualifyingCount={roundRobinBoardData.qualifyingCount}
-                        diagnostics={{
-                          candidateSetCount: roundRobinBoardData.candidateSetCount,
-                          twoSlotSetCount: roundRobinBoardData.twoSlotSetCount,
-                          resolvedSetCount: roundRobinBoardData.resolvedSetCount,
-                          registeredSetCount: roundRobinBoardData.registeredSetCount,
-                          unresolvedSetIds: roundRobinBoardData.unresolvedSetIds,
-                          unresolvedSetReasons: roundRobinBoardData.unresolvedSetReasons,
-                        }}
-                        onMatchClick={(set, event) => {
-                          if (event.altKey) {
-                            event.preventDefault();
-                            if (!busy && !obsOverlayBusy) void setObsOverlayFullyStopped(true);
-                            return;
-                          }
-                          if (event.ctrlKey) {
-                            event.preventDefault();
-                            if (!busy && !obsOverlayBusy) void toggleActiveMatchOverlay(set);
-                            return;
-                          }
-                          openMatchDialog(set);
-                        }}
-                      />
-                    ) : (
-                      <EliminationBracket
-                        scaleStyle={bracketScaleStyle}
-                        phaseGroupKey={selectedPhasePoolGroup.key}
-                        seeds={selectedPhasePoolGroup.seeds}
-                        seedMap={selectedPhasePoolGroup.seedMap}
-                        sections={eliminationBracketSections}
-                        onActivateSet={(set, event) => {
-                          if (event.altKey && event.button === 0) {
-                            event.preventDefault();
-                            if (busy || obsOverlayBusy) {
-                              return;
-                            }
-                            void setObsOverlayFullyStopped(true);
-                            return;
-                          }
-                          if (event.ctrlKey) {
-                            event.preventDefault();
-                            if (busy || obsOverlayBusy) {
-                              return;
-                            }
-                            void toggleActiveMatchOverlay(set);
-                            return;
-                          }
-                          openMatchDialog(set);
-                        }}
-                        onOpenSet={openMatchDialog}
-                      />
-                    )}
-                  </section>
-                )}
-              </div>
-            </section>
-          )}
-
-          {activeMatch && selectedEvent && (() => {
-            const currentDialogMatch = activeMatch;
-            const activeMatchCompleted = isCompletedSet(currentDialogMatch);
-            const dialogSetCode = setDisplayCodeById.get(currentDialogMatch.setId);
-            const dialogIsLiveOverlaySet = Boolean(
-              obsOverlayState?.active
-              && obsOverlayState.currentSetId === currentDialogMatch.setId
-              && obsOverlayState.currentSetId !== "__test__",
-            );
-
-            return (
-              <div className="dialog-backdrop" onClick={closeMatchDialog}> 
-                <section
-                  className="dialog-panel"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label="試合詳細"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="dialog-head">
-                    <div className="dialog-head-summary">
-                      <h3>{activeMatch.fullRoundText}</h3>
-                      <div className="dialog-set-meta">
-                        <span className="set-identifier">Set {dialogSetCode ?? "-"}</span>
-                        {dialogIsLiveOverlaySet && <span className="set-live-badge">配信中</span>}
-                      </div>
-                    </div>
-                    <button type="button" className="ghost" onClick={closeMatchDialog}>閉じる</button>
-                  </div>
-                  <p className="meta">setId: {activeMatch.setId} / state: {activeMatch.state}</p>
-                  {activeMatchCompleted && (
-                    <p className="meta">確定済みsetのスコアは変更できません。修正する場合は「影響setを取消」からやり直してください。</p>
-                  )}
-                  {!isMatchupReady(activeMatch) && <p className="meta">対戦カード確定後にプレイヤーサイドを変更できます。</p>}
-                  {matchSideRandomNotice && matchSideRandomNotice.setId === activeMatch.setId && (
-                    <p className={`meta side-random-notice ${matchSideRandomNotice.changed ? "changed" : "unchanged"}`}>
-                      ランダム実行済み ({new Date(matchSideRandomNotice.triggeredAt).toLocaleTimeString("ja-JP", { hour12: false })})
-                      : 上段 {matchSideRandomNotice.upperEntrantName} = {matchSideRandomNotice.upperSide} / 下段 {matchSideRandomNotice.lowerEntrantName} = {matchSideRandomNotice.lowerSide}
-                      {!matchSideRandomNotice.changed ? " (結果は変更なし)" : ""}
-                    </p>
-                  )}
-                  <label className="checkbox-row" style={{ marginTop: "0.4rem" }}>
-                    <input
-                      type="checkbox"
-                      checked={displayBracketPlayersBySide}
-                      onChange={(event) => setDisplayBracketPlayersBySide(event.currentTarget.checked)}
-                    />
-                    プレイヤーサイドに合わせて表示 (1Pが左 / 2Pが右)
-                  </label>
-                  <div className="side-toggle-row" style={{ marginTop: "0.45rem" }}>
-                    <button
-                      type="button"
-                      className="ghost tiny"
-                      disabled={busy || !isMatchupReady(activeMatch)}
-                      onClick={() => {
-                        swapMatchSides(activeMatch);
-                      }}
-                    >
-                      1P/2P入替
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost tiny side-choice side-choice-random"
-                      disabled={busy || !isMatchupReady(activeMatch)}
-                      onClick={() => {
-                        void randomizeMatchSides(activeMatch);
-                      }}
-                    >
-                      1P/2Pランダム決定
-                    </button>
-                  </div>
-
-                  <div className="dialog-players">
-                    {(() => {
-                      const matchupReady = isMatchupReady(activeMatch);
-                      const displaySlots = getDisplaySlotsForSet(activeMatch, {
-                        matchupReady,
-                        sideDrafts: activeMatchSideDrafts,
-                      });
-
-                      return displaySlots.map(({ slot, slotIndex: idx }) => {
-                        const entrantId = slot.entrantId;
-                        const dialogTbdLabel = resolveTbdSourceLabel(activeMatch, idx, slot);
-                        const dialogEntrantName = !entrantId && dialogTbdLabel ? dialogTbdLabel : slot.entrantName;
-                        const fallbackSide = getSetSlotSideLabel(activeMatch.setId, entrantId, {
-                          fallbackBySlotIndex: idx,
-                          matchupReady,
-                        });
-                        const currentSide = entrantId
-                          ? (activeMatchSideDrafts[entrantId] || getSetSlotSide(activeMatch.setId, entrantId) || fallbackSide)
-                          : "";
-                        const scoreValue = entrantId && directWinnerId
-                          ? (entrantId === directWinnerId ? "W" : "L")
-                          : entrantId ? scoreDrafts[entrantId] ?? "" : "";
-                        const otherEntrantId = activeMatch.slots.find(
-                          (item) => item.entrantId !== null && item.entrantId !== entrantId,
-                        )?.entrantId ?? null;
-
-                        return (
-                          <article
-                            className={`dialog-player-card ${currentSide === "1P" ? "side-card-1p" : currentSide === "2P" ? "side-card-2p" : ""}`}
-                            key={`${activeMatch.setId}-dialog-${idx}`}
-                          >
-                            <p className="dialog-player-name">{dialogEntrantName}</p>
-                            <p className="meta">entrantId: {entrantId ?? "-"}</p>
-                            {entrantId && (
-                              <>
-                                <p className="meta">プレイヤーサイド: {currentSide === "" ? "-" : currentSide}</p>
-                                <label>
-                                  取得ゲーム数
-                                  <div className="set-score-stepper">
-                                    <button
-                                      type="button"
-                                      className="ghost tiny"
-                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch) || directWinnerId !== null}
-                                      onClick={() => {
-                                        if (!entrantId) {
-                                          return;
-                                        }
-                                        setScoreDrafts((current) =>
-                                          applyScoreDraftWithOpponentDefault(
-                                            activeMatch,
-                                            current,
-                                            entrantId,
-                                            stepScoreDraftValue(current[entrantId] ?? "", -1),
-                                          ));
-                                      }}
-                                    >
-                                      -
-                                    </button>
-                                    <input
-                                      className="set-score-input"
-                                      type="text"
-                                      inputMode="numeric"
-                                      value={scoreValue}
-                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch) || directWinnerId !== null}
-                                      onChange={(e) => {
-                                        if (!entrantId) {
-                                          return;
-                                        }
-                                        const nextValue = e.currentTarget.value;
-                                        setScoreDrafts((current) =>
-                                          applyScoreDraftWithOpponentDefault(
-                                            activeMatch,
-                                            current,
-                                            entrantId,
-                                            nextValue,
-                                          ));
-                                      }}
-                                    />
-                                    <button
-                                      type="button"
-                                      className="ghost tiny"
-                                      disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch) || directWinnerId !== null}
-                                      onClick={() => {
-                                        if (!entrantId) {
-                                          return;
-                                        }
-                                        setScoreDrafts((current) =>
-                                          applyScoreDraftWithOpponentDefault(
-                                            activeMatch,
-                                            current,
-                                            entrantId,
-                                            stepScoreDraftValue(current[entrantId] ?? "", 1),
-                                          ));
-                                      }}
-                                    >
-                                      +
-                                    </button>
-                                  </div>
-                                </label>
-                                {entrantId && otherEntrantId && (
-                                  <button
-                                    type="button"
-                                    className="ghost tiny"
-                                    disabled={busy || activeMatchCompleted}
-                                    onClick={() => {
-                                      setDirectWinnerId((current) => current === entrantId ? null : entrantId);
-                                      setScoreDrafts((current) => ({
-                                        ...current,
-                                        [entrantId]: directWinnerId === entrantId ? "" : "W",
-                                        [otherEntrantId]: directWinnerId === entrantId ? "" : "L",
-                                      }));
-                                    }}
-                                  >
-                                    {directWinnerId === entrantId ? "解除" : "Win"}
-                                  </button>
-                                )}
-                                {entrantId && otherEntrantId && (
-                                  <button
-                                    type="button"
-                                    className="ghost tiny"
-                                    disabled={busy || activeMatchCompleted}
-                                    onClick={() => {
-                                      setScoreDrafts((current) => ({
-                                        ...current,
-                                        [entrantId]: "-",
-                                        [otherEntrantId]: "0",
-                                      }));
-                                    }}
-                                  >
-                                    DQ
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  className="ghost tiny"
-                                  disabled={
-                                    busy
-                                    || callingEntrantId === entrantId
-                                  }
-                                  onClick={() => {
-                                    if (!entrantId) {
-                                      return;
-                                    }
-                                    void sendCallMessageFromMatch(slot, entrantId);
-                                  }}
-                                >
-                                  {callingEntrantId === entrantId ? "送信中..." : "呼び出し"}
-                                </button>
-                              </>
-                            )}
-                          </article>
-                        );
-                      });
-                    })()}
-                  </div>
-
-                  <div className="dialog-actions dialog-actions-split match-dialog-actions">
-                    <div className="dialog-danger-actions">
-                      <button
-                        type="button"
-                        className="ghost"
-                        disabled={busy || activeMatchCompleted}
-                        onClick={() => {
-                          void discardLocalResultDraftForMatch();
-                        }}
-                      >
-                        下書きの破棄
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost"
-                        disabled={busy}
-                        onClick={() => {
-                          void resetSetResultCascadeForMatch();
-                        }}
-                      >
-                        setの取り消し
-                      </button>
-                    </div>
-                    <div className="dialog-primary-actions">
-                      <button
-                        type="button"
-                        disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch) || isActiveMatchDqDraft}
-                        onClick={() => {
-                          void saveLocalResultForMatch(false);
-                        }}
-                      >
-                        更新
-                      </button>
-                      <button
-                        type="button"
-                        className="ghost"
-                        disabled={busy || obsOverlayBusy}
-                        onClick={() => {
-                          const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === currentDialogMatch.setId;
-                          const otherSetIsActive = Boolean(
-                            obsOverlayState?.active
-                            && obsOverlayState.currentSetId
-                            && obsOverlayState.currentSetId !== currentDialogMatch.setId
-                            && obsOverlayState.currentSetId !== "__test__",
-                          );
-
-                          if (otherSetIsActive && !isSameActive) {
-                            setOverlaySwitchConfirm({
-                              targetSetId: currentDialogMatch.setId,
-                              targetSetLabel: currentDialogMatch.fullRoundText || `Set ${dialogSetCode ?? "-"}`,
-                            });
-                            return;
-                          }
-
-                          void toggleActiveMatchOverlay(currentDialogMatch);
-                        }}
-                      >
-                        {obsOverlayState?.active && obsOverlayState.currentSetId === currentDialogMatch.setId && obsOverlayState.currentSetId !== "__test__"
-                          ? "配信停止"
-                          : "配信開始"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy || activeMatchCompleted || !isMatchupReady(activeMatch)}
-                        onClick={() => {
-                          requestResultConfirmation(activeMatch);
-                        }}
-                      >
-                        確定
-                      </button>
-                    </div>
-                  </div>
-                </section>
-              </div>
-            );
-          })()}
-          {resultConfirmation && activeMatch && resultConfirmation.match.setId === activeMatch.setId && (
-            <div className="dialog-backdrop" onClick={() => setResultConfirmation(null)}>
-              <section
-                className="dialog-panel"
-                role="dialog"
-                aria-modal="true"
-                aria-label="結果確定確認"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <div className="dialog-head">
-                  <div>
-                    <h3>結果を確定しますか？</h3>
-                    <p className="meta">確定後は通常の下書き破棄では取り消せません。</p>
-                  </div>
-                </div>
-                <div className="dialog-body">
-                  <div className="dialog-summary-box">
-                    <p className="dialog-summary-title">{resultConfirmation.match.fullRoundText}</p>
-                    {resultConfirmation.match.slots
-                      .filter((slot) => slot.entrantId)
-                      .map((slot) => (
-                        <p className="meta" key={`result-confirm-${resultConfirmation.match.setId}-${slot.entrantId}`}>
-                          {slot.entrantName}: {resultConfirmation.scoreDrafts[slot.entrantId ?? ""] || "未入力"}
-                        </p>
-                      ))}
-                  </div>
-                  <p className="meta">内容を確認し、正しければ確定してください。修正する場合はキャンセルしてください。</p>
-                </div>
-                <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
-                  <button type="button" className="ghost" onClick={() => setResultConfirmation(null)}>キャンセル</button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
-                      setResultConfirmation(null);
-                      void saveLocalResultForMatch(true);
-                    }}
-                  >
-                    この結果を確定
-                  </button>
-                </div>
-              </section>
-            </div>
-          )}
-          {restoreDialogOpen && (
-            <div className="dialog-backdrop" onClick={() => setRestoreDialogOpen(false)}>
-              <section
-                className="dialog-panel"
-                role="dialog"
-                aria-modal="true"
-                aria-label="復元方法"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <div className="dialog-head">
-                  <div>
-                    <h3>復元方法</h3>
-                    <p className="meta">対象: {selectedEvent?.name ?? "選択中のイベント"}</p>
-                  </div>
-                  <button type="button" className="ghost" onClick={() => setRestoreDialogOpen(false)}>閉じる</button>
-                </div>
-                <div className="dialog-body" style={{ display: "grid", gap: "0.5rem" }}>
-                  <p className="meta">
-                    スナップショット取得後の対象eventの未報告結果（確定済みを含む）は破棄されます。
-                  </p>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy || !selectedEvent}
-                    onClick={() => void restoreGraphFromSnapshot()}
-                  >
-                    スナップショットから復元
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy || toApiSlug(slug) === ""}
-                    onClick={() => {
-                      setRestoreDialogOpen(false);
-                      void updateSnapshot();
-                    }}
-                  >
-                    スナップショットの更新
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy || toApiSlug(slug) === "" || !selectedEvent}
-                    onClick={() => {
-                      setRestoreDialogOpen(false);
-                      void discardLocalResultDraftsForBracket();
-                    }}
-                  >
-                    全下書きの破棄
-                  </button>
-                </div>
-              </section>
-            </div>
-          )}
-          {overlaySwitchConfirm && activeMatch && activeObsOverlaySet && (
-            <div
-              className="dialog-backdrop"
-              onClick={() => {
-                setOverlaySwitchConfirm(null);
-              }}
-            >
-              <section
-                className="dialog-panel"
-                role="dialog"
-                aria-modal="true"
-                aria-label="配信切替確認"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <div className="dialog-head">
-                  <div>
-                    <h3>配信先の切り替え確認</h3>
-                    <p className="meta">他のセットが配信中です。</p>
-                  </div>
-                </div>
-
-                <div className="dialog-body">
-                  <div className="dialog-summary-box">
-                    <p className="dialog-summary-title">現在の配信中セット</p>
-                    <p className="dialog-summary-value">{activeObsOverlaySet.set.fullRoundText}</p>
-                    <p className="meta">{activeObsOverlaySet.set.slots.filter((slot) => slot.entrantName.trim() !== "").map((slot) => slot.entrantName).join(" vs ") || "対戦カード未確定"}</p>
-                  </div>
-
-                  <p className="meta">
-                    「{overlaySwitchConfirm.targetSetLabel}」へ切り替えますか？
-                  </p>
-                </div>
-
-                <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
-                  <button type="button" className="ghost" onClick={() => setOverlaySwitchConfirm(null)}>キャンセル</button>
-                  <button
-                    type="button"
-                    disabled={busy || obsOverlayBusy}
-                    onClick={() => {
-                      setOverlaySwitchConfirm(null);
-                      void forceSwitchActiveMatchOverlay(activeMatch);
-                    }}
-                  >
-                    強制切り替え
-                  </button>
-                </div>
-              </section>
-            </div>
-          )}
-          {mobileInputPortalOpen && (
-            <div
-              className="dialog-backdrop"
-              onClick={() => {
-                closeMobileInputPortalDialog();
-              }}
-            >
-              <section
-                className="dialog-panel mobile-input-dialog"
-                role="dialog"
-                aria-modal="true"
-                aria-label="スマホ入力URL"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <div className="dialog-head">
-                  <div>
-                    <h3>スマートフォンでアクセス</h3>
-                    <p className="meta">同一LAN内の端末に共有してください。</p>
-                  </div>
-                  <button type="button" className="ghost" onClick={closeMobileInputPortalDialog}>閉じる</button>
-                </div>
-
-                <div className="dialog-body">
-                  <div className="dialog-summary-box">
-                    <p className="dialog-summary-title">アクセス候補</p>
-                    <div className="mobile-url-list">
-                      {mobileInputPortalCandidates.map((item) => (
-                        <article className="mobile-url-item" key={`${item.bindIp}::${item.interfaceName}`}>
-                          <span className="mobile-url-text">{item.bindIp}</span>
-                          <button
-                            type="button"
-                            className="ghost tiny"
-                            onClick={() => {
-                              void issueMobileInputPortalUrl(item.bindIp);
-                            }}
-                          >
-                            URL発行
-                          </button>
-                        </article>
-                      ))}
-                    </div>
-                  </div>
-
-                  {mobileInputIssuedUrl.trim() !== "" && mobileInputPortalDialog && (
-                    <>
-                      <div className="mobile-input-qr-wrap">
-                        {mobileInputPortalQrUrl === "" ? (
-                          <p className="meta">2次元コードを生成中です...</p>
-                        ) : (
-                          <img className="mobile-input-qr" src={mobileInputPortalQrUrl} alt="スマホ入力URLの2次元コード" />
-                        )}
-                      </div>
-
-                      <div className="dialog-summary-box">
-                        <p className="dialog-summary-title">発行中のURL</p>
-                        <p className="dialog-summary-value mobile-url-text">{mobileUrlDisplayIp(mobileInputIssuedUrl)}</p>
-                        <p className="meta mobile-url-full">{mobileInputIssuedUrl}</p>
-                        <div className="mobile-url-actions">
-                          <button
-                            type="button"
-                            className="ghost"
-                            disabled={mobileInputPortalBusy || mobileInputIssuedUrl.trim() === ""}
-                            onClick={() => {
-                              void copyMobileInputUrl(mobileInputIssuedUrl);
-                            }}
-                          >
-                            URLをコピー
-                          </button>
-                          <button
-                            type="button"
-                            className="ghost"
-                            disabled={mobileInputPortalBusy}
-                            onClick={() => {
-                              void refreshMobileInputPortalDialog();
-                            }}
-                          >
-                            {mobileInputPortalBusy ? "更新中..." : "URLを更新"}
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </section>
-            </div>
-          )}
-          {bracketReport.conflictDialog && (
-            <div
-              className="dialog-backdrop"
-              onClick={() => {
-                if (!busy) {
-                  bracketReport.cancelConflict();
+          <BracketTab
+            draftPendingCount={draftPendingCount}
+            confirmedReportableCount={confirmedReportableCount}
+            reportProgressActive={Boolean(busy || bracketReport.progress)}
+            reportProgressHasProgress={Boolean(bracketReport.progress)}
+            reportProgressPercent={bracketReport.progressPercent}
+            reportProgressLabel={bracketReport.progressLabel}
+            showSnapshotRefreshProgress={shouldShowBracketSnapshotRefreshProgress}
+            snapshotProgressPercent={createSnapshotProgressPercent}
+            snapshotProgressLabel={createSnapshotProgressLabel}
+            snapshotProgressHasTotal={createSnapshotProgress?.totalSets !== null}
+            hasSnapshot={Boolean(snapshot)}
+            tournamentName={snapshot?.name ?? "-"}
+            eventAlias={selectedEventMeta?.eventAlias ?? ""}
+            eventName={selectedEvent?.name ?? "-"}
+            phaseNames={phaseNames}
+            selectedPhaseName={selectedPhaseName}
+            onPhaseNameChange={setSelectedPhaseName}
+            phaseScopedPoolGroups={phaseScopedPoolGroups}
+            selectedPhasePoolGroup={selectedPhasePoolGroup}
+            onPhasePoolChange={setSelectedPhasePoolKey}
+            bracketScaleStyle={bracketScaleStyle}
+            bracketZoomLevel={bracketZoomLevel}
+            bracketZoomLevels={BRACKET_ZOOM_LEVELS}
+            onBracketZoomChange={(value) => setBracketZoomLevel(normalizeBracketZoomLevel(value))}
+            canOpenMobileInput={
+              !busy && !mobileInputPortalBusy && toApiSlug(slug) !== "" && Boolean(selectedEvent)
+            }
+            onOpenMobileInput={() => void openMobileInputPortalDialog()}
+            canRestore={!busy && toApiSlug(slug) !== "" && Boolean(selectedEvent)}
+            onOpenRestore={() => setRestoreDialogOpen(true)}
+            canReport={!busy && toApiSlug(slug) !== "" && confirmedReportableCount > 0}
+            onReport={() => void bracketReport.startReport()}
+            roundRobin={{
+              entrantNames: roundRobinBoardData.entrants.map((entrantId) =>
+                roundRobinBoardData.entrantNames.get(entrantId) ?? "",
+              ),
+              rows: roundRobinMatrixRows,
+              standings: roundRobinBoardData.standings,
+              tieBreakRules: roundRobinBoardData.tieBreakRules,
+              qualifyingCount: roundRobinBoardData.qualifyingCount,
+              diagnostics: {
+                candidateSetCount: roundRobinBoardData.candidateSetCount,
+                twoSlotSetCount: roundRobinBoardData.twoSlotSetCount,
+                resolvedSetCount: roundRobinBoardData.resolvedSetCount,
+                registeredSetCount: roundRobinBoardData.registeredSetCount,
+                unresolvedSetIds: roundRobinBoardData.unresolvedSetIds,
+                unresolvedSetReasons: roundRobinBoardData.unresolvedSetReasons,
+              },
+            }}
+            eliminationSections={eliminationBracketSections}
+            onRoundRobinMatchClick={(set, event) => {
+              if (event.altKey) {
+                event.preventDefault();
+                if (!busy && !obsOverlayBusy) void setObsOverlayFullyStopped(true);
+                return;
+              }
+              if (event.ctrlKey) {
+                event.preventDefault();
+                if (!busy && !obsOverlayBusy) void toggleActiveMatchOverlay(set);
+                return;
+              }
+              openMatchDialog(set);
+            }}
+            onEliminationSetActivate={(set, event) => {
+              if (event.altKey && event.button === 0) {
+                event.preventDefault();
+                if (busy || obsOverlayBusy) {
+                  return;
                 }
+                void setObsOverlayFullyStopped(true);
+                return;
+              }
+              if (event.ctrlKey) {
+                event.preventDefault();
+                if (busy || obsOverlayBusy) {
+                  return;
+                }
+                void toggleActiveMatchOverlay(set);
+                return;
+              }
+              openMatchDialog(set);
+            }}
+            onOpenSet={openMatchDialog}
+          />
+
+          {activeMatch && selectedEvent && (
+            <MatchDetailDialog
+              match={activeMatch}
+              setCode={setDisplayCodeById.get(activeMatch.setId)}
+              isLive={Boolean(
+                obsOverlayState?.active
+                && obsOverlayState.currentSetId === activeMatch.setId
+                && obsOverlayState.currentSetId !== "__test__",
+              )}
+              completed={isCompletedSet(activeMatch)}
+              matchupReady={isMatchupReady(activeMatch)}
+              busy={busy}
+              overlayBusy={obsOverlayBusy}
+              scoreInputDisabled={
+                busy
+                || isCompletedSet(activeMatch)
+                || !isMatchupReady(activeMatch)
+                || directWinnerId !== null
+              }
+              directWinnerId={directWinnerId}
+              displayPlayersBySide={displayBracketPlayersBySide}
+              onDisplayPlayersBySideChange={setDisplayBracketPlayersBySide}
+              randomNotice={matchSideRandomNotice}
+              players={getDisplaySlotsForSet(activeMatch, {
+                matchupReady: isMatchupReady(activeMatch),
+                sideDrafts: activeMatchSideDrafts,
+              }).map(({ slot, slotIndex }) => {
+                const entrantId = slot.entrantId;
+                const tbdLabel = resolveTbdSourceLabel(activeMatch, slotIndex, slot);
+                const fallbackSide = getSetSlotSideLabel(activeMatch.setId, entrantId, {
+                  fallbackBySlotIndex: slotIndex,
+                  matchupReady: isMatchupReady(activeMatch),
+                });
+                const otherEntrantId = activeMatch.slots.find(
+                  (item) => item.entrantId !== null && item.entrantId !== entrantId,
+                )?.entrantId ?? null;
+
+                return {
+                  key: `${activeMatch.setId}-dialog-${slotIndex}`,
+                  slot,
+                  entrantId,
+                  entrantName: !entrantId && tbdLabel ? tbdLabel : slot.entrantName,
+                  side: entrantId
+                    ? activeMatchSideDrafts[entrantId] || getSetSlotSide(activeMatch.setId, entrantId) || fallbackSide
+                    : "",
+                  scoreValue: entrantId && directWinnerId
+                    ? (entrantId === directWinnerId ? "W" : "L")
+                    : entrantId ? scoreDrafts[entrantId] ?? "" : "",
+                  otherEntrantId,
+                };
+              })}
+              callingEntrantId={callingEntrantId}
+              isDqDraft={isActiveMatchDqDraft}
+              overlayActive={Boolean(
+                obsOverlayState?.active
+                && obsOverlayState.currentSetId === activeMatch.setId
+                && obsOverlayState.currentSetId !== "__test__",
+              )}
+              onClose={closeMatchDialog}
+              onSwapSides={() => swapMatchSides(activeMatch)}
+              onRandomizeSides={() => void randomizeMatchSides(activeMatch)}
+              onScoreAdjust={(entrantId, delta) => {
+                setScoreDrafts((current) =>
+                  applyScoreDraftWithOpponentDefault(
+                    activeMatch,
+                    current,
+                    entrantId,
+                    stepScoreDraftValue(current[entrantId] ?? "", delta),
+                  ));
               }}
-            >
-              <section
-                className="dialog-panel conflict-dialog"
-                role="dialog"
-                aria-modal="true"
-                aria-label="一括報告の競合確認"
-                onClick={(event) => event.stopPropagation()}
-              >
-                <div className="dialog-head">
-                  <div>
-                    <h3>一括報告の競合</h3>
-                    <p className="meta">このsetは start.gg 側の状態が進んでいるため、そのままでは更新できません。</p>
-                  </div>
-                  <button type="button" className="ghost" disabled={busy} onClick={bracketReport.cancelConflict}>中止</button>
-                </div>
+              onScoreChange={(entrantId, value) => {
+                setScoreDrafts((current) =>
+                  applyScoreDraftWithOpponentDefault(activeMatch, current, entrantId, value));
+              }}
+              onToggleWinner={(entrantId, otherEntrantId) => {
+                setDirectWinnerId((current) => current === entrantId ? null : entrantId);
+                setScoreDrafts((current) => ({
+                  ...current,
+                  [entrantId]: directWinnerId === entrantId ? "" : "W",
+                  [otherEntrantId]: directWinnerId === entrantId ? "" : "L",
+                }));
+              }}
+              onSetDq={(entrantId, otherEntrantId) => {
+                setScoreDrafts((current) => ({
+                  ...current,
+                  [entrantId]: "-",
+                  [otherEntrantId]: "0",
+                }));
+              }}
+              onCall={(slot, entrantId) => void sendCallMessageFromMatch(slot, entrantId)}
+              onDiscardDraft={() => void discardLocalResultDraftForMatch()}
+              onResetSet={() => void resetSetResultCascadeForMatch()}
+              onSaveDraft={() => void saveLocalResultForMatch(false)}
+              onToggleOverlay={() => {
+                const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === activeMatch.setId;
+                const otherSetIsActive = Boolean(
+                  obsOverlayState?.active
+                  && obsOverlayState.currentSetId
+                  && obsOverlayState.currentSetId !== activeMatch.setId
+                  && obsOverlayState.currentSetId !== "__test__",
+                );
 
-                <div className="dialog-body">
-                  <div className="dialog-summary-box">
-                    <p className="dialog-summary-title">対象set</p>
-                    <p className="dialog-summary-value">{bracketReport.conflictDialog.conflict.fullRoundText}</p>
-                    <p className="meta">{bracketReport.conflictDialog.conflict.entrantNames.filter((name) => name.trim() !== "").join(" vs ") || bracketReport.conflictDialog.conflict.setId}</p>
-                    <p className="meta">remote state: {bracketReport.conflictDialog.conflict.remoteState} / remote winner: {bracketReport.conflictDialog.conflict.remoteWinnerId ?? "-"}</p>
-                  </div>
+                if (otherSetIsActive && !isSameActive) {
+                  setOverlaySwitchConfirm({
+                    targetSetId: activeMatch.setId,
+                    targetSetLabel: activeMatch.fullRoundText || `Set ${setDisplayCodeById.get(activeMatch.setId) ?? "-"}`,
+                  });
+                  return;
+                }
 
-                  <div className="dialog-summary-box">
-                    <p className="dialog-summary-title">ここまでの進捗</p>
-                    <p className="dialog-summary-value">
-                      対象 {bracketReport.conflictDialog.progress.totalCount} 件 / 送信 {bracketReport.conflictDialog.progress.reportedCount} 件 / スキップ {bracketReport.conflictDialog.progress.skippedCount} 件
-                    </p>
-                  </div>
-
-                  <label className="checkbox-row">
-                    <input
-                      type="checkbox"
-                      checked={bracketReport.forceOverwriteRemaining}
-                      onChange={(event) => bracketReport.setForceOverwriteRemaining(event.currentTarget.checked)}
-                    />
-                    この一括報告の残りでも、競合したsetは自動で reset して強制上書きする
-                  </label>
-                </div>
-
-                <div className="dialog-actions dialog-actions-split">
-                  <button type="button" className="ghost" disabled={busy} onClick={bracketReport.cancelConflict}>この時点で止める</button>
-                  <button type="button" disabled={busy} onClick={() => void bracketReport.continueWithForceOverwrite()}>
-                    このsetを reset して続行
-                  </button>
-                </div>
-              </section>
-            </div>
+                void toggleActiveMatchOverlay(activeMatch);
+              }}
+              onConfirm={() => requestResultConfirmation(activeMatch)}
+            />
           )}
+          <BracketDialogs
+            busy={busy}
+            resultConfirmation={resultConfirmation}
+            activeSetId={activeMatch?.setId ?? null}
+            onCancelResultConfirmation={() => setResultConfirmation(null)}
+            onConfirmResult={() => {
+              setResultConfirmation(null);
+              void saveLocalResultForMatch(true);
+            }}
+            restoreOpen={restoreDialogOpen}
+            selectedEventName={selectedEvent?.name ?? "選択中のイベント"}
+            canRestoreFromSnapshot={!busy && Boolean(selectedEvent)}
+            canUpdateSnapshot={!busy && toApiSlug(slug) !== ""}
+            canDiscardAllDrafts={!busy && toApiSlug(slug) !== "" && Boolean(selectedEvent)}
+            onCloseRestore={() => setRestoreDialogOpen(false)}
+            onRestoreFromSnapshot={() => void restoreGraphFromSnapshot()}
+            onUpdateSnapshot={() => {
+              setRestoreDialogOpen(false);
+              void updateSnapshot();
+            }}
+            onDiscardAllDrafts={() => {
+              setRestoreDialogOpen(false);
+              void discardLocalResultDraftsForBracket();
+            }}
+            overlaySwitch={overlaySwitchConfirm && activeMatch && activeObsOverlaySet ? {
+              targetSetLabel: overlaySwitchConfirm.targetSetLabel,
+              activeSetLabel: activeObsOverlaySet.set.fullRoundText,
+              activeEntrantNames: activeObsOverlaySet.set.slots
+                .filter((slot) => slot.entrantName.trim() !== "")
+                .map((slot) => slot.entrantName),
+            } : null}
+            overlayBusy={obsOverlayBusy}
+            onCancelOverlaySwitch={() => setOverlaySwitchConfirm(null)}
+            onConfirmOverlaySwitch={() => {
+              setOverlaySwitchConfirm(null);
+              if (activeMatch) {
+                void forceSwitchActiveMatchOverlay(activeMatch);
+              }
+            }}
+            mobileInputOpen={mobileInputPortalOpen}
+            mobileInputCandidates={mobileInputPortalCandidates}
+            mobileInputBusy={mobileInputPortalBusy}
+            issuedUrl={mobileInputIssuedUrl}
+            issuedUrlDisplayIp={mobileUrlDisplayIp(mobileInputIssuedUrl)}
+            issuedQrUrl={mobileInputPortalQrUrl}
+            showIssuedUrl={Boolean(mobileInputPortalDialog)}
+            onCloseMobileInput={closeMobileInputPortalDialog}
+            onIssueMobileUrl={(bindIp) => void issueMobileInputPortalUrl(bindIp)}
+            onCopyMobileUrl={() => void copyMobileInputUrl(mobileInputIssuedUrl)}
+            onRefreshMobileUrl={() => void refreshMobileInputPortalDialog()}
+            conflictDialog={bracketReport.conflictDialog}
+            forceOverwriteRemaining={bracketReport.forceOverwriteRemaining}
+            onCancelConflict={bracketReport.cancelConflict}
+            onForceOverwriteRemainingChange={bracketReport.setForceOverwriteRemaining}
+            onContinueConflict={() => void bracketReport.continueWithForceOverwrite()}
+          />
         </>
       )}
       </main>
