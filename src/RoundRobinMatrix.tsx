@@ -7,7 +7,7 @@ export type RoundRobinMatrixMatchView = {
   title: string;
   roundLabel: string;
   setLabel: string;
-  resultStatus: "inprogress" | "draft" | "confirmed" | null;
+  resultStatus: "inprogress" | "draft" | "confirmed" | "reset" | null;
   resultStatusLabel: string;
   isLiveOverlaySet: boolean;
   rowGameScore: string;

@@ -1453,6 +1453,12 @@ button:disabled {
   color: #1e3a8a;
 }
 
+.set-status-badge.status-reset {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
 .set-live-badge {
   margin: 0;
   display: inline-flex;
@@ -1489,6 +1495,11 @@ button:disabled {
   box-shadow: 0 0 0 1px #fed7aa inset;
 }
 
+.set-card-changed-reset {
+  border-color: #94a3b8;
+  box-shadow: 0 0 0 1px #cbd5e1 inset;
+}
+
 .set-card-status-confirmed {
   border-left: 4px solid #22c55e;
 }
@@ -1499,6 +1510,10 @@ button:disabled {
 
 .set-card-status-inprogress {
   border-left: 4px solid #3b82f6;
+}
+
+.set-card-status-reset {
+  border-left: 4px solid #94a3b8;
 }
 
 .simple-match-row {

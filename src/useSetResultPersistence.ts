@@ -16,6 +16,12 @@ type SaveSetResultInput = {
   sideDrafts: Record<string, "1P" | "2P" | "">;
 };
 
+type ResetSetResultCascadeResult<TWorkspace> = {
+  workspace: TWorkspace;
+  affectedSetIds: string[];
+  remoteResetApplied: boolean;
+};
+
 type UseSetResultPersistenceOptions<TWorkspace> = {
   setWorkspace: (workspace: TWorkspace) => void;
   setBusy: (busy: boolean) => void;
@@ -32,6 +38,9 @@ type UseSetResultPersistenceOptions<TWorkspace> = {
   saveSetDraft: (setId: string, draft: SetResultDraftState) => void;
   removeInterimDraft: (setId: string) => void;
   removeDraftsForSet: (setId: string) => void;
+  clearAllDrafts: () => void;
+  restoreSetDraftState: (workspace: TWorkspace, eventId: string, setId: string) => void;
+  refreshSnapshotEvents: () => Promise<void>;
   closeMatchDialog: () => void;
 };
 
@@ -47,6 +56,9 @@ export function useSetResultPersistence<TWorkspace>({
   saveSetDraft,
   removeInterimDraft,
   removeDraftsForSet,
+  clearAllDrafts,
+  restoreSetDraftState,
+  refreshSnapshotEvents,
   closeMatchDialog,
 }: UseSetResultPersistenceOptions<TWorkspace>) {
   async function saveLocalResult(input: SaveSetResultInput) {
@@ -133,5 +145,73 @@ export function useSetResultPersistence<TWorkspace>({
     }
   }
 
-  return { saveLocalResult };
+  async function discardAllLocalDrafts(input: { slug: string; eventId: string }) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const workspace = await invoke<TWorkspace>("clear_local_set_result_drafts", {
+        slug: input.slug,
+        eventId: input.eventId,
+      });
+      setWorkspace(workspace);
+      clearAllDrafts();
+      closeMatchDialog();
+      await refreshSnapshotEvents();
+      setMessage("全下書きを破棄しました。スナップショットの内容に戻しました。");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function discardLocalDraftForSet(input: { slug: string; eventId: string; setId: string }) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const workspace = await invoke<TWorkspace>("clear_local_set_result_draft_for_set", {
+        input,
+      });
+      setWorkspace(workspace);
+      removeDraftsForSet(input.setId);
+      restoreSetDraftState(workspace, input.eventId, input.setId);
+      await refreshSnapshotEvents();
+      setMessage("このsetの下書きを破棄しました。保存用スナップショットの内容に戻しました。");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetLocalSetResultCascade(input: {
+    slug: string;
+    eventId: string;
+    setId: string;
+    perPage: number;
+  }) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const result = await invoke<ResetSetResultCascadeResult<TWorkspace>>(
+        "reset_set_result_cascade",
+        { input: { ...input, resetRemote: false } },
+      );
+      setWorkspace(result.workspace);
+      closeMatchDialog();
+      setMessage(`結果をローカルで取り消しました。${result.affectedSetIds.length} 件のsetを更新しています。`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return { saveLocalResult, discardAllLocalDrafts, discardLocalDraftForSet, resetLocalSetResultCascade };
 }

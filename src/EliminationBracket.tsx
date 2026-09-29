@@ -7,7 +7,7 @@ export type EliminationBracketCardView = {
   positionY: number;
   displayCode?: string;
   changeClass: string;
-  resultStatus: "inprogress" | "draft" | "confirmed" | null;
+  resultStatus: "inprogress" | "draft" | "confirmed" | "reset" | null;
   resultStatusLabel: string;
   isLiveOverlaySet: boolean;
   slots: {

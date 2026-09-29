@@ -258,12 +258,6 @@ type WorkspaceUpdatedEvent = {
   eventId: string;
 };
 
-type ResetSetResultCascadeResult = {
-  workspace: TournamentWorkspace;
-  affectedSetIds: string[];
-  remoteResetApplied: boolean;
-};
-
 type MatchSideRandomNotice = {
   setId: string;
   upperEntrantName: string;
@@ -800,6 +794,25 @@ function isConfirmedSetResult(result: { confirmed?: boolean }): boolean {
   return result.confirmed !== false;
 }
 
+function isResetPendingResult(result: {
+  confirmed?: boolean;
+  winnerId: string;
+  scoreCsv: string;
+  slotScores?: unknown[];
+}): boolean {
+  return isConfirmedSetResult(result)
+    && result.winnerId.trim() === ""
+    && result.scoreCsv.trim() === ""
+    && (result.slotScores?.length ?? 0) === 0;
+}
+
+function getPendingSetChangeClass(result: LocalSetResultMeta): string {
+  if (isResetPendingResult(result)) {
+    return "set-card-changed-reset";
+  }
+  return isConfirmedSetResult(result) ? "set-card-changed-confirmed" : "set-card-changed-draft";
+}
+
 function oppositePlaySide(side: PlaySide): PlaySide {
   return side === "1P" ? "2P" : "1P";
 }
@@ -1165,7 +1178,12 @@ function App() {
   workspacePollingBlockedRef.current = busy || createBusy || loadingLocalSnapshotEvents;
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const { saveLocalResult: persistLocalSetResult } = useSetResultPersistence<TournamentWorkspace>({
+  const {
+    saveLocalResult: persistLocalSetResult,
+    discardAllLocalDrafts,
+    discardLocalDraftForSet,
+    resetLocalSetResultCascade,
+  } = useSetResultPersistence<TournamentWorkspace>({
     setWorkspace,
     setBusy,
     setError,
@@ -1177,6 +1195,33 @@ function App() {
     saveSetDraft,
     removeInterimDraft,
     removeDraftsForSet,
+    clearAllDrafts,
+    restoreSetDraftState: (restoredWorkspace, eventId, targetSetId) => {
+      const restoredSet = restoredWorkspace.snapshot.events
+        .find((event) => event.eventId === eventId)
+        ?.sets.find((set) => set.setId === targetSetId);
+
+      if (!restoredSet) {
+        closeMatchDialog();
+        return;
+      }
+
+      setScoreDrafts(buildScoreDraftsFromSet(restoredSet));
+      const sideMap = new Map(
+        (restoredWorkspace.localMeta.setPlaySides ?? []).map(
+          (item) => [`${item.setId}:${item.entrantId}`, item.playSide] as const,
+        ),
+      );
+      const sideDrafts: Record<string, PlaySide | ""> = {};
+      for (const slot of restoredSet.slots) {
+        if (!slot.entrantId) {
+          continue;
+        }
+        sideDrafts[slot.entrantId] = sideMap.get(`${restoredSet.setId}:${slot.entrantId}`) ?? "";
+      }
+      setActiveMatchSideDrafts(sideDrafts);
+    },
+    refreshSnapshotEvents: refreshLocalSnapshotEvents,
     closeMatchDialog,
   });
   const {
@@ -5903,11 +5948,13 @@ function App() {
         const resultStatusClass = resultStatus ? `set-card-status-${resultStatus}` : "";
         const resultStatusLabel = resultStatus === "confirmed"
           ? "確定"
-          : resultStatus === "draft"
-            ? "下書き"
-            : resultStatus === "inprogress"
-              ? "進行中"
-              : "";
+          : resultStatus === "reset"
+            ? "取消待ち"
+            : resultStatus === "draft"
+              ? "下書き"
+              : resultStatus === "inprogress"
+                ? "進行中"
+                : "";
         const winnerId = setDisplay.winnerId ?? set.winnerId;
         const columnColumnEntrantId = roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId);
         const rowSlot = set.slots.find((slot) =>
@@ -5928,9 +5975,7 @@ function App() {
           ? setDisplay.scores[columnEntrantIdForSet]
             ?? (columnSlot?.score !== null && columnSlot?.score !== undefined ? String(columnSlot.score) : "-")
           : "-";
-        const changeClass = pendingResult
-          ? (isConfirmedSetResult(pendingResult) ? "set-card-changed-confirmed" : "set-card-changed-draft")
-          : "";
+        const changeClass = pendingResult ? getPendingSetChangeClass(pendingResult) : "";
         const outcomeClass = winnerId === null
           ? ""
           : winnerId === rowEntrantIdForSet
@@ -5998,11 +6043,13 @@ function App() {
         const resultStatus = getSetResultVisualStatus(set);
         const resultStatusLabel = resultStatus === "confirmed"
           ? "確定"
-          : resultStatus === "draft"
-            ? "下書き"
-            : resultStatus === "inprogress"
-              ? "途中"
-              : "";
+          : resultStatus === "reset"
+            ? "取消待ち"
+            : resultStatus === "draft"
+              ? "下書き"
+              : resultStatus === "inprogress"
+                ? "途中"
+                : "";
         const finishedSet = isCompletedSet(set);
         const matchupReady = isMatchupReady(displaySet);
         const setDisplay = getSetScoresForDisplay(displaySet);
@@ -6012,9 +6059,7 @@ function App() {
           set,
           positionY: y,
           displayCode: setDisplayCodeById.get(set.setId),
-          changeClass: pendingResult
-            ? (isConfirmedSetResult(pendingResult) ? "set-card-changed-confirmed" : "set-card-changed-draft")
-            : "",
+          changeClass: pendingResult ? getPendingSetChangeClass(pendingResult) : "",
           resultStatus,
           resultStatusLabel,
           isLiveOverlaySet: Boolean(
@@ -6805,9 +6850,12 @@ function App() {
     };
   }
 
-  function getSetResultVisualStatus(set: SetSnapshot): "inprogress" | "draft" | "confirmed" | null {
+  function getSetResultVisualStatus(set: SetSnapshot): "inprogress" | "draft" | "confirmed" | "reset" | null {
     const pending = pendingResultBySetId.get(set.setId);
     if (pending) {
+      if (isResetPendingResult(pending)) {
+        return "reset";
+      }
       return isConfirmedSetResult(pending) ? "confirmed" : "draft";
     }
 
@@ -7167,27 +7215,10 @@ function App() {
       return;
     }
 
-    setBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const normalizedSlug = toApiSlug(slug);
-      const result = await invoke<TournamentWorkspace>("clear_local_set_result_drafts", {
-        slug: normalizedSlug,
-        eventId: selectedEvent.eventId,
-      });
-
-      setWorkspace(result);
-      clearAllDrafts();
-      closeMatchDialog();
-      await refreshLocalSnapshotEvents();
-      setMessage("全下書きを破棄しました。スナップショットの内容に戻しました。");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
+    await discardAllLocalDrafts({
+      slug: toApiSlug(slug),
+      eventId: selectedEvent.eventId,
+    });
   }
 
   async function discardLocalResultDraftForMatch() {
@@ -7202,53 +7233,11 @@ function App() {
     }
 
     const targetSetId = activeMatch.setId;
-
-    setBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const normalizedSlug = toApiSlug(slug);
-      const result = await invoke<TournamentWorkspace>("clear_local_set_result_draft_for_set", {
-        input: {
-          slug: normalizedSlug,
-          eventId: selectedEvent.eventId,
-          setId: targetSetId,
-        },
-      });
-
-      setWorkspace(result);
-      removeDraftsForSet(targetSetId);
-
-      const restoredSet = result.snapshot.events
-        .find((event) => event.eventId === selectedEvent.eventId)
-        ?.sets.find((set) => set.setId === targetSetId);
-
-      if (!restoredSet) {
-        closeMatchDialog();
-      } else {
-        setScoreDrafts(buildScoreDraftsFromSet(restoredSet));
-
-        const sideMap = new Map(
-          (result.localMeta.setPlaySides ?? []).map((item) => [`${item.setId}:${item.entrantId}`, item.playSide] as const),
-        );
-        const sideDrafts: Record<string, PlaySide | ""> = {};
-        for (const slot of restoredSet.slots) {
-          if (!slot.entrantId) {
-            continue;
-          }
-          sideDrafts[slot.entrantId] = sideMap.get(`${restoredSet.setId}:${slot.entrantId}`) ?? "";
-        }
-        setActiveMatchSideDrafts(sideDrafts);
-      }
-
-      await refreshLocalSnapshotEvents();
-      setMessage("このsetの下書きを破棄しました。保存用スナップショットの内容に戻しました。");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
+    await discardLocalDraftForSet({
+      slug: toApiSlug(slug),
+      eventId: selectedEvent.eventId,
+      setId: targetSetId,
+    });
   }
 
   async function resetSetResultCascadeForMatch() {
@@ -7267,30 +7256,12 @@ function App() {
       return;
     }
 
-    setBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const normalizedSlug = toApiSlug(slug);
-      const result = await invoke<ResetSetResultCascadeResult>("reset_set_result_cascade", {
-        input: {
-          slug: normalizedSlug,
-          eventId: selectedEvent.eventId,
-          setId: activeMatch.setId,
-          resetRemote: false,
-          perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
-        },
-      });
-
-      setWorkspace(result.workspace);
-      closeMatchDialog();
-      setMessage(`結果をローカルで取り消しました。${result.affectedSetIds.length} 件のsetを更新しています。`);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
+    await resetLocalSetResultCascade({
+      slug: toApiSlug(slug),
+      eventId: selectedEvent.eventId,
+      setId: activeMatch.setId,
+      perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
+    });
   }
 
   async function savePlayerMeta(
