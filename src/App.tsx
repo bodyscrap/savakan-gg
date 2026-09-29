@@ -27,7 +27,7 @@ import {
   type ItemListConfig,
 } from "./itemList";
 import { EventSelector, localSnapshotAliasLabel, localSnapshotItemKey, type LocalSnapshotEventListItem } from "./EventSelector";
-import { EventSetting } from "./EventSetting";
+import { EventSetting, type EventSettingCategorySlot } from "./EventSetting";
 import { OverlayControl, type ObsOverlayState } from "./OverlayControl";
 import { BracketTab } from "./BracketTab";
 import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
@@ -7500,6 +7500,84 @@ function App() {
     });
   }
 
+  function handleTournamentCategoryMinChange(slotIndex: number, value: string) {
+    const nextMin = clampNonNegativeInteger(Number(value), 0);
+    setCategorySlotMinCounts((current) => {
+      const next = [...current];
+      next[slotIndex] = nextMin;
+      return next;
+    });
+    setCategorySlotMaxCounts((current) => {
+      const next = [...current];
+      if ((next[slotIndex] ?? 0) < nextMin) {
+        next[slotIndex] = nextMin;
+      }
+      return next;
+    });
+  }
+
+  function handleTournamentCategoryMaxChange(slotIndex: number, value: string) {
+    const rawMax = clampNonNegativeInteger(Number(value), 0);
+    const ensuredMax = Math.max(rawMax, categorySlotMinCounts[slotIndex] ?? 0);
+    setCategorySlotMaxCounts((current) => {
+      const next = [...current];
+      next[slotIndex] = ensuredMax;
+      return next;
+    });
+  }
+
+  function handleTournamentCategoryAllowDuplicatesChange(slotIndex: number, allowed: boolean) {
+    setCategorySlotAllowDuplicates((current) => {
+      const next = [...current];
+      next[slotIndex] = allowed;
+      return next;
+    });
+  }
+
+  function handleTournamentTotalMinChange(value: string) {
+    const nextMin = clampNonNegativeInteger(Number(value), 0);
+    setTotalItemMinCount(nextMin);
+    setTotalItemMaxCount((current) => Math.max(current, nextMin));
+  }
+
+  function handleTournamentTotalMaxChange(value: string) {
+    const nextMax = clampNonNegativeInteger(Number(value), 0);
+    setTotalItemMaxCount(Math.max(nextMax, totalItemMinCount));
+  }
+
+  function addSelectedEntrantDraftSelection(slot: EventSettingCategorySlot, itemName: string) {
+    if (!selectedEvent || !selectedTournamentEntrant) {
+      return;
+    }
+    addDraftCategorySelection(
+      selectedEvent.eventId,
+      selectedTournamentEntrant.entrantId,
+      slot.slotIndex,
+      slot.list,
+      slot.allowDuplicates,
+      slot.maxCount,
+      itemName,
+    );
+  }
+
+  function removeSelectedEntrantDraftSelection(slotIndex: number, selectionIndex: number) {
+    if (!selectedEvent || !selectedTournamentEntrant) {
+      return;
+    }
+    removeDraftCategorySelection(
+      selectedEvent.eventId,
+      selectedTournamentEntrant.entrantId,
+      slotIndex,
+      selectionIndex,
+    );
+  }
+
+  function saveSelectedEntrantMeta() {
+    if (selectedEvent && selectedTournamentEntrant) {
+      void savePlayerMeta(selectedEvent, selectedTournamentEntrant.entrantId, selectedTournamentEntrant.entrantName);
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -7646,117 +7724,63 @@ function App() {
 
         {activeTab === "tournament" && (
           <EventSetting
-            hasSelectedEvent={Boolean(selectedEvent)}
-            eventAlias={selectedEventMeta?.eventAlias ?? ""}
-            tournamentName={snapshot?.name ?? "-"}
-            eventName={selectedEvent?.name ?? ""}
-            busy={busy}
-            canUpdateSnapshot={toApiSlug(slug) !== ""}
-            onUpdateSnapshot={() => void updateSnapshot()}
-            eventAliasDraft={eventAliasDraft}
-            onEventAliasDraftChange={setEventAliasDraft}
-            onSaveEventAlias={() => void saveSelectedEventAlias()}
-            sideDecisionMethod={sideDecisionMethod}
-            onSideDecisionMethodChange={(method) => setSideDecisionMethod(method as EventManagementSetting["sideDecisionMethod"])}
-            onApplySideDecisionMethod={() => void applySideDecisionMethodToAllUnconfirmedSets()}
-            itemLists={itemLists}
-            categorySlotListIds={categorySlotListIds}
-            categorySlotMinCounts={categorySlotMinCounts}
-            categorySlotMaxCounts={categorySlotMaxCounts}
-            categorySlotAllowDuplicates={categorySlotAllowDuplicates}
-            onCategoryListChange={setCategoryListSlot}
-            onCategoryMinChange={(slotIndex, value) => {
-              const nextMin = clampNonNegativeInteger(Number(value), 0);
-              setCategorySlotMinCounts((current) => {
-                const next = [...current];
-                next[slotIndex] = nextMin;
-                return next;
-              });
-              setCategorySlotMaxCounts((current) => {
-                const next = [...current];
-                if ((next[slotIndex] ?? 0) < nextMin) {
-                  next[slotIndex] = nextMin;
-                }
-                return next;
-              });
+            event={{
+              hasSelectedEvent: Boolean(selectedEvent),
+              eventAlias: selectedEventMeta?.eventAlias ?? "",
+              tournamentName: snapshot?.name ?? "-",
+              eventName: selectedEvent?.name ?? "",
+              busy,
+              canUpdateSnapshot: toApiSlug(slug) !== "",
+              eventAliasDraft,
             }}
-            onCategoryMaxChange={(slotIndex, value) => {
-              const rawMax = clampNonNegativeInteger(Number(value), 0);
-              const ensuredMax = Math.max(rawMax, categorySlotMinCounts[slotIndex] ?? 0);
-              setCategorySlotMaxCounts((current) => {
-                const next = [...current];
-                next[slotIndex] = ensuredMax;
-                return next;
-              });
+            rules={{
+              sideDecisionMethod,
+              itemLists,
+              categorySlotListIds,
+              categorySlotMinCounts,
+              categorySlotMaxCounts,
+              categorySlotAllowDuplicates,
+              totalItemMinCount,
+              totalItemMaxCount,
             }}
-            onCategoryAllowDuplicatesChange={(slotIndex, allowed) => {
-              setCategorySlotAllowDuplicates((current) => {
-                const next = [...current];
-                next[slotIndex] = allowed;
-                return next;
-              });
+            playerMeta={{
+              selectedEventEntrants,
+              selectedEventMetaEntrantCount: selectedEventMeta?.entrants.length ?? 0,
+              selectedEntrantId: selectedTournamentEntrant?.entrantId ?? "",
+              selectedEntrantName: selectedTournamentEntrant?.entrantName ?? "",
+              configuredCategorySlots,
+              selectedCategoryUsageList,
+              draftSelectionsBySlot: selectedEvent && selectedTournamentEntrant
+                ? configuredCategorySlots.map((slot) => getDraftCategorySelections(
+                  getMetaDraft(selectedEvent.eventId, selectedTournamentEntrant.entrantId),
+                  slot.slotIndex,
+                ))
+                : [],
+              validationErrors: selectedEvent && selectedTournamentEntrant
+                ? buildValidatedSelections(
+                  getMetaDraft(selectedEvent.eventId, selectedTournamentEntrant.entrantId),
+                  configuredCategorySlots,
+                ).errors
+                : [],
+              canSavePlayerMeta: !busy && toApiSlug(slug) !== "",
             }}
-            totalItemMinCount={totalItemMinCount}
-            totalItemMaxCount={totalItemMaxCount}
-            onTotalItemMinChange={(value) => {
-              const nextMin = clampNonNegativeInteger(Number(value), 0);
-              setTotalItemMinCount(nextMin);
-              setTotalItemMaxCount((current) => Math.max(current, nextMin));
-            }}
-            onTotalItemMaxChange={(value) => {
-              const nextMax = clampNonNegativeInteger(Number(value), 0);
-              setTotalItemMaxCount(Math.max(nextMax, totalItemMinCount));
-            }}
-            onSaveEventManagementSetting={saveEventManagementSetting}
-            selectedEventEntrants={selectedEventEntrants}
-            selectedEventMetaEntrantCount={selectedEventMeta?.entrants.length ?? 0}
-            selectedEntrantId={selectedTournamentEntrant?.entrantId ?? ""}
-            selectedEntrantName={selectedTournamentEntrant?.entrantName ?? ""}
-            onSelectEntrant={setSelectedTournamentEntrantId}
-            configuredCategorySlots={configuredCategorySlots}
-            selectedCategoryUsageList={selectedCategoryUsageList}
-            draftSelectionsBySlot={selectedEvent && selectedTournamentEntrant
-              ? configuredCategorySlots.map((slot) => getDraftCategorySelections(
-                getMetaDraft(selectedEvent.eventId, selectedTournamentEntrant.entrantId),
-                slot.slotIndex,
-              ))
-              : []}
-            validationErrors={selectedEvent && selectedTournamentEntrant
-              ? buildValidatedSelections(
-                getMetaDraft(selectedEvent.eventId, selectedTournamentEntrant.entrantId),
-                configuredCategorySlots,
-              ).errors
-              : []}
-            onAddDraftSelection={(slot, itemName) => {
-              if (!selectedEvent || !selectedTournamentEntrant) {
-                return;
-              }
-              addDraftCategorySelection(
-                selectedEvent.eventId,
-                selectedTournamentEntrant.entrantId,
-                slot.slotIndex,
-                slot.list,
-                slot.allowDuplicates,
-                slot.maxCount,
-                itemName,
-              );
-            }}
-            onRemoveDraftSelection={(slotIndex, selectionIndex) => {
-              if (!selectedEvent || !selectedTournamentEntrant) {
-                return;
-              }
-              removeDraftCategorySelection(
-                selectedEvent.eventId,
-                selectedTournamentEntrant.entrantId,
-                slotIndex,
-                selectionIndex,
-              );
-            }}
-            canSavePlayerMeta={!busy && toApiSlug(slug) !== ""}
-            onSavePlayerMeta={() => {
-              if (selectedEvent && selectedTournamentEntrant) {
-                void savePlayerMeta(selectedEvent, selectedTournamentEntrant.entrantId, selectedTournamentEntrant.entrantName);
-              }
+            actions={{
+              onUpdateSnapshot: () => void updateSnapshot(),
+              onEventAliasDraftChange: setEventAliasDraft,
+              onSaveEventAlias: () => void saveSelectedEventAlias(),
+              onSideDecisionMethodChange: setSideDecisionMethod,
+              onApplySideDecisionMethod: () => void applySideDecisionMethodToAllUnconfirmedSets(),
+              onCategoryListChange: setCategoryListSlot,
+              onCategoryMinChange: handleTournamentCategoryMinChange,
+              onCategoryMaxChange: handleTournamentCategoryMaxChange,
+              onCategoryAllowDuplicatesChange: handleTournamentCategoryAllowDuplicatesChange,
+              onTotalItemMinChange: handleTournamentTotalMinChange,
+              onTotalItemMaxChange: handleTournamentTotalMaxChange,
+              onSaveEventManagementSetting: saveEventManagementSetting,
+              onSelectEntrant: setSelectedTournamentEntrantId,
+              onAddDraftSelection: addSelectedEntrantDraftSelection,
+              onRemoveDraftSelection: removeSelectedEntrantDraftSelection,
+              onSavePlayerMeta: saveSelectedEntrantMeta,
             }}
           />
         )}

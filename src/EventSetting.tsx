@@ -22,91 +22,106 @@ export type EventSettingCategoryUsage = {
 
 export type SideDecisionMethod = "upper_1p" | "upper_2p" | "random";
 
-type EventSettingProps = {
-  hasSelectedEvent: boolean;
-  eventAlias: string;
-  tournamentName: string;
-  eventName: string;
-  busy: boolean;
-  canUpdateSnapshot: boolean;
-  onUpdateSnapshot: () => void;
-  eventAliasDraft: string;
-  onEventAliasDraftChange: (value: string) => void;
-  onSaveEventAlias: () => void;
-  sideDecisionMethod: SideDecisionMethod;
-  onSideDecisionMethodChange: (method: SideDecisionMethod) => void;
-  onApplySideDecisionMethod: () => void;
-  itemLists: ItemListConfig[];
-  categorySlotListIds: string[];
-  categorySlotMinCounts: number[];
-  categorySlotMaxCounts: number[];
-  categorySlotAllowDuplicates: boolean[];
-  onCategoryListChange: (slotIndex: number, listId: string) => void;
-  onCategoryMinChange: (slotIndex: number, value: string) => void;
-  onCategoryMaxChange: (slotIndex: number, value: string) => void;
-  onCategoryAllowDuplicatesChange: (slotIndex: number, allowed: boolean) => void;
-  totalItemMinCount: number;
-  totalItemMaxCount: number;
-  onTotalItemMinChange: (value: string) => void;
-  onTotalItemMaxChange: (value: string) => void;
-  onSaveEventManagementSetting: () => void;
-  selectedEventEntrants: EventSettingEntrant[];
-  selectedEventMetaEntrantCount: number;
-  selectedEntrantId: string;
-  selectedEntrantName: string;
-  onSelectEntrant: (entrantId: string) => void;
-  configuredCategorySlots: EventSettingCategorySlot[];
-  selectedCategoryUsageList: EventSettingCategoryUsage[];
-  draftSelectionsBySlot: string[][];
-  validationErrors: string[];
-  onAddDraftSelection: (slot: EventSettingCategorySlot, itemName: string) => void;
-  onRemoveDraftSelection: (slotIndex: number, selectionIndex: number) => void;
-  canSavePlayerMeta: boolean;
-  onSavePlayerMeta: () => void;
+export type EventSettingProps = {
+  event: {
+    hasSelectedEvent: boolean;
+    eventAlias: string;
+    tournamentName: string;
+    eventName: string;
+    busy: boolean;
+    canUpdateSnapshot: boolean;
+    eventAliasDraft: string;
+  };
+  rules: {
+    sideDecisionMethod: SideDecisionMethod;
+    itemLists: ItemListConfig[];
+    categorySlotListIds: string[];
+    categorySlotMinCounts: number[];
+    categorySlotMaxCounts: number[];
+    categorySlotAllowDuplicates: boolean[];
+    totalItemMinCount: number;
+    totalItemMaxCount: number;
+  };
+  playerMeta: {
+    selectedEventEntrants: EventSettingEntrant[];
+    selectedEventMetaEntrantCount: number;
+    selectedEntrantId: string;
+    selectedEntrantName: string;
+    configuredCategorySlots: EventSettingCategorySlot[];
+    selectedCategoryUsageList: EventSettingCategoryUsage[];
+    draftSelectionsBySlot: string[][];
+    validationErrors: string[];
+    canSavePlayerMeta: boolean;
+  };
+  actions: {
+    onUpdateSnapshot: () => void;
+    onEventAliasDraftChange: (value: string) => void;
+    onSaveEventAlias: () => void;
+    onSideDecisionMethodChange: (method: SideDecisionMethod) => void;
+    onApplySideDecisionMethod: () => void;
+    onCategoryListChange: (slotIndex: number, listId: string) => void;
+    onCategoryMinChange: (slotIndex: number, value: string) => void;
+    onCategoryMaxChange: (slotIndex: number, value: string) => void;
+    onCategoryAllowDuplicatesChange: (slotIndex: number, allowed: boolean) => void;
+    onTotalItemMinChange: (value: string) => void;
+    onTotalItemMaxChange: (value: string) => void;
+    onSaveEventManagementSetting: () => void;
+    onSelectEntrant: (entrantId: string) => void;
+    onAddDraftSelection: (slot: EventSettingCategorySlot, itemName: string) => void;
+    onRemoveDraftSelection: (slotIndex: number, selectionIndex: number) => void;
+    onSavePlayerMeta: () => void;
+  };
 };
 
-export function EventSetting({
-  hasSelectedEvent,
-  eventAlias,
-  tournamentName,
-  eventName,
-  busy,
-  canUpdateSnapshot,
-  onUpdateSnapshot,
-  eventAliasDraft,
-  onEventAliasDraftChange,
-  onSaveEventAlias,
-  sideDecisionMethod,
-  onSideDecisionMethodChange,
-  onApplySideDecisionMethod,
-  itemLists,
-  categorySlotListIds,
-  categorySlotMinCounts,
-  categorySlotMaxCounts,
-  categorySlotAllowDuplicates,
-  onCategoryListChange,
-  onCategoryMinChange,
-  onCategoryMaxChange,
-  onCategoryAllowDuplicatesChange,
-  totalItemMinCount,
-  totalItemMaxCount,
-  onTotalItemMinChange,
-  onTotalItemMaxChange,
-  onSaveEventManagementSetting,
-  selectedEventEntrants,
-  selectedEventMetaEntrantCount,
-  selectedEntrantId,
-  selectedEntrantName,
-  onSelectEntrant,
-  configuredCategorySlots,
-  selectedCategoryUsageList,
-  draftSelectionsBySlot,
-  validationErrors,
-  onAddDraftSelection,
-  onRemoveDraftSelection,
-  canSavePlayerMeta,
-  onSavePlayerMeta,
-}: EventSettingProps) {
+export function EventSetting({ event, rules, playerMeta, actions }: EventSettingProps) {
+  const {
+    hasSelectedEvent,
+    eventAlias,
+    tournamentName,
+    eventName,
+    busy,
+    canUpdateSnapshot,
+    eventAliasDraft,
+  } = event;
+  const {
+    sideDecisionMethod,
+    itemLists,
+    categorySlotListIds,
+    categorySlotMinCounts,
+    categorySlotMaxCounts,
+    categorySlotAllowDuplicates,
+    totalItemMinCount,
+    totalItemMaxCount,
+  } = rules;
+  const {
+    selectedEventEntrants,
+    selectedEventMetaEntrantCount,
+    selectedEntrantId,
+    selectedEntrantName,
+    configuredCategorySlots,
+    selectedCategoryUsageList,
+    draftSelectionsBySlot,
+    validationErrors,
+    canSavePlayerMeta,
+  } = playerMeta;
+  const {
+    onUpdateSnapshot,
+    onEventAliasDraftChange,
+    onSaveEventAlias,
+    onSideDecisionMethodChange,
+    onApplySideDecisionMethod,
+    onCategoryListChange,
+    onCategoryMinChange,
+    onCategoryMaxChange,
+    onCategoryAllowDuplicatesChange,
+    onTotalItemMinChange,
+    onTotalItemMaxChange,
+    onSaveEventManagementSetting,
+    onSelectEntrant,
+    onAddDraftSelection,
+    onRemoveDraftSelection,
+    onSavePlayerMeta,
+  } = actions;
   return (
     <section className="panel">
       {!hasSelectedEvent ? (
