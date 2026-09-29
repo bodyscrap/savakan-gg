@@ -1,4 +1,4 @@
-import type { RoundColumn } from "./bracketLayout";
+import { buildPositionedRoundColumns, type PositionedRoundColumn, type RoundColumn } from "./bracketLayout";
 import type {
   PhaseGroupProgressionSnapshot,
   PhaseGroupSeedSnapshot,
@@ -33,6 +33,281 @@ export type PhaseGroupSnapshot = {
   seedOrder?: string[];
   seeds?: PhaseGroupSeedSnapshot[];
 };
+
+export type PhasePoolGroup = {
+  key: string;
+  phaseGroupId: string | null;
+  phaseName: string;
+  phaseGroupName: string;
+  bracketType: string | null;
+  phaseOrder: number | null;
+  phaseGroupDisplayIdentifier: string | null;
+  tiebreakOrder?: string[];
+  progressionsOut: PhaseGroupProgressionSnapshot[];
+  seedMap: unknown;
+  seedOrder: string[];
+  seeds: PhaseGroupSeedSnapshot[];
+  sets: SetSnapshot[];
+  columns: RoundColumn[];
+};
+
+export type BracketSection = {
+  key: string;
+  title: string;
+  columns: RoundColumn[];
+  setCount: number;
+};
+
+export type BracketSectionForView = Omit<BracketSection, "columns"> & {
+  columns: PositionedRoundColumn[];
+};
+
+export function buildPhasePoolGroups(event: EventSnapshot | null): PhasePoolGroup[] {
+  if (!event) {
+    return [];
+  }
+
+  const groupMap = new Map<string, PhasePoolGroup>();
+
+  for (const set of event.sets) {
+    if (!isDisplayableSet(set, event)) {
+      continue;
+    }
+    const phaseName = set.phaseName && set.phaseName.trim() !== "" ? set.phaseName : "Phase 未設定";
+    const phaseGroupName = set.phaseGroupName && set.phaseGroupName.trim() !== "" ? set.phaseGroupName : "Pool 未設定";
+    const phaseGroupDisplayIdentifier = set.phaseGroupDisplayIdentifier?.trim() || null;
+    const phaseGroupMetadata = set.phaseGroupId
+      ? event.phaseGroups?.find((group) => group.phaseGroupId === set.phaseGroupId)
+      : event.phaseGroups?.find((group) =>
+        group.phaseOrder === set.phaseOrder
+        && (group.displayIdentifier?.trim() || null) === phaseGroupDisplayIdentifier,
+      ) ?? event.phaseGroups?.find((group) =>
+        group.phaseName === set.phaseName
+        && (group.displayIdentifier?.trim() || null) === phaseGroupDisplayIdentifier,
+      );
+    if (!phaseGroupMetadata) {
+      continue;
+    }
+    const bracketType = phaseGroupMetadata.bracketType?.trim().toUpperCase() || null;
+    const tiebreakOrder = phaseGroupMetadata.tiebreakOrder ?? [];
+    const progressionsOut = phaseGroupMetadata.progressionsOut ?? [];
+    const seedMap = phaseGroupMetadata.seedMap ?? null;
+    const seedOrder = phaseGroupMetadata.seedOrder ?? [];
+    const seeds = phaseGroupMetadata.seeds ?? [];
+    const hasStablePhasePoolIdentity = set.phaseOrder !== null && phaseGroupDisplayIdentifier !== null;
+    const groupKey = set.phaseGroupId
+      ? `id:${set.phaseGroupId}`
+      : hasStablePhasePoolIdentity
+        ? `order:${set.phaseOrder}::pool:${phaseGroupDisplayIdentifier}`
+        : `name:${phaseName}::${phaseGroupName}`;
+    const found = groupMap.get(groupKey);
+
+    if (found) {
+      found.sets.push(set);
+      if (found.bracketType === null && bracketType !== null) {
+        found.bracketType = bracketType;
+      }
+      if (found.progressionsOut.length === 0 && progressionsOut.length > 0) {
+        found.progressionsOut = progressionsOut;
+      }
+      if (found.seedMap === null && seedMap !== null) {
+        found.seedMap = seedMap;
+      }
+      if (found.seedOrder.length === 0 && seedOrder.length > 0) {
+        found.seedOrder = seedOrder;
+      }
+      if (found.seeds.length === 0 && seeds.length > 0) {
+        found.seeds = seeds;
+      }
+      continue;
+    }
+
+    groupMap.set(groupKey, {
+      key: groupKey,
+      phaseGroupId: set.phaseGroupId ?? null,
+      phaseName,
+      phaseGroupName,
+      bracketType,
+      phaseOrder: set.phaseOrder,
+      phaseGroupDisplayIdentifier,
+      tiebreakOrder,
+      progressionsOut,
+      seedMap,
+      seedOrder,
+      seeds,
+      sets: [set],
+      columns: [],
+    });
+  }
+
+  return [...groupMap.values()]
+    .sort((left, right) => {
+      if (left.phaseOrder === null && right.phaseOrder !== null) {
+        return 1;
+      }
+      if (left.phaseOrder !== null && right.phaseOrder === null) {
+        return -1;
+      }
+      if (left.phaseOrder !== null && right.phaseOrder !== null && left.phaseOrder !== right.phaseOrder) {
+        return left.phaseOrder - right.phaseOrder;
+      }
+      const byPhase = left.phaseName.localeCompare(right.phaseName, "ja");
+      if (byPhase !== 0) {
+        return byPhase;
+      }
+      if (left.phaseGroupDisplayIdentifier !== null && right.phaseGroupDisplayIdentifier !== null) {
+        return left.phaseGroupDisplayIdentifier.localeCompare(right.phaseGroupDisplayIdentifier, "ja");
+      }
+      return left.phaseGroupName.localeCompare(right.phaseGroupName, "ja");
+    })
+    .map((group) => ({
+      ...group,
+      columns: buildRoundColumns(group.sets),
+    }));
+}
+
+export function buildPhaseNames(phasePoolGroups: PhasePoolGroup[], phases: PhaseSnapshot[] = []): string[] {
+  const names = [...new Set(phasePoolGroups.map((group) => group.phaseName))];
+  const phasePositionByName = new Map<string, number>();
+  for (const [index, phase] of phases.entries()) {
+    if (phase.name && !phasePositionByName.has(phase.name)) {
+      phasePositionByName.set(phase.name, index);
+    }
+  }
+
+  const groupOrderByName = new Map<string, number>();
+  for (const group of phasePoolGroups) {
+    if (group.phaseOrder === null) {
+      continue;
+    }
+    const currentOrder = groupOrderByName.get(group.phaseName);
+    if (currentOrder === undefined || group.phaseOrder < currentOrder) {
+      groupOrderByName.set(group.phaseName, group.phaseOrder);
+    }
+  }
+
+  const useGroupOrderFallback = phasePositionByName.size === 0;
+  return names.sort((left, right) => {
+    const leftPosition = phasePositionByName.get(left);
+    const rightPosition = phasePositionByName.get(right);
+    if (leftPosition !== undefined && rightPosition !== undefined && leftPosition !== rightPosition) {
+      return leftPosition - rightPosition;
+    }
+    if (leftPosition !== undefined && rightPosition === undefined) {
+      return -1;
+    }
+    if (leftPosition === undefined && rightPosition !== undefined) {
+      return 1;
+    }
+
+    const leftOrder = useGroupOrderFallback ? groupOrderByName.get(left) : undefined;
+    const rightOrder = useGroupOrderFallback ? groupOrderByName.get(right) : undefined;
+    if (leftOrder === undefined && rightOrder !== undefined) {
+      return 1;
+    }
+    if (leftOrder !== undefined && rightOrder === undefined) {
+      return -1;
+    }
+    if (leftOrder !== undefined && rightOrder !== undefined && leftOrder !== rightOrder) {
+      return leftOrder - rightOrder;
+    }
+    return left.localeCompare(right, "ja");
+  });
+}
+
+export function buildBracketSections(group: PhasePoolGroup | null): BracketSection[] {
+  if (!group) {
+    return [];
+  }
+
+  const winnersSets = group.sets.filter((set) => !isLosersBracketSet(set));
+  const losersSets = group.sets.filter((set) => isLosersBracketSet(set));
+  const sections: BracketSection[] = [];
+
+  if (winnersSets.length > 0) {
+    sections.push({
+      key: "winners",
+      title: "Winners",
+      columns: buildRoundColumns(winnersSets),
+      setCount: winnersSets.length,
+    });
+  }
+
+  if (losersSets.length > 0) {
+    sections.push({
+      key: "losers",
+      title: "Losers",
+      columns: buildRoundColumns(losersSets),
+      setCount: losersSets.length,
+    });
+  }
+
+  if (sections.length === 0) {
+    sections.push({
+      key: "all",
+      title: "Bracket",
+      columns: group.columns,
+      setCount: group.sets.length,
+    });
+  }
+
+  return sections;
+}
+
+export function buildBracketSectionsForView(input: {
+  sections: BracketSection[];
+  phaseGroupSets: SetSnapshot[];
+  event: EventSnapshot | null;
+  pendingResetSetIds: Set<string>;
+}): BracketSectionForView[] {
+  return input.sections.map((section) => {
+    const preparedColumns = section.columns.map((column) => ({
+      column,
+      hidden: !shouldShowGrandFinalResetColumn(
+        column,
+        input.phaseGroupSets,
+        input.event,
+        input.pendingResetSetIds,
+      ),
+    }));
+
+    const hasResetColumn = preparedColumns.some((item) => item.column.sets.some((set) => isGrandFinalResetSet(set)));
+    if (!hasResetColumn) {
+      const grandFinalColumnIndex = preparedColumns.findIndex((item) =>
+        item.column.sets.some((set) => isGrandFinalText(set.fullRoundText) && !isGrandFinalResetSet(set)),
+      );
+
+      if (grandFinalColumnIndex >= 0) {
+        const grandFinalColumn = preparedColumns[grandFinalColumnIndex].column;
+        preparedColumns.splice(grandFinalColumnIndex + 1, 0, {
+          column: {
+            key: `placeholder-gf-reset-${grandFinalColumn.key}`,
+            title: "Grand Final Reset",
+            round: grandFinalColumn.round,
+            seq: grandFinalColumn.seq + 1,
+            sets: [],
+          },
+          hidden: true,
+        });
+      }
+    }
+
+    const visualColumns = section.key === "losers" ? [...preparedColumns].reverse() : preparedColumns;
+    const hiddenByKey = new Map(visualColumns.map((item) => [item.column.key, item.hidden] as const));
+    const positionedColumns = buildPositionedRoundColumns(
+      visualColumns.map((item) => item.column),
+      section.key,
+    ).map((column) => ({
+      ...column,
+      hidden: hiddenByKey.get(column.key) ?? false,
+    }));
+
+    return {
+      ...section,
+      columns: positionedColumns,
+    };
+  });
+}
 
 export function isGrandFinalText(text: string): boolean {
   const normalized = text.trim().toLowerCase();

@@ -9,7 +9,7 @@ import { CreateSnapshot, type EventSnapshotProgress, type TournamentEventPreview
 import { SettingsScreen } from "./SettingMenu";
 import { StatusBoard, StatusBoardHero, type CallListEventGroup, type CallListEventSortStrategy } from "./StatusBoard";
 import { PlayerListInfo } from "./PlayerListInfo";
-import { MessageBox, type GenericMessage, type MailboxDeliveryMode } from "./MessageBox";
+import { MessageBox, type GenericMessage } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
 import {
   clampNonNegativeInteger,
@@ -34,12 +34,17 @@ import { RoundRobinBracket } from "./RoundRobinBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
 
 import { useBracketReport } from "./useBracketReport";
+import { useSetResultDrafts, type SetResultDraftState, type SetScoreDraft } from "./useSetResultDrafts";
+import { useSetResultPersistence } from "./useSetResultPersistence";
 import { useUserCards } from "./useUserCards";
 import { useItemLists } from "./useItemLists";
 import { useMailbox } from "./useMailbox";
 import { deriveEncryptedPlayerId } from "./userCardCanvas";
 import {
-  buildRoundColumns,
+  buildBracketSections,
+  buildBracketSectionsForView,
+  buildPhaseNames,
+  buildPhasePoolGroups,
   isCompletedSet,
   isDisplayableSet,
   isGrandFinalResetSet,
@@ -50,13 +55,12 @@ import {
   isMatchupReady,
   isSlotTbd,
   isWinnersFinalText,
-  shouldShowGrandFinalResetColumn,
   type EventSnapshot,
+  type PhasePoolGroup,
 } from "./bracketDisplay";
 import {
   buildCallListDedupKey,
   buildCallSyncStatusTargets,
-  buildScopedMessageMeta,
   compareCallListEventGroup,
   compareCallListEventGroupByMaxElapsed,
   extractCallEventMeta,
@@ -67,12 +71,10 @@ import {
   getMailboxMethodLabel,
   isLikelyPlayerId,
   isDqRequestMessage,
-  isSameGenericMessageIdentity,
   isValidIpv4,
   isValidSenderUserId,
   normalizeCallPhaseGroupName,
   normalizeCallPhaseName,
-  normalizeGenericMessage,
   parsePhasePoolKey,
   type MessageScope,
 } from "./messageUtils";
@@ -86,44 +88,13 @@ import {
   parseRoundRobinGameScore,
   rankRoundRobinStandings,
   roundRobinTieBreakRuleFromApi,
-  type PhaseGroupProgressionSnapshot,
-  type PhaseGroupSeedSnapshot,
   type RoundRobinStanding,
   type RoundRobinTieBreakRule,
   type SetEntrantSource,
   type SetSlot,
   type SetSnapshot,
 } from "./bracketProgression";
-import {
-  buildPositionedRoundColumns,
-  type PositionedRoundColumn,
-  type RoundColumn,
-} from "./bracketLayout";
 import "./App.css";
-
-type BracketSectionForView = {
-  key: string;
-  title: string;
-  columns: PositionedRoundColumn[];
-  setCount: number;
-};
-
-type PhasePoolGroup = {
-  key: string;
-  phaseGroupId: string | null;
-  phaseName: string;
-  phaseGroupName: string;
-  bracketType: string | null;
-  phaseOrder: number | null;
-  phaseGroupDisplayIdentifier: string | null;
-  tiebreakOrder?: string[];
-  progressionsOut: PhaseGroupProgressionSnapshot[];
-  seedMap: unknown;
-  seedOrder: string[];
-  seeds: PhaseGroupSeedSnapshot[];
-  sets: SetSnapshot[];
-  columns: RoundColumn[];
-};
 
 type RoundRobinBoardData = {
   entrants: string[];
@@ -254,14 +225,6 @@ type LocalGrandFinalResetResultMeta = {
   confirmed?: boolean;
   slotScores?: Array<{ entrantId: string; score: number }>;
   recordedAt: string;
-};
-
-type SetScoreDraft = Record<string, string>;
-
-type SetResultDraftState = {
-  winnerId: string;
-  scoreDrafts: SetScoreDraft;
-  directWin?: boolean;
 };
 
 type SavePlayerMetaOptions = {
@@ -1126,11 +1089,19 @@ function App() {
   const [selectedPhasePoolKey, setSelectedPhasePoolKey] = useState("");
   const [activeMatchSetId, setActiveMatchSetId] = useState("");
   const [setId, setSetId] = useState("");
-  const [scoreDrafts, setScoreDrafts] = useState<SetScoreDraft>({});
-  const [directWinnerId, setDirectWinnerId] = useState<string | null>(null);
+  const {
+    scoreDrafts,
+    setScoreDrafts,
+    directWinnerId,
+    setDirectWinnerId,
+    setResultDrafts,
+    interimScoreDraftsBySetId,
+    saveSetDraft,
+    removeInterimDraft,
+    removeDraftsForSet,
+    clearAllDrafts,
+  } = useSetResultDrafts();
   const [activeMatchSideDrafts, setActiveMatchSideDrafts] = useState<Record<string, PlaySide | "">>({});
-  const [setResultDrafts, setSetResultDrafts] = useState<Record<string, SetResultDraftState>>({});
-  const [interimScoreDraftsBySetId, setInterimScoreDraftsBySetId] = useState<Record<string, SetScoreDraft>>({});
   const [metaDrafts, setMetaDrafts] = useState<Record<string, PlayerMetaDraft>>({});
   const [localSnapshotEvents, setLocalSnapshotEvents] = useState<LocalSnapshotEventListItem[]>([]);
   const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
@@ -1194,6 +1165,20 @@ function App() {
   workspacePollingBlockedRef.current = busy || createBusy || loadingLocalSnapshotEvents;
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const { saveLocalResult: persistLocalSetResult } = useSetResultPersistence<TournamentWorkspace>({
+    setWorkspace,
+    setBusy,
+    setError,
+    setMessage,
+    saveSides: (event, set, sideDrafts) => saveMatchSidesIfNeeded(event, set, sideDrafts),
+    buildSlotScores: buildSlotScoresForSave,
+    resolveWinnerId: resolveWinnerIdFromDrafts,
+    syncOverlayScores: syncObsOverlayScoresForSet,
+    saveSetDraft,
+    removeInterimDraft,
+    removeDraftsForSet,
+    closeMatchDialog,
+  });
   const {
     itemLists,
     itemListName,
@@ -1355,8 +1340,7 @@ function App() {
               });
               if (alive) {
                 setWorkspace(result);
-                setSetResultDrafts({});
-                setInterimScoreDraftsBySetId({});
+                clearAllDrafts();
 
                 const refreshedSet = result.snapshot.events
                   .find((event) => event.eventId === selectedEventId)
@@ -2095,6 +2079,7 @@ function App() {
     activeThreadMessages,
     activeThreadResolved,
     canResolveActiveThread,
+    resolveActiveThread: resolveMailboxThread,
     canSendGenericMessage,
     canReplyToThread,
     canDeleteActiveThread,
@@ -3230,55 +3215,8 @@ function App() {
     };
   }, []);
 
-  async function resolveActiveThread() {
-    setError("");
-    setMessage("");
-
-    if (disableLocalCommunication) {
-      setError("ローカル通信を行わない設定のため、解決メッセージ送信は無効です。設定タブで解除してください。");
-      return;
-    }
-
-    if (!activeThread) {
-      setError("解決するスレッドを選択してください。");
-      return;
-    }
-
-    if (!canResolveActiveThread) {
-      setError("スレッド作成者のみが解決メッセージを送信できます。未解決スレッドを選択してください。");
-      return;
-    }
-
-    const resolveTargetMode: MailboxDeliveryMode = "broadcast";
-
-    try {
-      const sent = await invoke<GenericMessage>("send_mailbox_message", {
-        input: {
-          profile: senderProfile,
-          messageType: "resolve",
-          method: activeThread.method,
-          subject: `Resolved: ${activeThread.subject}`,
-          body: "解決",
-          messageMeta: buildScopedMessageMeta(null, selectedMessageScope),
-          deliveryTargetMode: resolveTargetMode,
-          deliveryTargetIp: null,
-          threadId: activeThread.threadId,
-          parentMessageId: activeThread.messageId,
-        },
-      });
-
-      const normalized = normalizeGenericMessage(sent);
-      if (normalized) {
-        setGenericMessages((current) => {
-          const next = [normalized, ...current.filter((item) => !isSameGenericMessageIdentity(item, normalized))];
-          return next.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-        });
-      }
-
-      setMessage("解決メッセージを送信しました。スレッドは完了扱いになります。");
-    } catch (err) {
-      setError(String(err));
-    }
+  function resolveActiveThread() {
+    void resolveMailboxThread();
   }
 
   async function requestUnresolvedCallSyncBroadcast() {
@@ -4715,184 +4653,12 @@ function App() {
     });
   }
 
-  const phasePoolGroups = useMemo(() => {
-    if (!selectedEvent) {
-      return [] as PhasePoolGroup[];
-    }
+  const phasePoolGroups = useMemo(() => buildPhasePoolGroups(selectedEvent), [selectedEvent]);
 
-    const groupMap = new Map<string, {
-      key: string;
-      phaseGroupId: string | null;
-      phaseName: string;
-      phaseGroupName: string;
-      bracketType: string | null;
-      phaseOrder: number | null;
-      phaseGroupDisplayIdentifier: string | null;
-      tiebreakOrder: string[];
-      progressionsOut: PhaseGroupProgressionSnapshot[];
-      seedMap: unknown;
-      seedOrder: string[];
-      seeds: PhaseGroupSeedSnapshot[];
-      sets: SetSnapshot[];
-    }>();
-
-    for (const set of selectedEvent.sets) {
-      if (!isDisplayableSet(set, selectedEvent)) {
-        continue;
-      }
-      const phaseName = set.phaseName && set.phaseName.trim() !== "" ? set.phaseName : "Phase 未設定";
-      const phaseGroupName =
-        set.phaseGroupName && set.phaseGroupName.trim() !== "" ? set.phaseGroupName : "Pool 未設定";
-      const phaseGroupDisplayIdentifier = set.phaseGroupDisplayIdentifier?.trim() || null;
-      const phaseGroupMetadata = set.phaseGroupId
-        ? selectedEvent.phaseGroups?.find((group) => group.phaseGroupId === set.phaseGroupId)
-        : selectedEvent.phaseGroups?.find((group) =>
-          group.phaseOrder === set.phaseOrder
-          && (group.displayIdentifier?.trim() || null) === phaseGroupDisplayIdentifier,
-        ) ?? selectedEvent.phaseGroups?.find((group) =>
-          group.phaseName === set.phaseName
-          && (group.displayIdentifier?.trim() || null) === phaseGroupDisplayIdentifier,
-        );
-      if (!phaseGroupMetadata) {
-        continue;
-      }
-      const bracketType = phaseGroupMetadata?.bracketType?.trim().toUpperCase() || null;
-      const tiebreakOrder = phaseGroupMetadata?.tiebreakOrder ?? [];
-      const progressionsOut = phaseGroupMetadata?.progressionsOut ?? [];
-      const seedMap = phaseGroupMetadata?.seedMap ?? null;
-      const seedOrder = phaseGroupMetadata?.seedOrder ?? [];
-      const seeds = phaseGroupMetadata?.seeds ?? [];
-      const hasStablePhasePoolIdentity = set.phaseOrder !== null && phaseGroupDisplayIdentifier !== null;
-      const groupKey = set.phaseGroupId
-        ? `id:${set.phaseGroupId}`
-        : hasStablePhasePoolIdentity
-          ? `order:${set.phaseOrder}::pool:${phaseGroupDisplayIdentifier}`
-        : `name:${phaseName}::${phaseGroupName}`;
-      const found = groupMap.get(groupKey);
-
-      if (found) {
-        found.sets.push(set);
-        if (found.bracketType === null && bracketType !== null) {
-          found.bracketType = bracketType;
-        }
-        if (found.progressionsOut.length === 0 && progressionsOut.length > 0) {
-          found.progressionsOut = progressionsOut;
-        }
-        if (found.seedMap === null && seedMap !== null) {
-          found.seedMap = seedMap;
-        }
-        if (found.seedOrder.length === 0 && seedOrder.length > 0) {
-          found.seedOrder = seedOrder;
-        }
-        if (found.seeds.length === 0 && seeds.length > 0) {
-          found.seeds = seeds;
-        }
-        continue;
-      }
-
-      groupMap.set(groupKey, {
-        key: groupKey,
-        phaseGroupId: set.phaseGroupId ?? null,
-        phaseName,
-        phaseGroupName,
-        bracketType,
-        phaseOrder: set.phaseOrder,
-        phaseGroupDisplayIdentifier,
-        tiebreakOrder,
-        progressionsOut,
-        seedMap,
-        seedOrder,
-        seeds,
-        sets: [set],
-      });
-    }
-
-    return [...groupMap.values()]
-      .sort((a, b) => {
-        if (a.phaseOrder === null && b.phaseOrder !== null) {
-          return 1;
-        }
-        if (a.phaseOrder !== null && b.phaseOrder === null) {
-          return -1;
-        }
-        if (a.phaseOrder !== null && b.phaseOrder !== null && a.phaseOrder !== b.phaseOrder) {
-          return a.phaseOrder - b.phaseOrder;
-        }
-        const byPhase = a.phaseName.localeCompare(b.phaseName, "ja");
-        if (byPhase !== 0) {
-          return byPhase;
-        }
-        if (a.phaseGroupDisplayIdentifier !== null && b.phaseGroupDisplayIdentifier !== null) {
-          return a.phaseGroupDisplayIdentifier.localeCompare(b.phaseGroupDisplayIdentifier, "ja");
-        }
-        return a.phaseGroupName.localeCompare(b.phaseGroupName, "ja");
-      })
-      .map((group) => ({
-        key: group.key,
-        phaseGroupId: group.phaseGroupId,
-        phaseName: group.phaseName,
-        phaseGroupName: group.phaseGroupName,
-        bracketType: group.bracketType,
-        phaseOrder: group.phaseOrder,
-        phaseGroupDisplayIdentifier: group.phaseGroupDisplayIdentifier,
-        tiebreakOrder: group.tiebreakOrder,
-        progressionsOut: group.progressionsOut,
-        seedMap: group.seedMap,
-        seedOrder: group.seedOrder,
-        seeds: group.seeds,
-        sets: group.sets,
-        columns: buildRoundColumns(group.sets),
-      }));
-  }, [selectedEvent]);
-
-  const phaseNames = useMemo(() => {
-    const names = [...new Set(phasePoolGroups.map((group) => group.phaseName))];
-    const phasePositionByName = new Map<string, number>();
-    for (const [index, phase] of (selectedEvent?.phases ?? []).entries()) {
-      if (phase.name && !phasePositionByName.has(phase.name)) {
-        phasePositionByName.set(phase.name, index);
-      }
-    }
-
-    const groupOrderByName = new Map<string, number>();
-    for (const group of phasePoolGroups) {
-      if (group.phaseOrder === null) {
-        continue;
-      }
-      const currentOrder = groupOrderByName.get(group.phaseName);
-      if (currentOrder === undefined || group.phaseOrder < currentOrder) {
-        groupOrderByName.set(group.phaseName, group.phaseOrder);
-      }
-    }
-
-    const useGroupOrderFallback = phasePositionByName.size === 0;
-    return names.sort((left, right) => {
-      const leftPosition = phasePositionByName.get(left);
-      const rightPosition = phasePositionByName.get(right);
-      if (leftPosition !== undefined && rightPosition !== undefined && leftPosition !== rightPosition) {
-        return leftPosition - rightPosition;
-      }
-      if (leftPosition !== undefined && rightPosition === undefined) {
-        return -1;
-      }
-      if (leftPosition === undefined && rightPosition !== undefined) {
-        return 1;
-      }
-
-      const leftOrder = useGroupOrderFallback ? groupOrderByName.get(left) : undefined;
-      const rightOrder = useGroupOrderFallback ? groupOrderByName.get(right) : undefined;
-      if (leftOrder === undefined && rightOrder !== undefined) {
-        return 1;
-      }
-      if (leftOrder !== undefined && rightOrder === undefined) {
-        return -1;
-      }
-      if (leftOrder !== undefined && rightOrder !== undefined && leftOrder !== rightOrder) {
-        return leftOrder - rightOrder;
-      }
-      return left.localeCompare(right, "ja");
-    });
-  }, [phasePoolGroups, selectedEvent]);
+  const phaseNames = useMemo(
+    () => buildPhaseNames(phasePoolGroups, selectedEvent?.phases),
+    [phasePoolGroups, selectedEvent?.phases],
+  );
 
   const phaseScopedPoolGroups = useMemo(() => {
     if (phasePoolGroups.length === 0) {
@@ -4941,98 +4707,19 @@ function App() {
     return hasDqScoreInDrafts(activeMatch, scoreDrafts);
   }, [activeMatch, scoreDrafts]);
 
-  const selectedBracketSections = useMemo(() => {
-    if (!selectedPhasePoolGroup) {
-      return [] as Array<{ key: string; title: string; columns: RoundColumn[]; setCount: number }>;
-    }
+  const selectedBracketSections = useMemo(
+    () => buildBracketSections(selectedPhasePoolGroup),
+    [selectedPhasePoolGroup],
+  );
 
-    const winnersSets = selectedPhasePoolGroup.sets.filter((set) => !isLosersBracketSet(set));
-    const losersSets = selectedPhasePoolGroup.sets.filter((set) => isLosersBracketSet(set));
-
-    const sections: Array<{ key: string; title: string; columns: RoundColumn[]; setCount: number }> = [];
-
-    if (winnersSets.length > 0) {
-      sections.push({
-        key: "winners",
-        title: "Winners",
-        columns: buildRoundColumns(winnersSets),
-        setCount: winnersSets.length,
-      });
-    }
-
-    if (losersSets.length > 0) {
-      sections.push({
-        key: "losers",
-        title: "Losers",
-        columns: buildRoundColumns(losersSets),
-        setCount: losersSets.length,
-      });
-    }
-
-    if (sections.length === 0) {
-      sections.push({
-        key: "all",
-        title: "Bracket",
-        columns: selectedPhasePoolGroup.columns,
-        setCount: selectedPhasePoolGroup.sets.length,
-      });
-    }
-
-    return sections;
-  }, [selectedPhasePoolGroup]);
-
-  const selectedBracketSectionsForView = useMemo(() => {
-    const pendingResetSetIds = new Set(
+  const selectedBracketSectionsForView = useMemo(() => buildBracketSectionsForView({
+    sections: selectedBracketSections,
+    phaseGroupSets: selectedPhasePoolGroup?.sets ?? [],
+    event: selectedEvent,
+    pendingResetSetIds: new Set(
       pendingGrandFinalResetResults.map((result) => result.sourceGrandFinalSetId),
-    );
-    return selectedBracketSections.map((section) => {
-      const preparedColumns = section.columns.map((column) => ({
-        column,
-        hidden: !shouldShowGrandFinalResetColumn(
-          column,
-          selectedPhasePoolGroup?.sets ?? [],
-          selectedEvent,
-          pendingResetSetIds,
-        ),
-      }));
-
-      const hasResetColumn = preparedColumns.some((item) => item.column.sets.some((set) => isGrandFinalResetSet(set)));
-      if (!hasResetColumn) {
-        const grandFinalColumnIndex = preparedColumns.findIndex((item) =>
-          item.column.sets.some((set) => isGrandFinalText(set.fullRoundText) && !isGrandFinalResetSet(set)),
-        );
-
-        if (grandFinalColumnIndex >= 0) {
-          const grandFinalColumn = preparedColumns[grandFinalColumnIndex].column;
-          preparedColumns.splice(grandFinalColumnIndex + 1, 0, {
-            column: {
-              key: `placeholder-gf-reset-${grandFinalColumn.key}`,
-              title: "Grand Final Reset",
-              round: grandFinalColumn.round,
-              seq: grandFinalColumn.seq + 1,
-              sets: [],
-            },
-            hidden: true,
-          });
-        }
-      }
-
-      const visualColumns = section.key === "losers" ? [...preparedColumns].reverse() : preparedColumns;
-      const hiddenByKey = new Map(visualColumns.map((item) => [item.column.key, item.hidden] as const));
-      const positionedColumns = buildPositionedRoundColumns(
-        visualColumns.map((item) => item.column),
-        section.key,
-      ).map((column) => ({
-        ...column,
-        hidden: hiddenByKey.get(column.key) ?? false,
-      }));
-
-      return {
-        ...section,
-        columns: positionedColumns,
-      };
-    });
-  }, [pendingGrandFinalResetResults, selectedEvent, selectedPhasePoolGroup, selectedBracketSections]) as BracketSectionForView[];
+    ),
+  }), [pendingGrandFinalResetResults, selectedEvent, selectedPhasePoolGroup, selectedBracketSections]);
 
   const bracketScaleStyle = useMemo(() => ({
     ["--bracket-scale" as string]: String(bracketZoomLevel),
@@ -6790,8 +6477,7 @@ function App() {
         perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
       });
       setWorkspace(result);
-      setSetResultDrafts({});
-      setInterimScoreDraftsBySetId({});
+      clearAllDrafts();
       closeMatchDialog();
       setCreateSnapshotProgress(null);
       await refreshLocalSnapshotEvents();
@@ -6823,8 +6509,7 @@ function App() {
         eventId,
       });
       setWorkspace(result);
-      setSetResultDrafts({});
-      setInterimScoreDraftsBySetId({});
+      clearAllDrafts();
       closeMatchDialog();
       setMessage("最後に取得したスナップショット時点に復元しました。対象eventの未報告結果は破棄されました。");
     } catch (err) {
@@ -7166,10 +6851,7 @@ function App() {
     if (forcedDraftState) {
       setDirectWinnerId(forcedDraftState.directWin ? forcedDraftState.winnerId : null);
       setScoreDrafts(forcedDraftState.scoreDrafts);
-      setSetResultDrafts((current) => ({
-        ...current,
-        [set.setId]: forcedDraftState,
-      }));
+      saveSetDraft(set.setId, forcedDraftState);
       return;
     }
 
@@ -7178,10 +6860,7 @@ function App() {
       const draftState = buildDraftStateFromPending(inputSet, pending);
       setDirectWinnerId(draftState.directWin ? draftState.winnerId : null);
       setScoreDrafts(draftState.scoreDrafts);
-      setSetResultDrafts((current) => ({
-        ...current,
-        [set.setId]: draftState,
-      }));
+      saveSetDraft(set.setId, draftState);
       return;
     }
 
@@ -7198,14 +6877,11 @@ function App() {
       ? snapshotDisplay.scores
       : buildScoreDraftsFromSet(inputSet);
     setScoreDrafts(snapshotScoreDrafts);
-    setSetResultDrafts((current) => ({
-      ...current,
-      [set.setId]: {
-        winnerId: "",
-        scoreDrafts: snapshotScoreDrafts,
-        directWin: false,
-      },
-    }));
+    saveSetDraft(set.setId, {
+      winnerId: "",
+      scoreDrafts: snapshotScoreDrafts,
+      directWin: false,
+    });
   }
 
   function requestResultConfirmation(match: SetSnapshot) {
@@ -7474,112 +7150,16 @@ function App() {
       return;
     }
 
-    setBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const normalizedSlug = toApiSlug(slug);
-      await invoke("save_last_slug", { slug: normalizedSlug });
-
-      await saveMatchSidesIfNeeded(selectedEvent, activeMatch, activeMatchSideDrafts);
-
-      const directWin = directWinnerId !== null;
-      const slotScores = directWin
-        ? activeMatch.slots
-          .filter((slot): slot is SetSlot & { entrantId: string } => slot.entrantId !== null)
-          .map((slot) => ({ entrantId: slot.entrantId, score: 0 }))
-        : buildSlotScoresForSave(activeMatch, scoreDrafts);
-      let resolvedWinnerId = directWinnerId ?? resolveWinnerIdFromDrafts(activeMatch, scoreDrafts);
-
-      if (resolvedWinnerId === "") {
-        if (confirmed) {
-          setError("スコアから勝者を特定できませんでした。入力を確認してください。");
-          return;
-        }
-
-        const result = await invoke<TournamentWorkspace>("save_local_set_scores", {
-          input: {
-            slug: normalizedSlug,
-            eventId: selectedEvent.eventId,
-            setId,
-            slotScores,
-          },
-        });
-        setWorkspace(result);
-        setSetResultDrafts((current) => {
-          if (!(setId in current)) {
-            return current;
-          }
-          const next = { ...current };
-          delete next[setId];
-          return next;
-        });
-        setInterimScoreDraftsBySetId((current) => {
-          if (!(setId in current)) {
-            return current;
-          }
-          const next = { ...current };
-          delete next[setId];
-          return next;
-        });
-
-        try {
-          await syncObsOverlayScoresForSet(activeMatch, slotScores);
-        } catch {
-          // オーバーレイ反映失敗は入力中の進行を止めない
-        }
-
-        setMessage("勝者未確定のため結果は確定せず、現在スコアを更新しました。オーバーレイへも同期済みです。");
-        return;
-      }
-
-      const result = await invoke<TournamentWorkspace>("save_local_set_result", {
-        input: {
-          slug: normalizedSlug,
-          eventId: selectedEvent.eventId,
-          setId,
-          winnerId: resolvedWinnerId,
-          confirmed,
-            directWin,
-          slotScores,
-        },
-      });
-      setWorkspace(result);
-      setSetResultDrafts((current) => ({
-        ...current,
-        [setId]: {
-          winnerId: resolvedWinnerId,
-          scoreDrafts,
-          directWin,
-        },
-      }));
-      setInterimScoreDraftsBySetId((current) => {
-        if (!(setId in current)) {
-          return current;
-        }
-        const next = { ...current };
-        delete next[setId];
-        return next;
-      });
-      try {
-        await syncObsOverlayScoresForSet(activeMatch, slotScores);
-      } catch {
-        // local結果保存は成功しているため、オーバーレイ反映失敗は致命扱いにしない
-      }
-      setMessage(
-        confirmed
-          ? "結果を確定しました。確定済みの試合だけが一括報告の対象になります。"
-          : "入力を保存しました。確定すると一括報告の対象になります。",
-      );
-      if (confirmed) {
-        closeMatchDialog();
-      }
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
+    await persistLocalSetResult({
+      slug: toApiSlug(slug),
+      event: selectedEvent,
+      setId,
+      set: activeMatch,
+      confirmed,
+      directWinnerId,
+      scoreDrafts,
+      sideDrafts: activeMatchSideDrafts,
+    });
   }
 
   async function discardLocalResultDraftsForBracket() {
@@ -7599,8 +7179,7 @@ function App() {
       });
 
       setWorkspace(result);
-      setSetResultDrafts({});
-      setInterimScoreDraftsBySetId({});
+      clearAllDrafts();
       closeMatchDialog();
       await refreshLocalSnapshotEvents();
       setMessage("全下書きを破棄しました。スナップショットの内容に戻しました。");
@@ -7639,22 +7218,7 @@ function App() {
       });
 
       setWorkspace(result);
-      setSetResultDrafts((current) => {
-        if (!(targetSetId in current)) {
-          return current;
-        }
-        const next = { ...current };
-        delete next[targetSetId];
-        return next;
-      });
-      setInterimScoreDraftsBySetId((current) => {
-        if (!(targetSetId in current)) {
-          return current;
-        }
-        const next = { ...current };
-        delete next[targetSetId];
-        return next;
-      });
+      removeDraftsForSet(targetSetId);
 
       const restoredSet = result.snapshot.events
         .find((event) => event.eventId === selectedEvent.eventId)

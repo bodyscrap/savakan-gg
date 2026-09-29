@@ -208,3 +208,23 @@ Set A確定後に勝者がC、敗者がIへ進み、IDと名前も維持され�
 edge生成では、書き換え済みの`graph_event`に同じset IDがあればそのsourceを使い、graphから除外されたintermediate setはraw setへfallbackするようにしました。これにより、DEの各Poolで確定した上位2名を対応するROUND ROBIN seedとset slotへ伝播できます。phaseの順序は`phaseOrder`の数値ではなく`event.phases`配列順を引き続き使います。
 
 回帰テスト `progresses_middle_pool_placements_to_round_robin_seed_slots` はDE 2 Poolの4進出枠について、cross-phase edgeの生成、RR slotへのentrant ID伝播、seedへのentrant反映を確認します。修正後は `cargo test --lib`（32件）と `cargo check` が成功し、event-1で正常に進行することも実機確認済みです。
+
+### 2026-09-29: 中盤DEの誤entrant・古い結果の再伝播・仮想GF Reset
+
+中盤DE Poolの進行途中で、DQを含むsetの勝者表示が一致しない、次setに別対戦の敗者が入る、Losers Final勝者の次phase seedがTBDのままになる、決勝phaseに同じ対戦カードが重複して表示される症状を確認しました。
+
+保存snapshotでは、確定setの`winnerId`がそのsetのどのslotにも存在しない例がありました。また、下流setのsourceが示すseed IDとslotに保存されたseed IDが一致せず、同じseed IDが複数slotに残る例もありました。これはDQ scoreの色判定そのものではなく、winnerとslot entrantの不整合により、表示・進行が別のentrantを参照していた問題です。勝者色はwinner IDとslot entrant IDの一致で決まるため、ID不一致では正しい側を緑表示できません。
+
+再構築ではcompleted setの一覧をseed補正より先に収集していました。その後、seed sourceからslot entrantを更新しても旧結果を無効化しなかったため、古いwinnerがcompleted setとして再生され、次のsetやprogression seedへ誤って伝播していました。さらに、entrant IDをキーにscoreを保存・復元する処理が、無効化したsetのscoreを再び戻す場合がありました。
+
+修正では次の整合ルールを適用しています。
+
+- progression seedへの進行先解決では、target slotにseed IDが欠けていても、source setが持つwinner/loser progression seed IDとの完全一致を優先する。progression IDだけの曖昧な一致で別seedを選ばない。
+- snapshot再構築の前に、winner IDがsetのslot entrantのいずれかと一致することを検証する。一致しない確定結果はwinnerとscoreをクリアし、completed setとして再生しない。
+- seed sourceの再適用でentrant IDが変わったsetは、そのsetのwinner・state・scoreを無効化する。無効化されたsetの結果とscoreは再構築時に再伝播・再復元しない。
+- 結果確定によって進出先entrantが変わった場合、影響を受ける下流setの確定結果、pending結果、GF Reset pending、play sideを破棄し、進行を再構築する。古い対戦相手に対する結果を新entrantへ引き継がない。
+- 「Grand Final」という表示名だけでは仮想GF Resetを作らない。中間setではない実際のGrand Finalであることを確認する。
+
+再発時は、まず該当setごとに`winnerId`が2 slotのentrant IDのどちらかと一致するか確認します。次にsourceの`typeId`とwinner/loser progression seed ID、進行先phaseGroup seed ID、slotのseed IDを照合し、重複または欠落がないかを調べます。entrant補正後のstate・winner・scoreも確認し、古い結果が再構築対象に残っていないことを確認してください。表示名やDQ scoreの符号だけから原因を決めず、IDとsource graphを先に追います。
+
+回帰テストは [storage.rs](../src-tauri/src/storage.rs) の `intermediate_grand_final_does_not_create_virtual_reset`、`advances_middle_winner_to_final_phase_group_seed`、`changing_a_progressed_entrant_invalidates_target_result`、`rebuilding_clears_result_when_seed_corrects_slot_entrant`、`rebuilding_discards_winner_not_present_in_set_slots` を参照します。Rust変更後は `cargo test --lib` を実行し、フロントのwinner色・matrix表示を変えた場合は `npm run build` と対象画面での確認も行います。
