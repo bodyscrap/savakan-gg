@@ -1920,6 +1920,7 @@ fn mobile_input_html() -> &'static str {
                     <span id="detailSetId" class="detail-set-id"></span>
                 </div>
             </div>
+            <p id="detailPhasePool" class="meta" style="margin-top: 4px;"></p>
             <p id="detailMeta" class="meta" style="margin-top: 4px;"></p>
             <label class="checkbox-row">
                 <input id="onePOnTopCheckbox" type="checkbox" checked />
@@ -2041,6 +2042,7 @@ fn mobile_input_html() -> &'static str {
         const refreshDetailBtn = document.getElementById('refreshDetailBtn');
         const detailRound = document.getElementById('detailRound');
         const detailSetId = document.getElementById('detailSetId');
+        const detailPhasePool = document.getElementById('detailPhasePool');
         const detailMeta = document.getElementById('detailMeta');
         const onePOnTopCheckbox = document.getElementById('onePOnTopCheckbox');
         const sideActions = document.getElementById('sideActions');
@@ -2943,6 +2945,10 @@ fn mobile_input_html() -> &'static str {
             showDetailView();
             detailRound.textContent = detail.fullRoundText || '-';
             detailSetId.textContent = getDisplaySetLabel(detail);
+            detailPhasePool.textContent = [detail.phaseName, detail.phaseGroupName]
+                .map((value) => String(value || '').trim())
+                .filter(Boolean)
+                .join(' / ');
             detailMeta.textContent = '';
             if (sideActions) {
                 sideActions.hidden = false;
@@ -3805,6 +3811,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 set_play_sides: Vec::new(),
                 pending_set_results: Vec::new(),
                 pending_grand_final_reset_results: Vec::new(),
+                set_confirmation_history: Vec::new(),
                 updated_at: chrono::Utc::now(),
             },
         };

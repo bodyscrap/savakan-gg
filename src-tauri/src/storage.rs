@@ -252,7 +252,104 @@ fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
         set_play_sides: Vec::new(),
         pending_set_results: Vec::new(),
         pending_grand_final_reset_results: Vec::new(),
+        set_confirmation_history: Vec::new(),
         updated_at: Utc::now(),
+    }
+}
+
+fn append_set_confirmation_record(
+    local_meta: &mut TournamentLocalMeta,
+    event_id: &str,
+    set_id: &str,
+    winner_id: &str,
+    slot_entrant_ids: Vec<String>,
+    confirmed_at: chrono::DateTime<Utc>,
+) {
+    let sequence = local_meta
+        .set_confirmation_history
+        .iter()
+        .filter(|record| record.event_id == event_id)
+        .map(|record| record.sequence)
+        .max()
+        .unwrap_or_default()
+        .saturating_add(1);
+    local_meta
+        .set_confirmation_history
+        .push(crate::models::SetConfirmationRecord {
+            event_id: event_id.to_owned(),
+            set_id: set_id.to_owned(),
+            sequence,
+            confirmed_at,
+            winner_id: winner_id.to_owned(),
+            slot_entrant_ids,
+        });
+}
+
+#[cfg(test)]
+mod set_confirmation_history_tests {
+    use super::{append_set_confirmation_record, build_empty_meta};
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn assigns_confirmation_sequences_per_event_and_preserves_slot_order() {
+        let mut meta = build_empty_meta("tournament", "event-a");
+        let confirmed_at = Utc.timestamp_opt(1_798_718_400, 0).unwrap();
+
+        append_set_confirmation_record(
+            &mut meta,
+            "event-a",
+            "set-a",
+            "entrant-1",
+            vec!["entrant-1".to_owned(), "entrant-2".to_owned()],
+            confirmed_at,
+        );
+        append_set_confirmation_record(
+            &mut meta,
+            "event-a",
+            "set-b",
+            "entrant-4",
+            vec!["entrant-3".to_owned(), "entrant-4".to_owned()],
+            confirmed_at,
+        );
+        append_set_confirmation_record(
+            &mut meta,
+            "event-b",
+            "set-c",
+            "entrant-5",
+            vec!["entrant-5".to_owned(), "entrant-6".to_owned()],
+            confirmed_at,
+        );
+
+        assert_eq!(meta.set_confirmation_history[0].sequence, 1);
+        assert_eq!(meta.set_confirmation_history[1].sequence, 2);
+        assert_eq!(meta.set_confirmation_history[2].sequence, 1);
+        assert_eq!(
+            meta.set_confirmation_history[0].slot_entrant_ids,
+            vec!["entrant-1", "entrant-2"]
+        );
+        assert_eq!(
+            meta.set_confirmation_history[0].confirmed_at,
+            confirmed_at
+        );
+    }
+    #[test]
+    fn loads_metadata_without_confirmation_history() {
+        let meta = serde_json::from_value::<crate::models::TournamentLocalMeta>(serde_json::json!({
+            "tournamentId": "tournament",
+            "slug": "tournament",
+            "events": [{
+                "eventId": "event-a",
+                "eventName": "Event",
+                "entrants": []
+            }],
+            "setPlaySides": [],
+            "pendingSetResults": [],
+            "pendingGrandFinalResetResults": [],
+            "updatedAt": "2026-09-30T00:00:00Z"
+        }))
+        .expect("older metadata without confirmation history should load");
+
+        assert!(meta.set_confirmation_history.is_empty());
     }
 }
 
@@ -2582,10 +2679,10 @@ fn build_progression_targets_by_source(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            let selected_seed_nodes = if !seed_id_targets.is_empty() {
-                seed_id_targets
-            } else if !progression_seed_targets.is_empty() {
+            let selected_seed_nodes = if !progression_seed_targets.is_empty() {
                 progression_seed_targets
+            } else if !seed_id_targets.is_empty() {
+                seed_id_targets
             } else if let Some(progression_id) = edge.progression_id.as_deref() {
                 let progression_targets = matching_groups
                     .iter()
@@ -7083,7 +7180,7 @@ pub fn upsert_local_set_result(
             "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned()
         })?;
 
-    let (applied_event_id, should_advance) = {
+    let (applied_event_id, should_advance, slot_entrant_ids) = {
         let known_entrant_names = snapshot
             .events
             .iter()
@@ -7120,7 +7217,12 @@ pub fn upsert_local_set_result(
             }
         }
 
-        (event_id.clone(), input.confirmed)
+        let slot_entrant_ids = set_snapshot
+            .slots
+            .iter()
+            .filter_map(|slot| slot.entrant_id.clone())
+            .collect();
+        (event_id.clone(), input.confirmed, slot_entrant_ids)
     };
 
     let score_csv = if input.direct_win {
@@ -7141,6 +7243,17 @@ pub fn upsert_local_set_result(
             score: slot.score,
         })
         .collect::<Vec<LocalSetScoreMeta>>();
+    let recorded_at = Utc::now();
+    if input.confirmed {
+        append_set_confirmation_record(
+            &mut local_meta,
+            &applied_event_id,
+            &input.set_id,
+            &input.winner_id,
+            slot_entrant_ids,
+            recorded_at,
+        );
+    }
 
     if let Some(source_grand_final_set_id) = source_grand_final_set_id {
         local_meta.pending_grand_final_reset_results.retain(|item| {
@@ -7158,7 +7271,7 @@ pub fn upsert_local_set_result(
                 direct_win: input.direct_win,
                 confirmed: input.confirmed,
                 slot_scores,
-                recorded_at: Utc::now(),
+                recorded_at: recorded_at.clone(),
             });
     } else {
         local_meta
@@ -7173,7 +7286,7 @@ pub fn upsert_local_set_result(
             direct_win: input.direct_win,
             confirmed: input.confirmed,
             slot_scores,
-            recorded_at: Utc::now(),
+            recorded_at,
         });
     }
 
@@ -8357,6 +8470,147 @@ mod progression_source_tests {
             event.phase_groups[2].seeds[3].entrant_id.as_deref(),
             Some("loser-2")
         );
+    }
+
+    #[test]
+    fn progression_source_seed_overrides_mismatched_target_slot_seed() {
+        let event: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Event",
+            "phases": [
+                { "phaseId": "qualifiers", "phaseOrder": 1 },
+                { "phaseId": "middle", "phaseOrder": 2 }
+            ],
+            "phaseGroups": [
+                {
+                    "phaseGroupId": "qualifiers-pool-3",
+                    "phaseId": "qualifiers",
+                    "phaseOrder": 1,
+                    "displayIdentifier": "3"
+                },
+                {
+                    "phaseGroupId": "middle-pool-2",
+                    "phaseId": "middle",
+                    "phaseOrder": 2,
+                    "displayIdentifier": "2",
+                    "seeds": [
+                        { "seedId": "advance-a", "progressionId": "progression-a" },
+                        { "seedId": "advance-b", "progressionId": "progression-b" },
+                        { "seedId": "shared-seed", "progressionId": "progression-shared" }
+                    ]
+                }
+            ],
+            "sets": [
+                {
+                    "setId": "shared-source",
+                    "phaseGroupId": "qualifiers-pool-3",
+                    "phaseOrder": 1,
+                    "phaseName": "Qualifiers",
+                    "phaseGroupDisplayIdentifier": "3",
+                    "fullRoundText": "Other Pool Final",
+                    "state": 3,
+                    "winnerId": "entrant-c",
+                    "winnerProgressionSeedId": "shared-seed",
+                    "winnerProgressionId": "progression-shared",
+                    "slots": [
+                        { "entrantId": "entrant-c", "entrantName": "Entrant C" },
+                        { "entrantId": "opponent-c", "entrantName": "Opponent C" }
+                    ]
+                },
+                {
+                    "setId": "pool-3-set-a",
+                    "phaseGroupId": "qualifiers-pool-3",
+                    "phaseOrder": 1,
+                    "phaseName": "Qualifiers",
+                    "phaseGroupDisplayIdentifier": "3",
+                    "fullRoundText": "Semi-Final",
+                    "state": 3,
+                    "winnerId": "entrant-a",
+                    "winnerProgressionSeedId": "advance-a",
+                    "winnerProgressionId": "progression-a",
+                    "slots": [
+                        { "entrantId": "entrant-a", "entrantName": "Entrant A" },
+                        { "entrantId": "opponent-a", "entrantName": "Opponent A" }
+                    ]
+                },
+                {
+                    "setId": "pool-3-set-b",
+                    "phaseGroupId": "qualifiers-pool-3",
+                    "phaseOrder": 1,
+                    "phaseName": "Qualifiers",
+                    "phaseGroupDisplayIdentifier": "3",
+                    "fullRoundText": "Semi-Final",
+                    "state": 3,
+                    "winnerId": "entrant-b",
+                    "winnerProgressionSeedId": "advance-b",
+                    "winnerProgressionId": "progression-b",
+                    "slots": [
+                        { "entrantId": "entrant-b", "entrantName": "Entrant B" },
+                        { "entrantId": "opponent-b", "entrantName": "Opponent B" }
+                    ]
+                },
+                {
+                    "setId": "middle-set-a",
+                    "phaseGroupId": "middle-pool-2",
+                    "phaseOrder": 2,
+                    "phaseName": "Middle",
+                    "phaseGroupDisplayIdentifier": "2",
+                    "fullRoundText": "Winners Semi-Final",
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "shared-seed" },
+                    "slots": [
+                        { "seedId": "shared-seed", "entrantName": "TBD" },
+                        { "entrantName": "TBD" }
+                    ]
+                },
+                {
+                    "setId": "middle-set-b",
+                    "phaseGroupId": "middle-pool-2",
+                    "phaseOrder": 2,
+                    "phaseName": "Middle",
+                    "phaseGroupDisplayIdentifier": "2",
+                    "fullRoundText": "Winners Semi-Final",
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "advance-a" },
+                    "entrant2Source": { "sourceType": "seed", "typeId": "advance-b" },
+                    "slots": [
+                        { "seedId": "shared-seed", "entrantName": "TBD" },
+                        { "seedId": "shared-seed", "entrantName": "TBD" }
+                    ]
+                }
+            ]
+        }))
+        .expect("test event should deserialize");
+        let mut snapshot = TournamentSnapshot {
+            tournament_id: "tournament".to_owned(),
+            slug: "tournament".to_owned(),
+            name: "Tournament".to_owned(),
+            events: vec![event.clone()],
+            updated_at: Utc::now(),
+        };
+        let targets = progression_targets_for(&event);
+
+        for (source_set_id, winner_id) in [
+            ("shared-source", "entrant-c"),
+            ("pool-3-set-b", "entrant-b"),
+            ("pool-3-set-a", "entrant-a"),
+        ] {
+            apply_local_progression_incremental(
+                &mut snapshot,
+                "event",
+                source_set_id,
+                winner_id,
+                &targets,
+            );
+        }
+
+        let event = &snapshot.events[0];
+        let middle_set_a = event.sets.iter().find(|set| set.set_id == "middle-set-a").unwrap();
+        let middle_set_b = event.sets.iter().find(|set| set.set_id == "middle-set-b").unwrap();
+        assert_eq!(middle_set_a.slots[0].entrant_id.as_deref(), Some("entrant-c"));
+        assert_eq!(middle_set_b.slots[0].entrant_id.as_deref(), Some("entrant-a"));
+        assert_eq!(middle_set_b.slots[1].entrant_id.as_deref(), Some("entrant-b"));
+        assert_eq!(event.phase_groups[1].seeds[2].entrant_id.as_deref(), Some("entrant-c"));
     }
 
     #[test]

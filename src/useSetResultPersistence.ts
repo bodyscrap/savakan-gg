@@ -95,13 +95,18 @@ export function useSetResultPersistence<TWorkspace>({
         setWorkspace(workspace);
         removeDraftsForSet(input.setId);
 
+        let overlaySyncFailed = false;
         try {
           await syncOverlayScores(input.set, slotScores);
         } catch {
-          // オーバーレイ反映失敗は入力中の進行を止めない
+          overlaySyncFailed = true;
         }
 
-        setMessage("勝者未確定のため結果は確定せず、現在スコアを更新しました。オーバーレイへも同期済みです。");
+        setMessage(
+          overlaySyncFailed
+            ? "勝者未確定のため結果は確定せず、現在スコアを更新しました。オーバーレイ同期には失敗しましたが、ローカル保存は維持されています。"
+            : "勝者未確定のため結果は確定せず、現在スコアを更新しました。オーバーレイへも同期済みです。",
+        );
         return;
       }
 
@@ -124,16 +129,21 @@ export function useSetResultPersistence<TWorkspace>({
       });
       removeInterimDraft(input.setId);
 
+      let overlaySyncFailed = false;
       try {
         await syncOverlayScores(input.set, slotScores);
       } catch {
-        // local結果保存は成功しているため、オーバーレイ反映失敗は致命扱いにしない
+        overlaySyncFailed = true;
       }
 
-      setMessage(
+      const saveMessage =
         input.confirmed
           ? "結果を確定しました。確定済みの試合だけが一括報告の対象になります。"
-          : "入力を保存しました。確定すると一括報告の対象になります。",
+          : "入力を保存しました。確定すると一括報告の対象になります。";
+      setMessage(
+        overlaySyncFailed
+          ? `${saveMessage} オーバーレイ同期には失敗しましたが、ローカル保存は維持されています。`
+          : saveMessage,
       );
       if (input.confirmed) {
         closeMatchDialog();

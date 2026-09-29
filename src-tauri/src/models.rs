@@ -99,7 +99,20 @@ pub struct TournamentLocalMeta {
     pub pending_set_results: Vec<LocalSetResultMeta>,
     #[serde(default)]
     pub pending_grand_final_reset_results: Vec<LocalGrandFinalResetResultMeta>,
+    #[serde(default)]
+    pub set_confirmation_history: Vec<SetConfirmationRecord>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetConfirmationRecord {
+    pub event_id: String,
+    pub set_id: String,
+    pub sequence: u64,
+    pub confirmed_at: DateTime<Utc>,
+    pub winner_id: String,
+    pub slot_entrant_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

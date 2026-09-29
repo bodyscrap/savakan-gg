@@ -1101,7 +1101,6 @@ function App() {
   const [selectedPhaseName, setSelectedPhaseName] = useState("");
   const [selectedPhasePoolKey, setSelectedPhasePoolKey] = useState("");
   const [activeMatchSetId, setActiveMatchSetId] = useState("");
-  const [setId, setSetId] = useState("");
   const {
     scoreDrafts,
     setScoreDrafts,
@@ -6885,7 +6884,6 @@ function App() {
     }
     const inputSet = resolvedEventSetsById.get(set.setId) ?? set;
     setActiveMatchSetId(set.setId);
-    setSetId(set.setId);
 
     const sideDrafts: Record<string, PlaySide | ""> = {};
     for (const slot of inputSet.slots) {
@@ -6993,7 +6991,8 @@ function App() {
       return;
     }
 
-    const draftState = buildDqDraftStateForEntrant(targetSet, context.dqEntrantId);
+    const resolvedTargetSet = resolvedEventSetsById.get(targetSet.setId) ?? targetSet;
+    const draftState = buildDqDraftStateForEntrant(resolvedTargetSet, context.dqEntrantId);
     if (!draftState) {
       setError("DQ入力の自動設定に失敗しました。対象プレイヤーまたは対戦カードを確認してください。");
       return;
@@ -7010,7 +7009,6 @@ function App() {
 
   function closeMatchDialog() {
     setActiveMatchSetId("");
-    setSetId("");
     setActiveMatchSideDrafts({});
     setMatchSideRandomNotice(null);
     setDirectWinnerId(null);
@@ -7201,7 +7199,7 @@ function App() {
     await persistLocalSetResult({
       slug: toApiSlug(slug),
       event: selectedEvent,
-      setId,
+      setId: activeMatch.setId,
       set: activeMatch,
       confirmed,
       directWinnerId,
