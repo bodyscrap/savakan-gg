@@ -6217,6 +6217,209 @@ fn collect_affected_set_ids_for_reset(
     Ok(ordered)
 }
 
+#[derive(Default)]
+struct AffectedSetResetTargets {
+    set_ids: Vec<String>,
+    seed_ids: HashSet<String>,
+}
+
+fn phase_group_for_set<'a>(
+    event: &'a EventSnapshot,
+    set: &crate::models::SetSnapshot,
+) -> Option<&'a crate::models::PhaseGroupSnapshot> {
+    event.phase_groups.iter().find(|group| {
+        if let Some(phase_group_id) = set.phase_group_id.as_deref() {
+            return group.phase_group_id == phase_group_id;
+        }
+        group.phase_order == set.phase_order
+            && normalize_group_key(group.display_identifier.as_ref())
+                == normalize_group_key(set.phase_group_display_identifier.as_ref())
+    })
+}
+
+fn round_robin_progression_seed_ids(
+    event: &EventSnapshot,
+    set: &crate::models::SetSnapshot,
+) -> HashSet<String> {
+    let Some(source_group) = phase_group_for_set(event, set) else {
+        return HashSet::new();
+    };
+    if !source_group
+        .bracket_type
+        .as_deref()
+        .is_some_and(|bracket_type| bracket_type.eq_ignore_ascii_case("ROUND_ROBIN"))
+    {
+        return HashSet::new();
+    }
+    let Some(source_phase_order) = source_group.phase_order else {
+        return HashSet::new();
+    };
+    let Some((target_phase_id, target_phase_order)) =
+        next_phase_id_and_order(event, source_group.phase_id.as_deref(), source_phase_order)
+    else {
+        return HashSet::new();
+    };
+
+    let target_groups = event
+        .phase_groups
+        .iter()
+        .filter(|group| {
+            group.phase_order == Some(target_phase_order)
+                && target_phase_id
+                    .as_deref()
+                    .is_none_or(|phase_id| group.phase_id.as_deref() == Some(phase_id))
+        })
+        .collect::<Vec<_>>();
+    let mut seed_ids = HashSet::new();
+    for progression in &source_group.progressions_out {
+        let target_seed = target_groups
+            .iter()
+            .flat_map(|group| group.seeds.iter())
+            .find(|seed| {
+                seed.progression_id.as_deref() == Some(progression.progression_id.as_str())
+            })
+            .or_else(|| {
+                target_groups
+                    .iter()
+                    .flat_map(|group| group.seeds.iter())
+                    .find(|seed| {
+                        seed.progression_id.is_none()
+                            && seed.origin_phase_order == Some(source_phase_order)
+                            && (seed.origin_phase_group_id.as_deref()
+                                == Some(source_group.phase_group_id.as_str())
+                                || normalize_group_key(
+                                    seed.origin_phase_group_display_identifier.as_ref(),
+                                ) == normalize_group_key(source_group.display_identifier.as_ref()))
+                            && seed.origin_placement == progression.origin_placement
+                            && (progression.origin_order.is_none()
+                                || seed.origin_order == progression.origin_order)
+                    })
+            });
+        if let Some(seed) = target_seed {
+            seed_ids.insert(seed.seed_id.clone());
+        }
+    }
+    seed_ids
+}
+
+fn set_ids_depending_on_seed(event: &EventSnapshot, seed_id: &str) -> Vec<String> {
+    event
+        .sets
+        .iter()
+        .filter(|set| {
+            (0..set.slots.len()).any(|slot_index| {
+                entrant_source_for_slot(set, slot_index).is_some_and(|source| {
+                    source.source_type.as_deref() == Some("seed")
+                        && source.type_id.as_deref() == Some(seed_id)
+                })
+            })
+        })
+        .map(|set| set.set_id.clone())
+        .collect()
+}
+
+fn clear_affected_progression_seeds(
+    event: &mut EventSnapshot,
+    seed_ids: &HashSet<String>,
+    invalid_entrant_ids: &mut HashSet<String>,
+) {
+    for group in &mut event.phase_groups {
+        for seed in &mut group.seeds {
+            if !seed_ids.contains(&seed.seed_id) {
+                continue;
+            }
+            if let Some(entrant_id) = seed.entrant_id.take() {
+                invalid_entrant_ids.insert(entrant_id);
+            }
+            seed.entrant_name = None;
+        }
+    }
+}
+
+fn collect_affected_reset_targets(
+    snapshot: &TournamentSnapshot,
+    event: &EventSnapshot,
+    source_set_id: &str,
+) -> Result<AffectedSetResetTargets, String> {
+    collect_affected_set_ids_for_reset(event, source_set_id)?;
+    let progression_targets_by_source = build_progression_targets_by_source(snapshot, event);
+    let mut affected_set_ids = HashSet::from([source_set_id.to_owned()]);
+    let mut affected_seed_ids = HashSet::new();
+    let mut pending_set_ids = vec![source_set_id.to_owned()];
+    let mut expanded_set_ids = HashSet::new();
+
+    while let Some(current_set_id) = pending_set_ids.pop() {
+        for set_id in collect_affected_set_ids_for_reset(event, &current_set_id)? {
+            if affected_set_ids.insert(set_id.clone()) {
+                pending_set_ids.push(set_id);
+            }
+        }
+        if !expanded_set_ids.insert(current_set_id.clone()) {
+            continue;
+        }
+
+        if let Some(targets) = progression_targets_by_source.get(&current_set_id) {
+            for target in targets {
+                if let Some(target_set) = event.sets.get(target.set_index) {
+                    if affected_set_ids.insert(target_set.set_id.clone()) {
+                        pending_set_ids.push(target_set.set_id.clone());
+                    }
+                }
+                for seed_target in &target.seed_targets {
+                    affected_seed_ids.insert(seed_target.seed_id.clone());
+                    for &(dependent_set_index, _) in &seed_target.dependent_slots {
+                        if let Some(dependent_set) = event.sets.get(dependent_set_index) {
+                            if affected_set_ids.insert(dependent_set.set_id.clone()) {
+                                pending_set_ids.push(dependent_set.set_id.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(set) = event.sets.iter().find(|set| set.set_id == current_set_id) {
+            for seed_id in round_robin_progression_seed_ids(event, set) {
+                affected_seed_ids.insert(seed_id.clone());
+                for dependent_set_id in set_ids_depending_on_seed(event, &seed_id) {
+                    if affected_set_ids.insert(dependent_set_id.clone()) {
+                        pending_set_ids.push(dependent_set_id);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut ordered = affected_set_ids.into_iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        let left_set = event.sets.iter().find(|set| set.set_id == *left);
+        let right_set = event.sets.iter().find(|set| set.set_id == *right);
+        let left_phase = left_set
+            .and_then(|set| crate::models::phase_sequence_index_for_set(event, set))
+            .unwrap_or(usize::MAX);
+        let right_phase = right_set
+            .and_then(|set| crate::models::phase_sequence_index_for_set(event, set))
+            .unwrap_or(usize::MAX);
+        let left_round = left_set.and_then(|set| set.round);
+        let right_round = right_set.and_then(|set| set.round);
+        if left == source_set_id {
+            return std::cmp::Ordering::Less;
+        }
+        if right == source_set_id {
+            return std::cmp::Ordering::Greater;
+        }
+        left_phase
+            .cmp(&right_phase)
+            .then_with(|| round_depth_for_sort(left_round).cmp(&round_depth_for_sort(right_round)))
+            .then_with(|| left.cmp(right))
+    });
+
+    Ok(AffectedSetResetTargets {
+        set_ids: ordered,
+        seed_ids: affected_seed_ids,
+    })
+}
+
 fn clear_set_result_state(set: &mut crate::models::SetSnapshot) {
     set.winner_id = None;
     for slot in &mut set.slots {
@@ -6262,7 +6465,8 @@ pub fn list_affected_set_ids_for_reset(
         .find(|event| event.event_id == event_id)
         .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
 
-    collect_affected_set_ids_for_reset(event, source_set_id)
+    collect_affected_reset_targets(&snapshot, event, source_set_id)
+        .map(|targets| targets.set_ids)
 }
 
 pub fn reset_local_set_result_with_dependencies(
@@ -6280,13 +6484,14 @@ pub fn reset_local_set_result_with_dependencies(
         .position(|event| event.event_id == event_id)
         .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
 
-    let affected_set_ids = {
+    let reset_targets = {
         let event = snapshot
             .events
             .get(event_index)
             .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
-        collect_affected_set_ids_for_reset(event, source_set_id)?
+        collect_affected_reset_targets(&snapshot, event, source_set_id)?
     };
+    let affected_set_ids = reset_targets.set_ids;
 
     let remove_ids = affected_set_ids.iter().collect::<HashSet<&String>>();
 
@@ -6306,6 +6511,12 @@ pub fn reset_local_set_result_with_dependencies(
             .iter()
             .filter_map(|slot| slot.entrant_id.clone())
             .collect::<HashSet<String>>();
+
+        clear_affected_progression_seeds(
+            event,
+            &reset_targets.seed_ids,
+            &mut invalid_entrant_ids,
+        );
 
         for target_set_id in &affected_set_ids {
             let Some(set) = event
@@ -6337,6 +6548,9 @@ pub fn reset_local_set_result_with_dependencies(
     local_meta
         .pending_set_results
         .retain(|item| !remove_ids.contains(&item.set_id));
+    local_meta
+        .pending_grand_final_reset_results
+        .retain(|item| !remove_ids.contains(&item.source_grand_final_set_id));
     local_meta
         .set_play_sides
         .retain(|item| !remove_ids.contains(&item.set_id));
@@ -7000,10 +7214,10 @@ pub fn upsert_local_set_result(
                 .find(|event| event.event_id == applied_event_id)
             {
                 for changed_set_id in changed_set_ids {
-                    if let Ok(dependent_set_ids) =
-                        collect_affected_set_ids_for_reset(event, &changed_set_id)
+                    if let Ok(dependent_targets) =
+                        collect_affected_reset_targets(&snapshot, event, &changed_set_id)
                     {
-                        affected_set_ids.extend(dependent_set_ids);
+                        affected_set_ids.extend(dependent_targets.set_ids);
                     }
                 }
                 affected_set_ids.remove(&input.set_id);
@@ -7704,7 +7918,8 @@ mod progression_source_tests {
         advance_completed_set_by_placement, advance_completed_set_to_next_real_sets,
         apply_indexed_progression_targets, apply_local_progression_incremental,
         apply_seed_sources_to_set_slots, apply_source_based_tbd_labels, build_bracket_graph,
-        build_progression_targets_by_source,
+        build_progression_targets_by_source, clear_affected_progression_seeds,
+        collect_affected_reset_targets,
         rebuild_progression_from_completed_sets, restore_pending_result_to_event,
         restore_missing_slot_entrants, ProgressionTarget,
     };
@@ -7722,6 +7937,198 @@ mod progression_source_tests {
             updated_at: Utc::now(),
         };
         build_progression_targets_by_source(&snapshot, event)
+    }
+
+    #[test]
+    fn reset_dependency_collection_crosses_progression_seed_to_later_phase() {
+        let snapshot: TournamentSnapshot = serde_json::from_value(serde_json::json!({
+            "tournamentId": "tournament",
+            "slug": "tournament",
+            "name": "Tournament",
+            "events": [{
+                "eventId": "event",
+                "name": "Event",
+                "phases": [
+                    { "phaseId": "middle", "phaseOrder": 1 },
+                    { "phaseId": "finals", "phaseOrder": 2 }
+                ],
+                "phaseGroups": [
+                    {
+                        "phaseGroupId": "middle-pool",
+                        "phaseId": "middle",
+                        "phaseOrder": 1,
+                        "setIds": ["source"]
+                    },
+                    {
+                        "phaseGroupId": "finals-pool",
+                        "phaseId": "finals",
+                        "phaseOrder": 2,
+                        "bracketType": "ROUND_ROBIN",
+                        "setIds": ["finals-match"],
+                        "seeds": [
+                            {
+                                "seedId": "advance-seed",
+                                "progressionId": "advance",
+                                "entrantId": "advancing-player",
+                                "entrantName": "Advancing Player"
+                            },
+                            { "seedId": "other-seed", "progressionId": "other" }
+                        ]
+                    }
+                ],
+                "sets": [
+                    {
+                        "setId": "source",
+                        "phaseGroupId": "middle-pool",
+                        "phaseOrder": 1,
+                        "fullRoundText": "Winners Final",
+                        "state": 3,
+                        "winnerId": "advancing-player",
+                        "winnerProgressionSeedId": "advance-seed",
+                        "winnerProgressionId": "advance",
+                        "slots": [
+                            { "entrantId": "advancing-player", "entrantName": "Advancing Player" },
+                            { "entrantId": "other-player", "entrantName": "Other Player" }
+                        ]
+                    },
+                    {
+                        "setId": "finals-match",
+                        "phaseGroupId": "finals-pool",
+                        "phaseOrder": 2,
+                        "fullRoundText": "Round 1",
+                        "state": 1,
+                        "entrant1Source": { "sourceType": "seed", "typeId": "advance-seed" },
+                        "entrant2Source": { "sourceType": "seed", "typeId": "other-seed" },
+                        "slots": [
+                            { "seedId": "advance-seed", "entrantName": "TBD" },
+                            { "seedId": "other-seed", "entrantName": "TBD" }
+                        ]
+                    }
+                ]
+            }],
+            "updatedAt": "2026-01-01T00:00:00Z"
+        }))
+        .expect("test snapshot should deserialize");
+        let event = &snapshot.events[0];
+
+        let reset_targets = collect_affected_reset_targets(&snapshot, event, "source")
+            .expect("source reset dependencies should resolve");
+
+        assert!(reset_targets.set_ids.contains(&"source".to_owned()));
+        assert!(reset_targets.set_ids.contains(&"finals-match".to_owned()));
+        assert!(reset_targets.seed_ids.contains("advance-seed"));
+
+        let mut event = snapshot.events[0].clone();
+        let mut invalid_entrant_ids = std::collections::HashSet::new();
+        clear_affected_progression_seeds(
+            &mut event,
+            &reset_targets.seed_ids,
+            &mut invalid_entrant_ids,
+        );
+        assert_eq!(event.phase_groups[1].seeds[0].entrant_id, None);
+        assert_eq!(event.phase_groups[1].seeds[0].entrant_name, None);
+        assert!(invalid_entrant_ids.contains("advancing-player"));
+    }
+
+    #[test]
+    fn reset_dependency_collection_crosses_round_robin_progressions_out() {
+        let snapshot: TournamentSnapshot = serde_json::from_value(serde_json::json!({
+            "tournamentId": "tournament",
+            "slug": "tournament",
+            "name": "Tournament",
+            "events": [{
+                "eventId": "event",
+                "name": "Event",
+                "phases": [
+                    { "phaseId": "pool", "phaseOrder": 1 },
+                    { "phaseId": "finals", "phaseOrder": 2 }
+                ],
+                "phaseGroups": [
+                    {
+                        "phaseGroupId": "round-robin",
+                        "phaseId": "pool",
+                        "phaseOrder": 1,
+                        "bracketType": "ROUND_ROBIN",
+                        "setIds": ["rr-source", "rr-other"],
+                        "progressionsOut": [{
+                            "progressionId": "top-seed",
+                            "originPhaseId": "pool",
+                            "originPhaseOrder": 1,
+                            "originPhaseGroupId": "round-robin",
+                            "originPlacement": 1,
+                            "originOrder": 1
+                        }]
+                    },
+                    {
+                        "phaseGroupId": "finals",
+                        "phaseId": "finals",
+                        "phaseOrder": 2,
+                        "setIds": ["final-match"],
+                        "seeds": [
+                            {
+                                "seedId": "qualified-seed",
+                                "progressionId": "top-seed",
+                                "originPhaseId": "pool",
+                                "originPhaseOrder": 1,
+                                "originPhaseGroupId": "round-robin",
+                                "originPlacement": 1,
+                                "originOrder": 1,
+                                "entrantId": "qualified-player",
+                                "entrantName": "Qualified Player"
+                            }
+                        ]
+                    }
+                ],
+                "sets": [
+                    {
+                        "setId": "rr-source",
+                        "phaseGroupId": "round-robin",
+                        "phaseOrder": 1,
+                        "fullRoundText": "Round 1",
+                        "state": 3,
+                        "winnerId": "qualified-player",
+                        "slots": [
+                            { "entrantId": "qualified-player", "entrantName": "Qualified Player", "score": 2 },
+                            { "entrantId": "pool-player", "entrantName": "Pool Player", "score": 0 }
+                        ]
+                    },
+                    {
+                        "setId": "rr-other",
+                        "phaseGroupId": "round-robin",
+                        "phaseOrder": 1,
+                        "fullRoundText": "Round 2",
+                        "state": 3,
+                        "winnerId": "pool-player",
+                        "slots": [
+                            { "entrantId": "pool-player", "entrantName": "Pool Player", "score": 2 },
+                            { "entrantId": "qualified-player", "entrantName": "Qualified Player", "score": 0 }
+                        ]
+                    },
+                    {
+                        "setId": "final-match",
+                        "phaseGroupId": "finals",
+                        "phaseOrder": 2,
+                        "fullRoundText": "Winners Round 1",
+                        "state": 1,
+                        "entrant1Source": { "sourceType": "seed", "typeId": "qualified-seed" },
+                        "slots": [
+                            { "seedId": "qualified-seed", "entrantId": "qualified-player", "entrantName": "Qualified Player" },
+                            { "entrantId": "finalist", "entrantName": "Finalist" }
+                        ]
+                    }
+                ]
+            }],
+            "updatedAt": "2026-01-01T00:00:00Z"
+        }))
+        .expect("test snapshot should deserialize");
+        let event = &snapshot.events[0];
+
+        let reset_targets = collect_affected_reset_targets(&snapshot, event, "rr-source")
+            .expect("round robin reset dependencies should resolve");
+
+        assert!(reset_targets.set_ids.contains(&"rr-source".to_owned()));
+        assert!(reset_targets.set_ids.contains(&"final-match".to_owned()));
+        assert!(reset_targets.seed_ids.contains("qualified-seed"));
     }
 
     #[test]
