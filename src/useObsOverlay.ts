@@ -59,6 +59,15 @@ export function abbreviateOverlayRoundText(value: string): string {
     .trim();
 }
 
+export function buildOverlaySetRoundText(
+  set: Pick<SetSnapshot, "fullRoundText" | "phaseName" | "phaseGroupDisplayIdentifier" | "identifier">,
+  displayCode: string | undefined,
+): string {
+  const phasePoolLabel = `${set.phaseName?.trim() || "-"} / Pool ${set.phaseGroupDisplayIdentifier?.trim() || "-"}`;
+  const setName = set.identifier?.trim() || displayCode || "-";
+  return `${phasePoolLabel} / Set ${setName}\n${abbreviateOverlayRoundText(set.fullRoundText)}`;
+}
+
 type OverlayPlaySide = "1P" | "2P" | "";
 
 export function resolveOverlaySidesForSet(

@@ -43,10 +43,11 @@ import { EventSetting, type EventSettingCategorySlot } from "./EventSetting";
 import { AppShell, type AppTab } from "./AppShell";
 import { OverlayControl } from "./OverlayControl";
 import {
-  abbreviateOverlayRoundText,
+  buildOverlaySetRoundText,
   resolveOverlaySidesForSet,
   useObsOverlay,
 } from "./useObsOverlay";
+import { usePhasePoolSelection } from "./usePhasePoolSelection";
 import { BracketTab } from "./BracketTab";
 import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
 import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDialog";
@@ -1242,10 +1243,6 @@ function App() {
     }
     const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === set.setId;
     const displayCode = setDisplayCodeById.get(set.setId);
-    const nextRoundLabel = abbreviateOverlayRoundText(set.fullRoundText);
-    const phasePoolLabel = `${set.phaseName?.trim() || "-"} / Pool ${set.phaseGroupDisplayIdentifier?.trim() || "-"}`;
-    const setName = set.identifier?.trim() || displayCode || "-";
-    const nextRoundText = `${phasePoolLabel} / Set ${setName}\n${nextRoundLabel}`;
     const overlaySides = resolveOverlaySidesForSet(set, {
       getSavedSide: getSetSlotSide,
     });
@@ -1255,7 +1252,7 @@ function App() {
       setId: set.setId,
       eventName: selectedEvent?.name ?? "",
       eventAlias: selectedEventMeta?.eventAlias?.trim() ?? "",
-      roundText: nextRoundText,
+      roundText: buildOverlaySetRoundText(set, displayCode),
       redPlayerName: overlaySides.redPlayerName,
       bluePlayerName: overlaySides.bluePlayerName,
       redSetWins: overlaySides.redSetWins,
@@ -1320,9 +1317,6 @@ function App() {
     }
 
     const displayCode = setDisplayCodeById.get(set.setId);
-    const nextRoundLabel = abbreviateOverlayRoundText(set.fullRoundText);
-    const phasePoolLabel = `${set.phaseName?.trim() || "-"} / Pool ${set.phaseGroupDisplayIdentifier?.trim() || "-"}`;
-    const setName = set.identifier?.trim() || displayCode || "-";
     const overlaySides = resolveOverlaySidesForSet(set, {
       scoreByEntrantId,
       sideOverrides,
@@ -1334,7 +1328,7 @@ function App() {
       setId: set.setId,
       eventName: selectedEvent?.name ?? "",
       eventAlias: selectedEventMeta?.eventAlias?.trim() ?? "",
-      roundText: `${phasePoolLabel} / Set ${setName}\n${nextRoundLabel}`,
+      roundText: buildOverlaySetRoundText(set, displayCode),
       redPlayerName: overlaySides.redPlayerName,
       bluePlayerName: overlaySides.bluePlayerName,
       redSetWins: overlaySides.redSetWins,
@@ -1493,35 +1487,14 @@ function App() {
     isDqScoreValue,
   });
 
-  useEffect(() => {
-    if (phaseNames.length === 0) {
-      if (selectedPhaseName !== "") {
-        setSelectedPhaseName("");
-      }
-      return;
-    }
-
-    if (phaseNames.includes(selectedPhaseName)) {
-      return;
-    }
-
-    setSelectedPhaseName(phaseNames[0]);
-  }, [phaseNames, selectedPhaseName]);
-
-  useEffect(() => {
-    if (phaseScopedPoolGroups.length === 0) {
-      if (selectedPhasePoolKey !== "") {
-        setSelectedPhasePoolKey("");
-      }
-      return;
-    }
-
-    if (phaseScopedPoolGroups.some((group) => group.key === selectedPhasePoolKey)) {
-      return;
-    }
-
-    setSelectedPhasePoolKey(phaseScopedPoolGroups[0].key);
-  }, [phaseScopedPoolGroups, selectedPhasePoolKey]);
+  usePhasePoolSelection({
+    phaseNames,
+    phaseScopedPoolGroups,
+    selectedPhaseName,
+    selectedPhasePoolKey,
+    setSelectedPhaseName,
+    setSelectedPhasePoolKey,
+  });
 
   useEffect(() => {
     if (!snapshot || snapshot.events.length === 0) {

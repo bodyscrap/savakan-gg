@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   abbreviateOverlayRoundText,
+  buildOverlaySetRoundText,
   resolveOverlaySidesForSet,
   scoreToOverlayGameWins,
 } from "./useObsOverlay";
@@ -17,6 +18,23 @@ describe("overlay display formatting", () => {
     expect(abbreviateOverlayRoundText("Grand Finals Reset")).toBe("GF Reset");
     expect(abbreviateOverlayRoundText("Grand Finals - Round 2")).toBe("GF - Round 2");
     expect(abbreviateOverlayRoundText("  Round 3  ")).toBe("Round 3");
+  });
+
+  it("builds a set round label with display-code and empty-value fallbacks", () => {
+    const set = {
+      fullRoundText: "Grand Finals Reset",
+      phaseName: " Main phase ",
+      phaseGroupDisplayIdentifier: "A",
+      identifier: "",
+    } as unknown as SetSnapshot;
+    expect(buildOverlaySetRoundText(set, "W-Final")).toBe("Main phase / Pool A / Set W-Final\nGF Reset");
+
+    expect(buildOverlaySetRoundText({
+      fullRoundText: "Round 1",
+      phaseName: null,
+      phaseGroupDisplayIdentifier: null,
+      identifier: null,
+    }, undefined)).toBe("- / Pool - / Set -\nRound 1");
   });
 
   it("maps player sides and scores to overlay colors", () => {
