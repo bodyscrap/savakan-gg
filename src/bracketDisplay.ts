@@ -408,6 +408,34 @@ export function buildPhaseNames(phasePoolGroups: PhasePoolGroup[], phases: Phase
   });
 }
 
+export function selectPhaseScopedPoolGroups(
+  phasePoolGroups: PhasePoolGroup[],
+  selectedPhaseName: string,
+): PhasePoolGroup[] {
+  if (phasePoolGroups.length === 0) {
+    return [];
+  }
+
+  const phaseName = selectedPhaseName === "" ? phasePoolGroups[0].phaseName : selectedPhaseName;
+  return phasePoolGroups.filter((group) => group.phaseName === phaseName);
+}
+
+export function resolveSelectedPhasePoolGroup(
+  phaseScopedPoolGroups: PhasePoolGroup[],
+  selectedPhasePoolKey: string,
+): PhasePoolGroup | null {
+  if (phaseScopedPoolGroups.length === 0) {
+    return null;
+  }
+
+  if (selectedPhasePoolKey === "") {
+    return phaseScopedPoolGroups[0];
+  }
+
+  return phaseScopedPoolGroups.find((group) => group.key === selectedPhasePoolKey)
+    ?? phaseScopedPoolGroups[0];
+}
+
 export function buildBracketSections(group: PhasePoolGroup | null): BracketSection[] {
   if (!group) {
     return [];

@@ -6,9 +6,11 @@ import {
   getDisplaySlotsForSet,
   normalizeSourceText,
   pickPairSourceIds,
+  resolveSelectedPhasePoolGroup,
   resolveTbdSourceLabel,
+  selectPhaseScopedPoolGroups,
 } from "./bracketDisplay";
-import type { BracketSectionForView } from "./bracketDisplay";
+import type { BracketSectionForView, PhasePoolGroup } from "./bracketDisplay";
 import type { SetSnapshot } from "./bracketProgression";
 
 describe("bracket source labels", () => {
@@ -145,5 +147,30 @@ describe("bracket source labels", () => {
     });
 
     expect(result.map(({ slot }) => slot.entrantId)).toEqual(["player-b", "player-a"]);
+  });
+});
+
+describe("phase and pool selection", () => {
+  const groups = [
+    { key: "phase-a-pool-1", phaseName: "Phase A" },
+    { key: "phase-b-pool-1", phaseName: "Phase B" },
+    { key: "phase-a-pool-2", phaseName: "Phase A" },
+  ] as PhasePoolGroup[];
+
+  it("uses the first group phase when no phase is selected and returns no groups for an unknown phase", () => {
+    expect(selectPhaseScopedPoolGroups(groups, "").map((group) => group.key)).toEqual([
+      "phase-a-pool-1",
+      "phase-a-pool-2",
+    ]);
+    expect(selectPhaseScopedPoolGroups(groups, "Unknown")).toEqual([]);
+    expect(selectPhaseScopedPoolGroups([], "")).toEqual([]);
+  });
+
+  it("uses the first phase group when the selected pool key is empty or stale", () => {
+    const phaseGroups = selectPhaseScopedPoolGroups(groups, "Phase A");
+    expect(resolveSelectedPhasePoolGroup(phaseGroups, "")).toBe(phaseGroups[0]);
+    expect(resolveSelectedPhasePoolGroup(phaseGroups, "stale-key")).toBe(phaseGroups[0]);
+    expect(resolveSelectedPhasePoolGroup(phaseGroups, "phase-a-pool-2")).toBe(phaseGroups[1]);
+    expect(resolveSelectedPhasePoolGroup([], "phase-a-pool-1")).toBeNull();
   });
 });

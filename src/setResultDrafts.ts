@@ -1,9 +1,38 @@
-import type { LocalSetResultMeta, PlaySide } from "./useTournamentWorkspace";
+import type {
+  LocalGrandFinalResetResultMeta,
+  LocalSetResultMeta,
+  PlaySide,
+} from "./useTournamentWorkspace";
 import type { SetResultDraftState, SetScoreDraft } from "./useSetResultDrafts";
 import type { SetSlot, SetSnapshot } from "./bracketProgression";
 import { isCompletedSet } from "./bracketDisplay";
 
 export type SetResultVisualStatus = "inprogress" | "draft" | "confirmed" | "reset" | null;
+
+export function buildPendingSetResultsById(
+  pendingSetResults: LocalSetResultMeta[],
+  pendingGrandFinalResetResults: LocalGrandFinalResetResultMeta[],
+): Map<string, LocalSetResultMeta> {
+  const resultsBySetId = new Map<string, LocalSetResultMeta>();
+  for (const pending of pendingSetResults) {
+    resultsBySetId.set(pending.setId, pending);
+  }
+  for (const pending of pendingGrandFinalResetResults) {
+    const setId = `virtual_gf_reset_${pending.sourceGrandFinalSetId}`;
+    resultsBySetId.set(setId, {
+      eventId: pending.eventId,
+      eventName: pending.eventName,
+      setId,
+      winnerId: pending.winnerId,
+      scoreCsv: pending.scoreCsv,
+      directWin: pending.directWin,
+      confirmed: pending.confirmed,
+      slotScores: pending.slotScores,
+      recordedAt: pending.recordedAt,
+    });
+  }
+  return resultsBySetId;
+}
 
 export function resolveSetSlotSideLabel(
   entrantId: string | null,

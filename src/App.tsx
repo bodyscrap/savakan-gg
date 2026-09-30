@@ -58,6 +58,7 @@ import { useBracketReport } from "./useBracketReport";
 import { useSetResultDrafts, type SetResultDraftState } from "./useSetResultDrafts";
 import {
   applyScoreDraftWithOpponentDefault,
+  buildPendingSetResultsById,
   getSetScoresForDisplay as buildSetScoresForDisplay,
   buildDraftStateFromPending,
   buildScoreDraftsFromResult,
@@ -92,7 +93,6 @@ import {
 } from "./useCallList";
 import {
   useTournamentWorkspace,
-  type LocalSetResultMeta,
   type PlaySide,
   type TournamentWorkspace,
 } from "./useTournamentWorkspace";
@@ -114,9 +114,10 @@ import {
   isDisplayableSet,
   isInactiveGrandFinalReset,
   isMatchupReady,
+  resolveSelectedPhasePoolGroup,
   resolveTbdSourceLabel as resolveBracketTbdSourceLabel,
+  selectPhaseScopedPoolGroups,
   type EventSnapshot,
-  type PhasePoolGroup,
 } from "./bracketDisplay";
 import {
   getMailboxMethodLabel,
@@ -1444,26 +1445,15 @@ function App() {
     [phasePoolGroups, selectedEvent?.phases],
   );
 
-  const phaseScopedPoolGroups = useMemo(() => {
-    if (phasePoolGroups.length === 0) {
-      return [] as PhasePoolGroup[];
-    }
+  const phaseScopedPoolGroups = useMemo(
+    () => selectPhaseScopedPoolGroups(phasePoolGroups, selectedPhaseName),
+    [phasePoolGroups, selectedPhaseName],
+  );
 
-    const phaseName = selectedPhaseName === "" ? phasePoolGroups[0].phaseName : selectedPhaseName;
-    return phasePoolGroups.filter((group) => group.phaseName === phaseName);
-  }, [phasePoolGroups, selectedPhaseName]);
-
-  const selectedPhasePoolGroup = useMemo(() => {
-    if (phaseScopedPoolGroups.length === 0) {
-      return null;
-    }
-
-    if (selectedPhasePoolKey === "") {
-      return phaseScopedPoolGroups[0];
-    }
-
-    return phaseScopedPoolGroups.find((group) => group.key === selectedPhasePoolKey) ?? phaseScopedPoolGroups[0];
-  }, [phaseScopedPoolGroups, selectedPhasePoolKey]);
+  const selectedPhasePoolGroup = useMemo(
+    () => resolveSelectedPhasePoolGroup(phaseScopedPoolGroups, selectedPhasePoolKey),
+    [phaseScopedPoolGroups, selectedPhasePoolKey],
+  );
 
   const activeMatch = useMemo(() => {
     if (!selectedPhasePoolGroup || activeMatchSetId.trim() === "") {
@@ -1573,27 +1563,10 @@ function App() {
     );
   }
 
-  const pendingResultBySetId = useMemo(() => {
-    const map = new Map<string, LocalSetResultMeta>();
-    for (const pending of pendingSetResults) {
-      map.set(pending.setId, pending);
-    }
-    for (const pending of pendingGrandFinalResetResults) {
-      const setId = `virtual_gf_reset_${pending.sourceGrandFinalSetId}`;
-      map.set(setId, {
-        eventId: pending.eventId,
-        eventName: pending.eventName,
-        setId,
-        winnerId: pending.winnerId,
-        scoreCsv: pending.scoreCsv,
-        directWin: pending.directWin,
-        confirmed: pending.confirmed,
-        slotScores: pending.slotScores,
-        recordedAt: pending.recordedAt,
-      });
-    }
-    return map;
-  }, [pendingGrandFinalResetResults, pendingSetResults]);
+  const pendingResultBySetId = useMemo(
+    () => buildPendingSetResultsById(pendingSetResults, pendingGrandFinalResetResults),
+    [pendingGrandFinalResetResults, pendingSetResults],
+  );
 
   const roundRobinBoardData = useMemo<RoundRobinBoardData>(() => {
     if (getBracketProgressionModel(selectedPhasePoolGroup?.bracketType ?? null) !== "round_robin") {

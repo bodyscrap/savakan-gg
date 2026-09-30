@@ -3,6 +3,7 @@ import type { LocalSetResultMeta } from "./useTournamentWorkspace";
 import type { SetSnapshot } from "./bracketProgression";
 import {
   applyScoreDraftWithOpponentDefault,
+  buildPendingSetResultsById,
   buildDraftStateFromPending,
   buildScoreDraftsFromResult,
   buildSlotScoresForSave,
@@ -77,6 +78,35 @@ describe("score parsing", () => {
 });
 
 describe("result drafts", () => {
+  it("maps ordinary and virtual grand-final reset results by their effective set ids", () => {
+    const ordinary = createResult();
+    const virtualReset = {
+      eventId: "event-1",
+      eventName: "Event",
+      sourceGrandFinalSetId: "gf-set",
+      winnerId: "blue",
+      scoreCsv: "1-0",
+      confirmed: false,
+      slotScores: [{ entrantId: "blue", score: 1 }],
+      recordedAt: "2026-09-30T01:00:00Z",
+    };
+
+    const results = buildPendingSetResultsById([ordinary], [virtualReset]);
+
+    expect(results.get("set-1")).toBe(ordinary);
+    expect(results.get("virtual_gf_reset_gf-set")).toEqual({
+      eventId: "event-1",
+      eventName: "Event",
+      setId: "virtual_gf_reset_gf-set",
+      winnerId: "blue",
+      scoreCsv: "1-0",
+      directWin: undefined,
+      confirmed: false,
+      slotScores: [{ entrantId: "blue", score: 1 }],
+      recordedAt: "2026-09-30T01:00:00Z",
+    });
+  });
+
   it("hides side labels until the matchup is ready and then applies saved or slot fallback sides", () => {
     expect(resolveSetSlotSideLabel("red", "2P")).toBe("-");
     expect(resolveSetSlotSideLabel("red", "2P", { matchupReady: true })).toBe("2P");
