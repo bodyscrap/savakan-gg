@@ -7,6 +7,15 @@ import { DqRequestDialog } from "./DqRequestDialog";
 import { useDqCameraScan } from "./useDqCameraScan";
 import { useSenderProfile } from "./useSenderProfile";
 import { useMobileInputPortal } from "./useMobileInputPortal";
+import {
+  BRACKET_ZOOM_LEVELS,
+  MOBILE_INPUT_POLLING_MS_MAX,
+  MOBILE_INPUT_POLLING_MS_MIN,
+  normalizeBracketZoomLevel,
+  normalizeMobileInputPollingMs,
+  normalizeStartggFetchPerPage,
+  useAppPreferences,
+} from "./useAppPreferences";
 import { localNetworkCandidateKey } from "./localNetworkSettings";
 import { toApiSlug, toEventApiSlug, toSlugInput } from "./slugUtils";
 import { SettingsScreen } from "./SettingMenu";
@@ -215,48 +224,12 @@ type SavePlayerMetaOptions = {
   manageBusy?: boolean;
 };
 
-const STARTGG_FETCH_PER_PAGE_DEFAULT = 50;
-const MOBILE_INPUT_POLLING_MS_MIN = 500;
-const MOBILE_INPUT_POLLING_MS_MAX = 10000;
-const MOBILE_INPUT_POLLING_MS_DEFAULT = 1500;
-
 function normalizeSlugForSettingKey(rawSlug: string): string {
   const trimmed = rawSlug.trim();
   const withoutPrefix = trimmed.startsWith("tournament/")
     ? trimmed.slice("tournament/".length)
     : trimmed;
   return withoutPrefix.replace(/^\/+|\/+$/g, "");
-}
-
-function normalizeStartggFetchPerPage(rawValue: unknown, fallback = STARTGG_FETCH_PER_PAGE_DEFAULT): number {
-  const numeric = Number(rawValue);
-  if (!Number.isFinite(numeric)) {
-    return fallback;
-  }
-
-  const rounded = Math.trunc(numeric);
-  if (rounded < 1) {
-    return 1;
-  }
-
-  return rounded;
-}
-
-function normalizeMobileInputPollingMs(rawValue: unknown, fallback = MOBILE_INPUT_POLLING_MS_DEFAULT): number {
-  const numeric = Number(rawValue);
-  if (!Number.isFinite(numeric)) {
-    return fallback;
-  }
-
-  const rounded = Math.trunc(numeric);
-  if (rounded < MOBILE_INPUT_POLLING_MS_MIN) {
-    return MOBILE_INPUT_POLLING_MS_MIN;
-  }
-  if (rounded > MOBILE_INPUT_POLLING_MS_MAX) {
-    return MOBILE_INPUT_POLLING_MS_MAX;
-  }
-
-  return rounded;
 }
 
 function generateRandomSenderUserId(): string {
@@ -283,31 +256,6 @@ function resolveCallPhaseName(event: EventSnapshot | null, rawValue: string, pha
     (candidate) => candidate.phaseOrder === resolvedPhaseOrder && candidate.phaseName?.trim(),
   );
   return set?.phaseName?.trim() || normalized;
-}
-
-const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
-const BRACKET_ZOOM_LEVEL_STORAGE_KEY = "savakan-gg.bracket-zoom-level.v1";
-const STARTGG_FETCH_PER_PAGE_STORAGE_KEY = "savakan-gg.startgg-fetch-per-page.v1";
-const MOBILE_INPUT_POLLING_MS_STORAGE_KEY = "savakan-gg.mobile-input-polling-ms.v1";
-const LOCAL_COMMUNICATION_DISABLED_STORAGE_KEY = "savakan-gg.local-communication-disabled.v1";
-
-const BRACKET_ZOOM_LEVELS = [1, 0.7, 0.5] as const;
-
-function normalizeBracketZoomLevel(value: unknown): number {
-  if (typeof value === "string" || typeof value === "number") {
-    const parsed = typeof value === "string" ? Number.parseFloat(value) : Number(value);
-    if (Number.isFinite(parsed)) {
-      let nearest: number = Number(BRACKET_ZOOM_LEVELS[0]);
-      for (const candidate of BRACKET_ZOOM_LEVELS) {
-        if (Math.abs(Number(candidate) - parsed) < Math.abs(nearest - parsed)) {
-          nearest = Number(candidate);
-        }
-      }
-      return nearest;
-    }
-  }
-
-  return Number(BRACKET_ZOOM_LEVELS[0]);
 }
 
 function eventSettingKey(slug: string, eventId: string): string {
@@ -385,7 +333,6 @@ function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("home");
   const [appVersion, setAppVersion] = useState("");
   const [slug, setSlug] = useState("");
-  const [startggFetchPerPage, setStartggFetchPerPage] = useState(STARTGG_FETCH_PER_PAGE_DEFAULT);
   const [eventAliasDraft, setEventAliasDraft] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState("");
@@ -408,19 +355,27 @@ function App() {
   const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
   const [homeSelectedSnapshotKey, setHomeSelectedSnapshotKey] = useState("");
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
-  const [displayBracketPlayersBySide, setDisplayBracketPlayersBySide] = useState(true);
-  const [bracketZoomLevel, setBracketZoomLevel] = useState<number>(Number(BRACKET_ZOOM_LEVELS[0]));
-  const [mobileInputPollingMs, setMobileInputPollingMs] = useState<number>(MOBILE_INPUT_POLLING_MS_DEFAULT);
   const [overlaySwitchConfirm, setOverlaySwitchConfirm] = useState<{ targetSetId: string; targetSetLabel: string } | null>(null);
   const [resultConfirmation, setResultConfirmation] = useState<ResultConfirmationState | null>(null);
   const [callingEntrantId, setCallingEntrantId] = useState("");
-  const [disableLocalCommunication, setDisableLocalCommunication] = useState(false);
   const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [selectedTournamentEntrantId, setSelectedTournamentEntrantId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const {
+    startggFetchPerPage,
+    setStartggFetchPerPage,
+    displayBracketPlayersBySide,
+    setDisplayBracketPlayersBySide,
+    bracketZoomLevel,
+    setBracketZoomLevel,
+    mobileInputPollingMs,
+    setMobileInputPollingMs,
+    disableLocalCommunication,
+    setDisableLocalCommunication,
+  } = useAppPreferences();
   const {
     senderProfile,
     senderProfileReady,
@@ -711,110 +666,6 @@ function App() {
       alive = false;
     };
   }, []);
-
-  useEffect(() => {
-    try {
-      const rawBracketSideOrderDisplay = window.localStorage.getItem(BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY);
-      if (rawBracketSideOrderDisplay !== null) {
-        setDisplayBracketPlayersBySide(rawBracketSideOrderDisplay === "true");
-      } else {
-        setDisplayBracketPlayersBySide(true);
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      const rawBracketZoomLevel = window.localStorage.getItem(BRACKET_ZOOM_LEVEL_STORAGE_KEY);
-      if (rawBracketZoomLevel !== null) {
-        setBracketZoomLevel(normalizeBracketZoomLevel(rawBracketZoomLevel));
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      const rawStartggFetchPerPage = window.localStorage.getItem(STARTGG_FETCH_PER_PAGE_STORAGE_KEY);
-      if (rawStartggFetchPerPage !== null) {
-        setStartggFetchPerPage(normalizeStartggFetchPerPage(rawStartggFetchPerPage));
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      const rawDisableLocalCommunication = window.localStorage.getItem(LOCAL_COMMUNICATION_DISABLED_STORAGE_KEY);
-      if (rawDisableLocalCommunication !== null) {
-        setDisableLocalCommunication(rawDisableLocalCommunication === "true");
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      const rawMobileInputPollingMs = window.localStorage.getItem(MOBILE_INPUT_POLLING_MS_STORAGE_KEY);
-      if (rawMobileInputPollingMs !== null) {
-        setMobileInputPollingMs(normalizeMobileInputPollingMs(rawMobileInputPollingMs));
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY,
-        displayBracketPlayersBySide ? "true" : "false",
-      );
-    } catch {
-      // ignore
-    }
-  }, [displayBracketPlayersBySide]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        BRACKET_ZOOM_LEVEL_STORAGE_KEY,
-        String(bracketZoomLevel),
-      );
-    } catch {
-      // ignore
-    }
-  }, [bracketZoomLevel]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        STARTGG_FETCH_PER_PAGE_STORAGE_KEY,
-        String(normalizeStartggFetchPerPage(startggFetchPerPage)),
-      );
-    } catch {
-      // ignore
-    }
-  }, [startggFetchPerPage]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        LOCAL_COMMUNICATION_DISABLED_STORAGE_KEY,
-        disableLocalCommunication ? "true" : "false",
-      );
-    } catch {
-      // ignore
-    }
-  }, [disableLocalCommunication]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        MOBILE_INPUT_POLLING_MS_STORAGE_KEY,
-        String(normalizeMobileInputPollingMs(mobileInputPollingMs)),
-      );
-    } catch {
-      // ignore
-    }
-  }, [mobileInputPollingMs]);
 
   useEffect(() => {
     if (activeTab !== "home") {
