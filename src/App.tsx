@@ -27,8 +27,10 @@ import { MessageBox } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
 import {
   buildCategoryUsageList,
-  clampNonNegativeInteger,
+  buildConfiguredCategorySlots,
   resolveMatchSideAssignment,
+  resolveRandomMatchSideAssignment,
+  resolveSwappedMatchSideAssignment,
 } from "./eventManagement";
 import {
   MAX_CATEGORY_SLOTS,
@@ -994,42 +996,10 @@ function App() {
   });
 
   const configuredCategorySlots = useMemo(() => {
-    const slots: Array<{
-      slotIndex: number;
-      list: ItemListConfig;
-      minCount: number;
-      maxCount: number;
-      allowDuplicates: boolean;
-    }> = [];
-    const appliedSetting = appliedEventMgmtSettings[selectedEventSettingKey];
-
-    for (let slotIndex = 0; slotIndex < MAX_CATEGORY_SLOTS; slotIndex += 1) {
-      const listId = appliedSetting?.itemListIds[slotIndex] ?? "";
-      if (listId.trim() === "") {
-        continue;
-      }
-
-      const list = resolveItemListForSelectedEvent(listId);
-      if (!list) {
-        continue;
-      }
-
-      const minCount = clampNonNegativeInteger(appliedSetting?.categoryMinCounts?.[slotIndex] ?? 0, 0);
-      const maxCount = Math.max(
-        clampNonNegativeInteger(appliedSetting?.categoryMaxCounts?.[slotIndex] ?? 1, 1),
-        minCount,
-      );
-
-      slots.push({
-        slotIndex,
-        list,
-        minCount,
-        maxCount,
-        allowDuplicates: Boolean(appliedSetting?.categoryAllowDuplicates?.[slotIndex]),
-      });
-    }
-
-    return slots;
+    return buildConfiguredCategorySlots(
+      appliedEventMgmtSettings[selectedEventSettingKey],
+      resolveItemListForSelectedEvent,
+    );
   }, [
     appliedEventMgmtSettings,
     itemLists,
@@ -2834,27 +2804,17 @@ function App() {
       return;
     }
 
-    const resolveSide = (entrantId: string, fallbackSlotIndex: number): PlaySide => {
-      const draftSide = activeMatchSideDrafts[entrantId] ?? "";
-      if (draftSide !== "") {
-        return draftSide;
-      }
-
-      const savedSide = getSetSlotSide(setSnapshot.setId, entrantId);
-      if (savedSide !== "") {
-        return savedSide;
-      }
-
-      return fallbackSlotIndex === 0 ? "1P" : "2P";
-    };
-
-    const upperCurrent = resolveSide(upperId, 0);
-    const lowerCurrent = resolveSide(lowerId, 1);
+    const sideAssignment = resolveSwappedMatchSideAssignment(
+      activeMatchSideDrafts[upperId] ?? "",
+      activeMatchSideDrafts[lowerId] ?? "",
+      getSetSlotSide(setSnapshot.setId, upperId),
+      getSetSlotSide(setSnapshot.setId, lowerId),
+    );
 
     setActiveMatchSideDrafts((current) => ({
       ...current,
-      [upperId]: lowerCurrent,
-      [lowerId]: upperCurrent,
+      [upperId]: sideAssignment.upperSide,
+      [lowerId]: sideAssignment.lowerSide,
     }));
   }
 
@@ -2876,9 +2836,7 @@ function App() {
       return;
     }
 
-    const upperIsOneP = Math.random() < 0.5;
-    const upperSide: PlaySide = upperIsOneP ? "1P" : "2P";
-    const lowerSide: PlaySide = upperIsOneP ? "2P" : "1P";
+    const { upperSide, lowerSide } = resolveRandomMatchSideAssignment(Math.random());
 
     const upperCurrent = activeMatchSideDrafts[upperId] ?? "";
     const lowerCurrent = activeMatchSideDrafts[lowerId] ?? "";

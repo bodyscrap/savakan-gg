@@ -15,6 +15,25 @@ export type PlaySideAssignment = {
   lowerSide: "1P" | "2P";
 };
 
+export function resolveSwappedMatchSideAssignment(
+  upperDraft: PlaySideAssignment["upperSide"] | "",
+  lowerDraft: PlaySideAssignment["lowerSide"] | "",
+  upperSaved: PlaySideAssignment["upperSide"] | "",
+  lowerSaved: PlaySideAssignment["lowerSide"] | "",
+): PlaySideAssignment {
+  const upperCurrent = upperDraft || upperSaved || "1P";
+  const lowerCurrent = lowerDraft || lowerSaved || "2P";
+  return { upperSide: lowerCurrent, lowerSide: upperCurrent };
+}
+
+export function resolveRandomMatchSideAssignment(randomValue: number): PlaySideAssignment {
+  const upperSide = randomValue < 0.5 ? "1P" : "2P";
+  return {
+    upperSide,
+    lowerSide: upperSide === "1P" ? "2P" : "1P",
+  };
+}
+
 export function resolveMatchSideAssignment(
   upperCandidate: PlaySideAssignment["upperSide"] | "",
   lowerCandidate: PlaySideAssignment["lowerSide"] | "",
@@ -52,6 +71,49 @@ export type CategoryUsage = {
   listName: string;
   entries: Array<{ itemName: string; count: number; rate: number }>;
 };
+
+export type ConfiguredCategorySlot = {
+  slotIndex: number;
+  list: ItemListConfig;
+  minCount: number;
+  maxCount: number;
+  allowDuplicates: boolean;
+};
+
+export function buildConfiguredCategorySlots(
+  setting: EventManagementSetting | undefined,
+  resolveItemList: (listId: string) => ItemListConfig | null,
+): ConfiguredCategorySlot[] {
+  const slots: ConfiguredCategorySlot[] = [];
+
+  for (let slotIndex = 0; slotIndex < MAX_CATEGORY_SLOTS; slotIndex += 1) {
+    const listId = setting?.itemListIds[slotIndex] ?? "";
+    if (listId.trim() === "") {
+      continue;
+    }
+
+    const list = resolveItemList(listId);
+    if (!list) {
+      continue;
+    }
+
+    const minCount = clampNonNegativeInteger(setting?.categoryMinCounts?.[slotIndex] ?? 0, 0);
+    const maxCount = Math.max(
+      clampNonNegativeInteger(setting?.categoryMaxCounts?.[slotIndex] ?? 1, 1),
+      minCount,
+    );
+
+    slots.push({
+      slotIndex,
+      list,
+      minCount,
+      maxCount,
+      allowDuplicates: Boolean(setting?.categoryAllowDuplicates?.[slotIndex]),
+    });
+  }
+
+  return slots;
+}
 
 export function buildCategoryUsageList(
   configuredSlots: CategoryUsageSlot[],
