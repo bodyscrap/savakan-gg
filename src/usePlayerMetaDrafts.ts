@@ -3,6 +3,7 @@ import { clampNonNegativeInteger, emptyCategorySelections } from "./eventManagem
 import type { EventSettingCategorySlot } from "./EventSetting";
 import type { EventSnapshot } from "./bracketDisplay";
 import { MAX_CATEGORY_SLOTS, resolveEventItemList, type ItemListConfig } from "./itemList";
+import { toApiSlug } from "./slugUtils";
 import type { EventLocalMeta, PlaySide } from "./useTournamentWorkspace";
 
 type PlayerMetaDraft = {
@@ -15,6 +16,11 @@ type Entrant = {
   entrantName: string;
 };
 
+type SavePlayerMetaOptions = {
+  silent?: boolean;
+  manageBusy?: boolean;
+};
+
 type UsePlayerMetaDraftsOptions = {
   selectedEvent: EventSnapshot | null;
   selectedEventMeta: EventLocalMeta | null;
@@ -25,6 +31,21 @@ type UsePlayerMetaDraftsOptions = {
   totalItemMaxCount: number;
   itemLists: ItemListConfig[];
   selectedEventItemListSnapshots: ItemListConfig[];
+  slug: string;
+  configuredCategorySlots: EventSettingCategorySlot[];
+  saveLocalPlayerMeta: (input: {
+    slug: string;
+    eventId: string;
+    eventName: string;
+    entrantId: string;
+    entrantName: string;
+    playSide: null;
+    characterNames: string[];
+    notes: null;
+  }) => Promise<unknown>;
+  setBusy: (busy: boolean) => void;
+  setError: (error: string) => void;
+  setMessage: (message: string) => void;
 };
 
 export function usePlayerMetaDrafts({
@@ -37,6 +58,12 @@ export function usePlayerMetaDrafts({
   totalItemMaxCount,
   itemLists,
   selectedEventItemListSnapshots,
+  slug,
+  configuredCategorySlots,
+  saveLocalPlayerMeta,
+  setBusy,
+  setError,
+  setMessage,
 }: UsePlayerMetaDraftsOptions) {
   const [metaDrafts, setMetaDrafts] = useState<Record<string, PlayerMetaDraft>>({});
   const dirtyMetaDraftKeysRef = useRef(new Set<string>());
@@ -267,6 +294,61 @@ export function usePlayerMetaDrafts({
     dirtyMetaDraftKeysRef.current.delete(getMetaDraftKey(eventId, entrantId));
   }
 
+  async function savePlayerMeta(
+    eventSnapshot: EventSnapshot,
+    entrantId: string,
+    entrantName: string,
+    options?: SavePlayerMetaOptions,
+  ) {
+    const silent = options?.silent ?? false;
+    const manageBusy = options?.manageBusy ?? true;
+    const normalizedSlug = toApiSlug(slug);
+    const draft = getMetaDraft(eventSnapshot.eventId, entrantId);
+    const validated = buildValidatedSelections(draft, configuredCategorySlots);
+
+    if (validated.errors.length > 0) {
+      setError(validated.errors.join(" "));
+      return;
+    }
+
+    setMetaDraft(eventSnapshot.eventId, entrantId, {
+      categorySelections: validated.normalizedBySlot,
+    });
+
+    if (manageBusy) {
+      setBusy(true);
+    }
+    setError("");
+    if (!silent) {
+      setMessage("");
+    }
+
+    try {
+      await saveLocalPlayerMeta({
+        slug: normalizedSlug,
+        eventId: eventSnapshot.eventId,
+        eventName: eventSnapshot.name,
+        entrantId,
+        entrantName,
+        playSide: null,
+        characterNames: validated.flattened,
+        notes: null,
+      });
+
+      clearDirtyDraft(eventSnapshot.eventId, entrantId);
+      if (!silent) {
+        setMessage("ローカルメタを保存しました。");
+      }
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      if (manageBusy) {
+        setBusy(false);
+      }
+    }
+  }
+
   return {
     getMetaDraft,
     setMetaDraft,
@@ -275,5 +357,6 @@ export function usePlayerMetaDrafts({
     removeDraftCategorySelection,
     buildValidatedSelections,
     clearDirtyDraft,
+    savePlayerMeta,
   };
 }

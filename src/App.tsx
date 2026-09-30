@@ -152,11 +152,6 @@ import {
 } from "./bracketProgression";
 import "./App.css";
 
-type SavePlayerMetaOptions = {
-  silent?: boolean;
-  manageBusy?: boolean;
-};
-
 function normalizeSlugForSettingKey(rawSlug: string): string {
   const trimmed = rawSlug.trim();
   const withoutPrefix = trimmed.startsWith("tournament/")
@@ -1262,12 +1257,11 @@ function App() {
 
   const {
     getMetaDraft,
-    setMetaDraft,
     getDraftCategorySelections,
     addDraftCategorySelection,
     removeDraftCategorySelection,
     buildValidatedSelections,
-    clearDirtyDraft,
+    savePlayerMeta,
   } = usePlayerMetaDrafts({
     selectedEvent,
     selectedEventMeta,
@@ -1278,6 +1272,12 @@ function App() {
     totalItemMaxCount,
     itemLists,
     selectedEventItemListSnapshots,
+    slug,
+    configuredCategorySlots,
+    saveLocalPlayerMeta,
+    setBusy,
+    setError,
+    setMessage,
   });
 
   const {
@@ -3187,61 +3187,6 @@ function App() {
       setId: activeMatch.setId,
       perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
     });
-  }
-
-  async function savePlayerMeta(
-    eventSnapshot: EventSnapshot,
-    entrantId: string,
-    entrantName: string,
-    options?: SavePlayerMetaOptions,
-  ) {
-    const silent = options?.silent ?? false;
-    const manageBusy = options?.manageBusy ?? true;
-    const normalizedSlug = toApiSlug(slug);
-    const draft = getMetaDraft(eventSnapshot.eventId, entrantId);
-    const validated = buildValidatedSelections(draft, configuredCategorySlots);
-
-    if (validated.errors.length > 0) {
-      setError(validated.errors.join(" "));
-      return;
-    }
-
-    setMetaDraft(eventSnapshot.eventId, entrantId, {
-      categorySelections: validated.normalizedBySlot,
-    });
-
-    if (manageBusy) {
-      setBusy(true);
-    }
-    setError("");
-    if (!silent) {
-      setMessage("");
-    }
-
-    try {
-      await saveLocalPlayerMeta({
-        slug: normalizedSlug,
-        eventId: eventSnapshot.eventId,
-        eventName: eventSnapshot.name,
-        entrantId,
-        entrantName,
-        playSide: null,
-        characterNames: validated.flattened,
-        notes: null,
-      });
-
-      clearDirtyDraft(eventSnapshot.eventId, entrantId);
-      if (!silent) {
-        setMessage("ローカルメタを保存しました。");
-      }
-    } catch (err) {
-      setError(String(err));
-      throw err;
-    } finally {
-      if (manageBusy) {
-        setBusy(false);
-      }
-    }
   }
 
   async function saveSetPlaySide(
