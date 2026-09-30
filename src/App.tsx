@@ -58,11 +58,11 @@ import {
   type TournamentWorkspace,
 } from "./useTournamentWorkspace";
 import {
-  createEventSnapshot as persistEventSnapshot,
-  deleteLocalSnapshotEvent as removeSnapshotEvent,
   listLocalSnapshotEvents,
   loadLastSlug,
   loadLastSnapshotSelection,
+  persistEventSnapshot,
+  removeSnapshotEvent,
   saveEventPhasePoolSelection,
   saveLastSlug,
   saveLastSnapshotSelection,

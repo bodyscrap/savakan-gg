@@ -179,11 +179,11 @@ export async function restoreTournamentGraph(slug: string, eventId: string): Pro
   return invoke<TournamentWorkspace>("restore_local_event_graph_from_snapshot", { slug, eventId });
 }
 
-export async function saveEventManagementMeta(input: SaveEventManagementMetaInput): Promise<TournamentWorkspace> {
+export async function persistEventManagementMeta(input: SaveEventManagementMetaInput): Promise<TournamentWorkspace> {
   return invoke<TournamentWorkspace>("save_event_management_meta", { input });
 }
 
-export async function saveEventAlias(
+export async function persistEventAlias(
   slug: string,
   eventId: string,
   eventAlias: string | null,
@@ -191,19 +191,19 @@ export async function saveEventAlias(
   return invoke<TournamentWorkspace>("save_event_alias", { slug, eventId, eventAlias });
 }
 
-export async function saveLocalPlayerMeta(input: SaveLocalPlayerMetaInput): Promise<TournamentWorkspace> {
+export async function persistLocalPlayerMeta(input: SaveLocalPlayerMetaInput): Promise<TournamentWorkspace> {
   return invoke<TournamentWorkspace>("save_local_player_meta", { input });
 }
 
-export async function saveLocalSetPlaySide(input: SaveLocalSetPlaySideInput): Promise<TournamentWorkspace> {
+export async function persistLocalSetPlaySide(input: SaveLocalSetPlaySideInput): Promise<TournamentWorkspace> {
   return invoke<TournamentWorkspace>("save_local_set_play_side", { input });
 }
 
-export async function createEventSnapshot(input: CreateEventSnapshotInput): Promise<void> {
+export async function persistEventSnapshot(input: CreateEventSnapshotInput): Promise<void> {
   await invoke("create_event_snapshot_by_slug", { input });
 }
 
-export async function deleteLocalSnapshotEvent(slug: string, eventId: string): Promise<void> {
+export async function removeSnapshotEvent(slug: string, eventId: string): Promise<void> {
   await invoke("delete_local_snapshot_event", { slug, eventId });
 }
 
