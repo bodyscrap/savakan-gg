@@ -8,6 +8,7 @@ import { useSenderProfile } from "./useSenderProfile";
 import { useMobileInputPortal } from "./useMobileInputPortal";
 import { useCallSync } from "./useCallSync";
 import { resolveCallPhaseName, useCallMessageDraft } from "./useCallMessageDraft";
+import { useDqRequestNavigation } from "./useDqRequestNavigation";
 import {
   BRACKET_ZOOM_LEVELS,
   MOBILE_INPUT_POLLING_MS_MAX,
@@ -22,11 +23,13 @@ import { toApiSlug, toEventApiSlug, toSlugInput } from "./slugUtils";
 import { SettingsScreen } from "./SettingMenu";
 import { StatusBoard, StatusBoardHero } from "./StatusBoard";
 import { PlayerListInfo } from "./PlayerListInfo";
-import { MessageBox, type GenericMessage } from "./MessageBox";
+import { MessageBox } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
 import {
   clampNonNegativeInteger,
   type EventManagementSetting,
+  resolveSideDecisionMethod,
+  resolveSidesByDecisionMethod,
 } from "./eventManagement";
 import {
   MAX_CATEGORY_SLOTS,
@@ -49,7 +52,6 @@ import { useBracketReport } from "./useBracketReport";
 import { useSetResultDrafts, type SetResultDraftState } from "./useSetResultDrafts";
 import {
   applyScoreDraftWithOpponentDefault,
-  buildDqDraftStateForEntrant,
   buildDraftStateFromPending,
   buildScoreDraftsFromResult,
   buildScoreDraftsFromSet,
@@ -96,8 +98,11 @@ import {
 import {
   buildBracketSections,
   buildBracketSectionsForView,
+  formatAlphabetSequence,
   buildPhaseNames,
   buildPhasePoolGroups,
+  normalizeSourceText,
+  pickPairSourceIds,
   isCompletedSet,
   isDisplayableSet,
   isGrandFinalResetSet,
@@ -112,7 +117,6 @@ import {
   type PhasePoolGroup,
 } from "./bracketDisplay";
 import {
-  extractMetaString,
   getMailboxMethodLabel,
   isDqRequestMessage,
   isValidIpv4,
@@ -163,59 +167,6 @@ type RoundRobinBoardData = {
   qualifyingCount: number;
   tieBreakRules: RoundRobinTieBreakRule[];
 };
-
-function formatAlphabetSequence(index: number): string {
-  let n = index;
-  let label = "";
-
-  do {
-    const remainder = n % 26;
-    label = String.fromCharCode(65 + remainder) + label;
-    n = Math.floor(n / 26) - 1;
-  } while (n >= 0);
-
-  return label;
-}
-
-function pickPairSourceIds(previousSetIds: string[], currentCount: number, currentIndex: number): string[] {
-  if (previousSetIds.length === 0 || currentCount <= 0) {
-    return [];
-  }
-
-  if (previousSetIds.length === 1) {
-    return [previousSetIds[0]];
-  }
-
-  if (previousSetIds.length >= currentCount * 2) {
-    const first = previousSetIds[currentIndex * 2];
-    const second = previousSetIds[currentIndex * 2 + 1];
-    return [first, second].filter((item): item is string => Boolean(item));
-  }
-
-  const mapped = ((currentIndex + 0.5) * previousSetIds.length) / currentCount - 0.5;
-  const left = Math.max(0, Math.floor(mapped));
-  const right = Math.min(previousSetIds.length - 1, Math.ceil(mapped));
-  const first = previousSetIds[left];
-  const second = previousSetIds[right];
-
-  if (first && second && first !== second) {
-    return [first, second];
-  }
-
-  if (first) {
-    const neighbor = previousSetIds[Math.min(previousSetIds.length - 1, left + 1)] ?? previousSetIds[Math.max(0, left - 1)];
-    if (neighbor && neighbor !== first) {
-      return [first, neighbor];
-    }
-    return [first];
-  }
-
-  return [];
-}
-
-function normalizeSourceText(kind: "winners" | "losers", setCode: string): string {
-  return `${kind === "winners" ? "winner" : "loser"} of ${setCode}`;
-}
 
 type SavePlayerMetaOptions = {
   silent?: boolean;
@@ -298,14 +249,6 @@ function getPendingSetChangeClass(result: LocalSetResultMeta): string {
 
 function oppositePlaySide(side: PlaySide): PlaySide {
   return side === "1P" ? "2P" : "1P";
-}
-
-function deterministicUpperIsOneP(seed: string): boolean {
-  let acc = 0;
-  for (let i = 0; i < seed.length; i += 1) {
-    acc = (acc + seed.charCodeAt(i)) % 9973;
-  }
-  return acc % 2 === 0;
 }
 
 function App() {
@@ -1425,6 +1368,18 @@ function App() {
     onMessage: setMessage,
   });
 
+  const { processDqRequestFromMessage } = useDqRequestNavigation({
+    event: selectedEvent,
+    mailboxThreadSummaries,
+    resolvedSetsById: resolvedEventSetsById,
+    setSelectedPhaseName,
+    setSelectedPhasePoolKey,
+    setActiveTab,
+    openMatchDialog,
+    onError: setError,
+    onMessage: setMessage,
+  });
+
   function fillRandomSenderUserId() {
     const usedIds = new Set(genericMessages.map((item) => item.senderUserId));
     let nextId = generateRandomSenderUserId();
@@ -1569,7 +1524,7 @@ function App() {
           continue;
         }
 
-        const decided = resolveSidesByDecisionMethod(set, getConfiguredSideDecisionMethod());
+        const decided = resolveSidesByDecisionMethod(set.setId, getConfiguredSideDecisionMethod());
         upperSide = decided.upperSide;
         lowerSide = decided.lowerSide;
       }
@@ -1579,18 +1534,9 @@ function App() {
       } else if (lowerSide !== "" && upperSide === "") {
         upperSide = oppositePlaySide(lowerSide);
       } else {
-        const method = getConfiguredSideDecisionMethod();
-        if (method === "upper_2p") {
-          upperSide = "2P";
-          lowerSide = "1P";
-        } else if (method === "random") {
-          const upperIsOneP = deterministicUpperIsOneP(set.setId);
-          upperSide = upperIsOneP ? "1P" : "2P";
-          lowerSide = upperIsOneP ? "2P" : "1P";
-        } else {
-          upperSide = "1P";
-          lowerSide = "2P";
-        }
+        const decided = resolveSidesByDecisionMethod(set.setId, getConfiguredSideDecisionMethod());
+        upperSide = decided.upperSide;
+        lowerSide = decided.lowerSide;
       }
 
       if (upperCurrent !== upperSide || lowerCurrent !== lowerSide) {
@@ -1624,31 +1570,7 @@ function App() {
       return "upper_1p";
     }
 
-    const configured = eventMgmtSettings[selectedEventSettingKey]?.sideDecisionMethod;
-    if (configured === "upper_2p" || configured === "random") {
-      return configured;
-    }
-
-    return "upper_1p";
-  }
-
-  function resolveSidesByDecisionMethod(
-    set: SetSnapshot,
-    method: EventManagementSetting["sideDecisionMethod"],
-  ): { upperSide: PlaySide; lowerSide: PlaySide } {
-    if (method === "upper_2p") {
-      return { upperSide: "2P", lowerSide: "1P" };
-    }
-
-    if (method === "random") {
-      const upperIsOneP = deterministicUpperIsOneP(set.setId);
-      return {
-        upperSide: upperIsOneP ? "1P" : "2P",
-        lowerSide: upperIsOneP ? "2P" : "1P",
-      };
-    }
-
-    return { upperSide: "1P", lowerSide: "2P" };
+    return resolveSideDecisionMethod(eventMgmtSettings[selectedEventSettingKey]?.sideDecisionMethod);
   }
 
   async function applySideDecisionMethodToAllUnconfirmedSets() {
@@ -1682,7 +1604,7 @@ function App() {
           continue;
         }
 
-        const decided = resolveSidesByDecisionMethod(set, method);
+        const decided = resolveSidesByDecisionMethod(set.setId, method);
         const upperCurrent = getSetSlotSide(set.setId, upperId);
         const lowerCurrent = getSetSlotSide(set.setId, lowerId);
 
@@ -1781,6 +1703,7 @@ function App() {
   function resolveOverlaySidesForSet(
     set: SetSnapshot,
     scoreByEntrantId?: Map<string, number>,
+    sideOverrides?: Record<string, PlaySide | "">,
   ): { redPlayerName: string; bluePlayerName: string; redSetWins: number; blueSetWins: number } {
     const slots = set.slots.slice(0, 2);
     const slot0 = slots[0] ?? null;
@@ -1790,7 +1713,7 @@ function App() {
       if (!slot || !slot.entrantId) {
         return "";
       }
-      return getSetSlotSide(set.setId, slot.entrantId);
+      return sideOverrides?.[slot.entrantId] || getSetSlotSide(set.setId, slot.entrantId);
     };
 
     const getScore = (slot: SetSlot | null): number | null => {
@@ -1844,6 +1767,7 @@ function App() {
   async function syncObsOverlayScoresForSet(
     set: SetSnapshot,
     slotScores: Array<{ entrantId: string; score: number }>,
+    sideOverrides?: Record<string, PlaySide | "">,
   ) {
     if (set.setId === "__test__") {
       return;
@@ -1875,7 +1799,7 @@ function App() {
     const nextRoundLabel = abbreviateOverlayRoundText(set.fullRoundText);
     const phasePoolLabel = `${set.phaseName?.trim() || "-"} / Pool ${set.phaseGroupDisplayIdentifier?.trim() || "-"}`;
     const setName = set.identifier?.trim() || displayCode || "-";
-    const overlaySides = resolveOverlaySidesForSet(set, scoreByEntrantId);
+    const overlaySides = resolveOverlaySidesForSet(set, scoreByEntrantId, sideOverrides);
 
     await toggleObsOverlaySet({
       enabled: true,
@@ -3968,71 +3892,6 @@ function App() {
     });
   }
 
-  function resolveDqRequestContext(message: GenericMessage): { setId: string; dqEntrantId: string } | null {
-    const directSetId = extractMetaString(message.messageMeta, "dqSetId");
-    const directEntrantId = extractMetaString(message.messageMeta, "dqCallEntrantId");
-
-    if (directSetId !== "" && directEntrantId !== "") {
-      return {
-        setId: directSetId,
-        dqEntrantId: directEntrantId,
-      };
-    }
-
-    const root = mailboxThreadSummaries.find((summary) => summary.root.threadId === message.threadId)?.root;
-    if (!root) {
-      return null;
-    }
-
-    const rootSetId = extractMetaString(root.messageMeta, "setId");
-    const rootEntrantId = extractMetaString(root.messageMeta, "callEntrantId");
-    if (rootSetId === "" || rootEntrantId === "") {
-      return null;
-    }
-
-    return {
-      setId: rootSetId,
-      dqEntrantId: rootEntrantId,
-    };
-  }
-
-  function processDqRequestFromMessage(message: GenericMessage) {
-    setError("");
-    setMessage("");
-
-    if (!selectedEvent) {
-      setError("先にイベントを選択してください。DQ処理先を開けません。");
-      return;
-    }
-
-    const context = resolveDqRequestContext(message);
-    if (!context) {
-      setError("DQ申請メッセージから対象setを特定できませんでした。");
-      return;
-    }
-
-    const targetSet = selectedEvent.sets.find((set) => set.setId === context.setId);
-    if (!targetSet) {
-      setError(`対象setが現在のイベント内に見つかりません: ${context.setId}`);
-      return;
-    }
-
-    const resolvedTargetSet = resolvedEventSetsById.get(targetSet.setId) ?? targetSet;
-    const draftState = buildDqDraftStateForEntrant(resolvedTargetSet, context.dqEntrantId);
-    if (!draftState) {
-      setError("DQ入力の自動設定に失敗しました。対象プレイヤーまたは対戦カードを確認してください。");
-      return;
-    }
-
-    const phaseName = targetSet.phaseName && targetSet.phaseName.trim() !== "" ? targetSet.phaseName : "Phase 未設定";
-    const phaseGroupName = targetSet.phaseGroupName && targetSet.phaseGroupName.trim() !== "" ? targetSet.phaseGroupName : "Pool 未設定";
-    setSelectedPhaseName(phaseName);
-    setSelectedPhasePoolKey(`${phaseName}::${phaseGroupName}`);
-    setActiveTab("bracket");
-    openMatchDialog(targetSet, draftState);
-    setMessage("DQ申請から対象setを開きました。DQ入力済みなので「確定」を押すと反映できます。");
-  }
-
   function closeMatchDialog() {
     setActiveMatchSetId("");
     setActiveMatchSideDrafts({});
@@ -4362,14 +4221,25 @@ function App() {
     }
 
     const resolvedLower = oppositePlaySide(resolvedUpper);
-    if (currentUpper === resolvedUpper && currentLower === resolvedLower) {
-      return;
+    const sideOverrides = {
+      [upperId]: resolvedUpper,
+      [lowerId]: resolvedLower,
+    };
+    const sidesChanged = currentUpper !== resolvedUpper || currentLower !== resolvedLower;
+
+    if (sidesChanged) {
+      await saveSetPlaySide(eventSnapshot, set, upperId, resolvedUpper, {
+        silent: true,
+        manageBusy: false,
+      });
+
+      const currentScores = set.slots
+        .filter((slot): slot is SetSlot & { entrantId: string } => slot.entrantId !== null)
+        .map((slot) => ({ entrantId: slot.entrantId, score: slot.score ?? 0 }));
+      await syncObsOverlayScoresForSet(set, currentScores, sideOverrides);
     }
 
-    await saveSetPlaySide(eventSnapshot, set, upperId, resolvedUpper, {
-      silent: true,
-      manageBusy: false,
-    });
+    return sideOverrides;
   }
 
   function handleTournamentCategoryMinChange(slotIndex: number, value: string) {

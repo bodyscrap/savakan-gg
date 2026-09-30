@@ -62,6 +62,59 @@ export type BracketSectionForView = Omit<BracketSection, "columns"> & {
   columns: PositionedRoundColumn[];
 };
 
+export function formatAlphabetSequence(index: number): string {
+  let remaining = index;
+  let label = "";
+
+  do {
+    const remainder = remaining % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    remaining = Math.floor(remaining / 26) - 1;
+  } while (remaining >= 0);
+
+  return label;
+}
+
+export function pickPairSourceIds(previousSetIds: string[], currentCount: number, currentIndex: number): string[] {
+  if (previousSetIds.length === 0 || currentCount <= 0) {
+    return [];
+  }
+
+  if (previousSetIds.length === 1) {
+    return [previousSetIds[0]];
+  }
+
+  if (previousSetIds.length >= currentCount * 2) {
+    const first = previousSetIds[currentIndex * 2];
+    const second = previousSetIds[currentIndex * 2 + 1];
+    return [first, second].filter((item): item is string => Boolean(item));
+  }
+
+  const mapped = ((currentIndex + 0.5) * previousSetIds.length) / currentCount - 0.5;
+  const left = Math.max(0, Math.floor(mapped));
+  const right = Math.min(previousSetIds.length - 1, Math.ceil(mapped));
+  const first = previousSetIds[left];
+  const second = previousSetIds[right];
+
+  if (first && second && first !== second) {
+    return [first, second];
+  }
+
+  if (first) {
+    const neighbor = previousSetIds[Math.min(previousSetIds.length - 1, left + 1)] ?? previousSetIds[Math.max(0, left - 1)];
+    if (neighbor && neighbor !== first) {
+      return [first, neighbor];
+    }
+    return [first];
+  }
+
+  return [];
+}
+
+export function normalizeSourceText(kind: "winners" | "losers", setCode: string): string {
+  return `${kind === "winners" ? "winner" : "loser"} of ${setCode}`;
+}
+
 export function buildPhasePoolGroups(event: EventSnapshot | null): PhasePoolGroup[] {
   if (!event) {
     return [];

@@ -4,6 +4,7 @@ import type { SetSlot, SetSnapshot } from "./bracketProgression";
 import type { SetResultDraftState, SetScoreDraft } from "./useSetResultDrafts";
 
 type SlotScore = { entrantId: string; score: number };
+type SideDrafts = Record<string, "1P" | "2P" | "">;
 
 type SaveSetResultInput = {
   slug: string;
@@ -13,7 +14,7 @@ type SaveSetResultInput = {
   confirmed: boolean;
   directWinnerId: string | null;
   scoreDrafts: SetScoreDraft;
-  sideDrafts: Record<string, "1P" | "2P" | "">;
+  sideDrafts: SideDrafts;
 };
 
 type ResetSetResultCascadeResult<TWorkspace> = {
@@ -30,11 +31,11 @@ type UseSetResultPersistenceOptions<TWorkspace> = {
   saveSides: (
     event: EventSnapshot,
     set: SetSnapshot,
-    sideDrafts: Record<string, "1P" | "2P" | "">,
-  ) => Promise<void>;
+    sideDrafts: SideDrafts,
+  ) => Promise<SideDrafts | void>;
   buildSlotScores: (set: SetSnapshot, drafts: SetScoreDraft) => SlotScore[];
   resolveWinnerId: (set: SetSnapshot, drafts: SetScoreDraft) => string;
-  syncOverlayScores: (set: SetSnapshot, slotScores: SlotScore[]) => Promise<void>;
+  syncOverlayScores: (set: SetSnapshot, slotScores: SlotScore[], sideDrafts?: SideDrafts) => Promise<void>;
   saveSetDraft: (setId: string, draft: SetResultDraftState) => void;
   removeInterimDraft: (setId: string) => void;
   removeDraftsForSet: (setId: string) => void;
@@ -68,7 +69,8 @@ export function useSetResultPersistence<TWorkspace>({
 
     try {
       await invoke("save_last_slug", { slug: input.slug });
-      await saveSides(input.event, input.set, input.sideDrafts);
+      const savedSideDrafts = await saveSides(input.event, input.set, input.sideDrafts);
+      const overlaySideDrafts = savedSideDrafts ?? input.sideDrafts;
 
       const directWin = input.directWinnerId !== null;
       const slotScores = directWin
@@ -97,7 +99,7 @@ export function useSetResultPersistence<TWorkspace>({
 
         let overlaySyncFailed = false;
         try {
-          await syncOverlayScores(input.set, slotScores);
+          await syncOverlayScores(input.set, slotScores, overlaySideDrafts);
         } catch {
           overlaySyncFailed = true;
         }
@@ -131,7 +133,7 @@ export function useSetResultPersistence<TWorkspace>({
 
       let overlaySyncFailed = false;
       try {
-        await syncOverlayScores(input.set, slotScores);
+        await syncOverlayScores(input.set, slotScores, overlaySideDrafts);
       } catch {
         overlaySyncFailed = true;
       }

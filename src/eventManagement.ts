@@ -10,6 +10,38 @@ export type EventManagementSetting = {
   totalMaxCount?: number;
 };
 
+export type PlaySideAssignment = {
+  upperSide: "1P" | "2P";
+  lowerSide: "1P" | "2P";
+};
+
+export function resolveSideDecisionMethod(value: unknown): EventManagementSetting["sideDecisionMethod"] {
+  return value === "upper_2p" || value === "random" ? value : "upper_1p";
+}
+
+export function resolveSidesByDecisionMethod(
+  setId: string,
+  method: EventManagementSetting["sideDecisionMethod"],
+): PlaySideAssignment {
+  if (method === "upper_2p") {
+    return { upperSide: "2P", lowerSide: "1P" };
+  }
+
+  if (method === "random") {
+    let accumulator = 0;
+    for (let index = 0; index < setId.length; index += 1) {
+      accumulator = (accumulator + setId.charCodeAt(index)) % 9973;
+    }
+    const upperIsOneP = accumulator % 2 === 0;
+    return {
+      upperSide: upperIsOneP ? "1P" : "2P",
+      lowerSide: upperIsOneP ? "2P" : "1P",
+    };
+  }
+
+  return { upperSide: "1P", lowerSide: "2P" };
+}
+
 export function clampNonNegativeInteger(value: number, fallback: number): number {
   if (!Number.isFinite(value)) {
     return fallback;
@@ -57,9 +89,7 @@ export function normalizeEventManagementSetting(rawValue: unknown): EventManagem
     ? (rawValue as Partial<EventManagementSetting>)
     : {};
 
-  const sideDecisionMethod = source.sideDecisionMethod === "upper_2p" || source.sideDecisionMethod === "random"
-    ? source.sideDecisionMethod
-    : "upper_1p";
+  const sideDecisionMethod = resolveSideDecisionMethod(source.sideDecisionMethod);
 
   const ids = Array.isArray(source.itemListIds)
     ? source.itemListIds.filter((id): id is string => typeof id === "string").slice(0, MAX_CATEGORY_SLOTS)
