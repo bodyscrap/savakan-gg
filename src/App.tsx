@@ -1,11 +1,10 @@
-import { type CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
-import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import QRCode from "qrcode";
 import jsQR from "jsqr";
-import { CreateSnapshot, type EventSnapshotProgress, type TournamentEventPreviewItem, type TournamentPreview } from "./CreateSnapshot";
+import { CreateSnapshot } from "./CreateSnapshot";
 import { SettingsScreen } from "./SettingMenu";
 import { StatusBoard, StatusBoardHero } from "./StatusBoard";
 import { PlayerListInfo } from "./PlayerListInfo";
@@ -13,10 +12,6 @@ import { MessageBox, type GenericMessage } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
 import {
   clampNonNegativeInteger,
-  normalizeAllowDuplicatesArray,
-  normalizeEventManagementSetting,
-  normalizeSelectionCountArrays,
-  removeItemListFromEventManagementSettings,
   type EventManagementSetting,
 } from "./eventManagement";
 import {
@@ -56,6 +51,8 @@ import {
 } from "./setResultDrafts";
 import { useSetResultPersistence } from "./useSetResultPersistence";
 import { usePlayerMetaDrafts } from "./usePlayerMetaDrafts";
+import { useEventManagementSettings } from "./useEventManagementSettings";
+import { useTournamentCreation } from "./useTournamentCreation";
 import { useUserCards } from "./useUserCards";
 import { useItemLists } from "./useItemLists";
 import { useMailbox } from "./useMailbox";
@@ -75,10 +72,8 @@ import {
   type TournamentWorkspace,
 } from "./useTournamentWorkspace";
 import {
-  listLocalSnapshotEvents,
   loadLastSlug,
   loadLastSnapshotSelection,
-  persistEventSnapshot,
   removeSnapshotEvent,
   saveEventPhasePoolSelection,
   saveLastSlug,
@@ -118,12 +113,9 @@ import {
   type MessageScope,
 } from "./messageUtils";
 import {
-  filterCreatePreviewEvents,
   filterLocalSnapshotEvents,
-  findCreatePreviewEvent,
   findSelectedLocalSnapshotEvent,
   findSnapshotEventByIdentity,
-  resolveCreatePreviewSelection,
   resolveSelectedSnapshotName,
   sameSnapshotEventKey,
 } from "./snapshotDisplay";
@@ -222,8 +214,6 @@ type SavePlayerMetaOptions = {
   manageBusy?: boolean;
 };
 
-const EVENT_SNAPSHOT_PROGRESS_EVENT = "event_snapshot_progress";
-
 type SenderProfile = {
   senderName: string;
   senderUserId: string;
@@ -308,20 +298,6 @@ function normalizeSlugForSettingKey(rawSlug: string): string {
     ? trimmed.slice("tournament/".length)
     : trimmed;
   return withoutPrefix.replace(/^\/+|\/+$/g, "");
-}
-
-function normalizeEventSettingStorageKey(rawKey: string): string {
-  const [slugPart, ...rest] = rawKey.split("::");
-  if (!slugPart) {
-    return rawKey.trim();
-  }
-
-  const eventId = rest.join("::").trim();
-  if (eventId === "") {
-    return normalizeSlugForSettingKey(slugPart);
-  }
-
-  return `${normalizeSlugForSettingKey(slugPart)}::${eventId}`;
 }
 
 function normalizeStartggFetchPerPage(rawValue: unknown, fallback = STARTGG_FETCH_PER_PAGE_DEFAULT): number {
@@ -419,52 +395,6 @@ function createQrBarcodeDetector(): {
   return new barcodeDetectorCtor({ formats: ["qr_code"] });
 }
 
-function arraysShallowEqual<T>(left: T[], right: T[]): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  for (let i = 0; i < left.length; i += 1) {
-    if (left[i] !== right[i]) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function isSameEventManagementSetting(
-  leftRaw: EventManagementSetting | undefined,
-  rightRaw: EventManagementSetting,
-): boolean {
-  if (!leftRaw) {
-    return false;
-  }
-
-  const left = normalizeEventManagementSetting(leftRaw);
-  const right = normalizeEventManagementSetting(rightRaw);
-
-  return left.sideDecisionMethod === right.sideDecisionMethod
-    && arraysShallowEqual(left.itemListIds, right.itemListIds)
-    && arraysShallowEqual(
-      normalizeSelectionCountArrays(left.categoryMinCounts, 0),
-      normalizeSelectionCountArrays(right.categoryMinCounts, 0),
-    )
-    && arraysShallowEqual(
-      normalizeSelectionCountArrays(left.categoryMaxCounts, 1),
-      normalizeSelectionCountArrays(right.categoryMaxCounts, 1),
-    )
-    && arraysShallowEqual(
-      normalizeAllowDuplicatesArray(left.categoryAllowDuplicates),
-      normalizeAllowDuplicatesArray(right.categoryAllowDuplicates),
-    )
-    && clampNonNegativeInteger(Number(left.totalMinCount ?? 0), 0)
-      === clampNonNegativeInteger(Number(right.totalMinCount ?? 0), 0)
-    && clampNonNegativeInteger(Number(left.totalMaxCount ?? 0), 0)
-      === clampNonNegativeInteger(Number(right.totalMaxCount ?? 0), 0);
-}
-
-const EVENT_MGMT_STORAGE_KEY = "savakan-gg.event-mgmt.v1";
 const SENDER_PROFILE_STORAGE_KEY = "savakan-gg.sender-profile.v1";
 const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
 const BRACKET_ZOOM_LEVEL_STORAGE_KEY = "savakan-gg.bracket-zoom-level.v1";
@@ -617,18 +547,10 @@ function toEventSlugInput(raw: string): string {
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("home");
   const [appVersion, setAppVersion] = useState("");
-  const [token, setToken] = useState("");
   const [slug, setSlug] = useState("");
   const [startggFetchPerPage, setStartggFetchPerPage] = useState(STARTGG_FETCH_PER_PAGE_DEFAULT);
-  const [createPreview, setCreatePreview] = useState<TournamentPreview | null>(null);
-  const [createPreviewLoadFailed, setCreatePreviewLoadFailed] = useState(false);
-  const [createSelectedEventId, setCreateSelectedEventId] = useState("");
-  const [createEventSearchInput, setCreateEventSearchInput] = useState("");
-  const [createEventSlugInput, setCreateEventSlugInput] = useState("");
-  const [createEventAlias, setCreateEventAlias] = useState("");
   const [eventAliasDraft, setEventAliasDraft] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
-  const [createSnapshotProgress, setCreateSnapshotProgress] = useState<EventSnapshotProgress | null>(null);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [selectedPhaseName, setSelectedPhaseName] = useState("");
   const [selectedPhasePoolKey, setSelectedPhasePoolKey] = useState("");
@@ -649,8 +571,6 @@ function App() {
   const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
   const [homeSelectedSnapshotKey, setHomeSelectedSnapshotKey] = useState("");
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
-  const [eventMgmtSettings, setEventMgmtSettings] = useState<Record<string, EventManagementSetting>>({});
-  const [eventMgmtSettingsReady, setEventMgmtSettingsReady] = useState(false);
   const [senderProfile, setSenderProfile] = useState<SenderProfile>({ senderName: "", senderUserId: "", bindIp: "0.0.0.0", broadcastSubnetMask: "255.255.255.0" });
   const [senderProfileReady, setSenderProfileReady] = useState(false);
   const [senderNameDraft, setSenderNameDraft] = useState("");
@@ -669,7 +589,6 @@ function App() {
   const [resultConfirmation, setResultConfirmation] = useState<ResultConfirmationState | null>(null);
   const [callingEntrantId, setCallingEntrantId] = useState("");
   const [disableLocalCommunication, setDisableLocalCommunication] = useState(false);
-  const [sideDecisionMethod, setSideDecisionMethod] = useState<EventManagementSetting["sideDecisionMethod"]>("upper_1p");
   const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
   const [mobileInputPortalBusy, setMobileInputPortalBusy] = useState(false);
   const [mobileInputPortalOpen, setMobileInputPortalOpen] = useState(false);
@@ -678,12 +597,6 @@ function App() {
   const [mobileInputPortalCandidates, setMobileInputPortalCandidates] = useState<LocalNetworkSettingsCandidate[]>([]);
   const [mobileInputIssuedUrl, setMobileInputIssuedUrl] = useState("");
   const [mobileInputPortalQrUrl, setMobileInputPortalQrUrl] = useState("");
-  const [categorySlotListIds, setCategorySlotListIds] = useState<string[]>(["", "", ""]);
-  const [categorySlotMinCounts, setCategorySlotMinCounts] = useState<number[]>([0, 0, 0]);
-  const [categorySlotMaxCounts, setCategorySlotMaxCounts] = useState<number[]>([1, 1, 1]);
-  const [categorySlotAllowDuplicates, setCategorySlotAllowDuplicates] = useState<boolean[]>([false, false, false]);
-  const [totalItemMinCount, setTotalItemMinCount] = useState(0);
-  const [totalItemMaxCount, setTotalItemMaxCount] = useState(3);
   const [selectedTournamentEntrantId, setSelectedTournamentEntrantId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -834,8 +747,6 @@ function App() {
   const startupListRestoreRetryCountRef = useRef(0);
   const lastPersistedSnapshotSelectionRef = useRef("");
   const lastPersistedEventMetaPhasePoolRef = useRef("");
-  const eventSettingHydratedKeyRef = useRef("");
-  const suppressEventSettingAutosaveRef = useRef(false);
   const autoIpFillTriedRef = useRef(false);
   const tabSelectionAutoLoadInFlightRef = useRef(false);
   const dqCameraVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -846,6 +757,45 @@ function App() {
   const dqCameraDetectorRef = useRef<{
     detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
   } | null>(null);
+  const tournamentCreation = useTournamentCreation({
+    slug,
+    perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
+    setCreateBusy,
+    setBusy,
+    setError,
+    setMessage,
+    normalizeTournamentSlug: toApiSlug,
+    normalizeEventSlug: toEventApiSlug,
+    eventSlugInputFromPreview: toEventSlugInput,
+    onSnapshotCreated: async () => {
+      setWorkspace(null);
+      startupAutoRestoreDoneRef.current = true;
+      await refreshLocalSnapshotEvents();
+      setActiveTab("home");
+    },
+  });
+  const {
+    token,
+    setToken,
+    createPreview,
+    createPreviewLoadFailed,
+    createSelectedEventId,
+    createEventSearchInput,
+    setCreateEventSearchInput,
+    createEventSlugInput,
+    setCreateEventSlugInput,
+    createEventAlias,
+    setCreateEventAlias,
+    createSnapshotProgress,
+    setCreateSnapshotProgress,
+    createFilteredEvents,
+    createSnapshotProgressPercent,
+    createSnapshotProgressLabel,
+    saveToken,
+    loadCreatePreview,
+    handleCreateEventDropdownChange,
+    createEventSnapshotBySlug,
+  } = tournamentCreation;
   useEffect(() => {
     setMobileInputPortalOpen(false);
     setMobileInputPortalDialog(null);
@@ -911,44 +861,9 @@ function App() {
 
   useEffect(() => {
     let alive = true;
-    let unlisten: (() => void) | null = null;
-
-    void (async () => {
-      try {
-        const off = await listen<EventSnapshotProgress>(EVENT_SNAPSHOT_PROGRESS_EVENT, (event) => {
-          if (!alive) {
-            return;
-          }
-          if (event.payload.phase === "completed") {
-            setCreateSnapshotProgress(null);
-            return;
-          }
-          setCreateSnapshotProgress(event.payload);
-        });
-        unlisten = off;
-      } catch {
-        // ignore listener setup failure in non-Tauri environments
-      }
-    })();
-
-    return () => {
-      alive = false;
-      if (unlisten) {
-        unlisten();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
 
     (async () => {
       try {
-        const savedToken = await invoke<string | null>("load_saved_startgg_token");
-        if (alive && savedToken && savedToken.trim() !== "") {
-          setToken(savedToken);
-        }
-
         const savedSelection = await loadLastSnapshotSelection();
         if (
           alive
@@ -1153,67 +1068,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    let alive = true;
-
-    (async () => {
-      try {
-        const fromRust = await invoke<Record<string, unknown> | null>("load_event_mgmt_settings");
-        if (!alive) {
-          return;
-        }
-
-        if (fromRust && typeof fromRust === "object") {
-          const normalized: Record<string, EventManagementSetting> = {};
-          for (const [key, value] of Object.entries(fromRust)) {
-            normalized[normalizeEventSettingStorageKey(key)] = normalizeEventManagementSetting(value);
-          }
-          setEventMgmtSettings(normalized);
-          return;
-        }
-
-        const raw = window.localStorage.getItem(EVENT_MGMT_STORAGE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw) as Record<string, unknown>;
-          if (parsed && typeof parsed === "object") {
-            const normalized: Record<string, EventManagementSetting> = {};
-            for (const [key, value] of Object.entries(parsed)) {
-              normalized[normalizeEventSettingStorageKey(key)] = normalizeEventManagementSetting(value);
-            }
-            setEventMgmtSettings(normalized);
-          }
-        }
-      } catch {
-        // ignore
-      } finally {
-        if (alive) {
-          setEventMgmtSettingsReady(true);
-        }
-      }
-
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!eventMgmtSettingsReady) {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(EVENT_MGMT_STORAGE_KEY, JSON.stringify(eventMgmtSettings));
-    } catch {
-      // ignore
-    }
-
-    void invoke("save_event_mgmt_settings", { settings: eventMgmtSettings }).catch((err) => {
-      setError(String(err));
-    });
-  }, [eventMgmtSettings]);
-
-  useEffect(() => {
     if (!senderProfileReady) {
       return;
     }
@@ -1361,20 +1215,6 @@ function App() {
       void selectLocalSnapshotEvent(matched);
     }
   }, [loadingLocalSnapshotEvents, localSnapshotEvents, workspace]);
-
-  useEffect(() => {
-    if (!createPreview) {
-      return;
-    }
-
-    const selected = resolveCreatePreviewSelection(createPreview.events, createSelectedEventId);
-    if (selected?.eventId === createSelectedEventId) {
-      return;
-    }
-
-    setCreateSelectedEventId(selected?.eventId ?? "");
-    setCreateEventSlugInput(toEventSlugInput(selected?.eventSlug ?? ""));
-  }, [createPreview, createSelectedEventId]);
 
   const snapshot = workspace?.snapshot ?? null;
   const localMeta = workspace?.localMeta ?? null;
@@ -1671,6 +1511,38 @@ function App() {
     }
     return eventSettingKey(snapshot.slug, selectedEvent.eventId);
   }, [snapshot, selectedEvent]);
+
+  const {
+    eventMgmtSettings,
+    sideDecisionMethod,
+    setSideDecisionMethod,
+    categorySlotListIds,
+    categorySlotMinCounts,
+    setCategorySlotMinCounts,
+    categorySlotMaxCounts,
+    setCategorySlotMaxCounts,
+    categorySlotAllowDuplicates,
+    setCategorySlotAllowDuplicates,
+    totalItemMinCount,
+    setTotalItemMinCount,
+    totalItemMaxCount,
+    setTotalItemMaxCount,
+    setEventMgmtSettings,
+    setCategoryListSlot,
+    removeItemListSettings,
+    saveEventManagementSetting,
+  } = useEventManagementSettings({
+    selectedEventSettingKey,
+    selectedEventMeta,
+    selectedEvent,
+    slug,
+    itemLists,
+    selectedEventItemListSnapshots,
+    saveEventManagementMeta,
+    setBusy,
+    setError,
+    setMessage,
+  });
 
   const configuredCategorySlots = useMemo(() => {
     const slots: Array<{
@@ -1972,80 +1844,6 @@ function App() {
     onError: setError,
     onMessage: setMessage,
   });
-
-  const createSnapshotProgressPercent = useMemo(() => {
-    if (!createSnapshotProgress) {
-      return 0;
-    }
-
-    if (createSnapshotProgress.phase === "completed") {
-      return 100;
-    }
-
-    if (createSnapshotProgress.totalSets === null || createSnapshotProgress.totalSets <= 0) {
-      return 0;
-    }
-
-    const raw = (createSnapshotProgress.completedSets / createSnapshotProgress.totalSets) * 100;
-    return Math.max(0, Math.min(100, raw));
-  }, [createSnapshotProgress]);
-
-  const createSnapshotProgressLabel = useMemo(() => {
-    if (!createSnapshotProgress) {
-      return "";
-    }
-
-    if (createSnapshotProgress.phase === "starting") {
-      return "開始準備中...";
-    }
-
-    if (createSnapshotProgress.phase === "requestingEventPage") {
-      return `ページ${createSnapshotProgress.currentPage ?? 1}を取得中`;
-    }
-
-    if (createSnapshotProgress.phase === "requestingTournamentPreview") {
-      return "大会event一覧を取得中";
-    }
-
-    if (createSnapshotProgress.phase === "requestingTournamentSnapshot") {
-      return "大会snapshotへ切替えて取得中";
-    }
-
-    if (createSnapshotProgress.phase === "discovering") {
-      const pageText = createSnapshotProgress.currentPage !== null
-        ? `ページ${createSnapshotProgress.currentPage}を確認済み`
-        : "ページを確認中";
-      return `${pageText}（対象set数を確認中）`;
-    }
-
-    if (createSnapshotProgress.phase === "requestingSetDetails") {
-      const total = createSnapshotProgress.totalSets ?? 0;
-      const details = total > 0
-        ? `${createSnapshotProgress.completedSets}/${total} set処理済み`
-        : `${createSnapshotProgress.completedSets} set処理済み`;
-      const currentSet = createSnapshotProgress.currentSetId
-        ? `set ${createSnapshotProgress.currentSetId} を含むbatch`
-        : "set詳細batch";
-      return `${details} / ${currentSet}を取得中`;
-    }
-
-    if (createSnapshotProgress.phase === "fetchingSetDetails") {
-      const total = createSnapshotProgress.totalSets ?? 0;
-      const details = total > 0
-        ? `${createSnapshotProgress.completedSets}/${total} set処理済み`
-        : `${createSnapshotProgress.completedSets} set処理済み`;
-      if (createSnapshotProgress.currentSetId) {
-        return `${details} / set ${createSnapshotProgress.currentSetId} を取得中`;
-      }
-      return details;
-    }
-
-    if (createSnapshotProgress.phase === "completed") {
-      return "取得完了";
-    }
-
-    return "取得中...";
-  }, [createSnapshotProgress]);
 
   const shouldShowBracketSnapshotRefreshProgress = useMemo(() => {
     const isReportSnapshotRefresh = bracketReport.progress?.phase === "refreshingSnapshot";
@@ -2596,122 +2394,6 @@ function App() {
   }
 
   useEffect(() => {
-    if (selectedEventSettingKey === "") {
-      return;
-    }
-
-    const eventMetaSetting = selectedEventMeta?.eventManagement;
-    const rawSetting = eventMetaSetting
-      ? normalizeEventManagementSetting({
-        sideDecisionMethod: eventMetaSetting.sideDecisionMethod,
-        itemListIds: (eventMetaSetting.itemListSnapshots ?? []).map((item) => normalizeItemListConfig(item).id),
-        categoryMinCounts: eventMetaSetting.categoryMinCounts,
-        categoryMaxCounts: eventMetaSetting.categoryMaxCounts,
-        categoryAllowDuplicates: eventMetaSetting.categoryAllowDuplicates,
-        totalMinCount: eventMetaSetting.totalMinCount,
-        totalMaxCount: eventMetaSetting.totalMaxCount,
-      })
-      : eventMgmtSettings[selectedEventSettingKey];
-    if (!rawSetting) {
-      suppressEventSettingAutosaveRef.current = true;
-      eventSettingHydratedKeyRef.current = selectedEventSettingKey;
-      setSideDecisionMethod("upper_1p");
-      setCategorySlotListIds(["", "", ""]);
-      setCategorySlotMinCounts([0, 0, 0]);
-      setCategorySlotMaxCounts([1, 1, 1]);
-      setCategorySlotAllowDuplicates([false, false, false]);
-      setTotalItemMinCount(0);
-      setTotalItemMaxCount(3);
-      return;
-    }
-
-    const setting = normalizeEventManagementSetting(rawSetting);
-    const nextSideMethod = setting.sideDecisionMethod === "upper_2p" || setting.sideDecisionMethod === "random"
-      ? setting.sideDecisionMethod
-      : "upper_1p";
-    const nextIds = (setting.itemListIds ?? []).slice(0, 3);
-    while (nextIds.length < 3) {
-      nextIds.push("");
-    }
-
-    suppressEventSettingAutosaveRef.current = true;
-    eventSettingHydratedKeyRef.current = selectedEventSettingKey;
-    setSideDecisionMethod(nextSideMethod);
-    setCategorySlotListIds(nextIds);
-    setCategorySlotMinCounts(normalizeSelectionCountArrays(setting.categoryMinCounts, 0));
-    setCategorySlotMaxCounts(normalizeSelectionCountArrays(setting.categoryMaxCounts, 1));
-    setCategorySlotAllowDuplicates(normalizeAllowDuplicatesArray(setting.categoryAllowDuplicates));
-    setTotalItemMinCount(clampNonNegativeInteger(Number(setting.totalMinCount ?? 0), 0));
-    setTotalItemMaxCount(clampNonNegativeInteger(Number(setting.totalMaxCount ?? 3), 3));
-  }, [eventMgmtSettingsReady, selectedEventMeta, selectedEventSettingKey]);
-
-  useEffect(() => {
-    if (selectedEventSettingKey === "") {
-      return;
-    }
-
-    if (eventSettingHydratedKeyRef.current !== selectedEventSettingKey) {
-      return;
-    }
-
-    if (suppressEventSettingAutosaveRef.current) {
-      suppressEventSettingAutosaveRef.current = false;
-      return;
-    }
-
-    const itemListIds = categorySlotListIds.slice(0, MAX_CATEGORY_SLOTS).map((id) => id.trim());
-    const normalizedMinCounts = normalizeSelectionCountArrays(categorySlotMinCounts, 0);
-    const normalizedMaxCounts = normalizeSelectionCountArrays(categorySlotMaxCounts, 1);
-    const normalizedAllowDuplicates = normalizeAllowDuplicatesArray(categorySlotAllowDuplicates);
-
-    for (let i = 0; i < itemListIds.length; i += 1) {
-      if (itemListIds[i] === "") {
-        normalizedMinCounts[i] = 0;
-        normalizedMaxCounts[i] = 0;
-        normalizedAllowDuplicates[i] = false;
-      } else if (normalizedMaxCounts[i] < normalizedMinCounts[i]) {
-        normalizedMaxCounts[i] = normalizedMinCounts[i];
-      }
-    }
-
-    const normalizedTotalMinCount = clampNonNegativeInteger(totalItemMinCount, 0);
-    const normalizedTotalMaxCount = Math.max(
-      clampNonNegativeInteger(totalItemMaxCount, 0),
-      normalizedTotalMinCount,
-    );
-
-    const nextSetting = normalizeEventManagementSetting({
-      sideDecisionMethod,
-      itemListIds,
-      categoryMinCounts: normalizedMinCounts,
-      categoryMaxCounts: normalizedMaxCounts,
-      categoryAllowDuplicates: normalizedAllowDuplicates,
-      totalMinCount: normalizedTotalMinCount,
-      totalMaxCount: normalizedTotalMaxCount,
-    });
-
-    setEventMgmtSettings((current) => {
-      if (isSameEventManagementSetting(current[selectedEventSettingKey], nextSetting)) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [selectedEventSettingKey]: nextSetting,
-      };
-    });
-  }, [
-    categorySlotAllowDuplicates,
-    categorySlotListIds,
-    categorySlotMaxCounts,
-    categorySlotMinCounts,
-    selectedEventSettingKey,
-    sideDecisionMethod,
-    totalItemMaxCount,
-    totalItemMinCount,
-  ]);
-
-  useEffect(() => {
     if (selectedEventEntrants.length === 0) {
       if (selectedTournamentEntrantId !== "") {
         setSelectedTournamentEntrantId("");
@@ -2948,161 +2630,10 @@ function App() {
     }
   }
 
-  function setCategoryListSlot(slotIndex: number, itemListId: string) {
-    setCategorySlotListIds((current) => {
-      const next = [...current];
-      while (next.length < MAX_CATEGORY_SLOTS) {
-        next.push("");
-      }
-
-      if (itemListId !== "") {
-        for (let i = 0; i < next.length; i += 1) {
-          if (i !== slotIndex && next[i] === itemListId) {
-            next[i] = "";
-          }
-        }
-      }
-
-      next[slotIndex] = itemListId;
-      return next.slice(0, MAX_CATEGORY_SLOTS);
-    });
-
-    if (itemListId.trim() === "") {
-      setCategorySlotMinCounts((current) => {
-        const next = [...current];
-        next[slotIndex] = 0;
-        return next;
-      });
-      setCategorySlotMaxCounts((current) => {
-        const next = [...current];
-        next[slotIndex] = 0;
-        return next;
-      });
-      setCategorySlotAllowDuplicates((current) => {
-        const next = [...current];
-        next[slotIndex] = false;
-        return next;
-      });
-      return;
-    }
-
-    setCategorySlotMaxCounts((current) => {
-      const next = [...current];
-      if ((next[slotIndex] ?? 0) < 1) {
-        next[slotIndex] = 1;
-      }
-      return next;
-    });
-  }
-
   function deleteItemList(itemListId: string) {
     removeItemList(itemListId);
-    const nextListIds = categorySlotListIds.map((id) => (id === itemListId ? "" : id));
-    setCategorySlotListIds(nextListIds);
-    setCategorySlotMinCounts((current) => current.map((value, index) => (nextListIds[index] === "" && categorySlotListIds[index] === itemListId ? 0 : value)));
-    setCategorySlotMaxCounts((current) => current.map((value, index) => (nextListIds[index] === "" && categorySlotListIds[index] === itemListId ? 0 : value)));
-    setCategorySlotAllowDuplicates((current) => current.map((value, index) => (nextListIds[index] === "" && categorySlotListIds[index] === itemListId ? false : value)));
-    setEventMgmtSettings((current) => removeItemListFromEventManagementSettings(current, itemListId));
+    removeItemListSettings(itemListId);
     setMessage("アイテムリストを削除しました。");
-  }
-
-  async function saveEventManagementSetting() {
-    if (selectedEventSettingKey === "" || !selectedEvent) {
-      setError("先にイベントを選択してください。");
-      return;
-    }
-
-    const itemListIds = categorySlotListIds.slice(0, MAX_CATEGORY_SLOTS).map((id) => id.trim());
-    const normalizedMinCounts = normalizeSelectionCountArrays(categorySlotMinCounts, 0);
-    const normalizedMaxCounts = normalizeSelectionCountArrays(categorySlotMaxCounts, 1);
-    const normalizedAllowDuplicates = normalizeAllowDuplicatesArray(categorySlotAllowDuplicates);
-
-    const seen = new Set<string>();
-    for (let i = 0; i < itemListIds.length; i += 1) {
-      if (itemListIds[i] === "") {
-        normalizedMinCounts[i] = 0;
-        normalizedMaxCounts[i] = 0;
-        normalizedAllowDuplicates[i] = false;
-        continue;
-      }
-
-      if (seen.has(itemListIds[i])) {
-        setError("カテゴリは重複して設定できません。");
-        return;
-      }
-      seen.add(itemListIds[i]);
-
-      if (normalizedMaxCounts[i] < normalizedMinCounts[i]) {
-        setError(`カテゴリ${i + 1}: 上限は下限以上にしてください。`);
-        return;
-      }
-    }
-
-    const normalizedTotalMinCount = clampNonNegativeInteger(totalItemMinCount, 0);
-    const normalizedTotalMaxCount = Math.max(
-      clampNonNegativeInteger(totalItemMaxCount, 0),
-      normalizedTotalMinCount,
-    );
-
-    const nextSetting: EventManagementSetting = {
-      sideDecisionMethod,
-      itemListIds,
-      categoryMinCounts: normalizedMinCounts,
-      categoryMaxCounts: normalizedMaxCounts,
-      categoryAllowDuplicates: normalizedAllowDuplicates,
-      totalMinCount: normalizedTotalMinCount,
-      totalMaxCount: normalizedTotalMaxCount,
-    };
-
-    setBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const itemListSnapshots = itemListIds.map((listId) => {
-        if (listId === "") {
-          return {
-            id: "",
-            name: "",
-            categoryName: "",
-            items: [],
-          } as ItemListConfig;
-        }
-
-        const source = resolveItemListForSelectedEvent(listId);
-        if (!source) {
-          throw new Error(`選択中のカテゴリ設定に存在しないアイテムリストがあります: ${listId}`);
-        }
-
-        return normalizeItemListConfig(source);
-      });
-
-      const normalizedSlug = toApiSlug(slug);
-      await saveEventManagementMeta({
-        slug: normalizedSlug,
-        eventId: selectedEvent.eventId,
-        eventName: selectedEvent.name,
-        setting: {
-          sideDecisionMethod,
-          itemListSnapshots,
-          categoryMinCounts: normalizedMinCounts,
-          categoryMaxCounts: normalizedMaxCounts,
-          categoryAllowDuplicates: normalizedAllowDuplicates,
-          totalMinCount: normalizedTotalMinCount,
-          totalMaxCount: normalizedTotalMaxCount,
-        },
-      });
-
-      setEventMgmtSettings((current) => ({
-        ...current,
-        [selectedEventSettingKey]: nextSetting,
-      }));
-      setMessage("大会管理設定を保存しました。");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
   }
 
   function formatScoreValue(value: number): string {
@@ -4725,157 +4256,6 @@ function App() {
     }
   }, [snapshot, selectedEventId]);
 
-  async function saveToken(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    clearStatusMessages();
-
-    try {
-      await saveStartggToken();
-      setMessage("start.ggトークンを保存しました。");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function clearStatusMessages() {
-    setError("");
-    setMessage("");
-  }
-
-  async function saveStartggToken() {
-    await invoke("save_startgg_token", { token });
-  }
-
-  function applyCreateEventSelection(event: TournamentEventPreviewItem | null, options?: { resetAlias?: boolean }) {
-    setCreateSelectedEventId(event?.eventId ?? "");
-    setCreateEventSlugInput(toEventSlugInput(event?.eventSlug ?? ""));
-    if (options?.resetAlias) {
-      setCreateEventAlias("");
-    }
-  }
-
-  async function loadCreatePreview(e?: FormEvent) {
-    e?.preventDefault();
-
-    const apiSlug = toApiSlug(slug);
-    if (apiSlug === "") {
-      setError("大会IDを入力してください。");
-      return;
-    }
-
-    const previousSelectedEventId = createSelectedEventId;
-    setCreateBusy(true);
-    clearStatusMessages();
-    setCreateSnapshotProgress(null);
-    setCreatePreview(null);
-    setCreatePreviewLoadFailed(false);
-    setCreateEventSearchInput("");
-
-    try {
-      await saveStartggToken();
-      const preview = await invoke<TournamentPreview>("preview_tournament", {
-        slug: apiSlug,
-      });
-      setCreatePreview(preview);
-      const selected = resolveCreatePreviewSelection(preview.events, previousSelectedEventId);
-      applyCreateEventSelection(selected);
-      setMessage("tournamentのイベント一覧を取得しました。");
-    } catch (err) {
-      setCreatePreviewLoadFailed(true);
-      setError(String(err));
-    } finally {
-      setCreateBusy(false);
-    }
-  }
-
-  function handleCreateEventSearchInputChange(nextValue: string) {
-    setCreateEventSearchInput(nextValue);
-  }
-
-  function handleCreateEventDropdownChange(nextEventId: string) {
-    if (!createPreview) {
-      return;
-    }
-
-    const selected = findCreatePreviewEvent(createPreview.events, nextEventId);
-    if (!selected || selected.eventId === createSelectedEventId) {
-      return;
-    }
-
-    applyCreateEventSelection(selected, { resetAlias: true });
-  }
-
-  const createFilteredEvents = useMemo(() => {
-    return filterCreatePreviewEvents(createPreview?.events ?? [], createEventSearchInput);
-  }, [createPreview, createEventSearchInput]);
-
-  async function createEventSnapshotBySlug() {
-    const tournamentSlug = toApiSlug(slug);
-    const eventSlug = toEventApiSlug(slug, createEventSlugInput);
-    if (tournamentSlug === "" || eventSlug === "") {
-      setError("大会IDとevent ID(またはevent slug)を入力してください。");
-      return;
-    }
-
-    if (createSelectedEventId !== "") {
-      try {
-        const existingItems = await listLocalSnapshotEvents();
-        const existing = existingItems.find((item) =>
-          toApiSlug(item.slug) === tournamentSlug
-          && item.eventId === createSelectedEventId,
-        );
-        if (existing) {
-          const confirmed = window.confirm(
-            `このeventのスナップショットは既に存在します。上書きして再取得しますか？\n${existing.slug}`,
-          );
-          if (!confirmed) {
-            return;
-          }
-        }
-      } catch (err) {
-        setError(String(err));
-        return;
-      }
-    }
-
-    setCreateBusy(true);
-    clearStatusMessages();
-    setCreateSnapshotProgress({
-      phase: "starting",
-      completedSets: 0,
-      totalSets: null,
-      currentPage: null,
-      currentSetId: null,
-    });
-
-    try {
-      await saveStartggToken();
-      await saveLastSlug(tournamentSlug);
-
-      await persistEventSnapshot({
-        tournamentSlug,
-        eventSlug,
-        eventAlias: createEventAlias.trim() === "" ? null : createEventAlias.trim(),
-        perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
-      });
-
-      setWorkspace(null);
-      startupAutoRestoreDoneRef.current = true;
-      setCreateSnapshotProgress(null);
-      await refreshLocalSnapshotEvents();
-      setActiveTab("home");
-      setMessage("eventのローカルスナップショットを作成しました。");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setCreateSnapshotProgress(null);
-      setCreateBusy(false);
-    }
-  }
-
   async function refreshLocalSnapshotEvents() {
     try {
       const items = await fetchLocalSnapshotEvents();
@@ -6183,7 +5563,7 @@ function App() {
             createPreview={createPreview}
             createPreviewLoadFailed={createPreviewLoadFailed}
             createEventSearchInput={createEventSearchInput}
-            onEventSearchInputChange={handleCreateEventSearchInputChange}
+            onEventSearchInputChange={setCreateEventSearchInput}
             createFilteredEvents={createFilteredEvents}
             createSelectedEventId={createSelectedEventId}
             onEventDropdownChange={handleCreateEventDropdownChange}
