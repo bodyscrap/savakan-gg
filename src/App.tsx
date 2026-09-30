@@ -19,7 +19,7 @@ import {
   useAppPreferences,
 } from "./useAppPreferences";
 import { localNetworkCandidateKey } from "./localNetworkSettings";
-import { toApiSlug, toEventApiSlug, toSlugInput } from "./slugUtils";
+import { toApiSlug, toEventApiSlug } from "./slugUtils";
 import { SettingsScreen } from "./SettingMenu";
 import { StatusBoard, StatusBoardHero } from "./StatusBoard";
 import { PlayerListInfo } from "./PlayerListInfo";
@@ -97,11 +97,10 @@ import {
   type TournamentWorkspace,
 } from "./useTournamentWorkspace";
 import {
-  loadLastSlug,
-  loadLastSnapshotSelection,
   saveLastSnapshotSelection,
 } from "./tournamentWorkspaceRepository";
 import { usePersistSnapshotSelection } from "./usePersistSnapshotSelection";
+import { useSnapshotStartupRestore } from "./useSnapshotStartupRestore";
 import {
   buildTbdSourceLabelBySlotKey as buildBracketTbdSourceLabelBySlotKey,
   buildSetDisplayCodeById,
@@ -361,13 +360,28 @@ function App() {
     saveItemList,
     removeItemList,
   } = useItemLists({ onError: setError, onMessage: setMessage });
-  const startupSavedSlugRef = useRef("");
-  const startupSavedEventIdRef = useRef("");
-  const startupRestoreReadyRef = useRef(false);
-  const localSnapshotEventsLoadedOnceRef = useRef(false);
-  const startupAutoRestoreDoneRef = useRef(false);
-  const startupDirectRestoreTriedRef = useRef(false);
-  const startupListRestoreRetryCountRef = useRef(0);
+  const selectLocalSnapshotEventRef = useRef<
+    (item: LocalSnapshotEventListItem) => Promise<unknown>
+  >(async () => undefined);
+  const {
+    startupSavedSlugRef,
+    startupSavedEventIdRef,
+    markSnapshotEventsLoaded,
+    markStartupAutoRestoreDone,
+    clearStartupSelection,
+  } = useSnapshotStartupRestore({
+    localSnapshotEvents,
+    loadingLocalSnapshotEvents,
+    workspace,
+    loadWorkspace,
+    refreshLocalSnapshotEvents,
+    selectLocalSnapshotEvent: (item) => selectLocalSnapshotEventRef.current(item),
+    setSlug,
+    setSelectedEventId,
+    setSelectedPhaseName,
+    setSelectedPhasePoolKey,
+    setError,
+  });
   const tabSelectionAutoLoadInFlightRef = useRef(false);
   const {
     cameraActive: dqCameraActive,
@@ -385,7 +399,7 @@ function App() {
     setMessage,
     onSnapshotCreated: async () => {
       setWorkspace(null);
-      startupAutoRestoreDoneRef.current = true;
+      markStartupAutoRestoreDone();
       await refreshLocalSnapshotEvents();
       setActiveTab("home");
     },
@@ -432,151 +446,12 @@ function App() {
   }, []);
 
   useEffect(() => {
-    let alive = true;
-
-    (async () => {
-      try {
-        const savedSelection = await loadLastSnapshotSelection();
-        if (
-          alive
-          && savedSelection
-          && savedSelection.slug.trim() !== ""
-          && savedSelection.eventId.trim() !== ""
-        ) {
-          const savedSlug = savedSelection.slug.trim();
-          const savedEventId = savedSelection.eventId.trim();
-          const savedPhaseName = typeof savedSelection.phaseName === "string"
-            ? savedSelection.phaseName.trim()
-            : "";
-          const savedPhaseGroupName = typeof savedSelection.phaseGroupName === "string"
-            ? savedSelection.phaseGroupName.trim()
-            : "";
-          startupSavedSlugRef.current = savedSlug;
-          startupSavedEventIdRef.current = savedEventId;
-          setSelectedEventId(savedEventId);
-          if (savedPhaseName !== "") {
-            setSelectedPhaseName(savedPhaseName);
-          }
-          if (savedPhaseName !== "" && savedPhaseGroupName !== "") {
-            setSelectedPhasePoolKey(`${savedPhaseName}::${savedPhaseGroupName}`);
-          }
-          setSlug(toSlugInput(savedSlug));
-        }
-
-        const savedSlug = await loadLastSlug();
-        if (
-          alive
-          && startupSavedSlugRef.current === ""
-          && savedSlug
-          && savedSlug.trim() !== ""
-        ) {
-          const savedRawSlug = savedSlug.trim();
-          startupSavedSlugRef.current = savedRawSlug;
-          setSlug(toSlugInput(savedRawSlug));
-        }
-
-      } catch (err) {
-        if (alive) {
-          setError(String(err));
-        }
-      } finally {
-        if (alive) {
-          startupRestoreReadyRef.current = true;
-        }
-      }
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
     if (activeTab !== "home") {
       return;
     }
 
     void refreshLocalSnapshotEvents();
   }, [activeTab]);
-
-  useEffect(() => {
-    if (startupAutoRestoreDoneRef.current) {
-      return;
-    }
-
-    if (!startupRestoreReadyRef.current) {
-      return;
-    }
-
-    if (!localSnapshotEventsLoadedOnceRef.current) {
-      return;
-    }
-
-    if (workspace) {
-      startupAutoRestoreDoneRef.current = true;
-      return;
-    }
-
-    const savedSlug = startupSavedSlugRef.current.trim();
-    const savedEventId = startupSavedEventIdRef.current;
-
-    if (savedSlug !== "" && savedEventId !== "" && !startupDirectRestoreTriedRef.current) {
-      startupDirectRestoreTriedRef.current = true;
-
-      void (async () => {
-        try {
-          await loadWorkspace(savedSlug, savedEventId);
-
-          setSlug(toSlugInput(savedSlug));
-          setSelectedEventId(savedEventId);
-          startupAutoRestoreDoneRef.current = true;
-        } catch {
-          // Direct restore can fail when old slug formats remain in persisted data.
-          // Trigger list reload so this effect re-runs and falls back to list-based restore.
-          if (!loadingLocalSnapshotEvents) {
-            void refreshLocalSnapshotEvents();
-          }
-        }
-      })();
-      return;
-    }
-
-    if (loadingLocalSnapshotEvents) {
-      return;
-    }
-
-    if (savedSlug === "") {
-      startupAutoRestoreDoneRef.current = true;
-      return;
-    }
-
-    if (localSnapshotEvents.length === 0) {
-      if (startupListRestoreRetryCountRef.current < 1) {
-        startupListRestoreRetryCountRef.current += 1;
-        void refreshLocalSnapshotEvents();
-        return;
-      }
-
-      startupAutoRestoreDoneRef.current = true;
-      return;
-    }
-
-    let matched = null as LocalSnapshotEventListItem | null;
-    if (savedEventId !== "") {
-      matched = findSnapshotEventByIdentity(localSnapshotEvents, savedSlug, savedEventId);
-    }
-
-    if (!matched) {
-      const normalizedSavedSlug = toSlugInput(savedSlug);
-      matched = localSnapshotEvents.find((item) => toSlugInput(item.slug) === normalizedSavedSlug) ?? null;
-    }
-
-    startupAutoRestoreDoneRef.current = true;
-
-    if (matched) {
-      void selectLocalSnapshotEvent(matched);
-    }
-  }, [loadingLocalSnapshotEvents, localSnapshotEvents, workspace]);
 
   const snapshot = workspace?.snapshot ?? null;
   const localMeta = workspace?.localMeta ?? null;
@@ -893,6 +768,7 @@ function App() {
     clearAllDrafts,
     closeMatchDialog,
   });
+  selectLocalSnapshotEventRef.current = selectLocalSnapshotEvent;
 
   const configuredCategorySlots = useMemo(() => {
     return buildConfiguredCategorySlots(
@@ -1516,8 +1392,7 @@ function App() {
         setSelectedEventId("");
         setSelectedPhaseName("");
         setSelectedPhasePoolKey("");
-        startupSavedSlugRef.current = "";
-        startupSavedEventIdRef.current = "";
+        clearStartupSelection();
         resetLastPersistedSnapshotSelection();
         await saveLastSnapshotSelection({
           slug: "",
@@ -1533,14 +1408,13 @@ function App() {
         setSelectedPhaseName("");
         setSelectedPhasePoolKey("");
         setHomeSelectedSnapshotKey("");
-        startupSavedSlugRef.current = "";
-        startupSavedEventIdRef.current = "";
+        clearStartupSelection();
         resetLastPersistedSnapshotSelection();
       }
     } catch (err) {
       setError(String(err));
     } finally {
-      localSnapshotEventsLoadedOnceRef.current = true;
+      markSnapshotEventsLoaded();
     }
   }
 
