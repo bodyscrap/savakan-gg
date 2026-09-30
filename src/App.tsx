@@ -6,6 +6,8 @@ import QRCode from "qrcode";
 import { CreateSnapshot } from "./CreateSnapshot";
 import { DqRequestDialog } from "./DqRequestDialog";
 import { useDqCameraScan } from "./useDqCameraScan";
+import { useSenderProfile, type SenderProfile } from "./useSenderProfile";
+import { localNetworkCandidateKey, type LocalNetworkSettingsCandidate } from "./localNetworkSettings";
 import { toApiSlug, toEventApiSlug, toSlugInput } from "./slugUtils";
 import { SettingsScreen } from "./SettingMenu";
 import { StatusBoard, StatusBoardHero } from "./StatusBoard";
@@ -213,29 +215,11 @@ type SavePlayerMetaOptions = {
   manageBusy?: boolean;
 };
 
-type SenderProfile = {
-  senderName: string;
-  senderUserId: string;
-  bindIp: string;
-  broadcastSubnetMask: string;
-};
-
-type LocalNetworkSettingsCandidate = {
-  bindIp: string;
-  broadcastSubnetMask: string;
-  source: string;
-  interfaceName: string;
-};
-
 type MobileInputPortalInfo = {
   url: string;
   accessUrls: string[];
   token: string;
 };
-
-function localNetworkCandidateKey(candidate: LocalNetworkSettingsCandidate): string {
-  return `${candidate.bindIp.trim()}::${candidate.broadcastSubnetMask.trim()}::${candidate.interfaceName.trim()}`;
-}
 
 function mobileUrlDisplayIp(url: string): string {
   const trimmed = url.trim();
@@ -330,28 +314,6 @@ function normalizeMobileInputPollingMs(rawValue: unknown, fallback = MOBILE_INPU
   return rounded;
 }
 
-function normalizeSenderProfile(rawValue: unknown): SenderProfile {
-  const source = rawValue && typeof rawValue === "object"
-    ? (rawValue as Partial<SenderProfile>)
-    : {};
-
-  const senderName = typeof source.senderName === "string" ? source.senderName.trim() : "";
-  const senderUserId = typeof source.senderUserId === "string"
-    ? source.senderUserId.replace(/\D/g, "").slice(0, 8)
-    : "";
-  const bindIp = typeof source.bindIp === "string" ? source.bindIp.trim() : "0.0.0.0";
-  const broadcastSubnetMask = typeof source.broadcastSubnetMask === "string"
-    ? source.broadcastSubnetMask.trim()
-    : "255.255.255.0";
-
-  return {
-    senderName,
-    senderUserId,
-    bindIp,
-    broadcastSubnetMask,
-  };
-}
-
 function generateRandomSenderUserId(): string {
   const array = new Uint32Array(1);
   window.crypto.getRandomValues(array);
@@ -378,7 +340,6 @@ function resolveCallPhaseName(event: EventSnapshot | null, rawValue: string, pha
   return set?.phaseName?.trim() || normalized;
 }
 
-const SENDER_PROFILE_STORAGE_KEY = "savakan-gg.sender-profile.v1";
 const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
 const BRACKET_ZOOM_LEVEL_STORAGE_KEY = "savakan-gg.bracket-zoom-level.v1";
 const STARTGG_FETCH_PER_PAGE_STORAGE_KEY = "savakan-gg.startgg-fetch-per-page.v1";
@@ -502,15 +463,6 @@ function App() {
   const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
   const [homeSelectedSnapshotKey, setHomeSelectedSnapshotKey] = useState("");
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
-  const [senderProfile, setSenderProfile] = useState<SenderProfile>({ senderName: "", senderUserId: "", bindIp: "0.0.0.0", broadcastSubnetMask: "255.255.255.0" });
-  const [senderProfileReady, setSenderProfileReady] = useState(false);
-  const [senderNameDraft, setSenderNameDraft] = useState("");
-  const [senderUserIdDraft, setSenderUserIdDraft] = useState("");
-  const [senderBindIpDraft, setSenderBindIpDraft] = useState("0.0.0.0");
-  const [senderBroadcastSubnetMaskDraft, setSenderBroadcastSubnetMaskDraft] = useState("255.255.255.0");
-  const [senderNetworkCandidates, setSenderNetworkCandidates] = useState<LocalNetworkSettingsCandidate[]>([]);
-  const [selectedSenderNetworkCandidateKey, setSelectedSenderNetworkCandidateKey] = useState("");
-  const [senderNetworkCandidatesLoading, setSenderNetworkCandidatesLoading] = useState(false);
   const [senderIdentityChangedSinceMailboxClear, setSenderIdentityChangedSinceMailboxClear] = useState(false);
   const [displayBracketPlayersBySide, setDisplayBracketPlayersBySide] = useState(true);
   const [bracketZoomLevel, setBracketZoomLevel] = useState<number>(Number(BRACKET_ZOOM_LEVELS[0]));
@@ -531,6 +483,23 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const {
+    senderProfile,
+    setSenderProfile,
+    senderProfileReady,
+    senderNameDraft,
+    setSenderNameDraft,
+    senderUserIdDraft,
+    setSenderUserIdDraft,
+    senderBindIpDraft,
+    senderBroadcastSubnetMaskDraft,
+    networkCandidates: senderNetworkCandidates,
+    selectedNetworkCandidateKey: selectedSenderNetworkCandidateKey,
+    setSelectedNetworkCandidateKey: setSelectedSenderNetworkCandidateKey,
+    networkCandidatesLoading: senderNetworkCandidatesLoading,
+    selectedNetworkCandidate: selectedSenderNetworkCandidate,
+    refreshNetworkCandidates: refreshLocalNetworkSettingsCandidates,
+  } = useSenderProfile(setError, activeTab);
   const {
     obsOverlayState,
     obsOverlayBusy,
@@ -677,7 +646,6 @@ function App() {
   const startupListRestoreRetryCountRef = useRef(0);
   const lastPersistedSnapshotSelectionRef = useRef("");
   const lastPersistedEventMetaPhasePoolRef = useRef("");
-  const autoIpFillTriedRef = useRef(false);
   const tabSelectionAutoLoadInFlightRef = useRef(false);
   const {
     cameraActive: dqCameraActive,
@@ -948,112 +916,6 @@ function App() {
       // ignore
     }
   }, [mobileInputPollingMs]);
-
-  useEffect(() => {
-    let alive = true;
-
-    (async () => {
-      try {
-        const fromRust = await invoke<SenderProfile | null>("load_sender_profile");
-        if (!alive) {
-          return;
-        }
-
-        if (fromRust) {
-          const normalized = normalizeSenderProfile(fromRust);
-          setSenderProfile(normalized);
-          setSenderNameDraft(normalized.senderName);
-          setSenderUserIdDraft(normalized.senderUserId);
-          setSenderBindIpDraft(normalized.bindIp);
-          setSenderBroadcastSubnetMaskDraft(normalized.broadcastSubnetMask);
-          return;
-        }
-
-        const raw = window.localStorage.getItem(SENDER_PROFILE_STORAGE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw) as unknown;
-          const normalized = normalizeSenderProfile(parsed);
-          setSenderProfile(normalized);
-          setSenderNameDraft(normalized.senderName);
-          setSenderUserIdDraft(normalized.senderUserId);
-          setSenderBindIpDraft(normalized.bindIp);
-          setSenderBroadcastSubnetMaskDraft(normalized.broadcastSubnetMask);
-        }
-      } catch {
-        // ignore
-      } finally {
-        if (alive) {
-          setSenderProfileReady(true);
-        }
-      }
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!senderProfileReady) {
-      return;
-    }
-
-    if (autoIpFillTriedRef.current) {
-      return;
-    }
-
-    autoIpFillTriedRef.current = true;
-
-    void invoke<string | null>("detect_local_ipv4")
-      .then((detectedIp) => {
-        if (!detectedIp || !isValidIpv4(detectedIp)) {
-          return;
-        }
-
-        const shouldUpdateDraft = senderBindIpDraft.trim() === ""
-          || senderBindIpDraft.trim() === "0.0.0.0"
-          || !isValidIpv4(senderBindIpDraft.trim());
-
-        if (shouldUpdateDraft) {
-          setSenderBindIpDraft(detectedIp);
-        }
-
-        const currentProfileIp = senderProfile.bindIp.trim();
-        const shouldUpdateProfile = currentProfileIp === ""
-          || currentProfileIp === "0.0.0.0"
-          || !isValidIpv4(currentProfileIp);
-
-        if (shouldUpdateProfile) {
-          setSenderProfile((current) => ({
-            ...current,
-            bindIp: detectedIp,
-          }));
-        }
-      })
-      .catch(() => {
-        // ignore auto detect failure
-      });
-  }, [senderBindIpDraft, senderProfile, senderProfileReady]);
-
-  useEffect(() => {
-    if (!senderProfileReady) {
-      return;
-    }
-
-    if (senderProfile.senderName.trim() === "" || !isValidSenderUserId(senderProfile.senderUserId)) {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(SENDER_PROFILE_STORAGE_KEY, JSON.stringify(senderProfile));
-    } catch {
-      // ignore
-    }
-
-    void invoke("save_sender_profile", { profile: senderProfile }).catch((err) => {
-      setError(String(err));
-    });
-  }, [senderProfile, senderProfileReady]);
 
   useEffect(() => {
     if (activeTab !== "home") {
@@ -1781,12 +1643,6 @@ function App() {
   const normalizedSenderUserIdDraft = senderUserIdDraft.replace(/\D/g, "").slice(0, 8);
   const normalizedSenderBindIpDraft = senderBindIpDraft.trim();
   const normalizedBroadcastSubnetMaskDraft = senderBroadcastSubnetMaskDraft.trim();
-  const selectedSenderNetworkCandidate = useMemo(
-    () => senderNetworkCandidates.find(
-      (candidate) => localNetworkCandidateKey(candidate) === selectedSenderNetworkCandidateKey,
-    ) ?? null,
-    [selectedSenderNetworkCandidateKey, senderNetworkCandidates],
-  );
   const hasSelectedSenderNetworkDevice = selectedSenderNetworkCandidate !== null;
   const senderIdCollision = useMemo(() => {
     if (!isValidSenderUserId(normalizedSenderUserIdDraft)) {
@@ -1843,64 +1699,6 @@ function App() {
 
     setSenderUserIdDraft(nextId);
   }
-
-  async function refreshLocalNetworkSettingsCandidates(showError = true) {
-    if (senderNetworkCandidatesLoading) {
-      return;
-    }
-
-    setSenderNetworkCandidatesLoading(true);
-    try {
-      const listed = await invoke<LocalNetworkSettingsCandidate[]>("list_local_network_settings");
-      const normalized = Array.isArray(listed) ? listed : [];
-      setSenderNetworkCandidates(normalized);
-
-      const selectedStillExists = normalized.some(
-        (candidate) => localNetworkCandidateKey(candidate) === selectedSenderNetworkCandidateKey,
-      );
-
-      if (selectedStillExists) {
-        return;
-      }
-
-      const matchedByDraft = normalized.find((candidate) =>
-        candidate.bindIp.trim() === senderBindIpDraft.trim()
-        && candidate.broadcastSubnetMask.trim() === senderBroadcastSubnetMaskDraft.trim()
-      );
-
-      if (matchedByDraft) {
-        setSelectedSenderNetworkCandidateKey(localNetworkCandidateKey(matchedByDraft));
-        return;
-      }
-
-      setSelectedSenderNetworkCandidateKey(
-        normalized[0] ? localNetworkCandidateKey(normalized[0]) : "",
-      );
-    } catch (err) {
-      if (showError) {
-        setError(`ネットワークデバイス一覧の取得に失敗しました: ${String(err)}`);
-      }
-    } finally {
-      setSenderNetworkCandidatesLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (activeTab !== "settings") {
-      return;
-    }
-
-    void refreshLocalNetworkSettingsCandidates(false);
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (!selectedSenderNetworkCandidate) {
-      return;
-    }
-
-    setSenderBindIpDraft(selectedSenderNetworkCandidate.bindIp.trim());
-    setSenderBroadcastSubnetMaskDraft(selectedSenderNetworkCandidate.broadcastSubnetMask.trim());
-  }, [selectedSenderNetworkCandidate]);
 
   async function saveSenderProfileSettings() {
     setError("");
