@@ -26,6 +26,7 @@ import { PlayerListInfo } from "./PlayerListInfo";
 import { MessageBox } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
 import {
+  buildCategoryUsageList,
   clampNonNegativeInteger,
 } from "./eventManagement";
 import {
@@ -137,8 +138,11 @@ import {
   parseRoundRobinGameScore,
   rankRoundRobinStandings,
   roundRobinTieBreakRuleFromApi,
+  collectEventEntrants,
+  sortEventEntrants,
   type RoundRobinStanding,
   type RoundRobinTieBreakRule,
+  type EventEntrantSnapshot,
   type SetEntrantSource,
   type SetSlot,
   type SetSnapshot,
@@ -1111,134 +1115,31 @@ function App() {
     })();
   }, [activeTab, busy, loadingLocalSnapshotEvents, selectedSidebarItem, workspace]);
 
-  const selectedCategoryUsageList = useMemo(() => {
-    if (!selectedEventMeta) {
-      return [] as Array<{
-        slotIndex: number;
-        categoryName: string;
-        listName: string;
-        entries: Array<{ itemName: string; count: number; rate: number }>;
-      }>;
-    }
-
-    const denominator = Math.max(selectedEventMeta.entrants.length, 1);
-
-    return configuredCategorySlots.map((slot) => {
-      const itemCounts = new Map<string, number>();
-      const items = slot.list.items
-        .map((itemName) => itemName.trim())
-        .filter((itemName) => itemName !== "");
-
-      for (const itemName of items) {
-        itemCounts.set(itemName, 0);
-      }
-
-      for (const entrant of selectedEventMeta.entrants) {
-        const chosen = entrant.characterNames
-          .map((itemName) => itemName.trim())
-          .filter((itemName) => itemCounts.has(itemName));
-
-        const uniqueChosen = new Set(chosen);
-        for (const itemName of uniqueChosen) {
-          itemCounts.set(itemName, (itemCounts.get(itemName) ?? 0) + 1);
-        }
-      }
-
-      const entries = [...itemCounts.entries()]
-        .map(([itemName, count]) => ({
-          itemName,
-          count,
-          rate: (count / denominator) * 100,
-        }))
-        .filter((entry) => entry.count > 0)
-        .sort((left, right) => right.rate - left.rate || left.itemName.localeCompare(right.itemName, "ja"));
-
-      return {
-        slotIndex: slot.slotIndex,
-        categoryName: slot.list.categoryName,
-        listName: slot.list.name,
-        entries,
-      };
-    });
-  }, [configuredCategorySlots, selectedEventMeta]);
+  const selectedCategoryUsageList = useMemo(
+    () => buildCategoryUsageList(configuredCategorySlots, selectedEventMeta?.entrants ?? []),
+    [configuredCategorySlots, selectedEventMeta],
+  );
   const selectedEventEntrants = useMemo(() => {
     if (!selectedEvent) {
-      return [] as Array<{ entrantId: string; entrantName: string; seedId: string | null; seedNum: number | null }>;
+      return [] as EventEntrantSnapshot[];
     }
 
-    const seenOrder: string[] = [];
-    const byEntrant = new Map<string, { entrantId: string; entrantName: string; seedId: string | null; seedNum: number | null; firstSeenSetId: string }>();
+    const entrants = collectEventEntrants(selectedEvent.sets);
 
-    for (const set of selectedEvent.sets) {
-      for (const slot of set.slots) {
-        if (!slot.entrantId) {
-          continue;
-        }
+    console.groupCollapsed(`[seed-debug] event=${selectedEvent.eventId} entrants=${entrants.length}`);
+    console.table(
+      entrants.map((item, index) => ({
+        order: index + 1,
+        entrantId: item.entrantId,
+        entrantName: item.entrantName,
+        seedId: item.seedId,
+        seedNum: item.seedNum,
+        firstSeenSetId: item.firstSeenSetId,
+      })),
+    );
+    console.groupEnd();
 
-        const current = byEntrant.get(slot.entrantId);
-        const normalizedSeedNum = typeof slot.seedNum === "number" ? slot.seedNum : null;
-        const normalizedSeedId = typeof slot.seedId === "string" && slot.seedId.trim() !== "" ? slot.seedId : null;
-
-        if (!current) {
-          seenOrder.push(slot.entrantId);
-          byEntrant.set(slot.entrantId, {
-            entrantId: slot.entrantId,
-            entrantName: slot.entrantName,
-            seedId: normalizedSeedId,
-            seedNum: normalizedSeedNum,
-            firstSeenSetId: set.setId,
-          });
-          continue;
-        }
-
-        // Keep the first observed name/order, but fill missing seed data if later slots have it.
-        if (current.seedNum === null && normalizedSeedNum !== null) {
-          current.seedNum = normalizedSeedNum;
-        }
-        if (current.seedId === null && normalizedSeedId !== null) {
-          current.seedId = normalizedSeedId;
-        }
-      }
-    }
-
-    const entrants = seenOrder
-      .map((entrantId) => byEntrant.get(entrantId))
-      .filter((item): item is { entrantId: string; entrantName: string; seedId: string | null; seedNum: number | null; firstSeenSetId: string } => item !== undefined);
-
-    if (selectedEvent) {
-      console.groupCollapsed(`[seed-debug] event=${selectedEvent.eventId} entrants=${entrants.length}`);
-      console.table(
-        entrants.map((item, index) => ({
-          order: index + 1,
-          entrantId: item.entrantId,
-          entrantName: item.entrantName,
-          seedId: item.seedId,
-          seedNum: item.seedNum,
-          firstSeenSetId: item.firstSeenSetId,
-        })),
-      );
-      console.groupEnd();
-    }
-
-    return entrants.sort((left, right) => {
-      const leftSeed = typeof left.seedNum === "number" ? left.seedNum : null;
-      const rightSeed = typeof right.seedNum === "number" ? right.seedNum : null;
-
-      if (leftSeed !== null && rightSeed !== null) {
-        return leftSeed - rightSeed
-          || (left.seedId ?? "").localeCompare(right.seedId ?? "", "ja")
-          || left.entrantName.localeCompare(right.entrantName, "ja");
-      }
-      if (leftSeed !== null) {
-        return -1;
-      }
-      if (rightSeed !== null) {
-        return 1;
-      }
-
-      // seed 未設定同士は推測で並び替えず、取得順を維持する。
-      return 0;
-    });
+    return sortEventEntrants(entrants);
   }, [selectedEvent]);
   const selectedTournamentEntrant = useMemo(() => {
     if (selectedTournamentEntrantId === "") {

@@ -1,4 +1,4 @@
-import { MAX_CATEGORY_SLOTS } from "./itemList";
+import { MAX_CATEGORY_SLOTS, type ItemListConfig } from "./itemList";
 
 export type EventManagementSetting = {
   sideDecisionMethod: "upper_1p" | "upper_2p" | "random";
@@ -14,6 +14,66 @@ export type PlaySideAssignment = {
   upperSide: "1P" | "2P";
   lowerSide: "1P" | "2P";
 };
+
+export type CategoryUsageSlot = {
+  slotIndex: number;
+  list: Pick<ItemListConfig, "categoryName" | "name" | "items">;
+};
+
+export type CategoryUsageEntrant = {
+  characterNames: string[];
+};
+
+export type CategoryUsage = {
+  slotIndex: number;
+  categoryName: string;
+  listName: string;
+  entries: Array<{ itemName: string; count: number; rate: number }>;
+};
+
+export function buildCategoryUsageList(
+  configuredSlots: CategoryUsageSlot[],
+  entrants: CategoryUsageEntrant[],
+): CategoryUsage[] {
+  const denominator = Math.max(entrants.length, 1);
+
+  return configuredSlots.map((slot) => {
+    const itemCounts = new Map<string, number>();
+    const items = slot.list.items
+      .map((itemName) => itemName.trim())
+      .filter((itemName) => itemName !== "");
+
+    for (const itemName of items) {
+      itemCounts.set(itemName, 0);
+    }
+
+    for (const entrant of entrants) {
+      const chosen = entrant.characterNames
+        .map((itemName) => itemName.trim())
+        .filter((itemName) => itemCounts.has(itemName));
+
+      for (const itemName of new Set(chosen)) {
+        itemCounts.set(itemName, (itemCounts.get(itemName) ?? 0) + 1);
+      }
+    }
+
+    const entries = [...itemCounts.entries()]
+      .map(([itemName, count]) => ({
+        itemName,
+        count,
+        rate: (count / denominator) * 100,
+      }))
+      .filter((entry) => entry.count > 0)
+      .sort((left, right) => right.rate - left.rate || left.itemName.localeCompare(right.itemName, "ja"));
+
+    return {
+      slotIndex: slot.slotIndex,
+      categoryName: slot.list.categoryName,
+      listName: slot.list.name,
+      entries,
+    };
+  });
+}
 
 export function resolveSideDecisionMethod(value: unknown): EventManagementSetting["sideDecisionMethod"] {
   return value === "upper_2p" || value === "random" ? value : "upper_1p";

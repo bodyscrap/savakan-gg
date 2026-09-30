@@ -56,6 +56,75 @@ export type SetSnapshot = {
   slots: SetSlot[];
 };
 
+export type EventEntrantSnapshot = {
+  entrantId: string;
+  entrantName: string;
+  seedId: string | null;
+  seedNum: number | null;
+  firstSeenSetId: string;
+};
+
+export function collectEventEntrants(sets: SetSnapshot[]): EventEntrantSnapshot[] {
+  const seenOrder: string[] = [];
+  const byEntrant = new Map<string, EventEntrantSnapshot>();
+
+  for (const set of sets) {
+    for (const slot of set.slots) {
+      if (!slot.entrantId) {
+        continue;
+      }
+
+      const current = byEntrant.get(slot.entrantId);
+      const normalizedSeedNum = typeof slot.seedNum === "number" ? slot.seedNum : null;
+      const normalizedSeedId = typeof slot.seedId === "string" && slot.seedId.trim() !== "" ? slot.seedId : null;
+
+      if (!current) {
+        seenOrder.push(slot.entrantId);
+        byEntrant.set(slot.entrantId, {
+          entrantId: slot.entrantId,
+          entrantName: slot.entrantName,
+          seedId: normalizedSeedId,
+          seedNum: normalizedSeedNum,
+          firstSeenSetId: set.setId,
+        });
+        continue;
+      }
+
+      if (current.seedNum === null && normalizedSeedNum !== null) {
+        current.seedNum = normalizedSeedNum;
+      }
+      if (current.seedId === null && normalizedSeedId !== null) {
+        current.seedId = normalizedSeedId;
+      }
+    }
+  }
+
+  return seenOrder
+    .map((entrantId) => byEntrant.get(entrantId))
+    .filter((entrant): entrant is EventEntrantSnapshot => entrant !== undefined);
+}
+
+export function sortEventEntrants(entrants: EventEntrantSnapshot[]): EventEntrantSnapshot[] {
+  return [...entrants].sort((left, right) => {
+    const leftSeed = typeof left.seedNum === "number" ? left.seedNum : null;
+    const rightSeed = typeof right.seedNum === "number" ? right.seedNum : null;
+
+    if (leftSeed !== null && rightSeed !== null) {
+      return leftSeed - rightSeed
+        || (left.seedId ?? "").localeCompare(right.seedId ?? "", "ja")
+        || left.entrantName.localeCompare(right.entrantName, "ja");
+    }
+    if (leftSeed !== null) {
+      return -1;
+    }
+    if (rightSeed !== null) {
+      return 1;
+    }
+
+    return 0;
+  });
+}
+
 export type PhaseGroupSeedSnapshot = {
   seedId: string;
   seedNum?: number | null;

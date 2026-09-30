@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCategoryUsageList,
   resolveSideDecisionMethod,
   resolveSidesByDecisionMethod,
 } from "./eventManagement";
@@ -28,5 +29,31 @@ describe("event side decision", () => {
 
     expect(first).toEqual(second);
     expect(first.lowerSide).not.toBe(first.upperSide);
+  });
+});
+
+describe("category usage", () => {
+  it("counts each selected item once per entrant and calculates usage rates", () => {
+    const result = buildCategoryUsageList([{
+      slotIndex: 1,
+      list: {
+        categoryName: "Main",
+        name: "Characters",
+        items: [" Alpha ", "Bravo", "Unused", ""],
+      },
+    }], [
+      { characterNames: ["Alpha", " Alpha ", "Bravo", "Other"] },
+      { characterNames: ["Alpha"] },
+    ]);
+
+    expect(result).toEqual([{
+      slotIndex: 1,
+      categoryName: "Main",
+      listName: "Characters",
+      entries: [
+        { itemName: "Alpha", count: 2, rate: 100 },
+        { itemName: "Bravo", count: 1, rate: 50 },
+      ],
+    }]);
   });
 });
