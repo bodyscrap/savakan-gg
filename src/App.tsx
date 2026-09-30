@@ -28,9 +28,6 @@ import { ItemListEditor } from "./ItemListEditor";
 import {
   buildCategoryUsageList,
   buildConfiguredCategorySlots,
-  resolveMatchSideAssignment,
-  resolveRandomMatchSideAssignment,
-  resolveSwappedMatchSideAssignment,
 } from "./eventManagement";
 import {
   MAX_CATEGORY_SLOTS,
@@ -48,6 +45,9 @@ import {
   useObsOverlay,
 } from "./useObsOverlay";
 import { usePhasePoolSelection } from "./usePhasePoolSelection";
+import { useMatchSideDraftActions } from "./useMatchSideDraftActions";
+import { buildMatchSideDrafts, resolveMatchSideDraftSavePlan } from "./matchSideDrafts";
+import { buildInitialMatchDialogDraft, resolveExistingMatchDialogDraft } from "./matchDialogDraft";
 import { BracketTab } from "./BracketTab";
 import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
 import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDialog";
@@ -297,12 +297,7 @@ function App() {
           : buildScoreDraftsFromSet(refreshedSet),
       );
       setDirectWinnerId(refreshedPending?.directWin ? refreshedPending.winnerId : null);
-      const refreshedSideDrafts: Record<string, PlaySide | ""> = {};
-      for (const slot of refreshedSet.slots) {
-        if (slot.entrantId) {
-          refreshedSideDrafts[slot.entrantId] = getSetSlotSide(refreshedSet.setId, slot.entrantId);
-        }
-      }
+      const refreshedSideDrafts = buildMatchSideDrafts(refreshedSet, getSetSlotSide);
       setActiveMatchSideDrafts(refreshedSideDrafts);
     },
   });
@@ -340,13 +335,10 @@ function App() {
           (item) => [`${item.setId}:${item.entrantId}`, item.playSide] as const,
         ),
       );
-      const sideDrafts: Record<string, PlaySide | ""> = {};
-      for (const slot of restoredSet.slots) {
-        if (!slot.entrantId) {
-          continue;
-        }
-        sideDrafts[slot.entrantId] = sideMap.get(`${restoredSet.setId}:${slot.entrantId}`) ?? "";
-      }
+      const sideDrafts = buildMatchSideDrafts(
+        restoredSet,
+        (setId, entrantId) => sideMap.get(`${setId}:${entrantId}`) ?? "",
+      );
       setActiveMatchSideDrafts(sideDrafts);
     },
     refreshSnapshotEvents: refreshLocalSnapshotEvents,
@@ -1586,49 +1578,33 @@ function App() {
     const inputSet = resolvedEventSetsById.get(set.setId) ?? set;
     setActiveMatchSetId(set.setId);
 
-    const sideDrafts: Record<string, PlaySide | ""> = {};
-    for (const slot of inputSet.slots) {
-      if (!slot.entrantId) {
-        continue;
-      }
-      sideDrafts[slot.entrantId] = getSetSlotSide(set.setId, slot.entrantId);
-    }
+    const sideDrafts = buildMatchSideDrafts(inputSet, getSetSlotSide);
     setActiveMatchSideDrafts(sideDrafts);
 
-    if (forcedDraftState) {
-      setDirectWinnerId(forcedDraftState.directWin ? forcedDraftState.winnerId : null);
-      setScoreDrafts(forcedDraftState.scoreDrafts);
-      saveSetDraft(set.setId, forcedDraftState);
-      return;
-    }
-
     const pending = pendingResultBySetId.get(set.setId);
-    if (pending) {
-      const draftState = buildDraftStateFromPending(inputSet, pending);
+    const existingDraft = resolveExistingMatchDialogDraft(
+      forcedDraftState,
+      pending ? buildDraftStateFromPending(inputSet, pending) : undefined,
+      setResultDrafts[set.setId],
+    );
+    if (existingDraft) {
+      const { draftState } = existingDraft;
       setDirectWinnerId(draftState.directWin ? draftState.winnerId : null);
       setScoreDrafts(draftState.scoreDrafts);
-      saveSetDraft(set.setId, draftState);
+      if (existingDraft.shouldPersist) {
+        saveSetDraft(set.setId, draftState);
+      }
       return;
     }
 
-    const cached = setResultDrafts[set.setId];
-    if (cached) {
-      setDirectWinnerId(cached.directWin ? cached.winnerId : null);
-      setScoreDrafts(cached.scoreDrafts);
-      return;
-    }
-
-    setDirectWinnerId(null);
     const snapshotDisplay = getSetScoresForDisplay(set);
-    const snapshotScoreDrafts = Object.keys(snapshotDisplay.scores).length > 0
-      ? snapshotDisplay.scores
-      : buildScoreDraftsFromSet(inputSet);
-    setScoreDrafts(snapshotScoreDrafts);
-    saveSetDraft(set.setId, {
-      winnerId: "",
-      scoreDrafts: snapshotScoreDrafts,
-      directWin: false,
-    });
+    const initialDraft = buildInitialMatchDialogDraft(
+      snapshotDisplay.scores,
+      buildScoreDraftsFromSet(inputSet),
+    );
+    setDirectWinnerId(null);
+    setScoreDrafts(initialDraft.scoreDrafts);
+    saveSetDraft(set.setId, initialDraft);
   }
 
   function requestResultConfirmation(match: SetSnapshot) {
@@ -1784,127 +1760,33 @@ function App() {
     }
   }
 
-  function swapMatchSides(setSnapshot: SetSnapshot) {
-    if (!isMatchupReady(setSnapshot)) {
-      return;
-    }
-
-    const slots = setSnapshot.slots.filter((slot) => slot.entrantId !== null);
-    if (slots.length < 2) {
-      return;
-    }
-
-    const upper = slots[0];
-    const lower = slots[1];
-    const upperId = upper.entrantId;
-    const lowerId = lower.entrantId;
-    if (!upperId || !lowerId) {
-      return;
-    }
-
-    const sideAssignment = resolveSwappedMatchSideAssignment(
-      activeMatchSideDrafts[upperId] ?? "",
-      activeMatchSideDrafts[lowerId] ?? "",
-      getSetSlotSide(setSnapshot.setId, upperId),
-      getSetSlotSide(setSnapshot.setId, lowerId),
-    );
-
-    setActiveMatchSideDrafts((current) => ({
-      ...current,
-      [upperId]: sideAssignment.upperSide,
-      [lowerId]: sideAssignment.lowerSide,
-    }));
-  }
-
-  async function randomizeMatchSides(setSnapshot: SetSnapshot) {
-    if (!isMatchupReady(setSnapshot)) {
-      return;
-    }
-
-    const slots = setSnapshot.slots.filter((slot) => slot.entrantId !== null);
-    if (slots.length < 2) {
-      return;
-    }
-
-    const upper = slots[0];
-    const lower = slots[1];
-    const upperId = upper.entrantId;
-    const lowerId = lower.entrantId;
-    if (!upperId || !lowerId) {
-      return;
-    }
-
-    const { upperSide, lowerSide } = resolveRandomMatchSideAssignment(Math.random());
-
-    const upperCurrent = activeMatchSideDrafts[upperId] ?? "";
-    const lowerCurrent = activeMatchSideDrafts[lowerId] ?? "";
-    const changed = upperCurrent !== upperSide || lowerCurrent !== lowerSide;
-
-    setActiveMatchSideDrafts((current) => ({
-      ...current,
-      [upperId]: upperSide,
-      [lowerId]: lowerSide,
-    }));
-
-    setMatchSideRandomNotice({
-      setId: setSnapshot.setId,
-      upperEntrantName: upper.entrantName,
-      lowerEntrantName: lower.entrantName,
-      upperSide,
-      lowerSide,
-      changed,
-      triggeredAt: Date.now(),
-    });
-  }
+  const { swapMatchSides, randomizeMatchSides } = useMatchSideDraftActions({
+    activeMatchSideDrafts,
+    setActiveMatchSideDrafts,
+    getSetSlotSide,
+    setMatchSideRandomNotice,
+  });
 
   async function saveMatchSidesIfNeeded(
     eventSnapshot: EventSnapshot,
     set: SetSnapshot,
     sideDrafts: Record<string, PlaySide | "">,
   ) {
-    if (!isMatchupReady(set)) {
+    const savePlan = resolveMatchSideDraftSavePlan(
+      set,
+      sideDrafts,
+      getSetSlotSide,
+      (setId, entrantId, slotIndex) => getSetSlotSideLabel(setId, entrantId, {
+        fallbackBySlotIndex: slotIndex,
+        matchupReady: true,
+      }),
+    );
+    if (!savePlan) {
       return;
     }
 
-    const slots = set.slots.filter((slot) => slot.entrantId !== null);
-    if (slots.length < 2) {
-      return;
-    }
-
-    const upperId = slots[0].entrantId;
-    const lowerId = slots[1].entrantId;
-    if (!upperId || !lowerId) {
-      return;
-    }
-
-    const currentUpper = getSetSlotSide(set.setId, upperId);
-    const currentLower = getSetSlotSide(set.setId, lowerId);
-    const fallbackUpper = getSetSlotSideLabel(set.setId, upperId, {
-      fallbackBySlotIndex: 0,
-      matchupReady: true,
-    });
-    const fallbackLower = getSetSlotSideLabel(set.setId, lowerId, {
-      fallbackBySlotIndex: 1,
-      matchupReady: true,
-    });
-    const toPlaySide = (value: string): PlaySide | "" => value === "1P" || value === "2P" ? value : "";
-    const draftUpper = sideDrafts[upperId] || currentUpper || toPlaySide(fallbackUpper);
-    const draftLower = sideDrafts[lowerId] || currentLower || toPlaySide(fallbackLower);
-
-    const sideAssignment = resolveMatchSideAssignment(draftUpper, draftLower);
-    if (!sideAssignment) {
-      return;
-    }
-
-    const { upperSide: resolvedUpper, lowerSide: resolvedLower } = sideAssignment;
-    const sideOverrides = {
-      [upperId]: resolvedUpper,
-      [lowerId]: resolvedLower,
-    };
-    const sidesChanged = currentUpper !== resolvedUpper || currentLower !== resolvedLower;
-
-    if (sidesChanged) {
-      await saveSetPlaySide(eventSnapshot, set, upperId, resolvedUpper, {
+    if (savePlan.sidesChanged) {
+      await saveSetPlaySide(eventSnapshot, set, savePlan.upperEntrantId, savePlan.sideOverrides[savePlan.upperEntrantId], {
         silent: true,
         manageBusy: false,
       });
@@ -1912,10 +1794,10 @@ function App() {
       const currentScores = set.slots
         .filter((slot): slot is SetSlot & { entrantId: string } => slot.entrantId !== null)
         .map((slot) => ({ entrantId: slot.entrantId, score: slot.score ?? 0 }));
-      await syncObsOverlayScoresForSet(set, currentScores, sideOverrides);
+      await syncObsOverlayScoresForSet(set, currentScores, savePlan.sideOverrides);
     }
 
-    return sideOverrides;
+    return savePlan.sideOverrides;
   }
 
   function addSelectedEntrantDraftSelection(slot: EventSettingCategorySlot, itemName: string) {

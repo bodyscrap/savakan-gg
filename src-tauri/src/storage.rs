@@ -5712,6 +5712,35 @@ fn is_round_robin_set(
         .is_some_and(|bracket_type| bracket_type.eq_ignore_ascii_case("ROUND_ROBIN"))
 }
 
+fn is_completed_round_robin_group(
+    snapshot: &TournamentSnapshot,
+    event_id: &str,
+    set_id: &str,
+) -> bool {
+    let Some(event) = snapshot.events.iter().find(|event| event.event_id == event_id) else {
+        return false;
+    };
+    let Some(target_set) = event.sets.iter().find(|set| set.set_id == set_id) else {
+        return false;
+    };
+    if !is_round_robin_set(snapshot, event_id, target_set) {
+        return false;
+    }
+
+    let group_key = phase_group_key(target_set);
+    let group_sets = event
+        .sets
+        .iter()
+        .filter(|set| phase_group_key(set) == group_key)
+        .collect::<Vec<_>>();
+    !group_sets.is_empty()
+        && group_sets.iter().all(|set| {
+            set.state == 3
+                && set.winner_id.is_some()
+                && set.slots.iter().all(|slot| slot.entrant_id.is_some())
+        })
+}
+
 fn apply_completed_round_robin_progression(
     snapshot: &mut TournamentSnapshot,
     event_id: &str,
@@ -5860,6 +5889,41 @@ fn apply_completed_round_robin_progression(
             })
     });
     let assignments = progressions.into_iter().zip(standings).collect::<Vec<_>>();
+    let target_group_ids = event
+        .phase_groups
+        .iter()
+        .filter(|group| {
+            group.phase_order == Some(target_phase_order)
+                && target_phase_id
+                    .as_deref()
+                    .is_none_or(|phase_id| group.phase_id.as_deref() == Some(phase_id))
+        })
+        .map(|group| group.phase_group_id.clone())
+        .collect::<HashSet<_>>();
+    let target_seeds = event
+        .phase_groups
+        .iter()
+        .filter(|group| target_group_ids.contains(&group.phase_group_id))
+        .flat_map(|group| group.seeds.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut entrant_names_by_id = HashMap::<String, String>::new();
+    for slot in event.sets.iter().flat_map(|set| set.slots.iter()) {
+        if let Some(entrant_id) = slot.entrant_id.as_ref() {
+            entrant_names_by_id
+                .entry(entrant_id.clone())
+                .or_insert_with(|| slot.entrant_name.clone());
+        }
+    }
+    let mut seed_group_indexes = HashMap::<String, Vec<usize>>::new();
+    for (group_index, group) in event.phase_groups.iter().enumerate() {
+        for seed in &group.seeds {
+            seed_group_indexes
+                .entry(seed.seed_id.clone())
+                .or_default()
+                .push(group_index);
+        }
+    }
     let Some(event) = snapshot
         .events
         .iter_mut()
@@ -5868,24 +5932,6 @@ fn apply_completed_round_robin_progression(
         return;
     };
     for (progression, entrant_id) in assignments {
-        let target_group_ids = event
-            .phase_groups
-            .iter()
-            .filter(|group| {
-                group.phase_order == Some(target_phase_order)
-                    && target_phase_id
-                        .as_deref()
-                        .is_none_or(|phase_id| group.phase_id.as_deref() == Some(phase_id))
-            })
-            .map(|group| group.phase_group_id.clone())
-            .collect::<HashSet<_>>();
-        let target_seeds = event
-            .phase_groups
-            .iter()
-            .filter(|group| target_group_ids.contains(&group.phase_group_id))
-            .flat_map(|group| group.seeds.iter())
-            .cloned()
-            .collect::<Vec<_>>();
         let target_seed = target_seeds
             .iter()
             .find(|seed| {
@@ -5910,28 +5956,21 @@ fn apply_completed_round_robin_progression(
         let Some(target_seed) = target_seed else {
             continue;
         };
-        let entrant_name = event
-            .sets
-            .iter()
-            .flat_map(|set| set.slots.iter())
-            .find(|slot| slot.entrant_id.as_deref() == Some(entrant_id.as_str()))
-            .map(|slot| slot.entrant_name.clone())
+        let entrant_name = entrant_names_by_id
+            .get(&entrant_id)
+            .cloned()
             .unwrap_or_else(|| "TBD".to_owned());
-        for group in &mut event.phase_groups {
-            if !group
-                .seeds
-                .iter()
-                .any(|seed| seed.seed_id == target_seed.seed_id)
-            {
-                continue;
-            }
-            if let Some(seed) = group
-                .seeds
-                .iter_mut()
-                .find(|seed| seed.seed_id == target_seed.seed_id)
-            {
-                seed.entrant_id = Some(entrant_id.clone());
-                seed.entrant_name = Some(entrant_name.clone());
+        if let Some(group_indexes) = seed_group_indexes.get(&target_seed.seed_id) {
+            for group_index in group_indexes {
+                if let Some(seed) = event.phase_groups.get_mut(*group_index).and_then(|group| {
+                    group
+                        .seeds
+                        .iter_mut()
+                        .find(|seed| seed.seed_id == target_seed.seed_id)
+                }) {
+                    seed.entrant_id = Some(entrant_id.clone());
+                    seed.entrant_name = Some(entrant_name.clone());
+                }
             }
         }
         hydrate_progression_entrant_to_seed_slots(event, &target_seed, &entrant_id, &entrant_name);
@@ -5943,6 +5982,73 @@ fn round_robin_game_score_for_tiebreak(score: f64) -> f64 {
         0.0
     } else {
         score
+    }
+}
+
+#[cfg(test)]
+mod round_robin_completion_tests {
+    use super::is_completed_round_robin_group;
+    use crate::models::TournamentSnapshot;
+
+    #[test]
+    fn round_robin_group_progression_waits_until_every_set_is_confirmed() {
+        let snapshot: TournamentSnapshot = serde_json::from_value(serde_json::json!({
+            "tournamentId": "tournament",
+            "slug": "tournament",
+            "name": "Tournament",
+            "updatedAt": "2026-10-01T00:00:00Z",
+            "events": [{
+                "eventId": "event",
+                "name": "Event",
+                "phaseGroups": [{
+                    "phaseGroupId": "round-robin",
+                    "bracketType": "ROUND_ROBIN",
+                    "setIds": ["set-a", "set-b"]
+                }],
+                "sets": [
+                    {
+                        "setId": "set-a",
+                        "phaseGroupId": "round-robin",
+                        "fullRoundText": "Round 1",
+                        "state": 3,
+                        "winnerId": "player-a",
+                        "slots": [
+                            { "entrantId": "player-a", "entrantName": "A", "score": 2 },
+                            { "entrantId": "player-b", "entrantName": "B", "score": 1 }
+                        ]
+                    },
+                    {
+                        "setId": "set-b",
+                        "phaseGroupId": "round-robin",
+                        "fullRoundText": "Round 1",
+                        "state": 2,
+                        "winnerId": null,
+                        "slots": [
+                            { "entrantId": "player-a", "entrantName": "A", "score": 1 },
+                            { "entrantId": "player-c", "entrantName": "C", "score": 0 }
+                        ]
+                    }
+                ]
+            }]
+        }))
+        .expect("round robin snapshot should deserialize");
+
+        assert!(!is_completed_round_robin_group(&snapshot, "event", "set-a"));
+
+        let mut completed_snapshot = snapshot.clone();
+        let set = completed_snapshot.events[0]
+            .sets
+            .iter_mut()
+            .find(|set| set.set_id == "set-b")
+            .expect("second round robin set should exist");
+        set.state = 3;
+        set.winner_id = Some("player-a".to_owned());
+
+        assert!(is_completed_round_robin_group(
+            &completed_snapshot,
+            "event",
+            "set-b",
+        ));
     }
 }
 
@@ -7462,7 +7568,12 @@ pub fn upsert_local_set_result(
             )
         });
     } else if should_advance || existing_set_state.0 {
-        rebuild_progression_from_completed_sets(&mut snapshot);
+        let should_rebuild_progression = !existing_set_state.1
+            || existing_set_state.0
+            || is_completed_round_robin_group(&snapshot, &applied_event_id, &input.set_id);
+        if should_rebuild_progression {
+            rebuild_progression_from_completed_sets(&mut snapshot);
+        }
     }
 
     save_local_meta(app, &applied_event_id, &local_meta)?;
