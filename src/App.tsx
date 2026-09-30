@@ -52,7 +52,12 @@ import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
 import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDialog";
 import type { EliminationBracketSectionView } from "./EliminationBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
-import { buildRoundRobinMatrixRows, roundRobinPairKey, type RoundRobinBoardData } from "./roundRobinMatrixDisplay";
+import {
+  buildRoundRobinMatrixRows,
+  roundRobinPairKey,
+  roundRobinPlaceholderId,
+  type RoundRobinBoardData,
+} from "./roundRobinMatrixDisplay";
 
 import { useBracketReport } from "./useBracketReport";
 import { useSetResultDrafts, type SetResultDraftState } from "./useSetResultDrafts";
@@ -171,19 +176,6 @@ function generateRandomSenderUserId(): string {
 
 function eventSettingKey(slug: string, eventId: string): string {
   return `${normalizeSlugForSettingKey(slug)}::${eventId}`;
-}
-
-function roundRobinPlaceholderId(slot: SetSlot, source?: SetEntrantSource | null): string {
-  const sourceIdentity = source?.typeId
-    ? `${source.typeId}:${source.condition?.trim().toLowerCase() || "source"}`
-    : null;
-  const identity = slot.seedId
-    || sourceIdentity
-    || slot.seedPlaceholderName?.trim()
-    || source?.placeholderName?.trim()
-    || slot.entrantName
-    || "unknown";
-  return `placeholder:${identity}`;
 }
 
 function App() {

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { RoundRobinStanding, SetSnapshot } from "./bracketProgression";
-import { buildRoundRobinMatrixRows, roundRobinPairKey, type RoundRobinBoardData } from "./roundRobinMatrixDisplay";
+import {
+  buildRoundRobinMatrixRows,
+  roundRobinPairKey,
+  roundRobinPlaceholderId,
+  type RoundRobinBoardData,
+} from "./roundRobinMatrixDisplay";
 
 function makeSet(): SetSnapshot {
   return {
@@ -82,5 +87,28 @@ describe("buildRoundRobinMatrixRows", () => {
       kind: "match",
       match: { className: expect.stringContaining("round-robin-match-loss") },
     });
+  });
+});
+
+describe("roundRobinPlaceholderId", () => {
+  it("uses seed, source, and placeholder identity in priority order", () => {
+    const slot = {
+      entrantId: null,
+      entrantName: "TBD",
+      seedId: "seed-7",
+      seedPlaceholderName: "Seed placeholder",
+    } as SetSnapshot["slots"][number];
+    const source = {
+      typeId: "set-3",
+      condition: " WINNER ",
+      conditionString: null,
+      placeholderName: "Source placeholder",
+    };
+
+    expect(roundRobinPlaceholderId(slot, source)).toBe("placeholder:seed-7");
+    expect(roundRobinPlaceholderId({ ...slot, seedId: null }, source)).toBe("placeholder:set-3:winner");
+    expect(roundRobinPlaceholderId({ ...slot, seedId: null }, null)).toBe("placeholder:Seed placeholder");
+    expect(roundRobinPlaceholderId({ ...slot, seedId: null, seedPlaceholderName: null }, null))
+      .toBe("placeholder:TBD");
   });
 });

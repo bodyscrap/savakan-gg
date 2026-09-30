@@ -1,5 +1,11 @@
 import type { LocalSetResultMeta } from "./useTournamentWorkspace";
-import type { RoundRobinStanding, RoundRobinTieBreakRule, SetSnapshot } from "./bracketProgression";
+import type {
+  RoundRobinStanding,
+  RoundRobinTieBreakRule,
+  SetEntrantSource,
+  SetSlot,
+  SetSnapshot,
+} from "./bracketProgression";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
 import {
   getPendingSetChangeClass,
@@ -30,6 +36,19 @@ export type RoundRobinBoardData = {
 
 export function roundRobinPairKey(leftEntrantId: string, rightEntrantId: string): string {
   return [leftEntrantId, rightEntrantId].sort((left, right) => left.localeCompare(right, "ja")).join("::");
+}
+
+export function roundRobinPlaceholderId(slot: SetSlot, source?: SetEntrantSource | null): string {
+  const sourceIdentity = source?.typeId
+    ? `${source.typeId}:${source.condition?.trim().toLowerCase() || "source"}`
+    : null;
+  const identity = slot.seedId
+    || sourceIdentity
+    || slot.seedPlaceholderName?.trim()
+    || source?.placeholderName?.trim()
+    || slot.entrantName
+    || "unknown";
+  return `placeholder:${identity}`;
 }
 
 type BuildRoundRobinMatrixRowsInput = {
