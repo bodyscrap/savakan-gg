@@ -43,6 +43,21 @@ export function normalizeObsSetWins(value: number): number {
   return Math.max(0, Math.trunc(value));
 }
 
+export function scoreToOverlayGameWins(value: number | null): number {
+  if (value === null || value < 0) {
+    return 0;
+  }
+  return normalizeObsSetWins(value);
+}
+
+export function abbreviateOverlayRoundText(value: string): string {
+  return value
+    .replace(/\bGrand\s+Finals?\s+Reset\b/gi, "GF Reset")
+    .replace(/\bGF\s+Reset\b/gi, "GF Reset")
+    .replace(/\bGrand\s+Finals?\b/gi, "GF")
+    .trim();
+}
+
 function normalizeObsFontScale(value: number): number {
   if (!Number.isFinite(value)) {
     return 1;

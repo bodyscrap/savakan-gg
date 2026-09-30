@@ -41,7 +41,11 @@ import { EventSelector, type LocalSnapshotEventListItem } from "./EventSelector"
 import { EventSetting, type EventSettingCategorySlot } from "./EventSetting";
 import { AppShell, type AppTab } from "./AppShell";
 import { OverlayControl } from "./OverlayControl";
-import { normalizeObsSetWins, useObsOverlay } from "./useObsOverlay";
+import {
+  abbreviateOverlayRoundText,
+  scoreToOverlayGameWins,
+  useObsOverlay,
+} from "./useObsOverlay";
 import { BracketTab } from "./BracketTab";
 import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
 import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDialog";
@@ -207,21 +211,6 @@ function roundRobinPlaceholderId(slot: SetSlot, source?: SetEntrantSource | null
     || slot.entrantName
     || "unknown";
   return `placeholder:${identity}`;
-}
-
-function scoreToOverlayGameWins(value: number | null): number {
-  if (value === null || value < 0) {
-    return 0;
-  }
-  return normalizeObsSetWins(value);
-}
-
-function abbreviateOverlayRoundText(value: string): string {
-  return value
-    .replace(/\bGrand\s+Finals?\s+Reset\b/gi, "GF Reset")
-    .replace(/\bGF\s+Reset\b/gi, "GF Reset")
-    .replace(/\bGrand\s+Finals?\b/gi, "GF")
-    .trim();
 }
 
 function isConfirmedSetResult(result: { confirmed?: boolean }): boolean {
