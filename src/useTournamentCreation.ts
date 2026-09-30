@@ -12,6 +12,7 @@ import {
   resolveCreatePreviewSelection,
 } from "./snapshotDisplay";
 import { listLocalSnapshotEvents, persistEventSnapshot, saveLastSlug } from "./tournamentWorkspaceRepository";
+import { toApiSlug, toEventApiSlug, toEventSlugInput } from "./slugUtils";
 
 const EVENT_SNAPSHOT_PROGRESS_EVENT = "event_snapshot_progress";
 
@@ -22,9 +23,6 @@ type UseTournamentCreationOptions = {
   setBusy: (busy: boolean) => void;
   setError: (error: string) => void;
   setMessage: (message: string) => void;
-  normalizeTournamentSlug: (slug: string) => string;
-  normalizeEventSlug: (tournamentSlug: string, eventSlug: string) => string;
-  eventSlugInputFromPreview: (eventSlug: string) => string;
   onSnapshotCreated: () => Promise<void>;
 };
 
@@ -35,9 +33,6 @@ export function useTournamentCreation({
   setBusy,
   setError,
   setMessage,
-  normalizeTournamentSlug,
-  normalizeEventSlug,
-  eventSlugInputFromPreview,
   onSnapshotCreated,
 }: UseTournamentCreationOptions) {
   const [token, setToken] = useState("");
@@ -94,8 +89,8 @@ export function useTournamentCreation({
       return;
     }
     setCreateSelectedEventId(selected?.eventId ?? "");
-    setCreateEventSlugInput(eventSlugInputFromPreview(selected?.eventSlug ?? ""));
-  }, [createPreview, createSelectedEventId, eventSlugInputFromPreview]);
+    setCreateEventSlugInput(toEventSlugInput(selected?.eventSlug ?? ""));
+  }, [createPreview, createSelectedEventId]);
 
   async function saveStartggToken() {
     await invoke("save_startgg_token", { token });
@@ -118,7 +113,7 @@ export function useTournamentCreation({
 
   function applyCreateEventSelection(event: TournamentEventPreviewItem | null, resetAlias = false) {
     setCreateSelectedEventId(event?.eventId ?? "");
-    setCreateEventSlugInput(eventSlugInputFromPreview(event?.eventSlug ?? ""));
+    setCreateEventSlugInput(toEventSlugInput(event?.eventSlug ?? ""));
     if (resetAlias) {
       setCreateEventAlias("");
     }
@@ -126,7 +121,7 @@ export function useTournamentCreation({
 
   async function loadCreatePreview(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
-    const apiSlug = normalizeTournamentSlug(slug);
+    const apiSlug = toApiSlug(slug);
     if (apiSlug === "") {
       setError("大会IDを入力してください。");
       return;
@@ -170,8 +165,8 @@ export function useTournamentCreation({
   );
 
   async function createEventSnapshotBySlug() {
-    const tournamentSlug = normalizeTournamentSlug(slug);
-    const eventSlug = normalizeEventSlug(slug, createEventSlugInput);
+    const tournamentSlug = toApiSlug(slug);
+    const eventSlug = toEventApiSlug(slug, createEventSlugInput);
     if (tournamentSlug === "" || eventSlug === "") {
       setError("大会IDとevent ID(またはevent slug)を入力してください。");
       return;
@@ -180,7 +175,7 @@ export function useTournamentCreation({
       try {
         const existingItems = await listLocalSnapshotEvents();
         const existing = existingItems.find((item) =>
-          normalizeTournamentSlug(item.slug) === tournamentSlug
+          toApiSlug(item.slug) === tournamentSlug
           && item.eventId === createSelectedEventId,
         );
         if (existing && !window.confirm(
