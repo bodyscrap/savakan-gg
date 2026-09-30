@@ -2295,7 +2295,7 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
     if should_rebuild_progression {
         rebuild_progression_from_completed_sets(&mut snapshot);
     }
-    cache_progression_snapshot(&snapshot, true);
+    cache_progression_snapshot(&snapshot, true, true);
     storage_perf_log(|| {
         format!(
             "load_snapshot slug={} events={} sets={} pending={} cache=miss elapsed_us={}",
@@ -2647,6 +2647,60 @@ fn known_resolved_entrant_names(event: &EventSnapshot) -> HashMap<String, String
     known_entrant_names
 }
 
+fn known_resolved_entrant_names_for_round_robin_set(
+    event: &EventSnapshot,
+    set_id: &str,
+) -> HashMap<String, String> {
+    let Some(target_set) = event.sets.iter().find(|set| set.set_id == set_id) else {
+        return HashMap::new();
+    };
+    let phase_group = event.phase_groups.iter().find(|group| {
+        if let Some(phase_group_id) = target_set.phase_group_id.as_deref() {
+            return group.phase_group_id == phase_group_id;
+        }
+        group.phase_order == target_set.phase_order
+            && normalize_group_key(group.display_identifier.as_ref())
+                == normalize_group_key(target_set.phase_group_display_identifier.as_ref())
+    });
+    let group_set_ids = phase_group
+        .map(|group| group.set_ids.iter().map(String::as_str).collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let target_group_key = phase_group_key(target_set);
+
+    let mut known_entrant_names = HashMap::new();
+    for slot in event
+        .sets
+        .iter()
+        .filter(|set| {
+            if group_set_ids.is_empty() {
+                phase_group_key(set) == target_group_key
+            } else {
+                group_set_ids.contains(set.set_id.as_str())
+            }
+        })
+        .flat_map(|set| set.slots.iter())
+    {
+        if let (Some(entrant_id), true) = (
+            slot.entrant_id.as_ref(),
+            is_resolved_entrant_name(&slot.entrant_name),
+        ) {
+            known_entrant_names.insert(entrant_id.clone(), slot.entrant_name.clone());
+        }
+    }
+    if let Some(phase_group) = phase_group {
+        for seed in &phase_group.seeds {
+            if let (Some(entrant_id), Some(entrant_name)) =
+                (seed.entrant_id.as_ref(), seed.entrant_name.as_ref())
+            {
+                if is_resolved_entrant_name(entrant_name) {
+                    known_entrant_names.insert(entrant_id.clone(), entrant_name.clone());
+                }
+            }
+        }
+    }
+    known_entrant_names
+}
+
 fn restore_missing_slot_entrants(
     set: &mut SetSnapshot,
     entrant_ids: impl IntoIterator<Item = String>,
@@ -2736,7 +2790,11 @@ fn cached_progression_snapshot(slug: &str) -> Option<TournamentSnapshot> {
         .map(|entry| entry.snapshot.clone())
 }
 
-fn cache_progression_snapshot(snapshot: &TournamentSnapshot, complete: bool) {
+fn cache_progression_snapshot(
+    snapshot: &TournamentSnapshot,
+    complete: bool,
+    rebuild_targets: bool,
+) {
     let slug_key = normalize_slug_for_storage(&snapshot.slug);
     let cache = PROGRESSION_CACHE.get_or_init(|| Mutex::new(None));
     let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
@@ -2789,15 +2847,17 @@ fn cache_progression_snapshot(snapshot: &TournamentSnapshot, complete: bool) {
             .map(|entry| std::mem::take(&mut entry.targets_by_event))
             .unwrap_or_default()
     };
-    for event in &snapshot.events {
-        event_set_ids.insert(
-            event.event_id.clone(),
-            event.sets.iter().map(|set| set.set_id.clone()).collect(),
-        );
-        targets_by_event.insert(
-            event.event_id.clone(),
-            build_progression_targets_by_source(snapshot, event),
-        );
+    if rebuild_targets {
+        for event in &snapshot.events {
+            event_set_ids.insert(
+                event.event_id.clone(),
+                event.sets.iter().map(|set| set.set_id.clone()).collect(),
+            );
+            targets_by_event.insert(
+                event.event_id.clone(),
+                build_progression_targets_by_source(snapshot, event),
+            );
+        }
     }
     *guard = Some(CachedProgressionSnapshot {
         slug_key,
@@ -6289,10 +6349,12 @@ fn round_robin_game_score_for_tiebreak(score: f64) -> f64 {
 #[cfg(test)]
 mod round_robin_completion_tests {
     use super::{
-        is_completed_round_robin_group, rebuild_event_progression_from_completed_sets,
-        rebuild_progression_from_completed_sets,
+        build_empty_meta, has_result_or_pending_for_set_ids, is_completed_round_robin_group,
+        known_resolved_entrant_names_for_round_robin_set,
+        rebuild_event_progression_from_completed_sets, rebuild_progression_from_completed_sets,
     };
-    use crate::models::TournamentSnapshot;
+    use crate::models::{EventSnapshot, TournamentSnapshot};
+    use std::collections::HashSet;
 
     #[test]
     fn round_robin_group_progression_waits_until_every_set_is_confirmed() {
@@ -6352,6 +6414,106 @@ mod round_robin_completion_tests {
             &completed_snapshot,
             "event",
             "set-b",
+        ));
+    }
+
+    #[test]
+    fn round_robin_name_resolution_stays_within_the_target_phase_group() {
+        let event: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Event",
+            "phaseGroups": [
+                {
+                    "phaseGroupId": "rr-group",
+                    "bracketType": "ROUND_ROBIN",
+                    "setIds": ["rr-set"],
+                    "seeds": [{
+                        "seedId": "rr-seed",
+                        "entrantId": "rr-seed-player",
+                        "entrantName": "RR Seed"
+                    }]
+                },
+                {
+                    "phaseGroupId": "other-group",
+                    "setIds": ["other-set"],
+                    "seeds": [{
+                        "seedId": "other-seed",
+                        "entrantId": "other-seed-player",
+                        "entrantName": "Other Seed"
+                    }]
+                }
+            ],
+            "sets": [
+                {
+                    "setId": "rr-set",
+                    "phaseGroupId": "rr-group",
+                    "fullRoundText": "Pool",
+                    "state": 2,
+                    "winnerId": null,
+                    "slots": [
+                        { "entrantId": "rr-player", "entrantName": "RR Player" },
+                        { "entrantId": null, "entrantName": "TBD" }
+                    ]
+                },
+                {
+                    "setId": "other-set",
+                    "phaseGroupId": "other-group",
+                    "fullRoundText": "Other Phase",
+                    "state": 2,
+                    "winnerId": null,
+                    "slots": [
+                        { "entrantId": "other-player", "entrantName": "Other Player" },
+                        { "entrantId": null, "entrantName": "TBD" }
+                    ]
+                }
+            ]
+        }))
+        .expect("event with two phase groups should deserialize");
+
+        let names = known_resolved_entrant_names_for_round_robin_set(&event, "rr-set");
+
+        assert_eq!(names.get("rr-player").map(String::as_str), Some("RR Player"));
+        assert_eq!(names.get("rr-seed-player").map(String::as_str), Some("RR Seed"));
+        assert!(!names.contains_key("other-player"));
+        assert!(!names.contains_key("other-seed-player"));
+    }
+
+    #[test]
+    fn unrelated_group_results_do_not_start_a_reset_cascade() {
+        let event: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Event",
+            "sets": [
+                {
+                    "setId": "target",
+                    "fullRoundText": "Round 1",
+                    "state": 2,
+                    "winnerId": null,
+                    "slots": [
+                        { "entrantId": "a", "entrantName": "A" },
+                        { "entrantId": "b", "entrantName": "B" }
+                    ]
+                },
+                {
+                    "setId": "unrelated",
+                    "fullRoundText": "Other Phase",
+                    "state": 3,
+                    "winnerId": "c",
+                    "slots": [
+                        { "entrantId": "c", "entrantName": "C", "score": 2 },
+                        { "entrantId": "d", "entrantName": "D", "score": 1 }
+                    ]
+                }
+            ]
+        }))
+        .expect("event with independent sets should deserialize");
+        let local_meta = build_empty_meta("tournament", "event");
+        let changed_targets = HashSet::from(["target".to_owned()]);
+
+        assert!(!has_result_or_pending_for_set_ids(
+            &event,
+            &local_meta,
+            &changed_targets
         ));
     }
 
@@ -6893,6 +7055,25 @@ fn collect_affected_set_ids_for_reset(
 struct AffectedSetResetTargets {
     set_ids: Vec<String>,
     seed_ids: HashSet<String>,
+}
+
+fn has_result_or_pending_for_set_ids(
+    event: &EventSnapshot,
+    local_meta: &TournamentLocalMeta,
+    set_ids: &HashSet<String>,
+) -> bool {
+    event.sets.iter().any(|set| {
+        set_ids.contains(&set.set_id)
+            && (set.winner_id.is_some() || set.slots.iter().any(|slot| slot.score.is_some()))
+    }) || local_meta.pending_set_results.iter().any(|result| {
+        result.event_id == event.event_id && set_ids.contains(&result.set_id)
+    }) || local_meta
+        .pending_grand_final_reset_results
+        .iter()
+        .any(|result| {
+            result.event_id == event.event_id
+                && set_ids.contains(&result.source_grand_final_set_id)
+        })
 }
 
 fn phase_group_for_set<'a>(
@@ -7777,7 +7958,13 @@ pub fn upsert_local_set_result(
             .events
             .iter()
             .find(|event| event.event_id == input.event_id)
-            .map(known_resolved_entrant_names)
+            .map(|event| {
+                if existing_set_state.1 {
+                    known_resolved_entrant_names_for_round_robin_set(event, &input.set_id)
+                } else {
+                    known_resolved_entrant_names(event)
+                }
+            })
             .unwrap_or_default();
         let (event_id, set_snapshot) = find_set_in_snapshot_mut(&mut snapshot, &input.set_id)
             .ok_or_else(|| {
@@ -7887,6 +8074,13 @@ pub fn upsert_local_set_result(
     local_meta.tournament_id = snapshot.tournament_id.clone();
     local_meta.updated_at = Utc::now();
 
+    let round_robin_group_completed = should_advance
+        && existing_set_state.1
+        && !existing_set_state.0
+        && is_completed_round_robin_group(&snapshot, &applied_event_id, &input.set_id);
+    let should_rebuild_progression =
+        !existing_set_state.1 || existing_set_state.0 || round_robin_group_completed;
+
     if should_advance && !existing_set_state.0 && !existing_set_state.1 {
         let progression_started_at = Instant::now();
         let cached_targets =
@@ -7913,43 +8107,33 @@ pub fn upsert_local_set_result(
         );
         if !changed_set_ids.is_empty() {
             let mut affected_set_ids = changed_set_ids;
-            let changed_set_ids = affected_set_ids.iter().cloned().collect::<Vec<_>>();
-            if let Some(event) = snapshot
-                .events
-                .iter()
-                .find(|event| event.event_id == applied_event_id)
-            {
-                for changed_set_id in changed_set_ids {
-                    if let Ok(dependent_targets) =
-                        collect_affected_reset_targets(&snapshot, event, &changed_set_id)
-                    {
-                        affected_set_ids.extend(dependent_targets.set_ids);
-                    }
-                }
-                affected_set_ids.remove(&input.set_id);
-            }
-
-            let affected_results_exist = snapshot
+            let direct_target_has_state = snapshot
                 .events
                 .iter()
                 .find(|event| event.event_id == applied_event_id)
                 .is_some_and(|event| {
-                    event.sets.iter().any(|set| {
-                        affected_set_ids.contains(&set.set_id)
-                            && (set.winner_id.is_some()
-                                || set.slots.iter().any(|slot| slot.score.is_some()))
-                    })
+                    has_result_or_pending_for_set_ids(event, &local_meta, &affected_set_ids)
                 });
-            let affected_pending_exists = local_meta
-                .pending_set_results
-                .iter()
-                .any(|result| affected_set_ids.contains(&result.set_id))
-                || local_meta
-                    .pending_grand_final_reset_results
-                    .iter()
-                    .any(|result| affected_set_ids.contains(&result.source_grand_final_set_id));
 
-            if affected_results_exist || affected_pending_exists {
+            if direct_target_has_state {
+                let changed_set_ids = affected_set_ids.iter().cloned().collect::<Vec<_>>();
+                if let Some(event) = snapshot
+                    .events
+                    .iter()
+                    .find(|event| event.event_id == applied_event_id)
+                {
+                    for changed_set_id in changed_set_ids {
+                        if let Ok(dependent_targets) =
+                            collect_affected_reset_targets(&snapshot, event, &changed_set_id)
+                        {
+                            affected_set_ids.extend(dependent_targets.set_ids);
+                        }
+                    }
+                    affected_set_ids.remove(&input.set_id);
+                }
+            }
+
+            if direct_target_has_state {
                 if let Some(event) = snapshot
                     .events
                     .iter_mut()
@@ -7984,17 +8168,16 @@ pub fn upsert_local_set_result(
                 progression_started_at.elapsed().as_micros()
             )
         });
-    } else if should_advance || existing_set_state.0 {
-        let should_rebuild_progression = !existing_set_state.1
-            || existing_set_state.0
-            || is_completed_round_robin_group(&snapshot, &applied_event_id, &input.set_id);
-        if should_rebuild_progression {
-            rebuild_event_progression_from_completed_sets(&mut snapshot, &applied_event_id);
-        }
+    } else if (should_advance || existing_set_state.0) && should_rebuild_progression {
+        rebuild_event_progression_from_completed_sets(&mut snapshot, &applied_event_id);
     }
 
     save_local_meta(app, &applied_event_id, &local_meta)?;
-    cache_progression_snapshot(&snapshot, false);
+    cache_progression_snapshot(
+        &snapshot,
+        false,
+        should_rebuild_progression,
+    );
     save_event_graph_snapshot(app, &snapshot, &applied_event_id)?;
 
     storage_perf_log(|| {
@@ -8133,7 +8316,7 @@ pub fn upsert_local_set_scores(
     local_meta.updated_at = Utc::now();
 
     save_local_meta(app, &applied_event_id, &local_meta)?;
-    cache_progression_snapshot(&snapshot, false);
+    cache_progression_snapshot(&snapshot, false, true);
     save_event_graph_snapshot(app, &snapshot, &applied_event_id)?;
 
     storage_perf_log(|| {
