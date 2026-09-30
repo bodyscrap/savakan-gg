@@ -26,7 +26,7 @@ import {
   resolveEventItemList,
   type ItemListConfig,
 } from "./itemList";
-import { EventSelector, localSnapshotAliasLabel, localSnapshotItemKey, type LocalSnapshotEventListItem } from "./EventSelector";
+import { EventSelector, type LocalSnapshotEventListItem } from "./EventSelector";
 import { EventSetting, type EventSettingCategorySlot } from "./EventSetting";
 import { AppShell, type AppTab } from "./AppShell";
 import { OverlayControl, type ObsOverlayState } from "./OverlayControl";
@@ -57,6 +57,16 @@ import {
   type PlaySide,
   type TournamentWorkspace,
 } from "./useTournamentWorkspace";
+import {
+  createEventSnapshot as persistEventSnapshot,
+  deleteLocalSnapshotEvent as removeSnapshotEvent,
+  listLocalSnapshotEvents,
+  loadLastSlug,
+  loadLastSnapshotSelection,
+  saveEventPhasePoolSelection,
+  saveLastSlug,
+  saveLastSnapshotSelection,
+} from "./tournamentWorkspaceRepository";
 import {
   buildBracketSections,
   buildBracketSectionsForView,
@@ -90,6 +100,16 @@ import {
   parsePhasePoolKey,
   type MessageScope,
 } from "./messageUtils";
+import {
+  filterCreatePreviewEvents,
+  filterLocalSnapshotEvents,
+  findCreatePreviewEvent,
+  findSelectedLocalSnapshotEvent,
+  findSnapshotEventByIdentity,
+  resolveCreatePreviewSelection,
+  resolveSelectedSnapshotName,
+  sameSnapshotEventKey,
+} from "./snapshotDisplay";
 import {
   calculateRoundRobinQualifyingCount,
   compareRoundRobinTieBreakRule,
@@ -477,16 +497,6 @@ function eventSettingKey(slug: string, eventId: string): string {
   return `${normalizeSlugForSettingKey(slug)}::${eventId}`;
 }
 
-function sameSnapshotEventKey(
-  leftSlug: string,
-  leftEventId: string,
-  rightSlug: string,
-  rightEventId: string,
-): boolean {
-  return toSlugInput(leftSlug) === toSlugInput(rightSlug)
-    && leftEventId.trim() === rightEventId.trim();
-}
-
 function roundRobinPairKey(leftEntrantId: string, rightEntrantId: string): string {
   return [leftEntrantId, rightEntrantId].sort((left, right) => left.localeCompare(right, "ja")).join("::");
 }
@@ -723,20 +733,6 @@ function toEventSlugInput(raw: string): string {
     : normalized;
 
   return eventPart.replace(/^event\//, "").replace(/^\/+|\/+$/g, "");
-}
-
-function resolveCreatePreviewSelection(
-  preview: TournamentPreview,
-  preferredEventId: string,
-): TournamentEventPreviewItem | null {
-  if (preferredEventId !== "") {
-    const matched = preview.events.find((event) => event.eventId === preferredEventId) ?? null;
-    if (matched) {
-      return matched;
-    }
-  }
-
-  return preview.events[0] ?? null;
 }
 
 function buildScoreDraftsFromSet(set: SetSnapshot): SetScoreDraft {
@@ -1280,14 +1276,7 @@ function App() {
           setToken(savedToken);
         }
 
-        const savedSelection = await invoke<{
-          slug: string;
-          eventId: string;
-          phaseName?: string | null;
-          phaseGroupName?: string | null;
-        } | null>(
-          "load_last_snapshot_selection",
-        );
+        const savedSelection = await loadLastSnapshotSelection();
         if (
           alive
           && savedSelection
@@ -1314,7 +1303,7 @@ function App() {
           setSlug(toSlugInput(savedSlug));
         }
 
-        const savedSlug = await invoke<string | null>("load_last_slug");
+        const savedSlug = await loadLastSlug();
         if (
           alive
           && startupSavedSlugRef.current === ""
@@ -1685,9 +1674,7 @@ function App() {
 
     let matched = null as LocalSnapshotEventListItem | null;
     if (savedEventId !== "") {
-      matched = localSnapshotEvents.find(
-        (item) => sameSnapshotEventKey(item.slug, item.eventId, savedSlug, savedEventId),
-      ) ?? null;
+      matched = findSnapshotEventByIdentity(localSnapshotEvents, savedSlug, savedEventId);
     }
 
     if (!matched) {
@@ -1707,7 +1694,7 @@ function App() {
       return;
     }
 
-    const selected = resolveCreatePreviewSelection(createPreview, createSelectedEventId);
+    const selected = resolveCreatePreviewSelection(createPreview.events, createSelectedEventId);
     if (selected?.eventId === createSelectedEventId) {
       return;
     }
@@ -1946,7 +1933,7 @@ function App() {
     }
 
     lastPersistedSnapshotSelectionRef.current = selectionKey;
-    void invoke("save_last_snapshot_selection", {
+    void saveLastSnapshotSelection({
       slug: snapshot.slug,
       eventId: selectedEvent.eventId,
       phaseName: selectedMessageScope?.phaseName ?? null,
@@ -1993,7 +1980,7 @@ function App() {
       };
     }));
 
-    void invoke("save_event_last_phase_pool_selection", {
+    void saveEventPhasePoolSelection({
       slug: snapshot.slug,
       eventId: selectedEvent.eventId,
       eventName: selectedEvent.name,
@@ -2058,33 +2045,17 @@ function App() {
   ]);
 
   const selectedSummaryName = useMemo(() => {
-    const alias = selectedEventMeta?.eventAlias?.trim();
-    if (alias) {
-      return alias;
-    }
-
-    if (selectedEvent?.name) {
-      return selectedEvent.name;
-    }
-
     const startupSelectedSlug = startupSavedSlugRef.current.trim();
     const startupSelectedEventId = startupSavedEventIdRef.current.trim();
     const currentSelectedSlug = snapshot?.slug?.trim() || startupSelectedSlug;
     const currentSelectedEventId = selectedEventId.trim() || startupSelectedEventId;
-    if (currentSelectedSlug !== "" && currentSelectedEventId !== "") {
-      const matched = localSnapshotEvents.find((item) =>
-        sameSnapshotEventKey(currentSelectedSlug, currentSelectedEventId, item.slug, item.eventId)
-      );
-      const matchedAlias = matched?.eventAlias?.trim();
-      if (matchedAlias) {
-        return matchedAlias;
-      }
-      if (matched?.eventName) {
-        return matched.eventName;
-      }
-    }
-
-    return snapshot?.name ?? "未選択";
+    return resolveSelectedSnapshotName(localSnapshotEvents, {
+      eventAlias: selectedEventMeta?.eventAlias,
+      eventName: selectedEvent?.name,
+      slug: currentSelectedSlug,
+      eventId: currentSelectedEventId,
+      fallbackName: snapshot?.name ?? "未選択",
+    });
   }, [localSnapshotEvents, selectedEventMeta, selectedEvent, selectedEventId, snapshot]);
 
   const selectedSidebarItem = useMemo(() => {
@@ -2097,42 +2068,15 @@ function App() {
       return null;
     }
 
-    return localSnapshotEvents.find((item) =>
-      sameSnapshotEventKey(currentSelectedSlug, currentSelectedEventId, item.slug, item.eventId)
-    ) ?? null;
+    return findSnapshotEventByIdentity(localSnapshotEvents, currentSelectedSlug, currentSelectedEventId);
   }, [localSnapshotEvents, selectedEvent, selectedEventId, snapshot]);
 
   const homeFilteredSnapshotEvents = useMemo(() => {
-    const normalizedQuery = homeSnapshotSearchInput.trim().toLocaleLowerCase();
-    if (normalizedQuery === "") {
-      return localSnapshotEvents;
-    }
-
-    return localSnapshotEvents.filter((item) => {
-      const alias = localSnapshotAliasLabel(item).toLocaleLowerCase();
-      const tournamentName = item.tournamentName.toLocaleLowerCase();
-      const eventName = item.eventName.toLocaleLowerCase();
-      const slugText = item.slug.toLocaleLowerCase();
-      return alias.includes(normalizedQuery)
-        || tournamentName.includes(normalizedQuery)
-        || eventName.includes(normalizedQuery)
-        || slugText.includes(normalizedQuery);
-    });
+    return filterLocalSnapshotEvents(localSnapshotEvents, homeSnapshotSearchInput);
   }, [homeSnapshotSearchInput, localSnapshotEvents]);
 
   const homeSelectedSnapshotItem = useMemo(() => {
-    if (homeFilteredSnapshotEvents.length === 0) {
-      return null;
-    }
-
-    if (homeSelectedSnapshotKey !== "") {
-      const matched = homeFilteredSnapshotEvents.find((item) => localSnapshotItemKey(item) === homeSelectedSnapshotKey);
-      if (matched) {
-        return matched;
-      }
-    }
-
-    return null;
+    return findSelectedLocalSnapshotEvent(homeFilteredSnapshotEvents, homeSelectedSnapshotKey);
   }, [homeFilteredSnapshotEvents, homeSelectedSnapshotKey]);
 
   useEffect(() => {
@@ -2143,11 +2087,8 @@ function App() {
       return;
     }
 
-    if (homeSelectedSnapshotKey !== "") {
-      const stillExists = localSnapshotEvents.some((item) => localSnapshotItemKey(item) === homeSelectedSnapshotKey);
-      if (stillExists) {
-        return;
-      }
+    if (homeSelectedSnapshotKey !== "" && !findSelectedLocalSnapshotEvent(localSnapshotEvents, homeSelectedSnapshotKey)) {
+      setHomeSelectedSnapshotKey("");
     }
 
   }, [homeSelectedSnapshotKey, localSnapshotEvents]);
@@ -5691,7 +5632,7 @@ function App() {
         slug: apiSlug,
       });
       setCreatePreview(preview);
-      const selected = resolveCreatePreviewSelection(preview, previousSelectedEventId);
+      const selected = resolveCreatePreviewSelection(preview.events, previousSelectedEventId);
       applyCreateEventSelection(selected);
       setMessage("tournamentのイベント一覧を取得しました。");
     } catch (err) {
@@ -5711,7 +5652,7 @@ function App() {
       return;
     }
 
-    const selected = createPreview.events.find((event) => event.eventId === nextEventId) ?? null;
+    const selected = findCreatePreviewEvent(createPreview.events, nextEventId);
     if (!selected || selected.eventId === createSelectedEventId) {
       return;
     }
@@ -5720,23 +5661,7 @@ function App() {
   }
 
   const createFilteredEvents = useMemo(() => {
-    if (!createPreview) {
-      return [] as TournamentEventPreviewItem[];
-    }
-
-    const normalizedQuery = createEventSearchInput.trim().toLocaleLowerCase();
-    if (normalizedQuery === "") {
-      return createPreview.events;
-    }
-
-    return createPreview.events.filter((event) => {
-      const eventName = event.eventName.toLocaleLowerCase();
-      const eventId = event.eventId.toLocaleLowerCase();
-      const eventSlug = (event.eventSlug ?? "").toLocaleLowerCase();
-      return eventName.includes(normalizedQuery)
-        || eventId.includes(normalizedQuery)
-        || eventSlug.includes(normalizedQuery);
-    });
+    return filterCreatePreviewEvents(createPreview?.events ?? [], createEventSearchInput);
   }, [createPreview, createEventSearchInput]);
 
   async function createEventSnapshotBySlug() {
@@ -5749,7 +5674,7 @@ function App() {
 
     if (createSelectedEventId !== "") {
       try {
-        const existingItems = await invoke<LocalSnapshotEventListItem[]>("list_local_snapshot_events");
+        const existingItems = await listLocalSnapshotEvents();
         const existing = existingItems.find((item) =>
           toApiSlug(item.slug) === tournamentSlug
           && item.eventId === createSelectedEventId,
@@ -5780,15 +5705,13 @@ function App() {
 
     try {
       await saveStartggToken();
-      await invoke("save_last_slug", { slug: tournamentSlug });
+      await saveLastSlug(tournamentSlug);
 
-      await invoke("create_event_snapshot_by_slug", {
-        input: {
-          tournamentSlug,
-          eventSlug,
-          eventAlias: createEventAlias.trim() === "" ? null : createEventAlias.trim(),
-          perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
-        },
+      await persistEventSnapshot({
+        tournamentSlug,
+        eventSlug,
+        eventAlias: createEventAlias.trim() === "" ? null : createEventAlias.trim(),
+        perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
       });
 
       setWorkspace(null);
@@ -5821,7 +5744,7 @@ function App() {
         startupSavedSlugRef.current = "";
         startupSavedEventIdRef.current = "";
         lastPersistedSnapshotSelectionRef.current = "";
-        await invoke("save_last_snapshot_selection", {
+        await saveLastSnapshotSelection({
           slug: "",
           eventId: "",
           phaseName: null,
@@ -5859,8 +5782,8 @@ function App() {
       : "";
 
     try {
-      await invoke("save_last_slug", { slug: item.slug });
-      await invoke("save_last_snapshot_selection", {
+      await saveLastSlug(item.slug);
+      await saveLastSnapshotSelection({
         slug: item.slug,
         eventId: item.eventId,
         phaseName: savedPhaseName === "" ? null : savedPhaseName,
@@ -5904,10 +5827,7 @@ function App() {
     setMessage("");
 
     try {
-      await invoke("delete_local_snapshot_event", {
-        slug: item.slug,
-        eventId: item.eventId,
-      });
+      await removeSnapshotEvent(item.slug, item.eventId);
 
       const removedSettingKey = eventSettingKey(item.slug, item.eventId);
       setEventMgmtSettings((current) => {

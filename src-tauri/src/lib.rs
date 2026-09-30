@@ -5798,8 +5798,11 @@ async fn refresh_workspace_after_remote_report(
     slug: &str,
     event_id: &str,
     per_page: u32,
+    reset_set_ids: &[String],
 ) -> Result<TournamentWorkspace, String> {
-    let snapshot = fetch_event_snapshot_with_fallback(app, token, slug, event_id, per_page).await?;
+    let mut snapshot =
+        fetch_event_snapshot_with_fallback(app, token, slug, event_id, per_page).await?;
+    storage::clear_reset_set_results_from_snapshot(&mut snapshot, event_id, reset_set_ids);
 
     let existing_alias = storage::load_local_meta(app, slug, event_id)?
         .events
@@ -5951,7 +5954,7 @@ async fn refresh_until_gf_reset_set_available(
     source_grand_final_set_id: &str,
 ) -> Result<(TournamentWorkspace, Option<SetSnapshot>), String> {
     let mut workspace =
-        match refresh_workspace_after_remote_report(app, token, slug, event_id, per_page).await {
+        match refresh_workspace_after_remote_report(app, token, slug, event_id, per_page, &[]).await {
             Ok(value) => value,
             Err(_) => storage::load_workspace(app, slug, event_id)?,
         };
@@ -5976,7 +5979,7 @@ async fn refresh_until_gf_reset_set_available(
 
         sleep(Duration::from_millis(GF_RESET_LINK_RETRY_DELAY_MS)).await;
         workspace =
-            match refresh_workspace_after_remote_report(app, token, slug, event_id, per_page).await
+            match refresh_workspace_after_remote_report(app, token, slug, event_id, per_page, &[]).await
             {
                 Ok(value) => value,
                 Err(_) => storage::load_workspace(app, slug, event_id)?,
@@ -6893,6 +6896,7 @@ async fn reset_set_result_cascade(
             &input.slug,
             &input.event_id,
             input.per_page.unwrap_or(200),
+            &reset_order,
         )
         .await?;
         let local_meta = storage::remove_pending_set_results(

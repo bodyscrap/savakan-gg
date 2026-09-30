@@ -1,29 +1,8 @@
-export type LocalSnapshotEventListItem = {
-  tournamentId: string;
-  slug: string;
-  tournamentName: string;
-  updatedAt: string;
-  eventId: string;
-  eventName: string;
-  eventAlias: string | null;
-  lastSelectedPhaseName?: string | null;
-  lastSelectedPhaseGroupName?: string | null;
-  setCount: number;
-};
+import type { LocalSnapshotEventListItem } from "./tournamentWorkspaceRepository";
+import { localSnapshotAliasLabel, localSnapshotItemKey } from "./snapshotDisplay";
 
-export function localSnapshotItemKey(item: LocalSnapshotEventListItem): string {
-  return `${item.slug}:${item.eventId}`;
-}
-
-export function localSnapshotAliasLabel(item: LocalSnapshotEventListItem): string {
-  if (item.eventAlias && item.eventAlias.trim() !== "") {
-    return item.eventAlias.trim();
-  }
-  if (item.eventName && item.eventName.trim() !== "") {
-    return item.eventName.trim();
-  }
-  return item.eventId;
-}
+export type { LocalSnapshotEventListItem } from "./tournamentWorkspaceRepository";
+export { localSnapshotAliasLabel, localSnapshotItemKey } from "./snapshotDisplay";
 
 type EventSelectorProps = {
   items: LocalSnapshotEventListItem[];

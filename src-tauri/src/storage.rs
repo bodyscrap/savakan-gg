@@ -4131,6 +4131,59 @@ mod grand_final_reset_order_tests {
     }
 
     #[test]
+    fn clear_reset_set_results_preserves_confirmed_matchup_and_clears_scores() {
+        let mut reset_set = make_set(
+            "reset-set",
+            "Round 1",
+            Some("entrant-1"),
+            &["entrant-1", "entrant-2"],
+        );
+        reset_set.slots[0].score = Some(2.0);
+        reset_set.slots[1].score = Some(1.0);
+        let mut unaffected_set = make_set(
+            "unaffected-set",
+            "Round 1",
+            Some("entrant-3"),
+            &["entrant-3", "entrant-4"],
+        );
+        unaffected_set.slots[0].score = Some(2.0);
+        unaffected_set.slots[1].score = Some(0.0);
+        let mut snapshot = TournamentSnapshot {
+            tournament_id: "tournament".to_owned(),
+            slug: "tournament/example".to_owned(),
+            name: "Tournament".to_owned(),
+            events: vec![EventSnapshot {
+                event_id: "event".to_owned(),
+                name: "Event".to_owned(),
+                phases: Vec::new(),
+                phase_groups: Vec::new(),
+                sets: vec![reset_set, unaffected_set],
+            }],
+            updated_at: Utc::now(),
+        };
+
+        clear_reset_set_results_from_snapshot(
+            &mut snapshot,
+            "event",
+            &["reset-set".to_owned()],
+        );
+
+        let event = &snapshot.events[0];
+        let reset_set = &event.sets[0];
+        assert_eq!(reset_set.winner_id, None);
+        assert_eq!(reset_set.state, 2);
+        assert_eq!(reset_set.slots[0].entrant_id.as_deref(), Some("entrant-1"));
+        assert_eq!(reset_set.slots[1].entrant_id.as_deref(), Some("entrant-2"));
+        assert_eq!(reset_set.slots[0].score, None);
+        assert_eq!(reset_set.slots[1].score, None);
+
+        let unaffected_set = &event.sets[1];
+        assert_eq!(unaffected_set.winner_id.as_deref(), Some("entrant-3"));
+        assert_eq!(unaffected_set.slots[0].score, Some(2.0));
+        assert_eq!(unaffected_set.slots[1].score, Some(0.0));
+    }
+
+    #[test]
     fn score_only_pending_is_not_treated_as_a_reset() {
         let mut set = make_set("set-1", "Round 1", None, &["entrant-1", "entrant-2"]);
         set.slots[0].score = Some(2.0);
@@ -6523,6 +6576,23 @@ fn clear_set_result_state(set: &mut crate::models::SetSnapshot) {
         slot.score = None;
     }
     set.state = if empty_slot_count(set) == 0 { 2 } else { 1 };
+}
+
+pub fn clear_reset_set_results_from_snapshot(
+    snapshot: &mut TournamentSnapshot,
+    event_id: &str,
+    set_ids: &[String],
+) {
+    let set_ids = set_ids.iter().collect::<HashSet<_>>();
+    let Some(event) = snapshot.events.iter_mut().find(|event| event.event_id == event_id) else {
+        return;
+    };
+
+    for set in &mut event.sets {
+        if set_ids.contains(&set.set_id) {
+            clear_set_result_state(set);
+        }
+    }
 }
 
 fn clear_invalid_entrants_from_set(

@@ -1,93 +1,32 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { EventSnapshot } from "./bracketDisplay";
-import type { LocalSnapshotEventListItem } from "./EventSelector";
-import type { ItemListConfig } from "./itemList";
+import {
+  listLocalSnapshotEvents,
+  loadTournamentWorkspace,
+  refreshTournamentSnapshot,
+  restoreTournamentGraph,
+  saveEventAlias as persistEventAlias,
+  saveEventManagementMeta as persistEventManagementMeta,
+  saveLocalPlayerMeta as persistLocalPlayerMeta,
+  saveLocalSetPlaySide as persistLocalSetPlaySide,
+  type EventManagementMeta,
+  type LocalSnapshotEventListItem,
+  type PlaySide,
+  type TournamentWorkspace,
+} from "./tournamentWorkspaceRepository";
 
-export type PlaySide = "1P" | "2P";
-
-export type EventManagementMeta = {
-  sideDecisionMethod: "upper_1p" | "upper_2p" | "random";
-  itemListSnapshots: ItemListConfig[];
-  categoryMinCounts?: number[];
-  categoryMaxCounts?: number[];
-  categoryAllowDuplicates?: boolean[];
-  totalMinCount?: number;
-  totalMaxCount?: number;
-};
-
-export type TournamentSnapshot = {
-  tournamentId: string;
-  slug: string;
-  name: string;
-  events: EventSnapshot[];
-  updatedAt: string;
-};
-
-export type EventEntrantMeta = {
-  entrantId: string;
-  entrantName: string;
-  playSide: PlaySide | null;
-  characterNames: string[];
-  authCode: string;
-  notes: string | null;
-};
-
-export type EventLocalMeta = {
-  eventId: string;
-  eventName: string;
-  eventAlias: string | null;
-  lastSelectedPhaseName?: string | null;
-  lastSelectedPhaseGroupName?: string | null;
-  eventManagement?: EventManagementMeta | null;
-  entrants: EventEntrantMeta[];
-};
-
-export type SetPlaySideMeta = {
-  setId: string;
-  entrantId: string;
-  playSide: PlaySide;
-};
-
-export type LocalSetResultMeta = {
-  eventId: string;
-  eventName: string;
-  setId: string;
-  winnerId: string;
-  scoreCsv: string;
-  directWin?: boolean;
-  confirmed?: boolean;
-  slotScores?: Array<{ entrantId: string; score: number }>;
-  recordedAt: string;
-};
-
-export type LocalGrandFinalResetResultMeta = {
-  eventId: string;
-  eventName: string;
-  sourceGrandFinalSetId: string;
-  winnerId: string;
-  scoreCsv: string;
-  directWin?: boolean;
-  confirmed?: boolean;
-  slotScores?: Array<{ entrantId: string; score: number }>;
-  recordedAt: string;
-};
-
-export type TournamentLocalMeta = {
-  tournamentId: string;
-  slug: string;
-  events: EventLocalMeta[];
-  setPlaySides?: SetPlaySideMeta[];
-  pendingSetResults: LocalSetResultMeta[];
-  pendingGrandFinalResetResults?: LocalGrandFinalResetResultMeta[];
-  updatedAt: string;
-};
-
-export type TournamentWorkspace = {
-  snapshot: TournamentSnapshot;
-  localMeta: TournamentLocalMeta;
-};
+export type {
+  EventEntrantMeta,
+  EventLocalMeta,
+  EventManagementMeta,
+  LocalGrandFinalResetResultMeta,
+  LocalSetResultMeta,
+  PlaySide,
+  SetPlaySideMeta,
+  TournamentLocalMeta,
+  TournamentSnapshot,
+  TournamentWorkspace,
+} from "./tournamentWorkspaceRepository";
 
 type WorkspaceUpdatedEvent = {
   slug: string;
@@ -131,7 +70,7 @@ export function useTournamentWorkspace({
   async function fetchLocalSnapshotEvents() {
     setLoadingLocalSnapshotEvents(true);
     try {
-      const items = await invoke<LocalSnapshotEventListItem[]>("list_local_snapshot_events");
+      const items = await listLocalSnapshotEvents();
       setLocalSnapshotEvents(items);
       return items;
     } finally {
@@ -140,35 +79,19 @@ export function useTournamentWorkspace({
   }
 
   async function loadWorkspace(targetSlug: string, eventId: string) {
-    const result = await invoke<TournamentWorkspace>("load_local_tournament_workspace", {
-      slug: targetSlug,
-      eventId,
-    });
+    const result = await loadTournamentWorkspace(targetSlug, eventId);
     setWorkspace(result);
     return result;
   }
 
   async function refreshRemoteSnapshot(targetSlug: string, eventId: string, perPage: number) {
-    const result = await invoke<TournamentWorkspace>("refresh_local_event_snapshot_from_remote", {
-      slug: targetSlug,
-      eventId,
-      perPage,
-    });
+    const result = await refreshTournamentSnapshot(targetSlug, eventId, perPage);
     setWorkspace(result);
     return result;
   }
 
   async function restoreWorkspaceGraph(targetSlug: string, eventId: string) {
-    const result = await invoke<TournamentWorkspace>("restore_local_event_graph_from_snapshot", {
-      slug: targetSlug,
-      eventId,
-    });
-    setWorkspace(result);
-    return result;
-  }
-
-  async function saveWorkspaceCommand(command: string, args: Record<string, unknown>) {
-    const result = await invoke<TournamentWorkspace>(command, args);
+    const result = await restoreTournamentGraph(targetSlug, eventId);
     setWorkspace(result);
     return result;
   }
@@ -179,15 +102,15 @@ export function useTournamentWorkspace({
     eventName: string;
     setting: EventManagementMeta;
   }) {
-    return saveWorkspaceCommand("save_event_management_meta", { input });
+    const result = await persistEventManagementMeta(input);
+    setWorkspace(result);
+    return result;
   }
 
   async function saveEventAlias(targetSlug: string, eventId: string, eventAlias: string | null) {
-    return saveWorkspaceCommand("save_event_alias", {
-      slug: targetSlug,
-      eventId,
-      eventAlias,
-    });
+    const result = await persistEventAlias(targetSlug, eventId, eventAlias);
+    setWorkspace(result);
+    return result;
   }
 
   async function saveLocalPlayerMeta(input: {
@@ -200,7 +123,9 @@ export function useTournamentWorkspace({
     characterNames: string[];
     notes: string | null;
   }) {
-    return saveWorkspaceCommand("save_local_player_meta", { input });
+    const result = await persistLocalPlayerMeta(input);
+    setWorkspace(result);
+    return result;
   }
 
   async function saveLocalSetPlaySide(input: {
@@ -211,7 +136,9 @@ export function useTournamentWorkspace({
     opponentEntrantId: string | null;
     playSide: PlaySide | null;
   }) {
-    return saveWorkspaceCommand("save_local_set_play_side", { input });
+    const result = await persistLocalSetPlaySide(input);
+    setWorkspace(result);
+    return result;
   }
 
   useEffect(() => {
@@ -232,10 +159,7 @@ export function useTournamentWorkspace({
     }
 
     let disposed = false;
-    void invoke<TournamentWorkspace>("load_local_tournament_workspace", {
-      slug: normalizedSlug,
-      eventId: selectedEventId,
-    })
+    void loadTournamentWorkspace(normalizedSlug, selectedEventId)
       .then((result) => {
         if (!disposed) {
           setWorkspace(result);
@@ -268,10 +192,7 @@ export function useTournamentWorkspace({
             return;
           }
 
-          void invoke<TournamentWorkspace>("load_local_tournament_workspace", {
-            slug: normalizeApiSlug(slug),
-            eventId: selectedEventId,
-          })
+          void loadTournamentWorkspace(normalizeApiSlug(slug), selectedEventId)
             .then((result) => {
               if (alive) {
                 setWorkspace(result);

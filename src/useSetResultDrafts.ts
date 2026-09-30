@@ -46,6 +46,8 @@ export function useSetResultDrafts() {
   }
 
   function clearAllDrafts() {
+    setScoreDrafts({});
+    setDirectWinnerId(null);
     setSetResultDrafts({});
     setInterimScoreDraftsBySetId({});
   }

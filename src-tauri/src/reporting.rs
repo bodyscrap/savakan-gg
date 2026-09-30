@@ -46,6 +46,7 @@ pub(crate) async fn report_confirmed_sets_from_bracket(
         .filter(|item| item.set_id.starts_with("preview_"))
         .map(|item| item.set_id.clone())
         .collect::<Vec<_>>();
+    let mut remotely_reset_set_ids = Vec::new();
     let mut removable_pending_gf_reset_source_set_ids = Vec::<String>::new();
     pending.retain(|item| !item.set_id.starts_with("preview_"));
     sort_pending_set_results_by_phase_order(&mut pending, local_event);
@@ -157,6 +158,7 @@ pub(crate) async fn report_confirmed_sets_from_bracket(
             if remote_is_already_reset {
                 skipped_count += 1;
                 removable_pending_set_ids.push(item.set_id.clone());
+                remotely_reset_set_ids.push(item.set_id.clone());
                 emit_bracket_report_progress(
                     &app,
                     "processing",
@@ -172,6 +174,7 @@ pub(crate) async fn report_confirmed_sets_from_bracket(
             startgg::reset_set_result(&token, &item.set_id).await?;
             reported_count += 1;
             removable_pending_set_ids.push(item.set_id.clone());
+            remotely_reset_set_ids.push(item.set_id.clone());
             emit_bracket_report_progress(
                 &app,
                 "processing",
@@ -526,10 +529,12 @@ pub(crate) async fn report_confirmed_sets_from_bracket(
         )?;
     }
 
-    let should_refresh_after_batch =
-        reported_count > 0 || !removable_pending_gf_reset_source_set_ids.is_empty();
+    let should_refresh_after_batch = reported_count > 0
+        || !remotely_reset_set_ids.is_empty()
+        || !removable_pending_gf_reset_source_set_ids.is_empty();
     let can_refresh_gf_reset_only = conflict.is_none()
         && normal_reported_count == 0
+        && remotely_reset_set_ids.is_empty()
         && resolved_remote_gf_reset_set_id.is_some();
 
     let workspace = if should_refresh_after_batch {
@@ -564,6 +569,7 @@ pub(crate) async fn report_confirmed_sets_from_bracket(
                         &input.slug,
                         &input.event_id,
                         per_page,
+                        &remotely_reset_set_ids,
                     )
                     .await
                     {
@@ -579,6 +585,7 @@ pub(crate) async fn report_confirmed_sets_from_bracket(
                 &input.slug,
                 &input.event_id,
                 per_page,
+                &remotely_reset_set_ids,
             )
             .await
             {
