@@ -29,7 +29,8 @@ import {
 import { EventSelector, type LocalSnapshotEventListItem } from "./EventSelector";
 import { EventSetting, type EventSettingCategorySlot } from "./EventSetting";
 import { AppShell, type AppTab } from "./AppShell";
-import { OverlayControl, type ObsOverlayState } from "./OverlayControl";
+import { OverlayControl } from "./OverlayControl";
+import { normalizeObsSetWins, useObsOverlay } from "./useObsOverlay";
 import { BracketTab } from "./BracketTab";
 import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
 import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDialog";
@@ -205,21 +206,7 @@ type SavePlayerMetaOptions = {
   manageBusy?: boolean;
 };
 
-type ObsOverlaySetInput = {
-  enabled: boolean;
-  setId: string;
-  eventName: string;
-  eventAlias: string;
-  roundText: string;
-  redPlayerName: string;
-  bluePlayerName: string;
-  redSetWins: number;
-  blueSetWins: number;
-  fontScale: number;
-};
-
 const EVENT_SNAPSHOT_PROGRESS_EVENT = "event_snapshot_progress";
-const OBS_OVERLAY_STATE_CHANGED_EVENT = "obs_overlay_state_changed";
 
 type PlayerMetaDraft = {
   playSide: PlaySide | "";
@@ -551,20 +538,6 @@ function parseDraftScoreValue(rawValue: string): number | null {
 
 function formatDraftScoreValue(value: number): string {
   return value < 0 ? "-" : String(Math.trunc(value));
-}
-
-function normalizeObsSetWins(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  return Math.max(0, Math.trunc(value));
-}
-
-function normalizeObsFontScale(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 1;
-  }
-  return Math.min(2, Math.max(0.6, value));
 }
 
 function scoreToOverlayGameWins(value: number | null): number {
@@ -982,13 +955,6 @@ function App() {
   const [disableLocalCommunication, setDisableLocalCommunication] = useState(false);
   const [sideDecisionMethod, setSideDecisionMethod] = useState<EventManagementSetting["sideDecisionMethod"]>("upper_1p");
   const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
-  const [obsOverlayState, setObsOverlayState] = useState<ObsOverlayState | null>(null);
-  const [obsOverlayBusy, setObsOverlayBusy] = useState(false);
-  const [testOverlayRedName, setTestOverlayRedName] = useState("テストプレイヤー1");
-  const [testOverlayBlueName, setTestOverlayBlueName] = useState("テストプレイヤー2");
-  const [testOverlayRedWins, setTestOverlayRedWins] = useState(0);
-  const [testOverlayBlueWins, setTestOverlayBlueWins] = useState(0);
-  const [isTestOverlayActive, setIsTestOverlayActive] = useState(false);
   const [mobileInputPortalBusy, setMobileInputPortalBusy] = useState(false);
   const [mobileInputPortalOpen, setMobileInputPortalOpen] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
@@ -1006,6 +972,30 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const {
+    obsOverlayState,
+    obsOverlayBusy,
+    testOverlayRedName,
+    setTestOverlayRedName,
+    testOverlayBlueName,
+    setTestOverlayBlueName,
+    testOverlayRedWins,
+    setTestOverlayRedWins,
+    testOverlayBlueWins,
+    setTestOverlayBlueWins,
+    isTestOverlayActive,
+    overlayPreviewWrapRef,
+    overlayPreviewIframeRef,
+    refreshObsOverlayState,
+    updateObsOverlayNameFitMode,
+    updateObsOverlayShowSetInfo,
+    updateObsOverlayShowEventAlias,
+    setObsOverlayFullyStopped,
+    toggleObsOverlaySet,
+    startTestOverlay,
+    stopTestOverlay,
+    handlePreviewLoad,
+  } = useObsOverlay({ activeTab, slug, selectedEventId, setError });
   const {
     workspace,
     setWorkspace,
@@ -1127,7 +1117,6 @@ function App() {
   const startupDirectRestoreTriedRef = useRef(false);
   const startupListRestoreRetryCountRef = useRef(0);
   const lastPersistedSnapshotSelectionRef = useRef("");
-  const overlaySelectionKeyRef = useRef<string | null>(null);
   const lastPersistedEventMetaPhasePoolRef = useRef("");
   const eventSettingHydratedKeyRef = useRef("");
   const suppressEventSettingAutosaveRef = useRef(false);
@@ -1142,9 +1131,6 @@ function App() {
   const dqCameraDetectorRef = useRef<{
     detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
   } | null>(null);
-  const overlayPreviewWrapRef = useRef<HTMLDivElement | null>(null);
-  const overlayPreviewIframeRef = useRef<HTMLIFrameElement | null>(null);
-
   useEffect(() => {
     setMobileInputPortalOpen(false);
     setMobileInputPortalDialog(null);
@@ -1223,34 +1209,6 @@ function App() {
             return;
           }
           setCreateSnapshotProgress(event.payload);
-        });
-        unlisten = off;
-      } catch {
-        // ignore listener setup failure in non-Tauri environments
-      }
-    })();
-
-    return () => {
-      alive = false;
-      if (unlisten) {
-        unlisten();
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    let unlisten: (() => void) | null = null;
-
-    void (async () => {
-      try {
-        const off = await listen<ObsOverlayState>(OBS_OVERLAY_STATE_CHANGED_EVENT, (event) => {
-          if (!alive) {
-            return;
-          }
-
-          setObsOverlayState(event.payload);
-          setIsTestOverlayActive(event.payload.active && event.payload.currentSetId === "__test__");
         });
         unlisten = off;
       } catch {
@@ -3125,142 +3083,6 @@ function App() {
   }, [matchSideRandomNotice]);
 
   useEffect(() => {
-    const selectionKey = `${toApiSlug(slug)}::${selectedEventId.trim()}`;
-    if (overlaySelectionKeyRef.current === null) {
-      overlaySelectionKeyRef.current = selectionKey;
-      return;
-    }
-
-    if (overlaySelectionKeyRef.current === selectionKey) {
-      return;
-    }
-
-    overlaySelectionKeyRef.current = selectionKey;
-    void invoke<ObsOverlayState>("set_obs_overlay_fully_stopped", {
-      fullyStopped: true,
-    })
-      .then((next) => {
-        setObsOverlayState(next);
-        setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
-      })
-      .catch((err) => {
-        setError(String(err));
-      });
-  }, [selectedEventId, slug]);
-
-  useEffect(() => {
-    if (activeTab !== "overlay") {
-      if (isTestOverlayActive) {
-        void stopTestOverlay();
-      }
-      return;
-    }
-
-    let alive = true;
-    const loadState = async () => {
-      try {
-        const next = await invoke<ObsOverlayState>("get_obs_overlay_state");
-        if (!alive) {
-          return;
-        }
-        setObsOverlayState(next);
-        setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
-      } catch (err) {
-        if (alive) {
-          setError(String(err));
-        }
-      }
-    };
-
-    void loadState();
-    const pollId = window.setInterval(() => {
-      void loadState();
-    }, 1200);
-
-    return () => {
-      alive = false;
-      window.clearInterval(pollId);
-    };
-  }, [activeTab, isTestOverlayActive]);
-
-  useEffect(() => {
-    if (!isTestOverlayActive || !obsOverlayState?.active || obsOverlayState.currentSetId !== "__test__") {
-      return;
-    }
-
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const next = await invoke<ObsOverlayState>("toggle_obs_overlay_set", {
-            input: {
-              enabled: true,
-              setId: "__test__",
-              eventName: "テスト配信",
-              eventAlias: "テスト大会",
-              roundText: "Preview / Pool A\nPreview\nSet T",
-              redPlayerName: testOverlayRedName.trim() || "テストプレイヤー1",
-              bluePlayerName: testOverlayBlueName.trim() || "テストプレイヤー2",
-              redSetWins: normalizeObsSetWins(testOverlayRedWins),
-              blueSetWins: normalizeObsSetWins(testOverlayBlueWins),
-              fontScale: normalizeObsFontScale(obsOverlayState.fontScale),
-            },
-          });
-          if (cancelled) {
-            return;
-          }
-          setObsOverlayState(next);
-          setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
-        } catch (err) {
-          if (!cancelled) {
-            setError(String(err));
-          }
-        }
-      })();
-    }, 140);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [
-    isTestOverlayActive,
-    obsOverlayState?.active,
-    obsOverlayState?.currentSetId,
-    obsOverlayState?.fontScale,
-    testOverlayRedName,
-    testOverlayBlueName,
-    testOverlayRedWins,
-    testOverlayBlueWins,
-  ]);
-
-  useEffect(() => {
-    if (activeTab !== "overlay") {
-      return;
-    }
-
-    const postPreviewSize = () => {
-      const width = overlayPreviewWrapRef.current?.clientWidth ?? 0;
-      const height = overlayPreviewWrapRef.current?.clientHeight ?? 0;
-      if (width <= 0 || height <= 0) {
-        return;
-      }
-      overlayPreviewIframeRef.current?.contentWindow?.postMessage({
-        type: "preview-container-width",
-        width,
-        height,
-      }, "*");
-    };
-
-    postPreviewSize();
-    const timer = window.setInterval(postPreviewSize, 500);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [activeTab, obsOverlayState?.overlayUrl]);
-
-  useEffect(() => {
     if (!selectedEvent) {
       standbyReadinessRef.current = {};
       return;
@@ -3839,126 +3661,6 @@ function App() {
     return Number.isInteger(value) ? String(value) : value.toFixed(1);
   }
 
-  async function updateObsOverlayNameFitMode(mode: "truncate" | "shrink") {
-    setObsOverlayBusy(true);
-    try {
-      const next = await invoke<ObsOverlayState>("set_obs_overlay_name_fit_mode", {
-        nameFitMode: mode,
-      });
-      setObsOverlayState(next);
-      setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setObsOverlayBusy(false);
-    }
-  }
-
-  async function updateObsOverlayShowSetInfo(showSetInfo: boolean) {
-    setObsOverlayBusy(true);
-    try {
-      const next = await invoke<ObsOverlayState>("set_obs_overlay_show_set_info", {
-        showSetInfo,
-      });
-      setObsOverlayState(next);
-      setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setObsOverlayBusy(false);
-    }
-  }
-
-  async function updateObsOverlayShowEventAlias(showEventAlias: boolean) {
-    setObsOverlayBusy(true);
-    try {
-      const next = await invoke<ObsOverlayState>("set_obs_overlay_show_event_alias", {
-        showEventAlias,
-      });
-      setObsOverlayState(next);
-      setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setObsOverlayBusy(false);
-    }
-  }
-
-  async function setObsOverlayFullyStopped(fullyStopped: boolean) {
-    setObsOverlayBusy(true);
-    try {
-      const next = await invoke<ObsOverlayState>("set_obs_overlay_fully_stopped", {
-        fullyStopped,
-      });
-      setObsOverlayState(next);
-      setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
-      setError("");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setObsOverlayBusy(false);
-    }
-  }
-
-  async function toggleObsOverlaySet(input: ObsOverlaySetInput) {
-    setObsOverlayBusy(true);
-    try {
-      const next = await invoke<ObsOverlayState>("toggle_obs_overlay_set", {
-        input: {
-          ...input,
-          redSetWins: normalizeObsSetWins(input.redSetWins),
-          blueSetWins: normalizeObsSetWins(input.blueSetWins),
-          fontScale: normalizeObsFontScale(input.fontScale),
-        },
-      });
-      setObsOverlayState(next);
-      setIsTestOverlayActive(next.active && next.currentSetId === "__test__");
-      setError("");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setObsOverlayBusy(false);
-    }
-  }
-
-  async function startTestOverlay() {
-    if (!obsOverlayState) {
-      return;
-    }
-
-    const buildInput = (fontScale: number): ObsOverlaySetInput => ({
-      enabled: true,
-      setId: "__test__",
-      eventName: "テスト配信",
-      eventAlias: "テスト大会",
-      roundText: "Preview / Pool A\nPreview\nSet T",
-      redPlayerName: testOverlayRedName.trim() || "テストプレイヤー1",
-      bluePlayerName: testOverlayBlueName.trim() || "テストプレイヤー2",
-      redSetWins: testOverlayRedWins,
-      blueSetWins: testOverlayBlueWins,
-      fontScale,
-    });
-
-    await toggleObsOverlaySet({
-      ...buildInput(obsOverlayState.fontScale),
-    });
-  }
-
-  async function stopTestOverlay() {
-    await toggleObsOverlaySet({
-      enabled: false,
-      setId: "__test__",
-      eventName: "",
-      eventAlias: "",
-      roundText: "",
-      redPlayerName: "",
-      bluePlayerName: "",
-      redSetWins: 0,
-      blueSetWins: 0,
-      fontScale: obsOverlayState?.fontScale ?? 1,
-    });
-  }
-
   async function toggleActiveMatchOverlay(set: SetSnapshot) {
     if (!isDisplayableSet(set, selectedEvent)) {
       return;
@@ -4086,9 +3788,7 @@ function App() {
     let currentOverlayState = obsOverlayState;
     if (!currentOverlayState?.active || currentOverlayState.currentSetId !== set.setId) {
       try {
-        const latest = await invoke<ObsOverlayState>("get_obs_overlay_state");
-        setObsOverlayState(latest);
-        setIsTestOverlayActive(latest.active && latest.currentSetId === "__test__");
+        const latest = await refreshObsOverlayState();
         currentOverlayState = latest;
       } catch {
         return;
@@ -7330,8 +7030,8 @@ function App() {
           onShowEventAliasChange={(checked) => void updateObsOverlayShowEventAlias(checked)}
           onTestRedNameChange={setTestOverlayRedName}
           onTestBlueNameChange={setTestOverlayBlueName}
-          onTestRedWinsChange={(value) => setTestOverlayRedWins(normalizeObsSetWins(value))}
-          onTestBlueWinsChange={(value) => setTestOverlayBlueWins(normalizeObsSetWins(value))}
+          onTestRedWinsChange={setTestOverlayRedWins}
+          onTestBlueWinsChange={setTestOverlayBlueWins}
           onToggleTestOverlay={() => {
             if (isTestOverlayActive) {
               void stopTestOverlay();
@@ -7340,18 +7040,7 @@ function App() {
             }
           }}
           onFullyStop={() => void setObsOverlayFullyStopped(true)}
-          onPreviewLoad={() => {
-            const width = overlayPreviewWrapRef.current?.clientWidth ?? 0;
-            const height = overlayPreviewWrapRef.current?.clientHeight ?? 0;
-            if (width <= 0 || height <= 0) {
-              return;
-            }
-            overlayPreviewIframeRef.current?.contentWindow?.postMessage({
-              type: "preview-container-width",
-              width,
-              height,
-            }, "*");
-          }}
+          onPreviewLoad={handlePreviewLoad}
         />
       )}
 
