@@ -3808,6 +3808,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             Err(_) => models::TournamentLocalMeta {
                 tournament_id: workspace.snapshot.tournament_id.clone(),
                 slug: slug.to_owned(),
+                tournament_name: workspace.snapshot.name.clone(),
                 events: Vec::new(),
                 set_play_sides: Vec::new(),
                 pending_set_results: Vec::new(),

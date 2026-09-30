@@ -240,6 +240,7 @@ fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
     TournamentLocalMeta {
         tournament_id: String::new(),
         slug: slug.to_owned(),
+        tournament_name: String::new(),
         events: vec![EventLocalMeta {
             event_id: event_id.to_owned(),
             event_name: String::new(),
@@ -287,7 +288,9 @@ fn append_set_confirmation_record(
 
 #[cfg(test)]
 mod set_confirmation_history_tests {
-    use super::{append_set_confirmation_record, build_empty_meta};
+    use super::{
+        append_set_confirmation_record, build_empty_meta, event_snapshot_file_matches,
+    };
     use chrono::{TimeZone, Utc};
 
     #[test]
@@ -350,6 +353,31 @@ mod set_confirmation_history_tests {
         .expect("older metadata without confirmation history should load");
 
         assert!(meta.set_confirmation_history.is_empty());
+        assert!(meta.tournament_name.is_empty());
+    }
+
+    #[test]
+    fn event_snapshot_file_filter_matches_only_the_requested_slug_and_event() {
+        let file_name = "123-tournament-slug-event-456-weekly-snapshot.json";
+
+        assert!(event_snapshot_file_matches(
+            file_name,
+            "tournament/slug",
+            "event-456",
+            "-snapshot.json"
+        ));
+        assert!(!event_snapshot_file_matches(
+            file_name,
+            "tournament/slug",
+            "event-789",
+            "-snapshot.json"
+        ));
+        assert!(!event_snapshot_file_matches(
+            file_name,
+            "another-tournament",
+            "event-456",
+            "-snapshot.json"
+        ));
     }
 }
 
@@ -596,6 +624,7 @@ fn merge_snapshot_into_meta(
 ) -> TournamentLocalMeta {
     meta.tournament_id = snapshot.tournament_id.clone();
     meta.slug = snapshot.slug.clone();
+    meta.tournament_name = snapshot.name.clone();
 
     let event = snapshot
         .events
@@ -2266,7 +2295,7 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
     if should_rebuild_progression {
         rebuild_progression_from_completed_sets(&mut snapshot);
     }
-    cache_progression_snapshot(&snapshot);
+    cache_progression_snapshot(&snapshot, true);
     storage_perf_log(|| {
         format!(
             "load_snapshot slug={} events={} sets={} pending={} cache=miss elapsed_us={}",
@@ -2282,6 +2311,181 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
         )
     });
     Ok(snapshot)
+}
+
+fn event_snapshot_file_matches(
+    file_name: &str,
+    slug: &str,
+    event_id: &str,
+    suffix: &str,
+) -> bool {
+    let event_fragment = format!(
+        "-{}-{}-",
+        sanitize_slug(&normalize_slug_for_storage(slug)),
+        sanitize_slug(event_id),
+    );
+    file_name.ends_with(suffix) && file_name.contains(&event_fragment)
+}
+
+fn load_event_snapshot_from_files(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+    pristine: bool,
+) -> Result<Option<TournamentSnapshot>, String> {
+    let started_at = Instant::now();
+    let dir = snapshots_dir(app)?;
+    let slug_key = normalize_slug_for_storage(slug);
+    let suffix = if pristine {
+        "-pristine.json"
+    } else {
+        "-snapshot.json"
+    };
+    let mut selected_snapshot: Option<TournamentSnapshot> = None;
+    let mut scanned_files = 0;
+    let mut matched_files = 0;
+    let mut read_bytes = 0;
+
+    for entry in fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))? {
+        let path = match entry {
+            Ok(value) => value.path(),
+            Err(_) => continue,
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        scanned_files += 1;
+        if !event_snapshot_file_matches(file_name, &slug_key, event_id, suffix) {
+            continue;
+        }
+        matched_files += 1;
+        let raw = match fs::read_to_string(&path) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        read_bytes += raw.len();
+        let mut snapshot = match serde_json::from_str::<TournamentSnapshot>(&raw) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if normalize_slug_for_storage(&snapshot.slug) != slug_key {
+            continue;
+        }
+        let Some(mut event) = snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == event_id)
+            .cloned()
+        else {
+            continue;
+        };
+        if !pristine {
+            apply_source_based_tbd_labels(&mut event);
+        }
+        snapshot.events = vec![event];
+        if selected_snapshot
+            .as_ref()
+            .is_none_or(|selected| snapshot.updated_at >= selected.updated_at)
+        {
+            selected_snapshot = Some(snapshot);
+        }
+    }
+
+    storage_perf_log(|| {
+        format!(
+            "load_event_snapshot slug={} event={} pristine={} scanned_files={} matched_files={} read_bytes={} elapsed_us={}",
+            slug_key,
+            event_id,
+            pristine,
+            scanned_files,
+            matched_files,
+            read_bytes,
+            started_at.elapsed().as_micros()
+        )
+    });
+    Ok(selected_snapshot)
+}
+
+fn load_event_graph_snapshot_from_files(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<Option<TournamentSnapshot>, String> {
+    let dir = snapshots_dir(app)?;
+    let slug_key = normalize_slug_for_storage(slug);
+    let mut selected_snapshot: Option<TournamentSnapshot> = None;
+    for entry in fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))? {
+        let path = match entry {
+            Ok(value) => value.path(),
+            Err(_) => continue,
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !event_snapshot_file_matches(file_name, &slug_key, event_id, "-graph.json") {
+            continue;
+        }
+        let raw = match fs::read_to_string(path) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let graph = match serde_json::from_str::<BracketGraphSnapshot>(&raw) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if normalize_slug_for_storage(&graph.slug) != slug_key || graph.event.event_id != event_id {
+            continue;
+        }
+        let snapshot = TournamentSnapshot {
+            tournament_id: graph.tournament_id,
+            slug: graph.slug,
+            name: graph.tournament_name,
+            events: vec![graph.event],
+            updated_at: graph.updated_at,
+        };
+        if selected_snapshot
+            .as_ref()
+            .is_none_or(|selected| snapshot.updated_at >= selected.updated_at)
+        {
+            selected_snapshot = Some(snapshot);
+        }
+    }
+    Ok(selected_snapshot)
+}
+
+fn load_event_snapshot(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentSnapshot, String> {
+    let (mut snapshot, should_rebuild_progression) =
+        if let Some(snapshot) = load_event_snapshot_from_files(app, slug, event_id, false)? {
+            let mut snapshot = snapshot;
+            let has_pending_results = restore_pending_local_results(app, slug, &mut snapshot)?;
+            (snapshot, has_pending_results)
+        } else if let Some(mut snapshot) = load_event_graph_snapshot_from_files(app, slug, event_id)? {
+            restore_pending_local_results(app, slug, &mut snapshot)?;
+            (snapshot, true)
+        } else {
+            return Err(format!(
+                "指定イベントのローカルsnapshotが見つかりません: {event_id}"
+            ));
+        };
+
+    if should_rebuild_progression {
+        rebuild_progression_from_completed_sets(&mut snapshot);
+    }
+    Ok(snapshot)
+}
+
+fn load_pristine_event_snapshot(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentSnapshot, String> {
+    load_event_snapshot_from_files(app, slug, event_id, true)?.ok_or_else(|| {
+        format!("原本スナップショット読込に失敗しました: event {event_id} が見つかりません。")
+    })
 }
 
 fn load_snapshot_without_progression_rebuild(
@@ -2517,6 +2721,7 @@ struct CachedProgressionSnapshot {
     snapshot: TournamentSnapshot,
     event_set_ids: HashMap<String, Vec<String>>,
     targets_by_event: ProgressionTargetsByEvent,
+    complete: bool,
 }
 
 static PROGRESSION_CACHE: OnceLock<Mutex<Option<CachedProgressionSnapshot>>> = OnceLock::new();
@@ -2527,47 +2732,79 @@ fn cached_progression_snapshot(slug: &str) -> Option<TournamentSnapshot> {
     let guard = cache.lock().unwrap_or_else(|error| error.into_inner());
     guard
         .as_ref()
-        .filter(|entry| entry.slug_key == slug_key)
+        .filter(|entry| entry.slug_key == slug_key && entry.complete)
         .map(|entry| entry.snapshot.clone())
 }
 
-fn cache_progression_snapshot(snapshot: &TournamentSnapshot) {
+fn cache_progression_snapshot(snapshot: &TournamentSnapshot, complete: bool) {
     let slug_key = normalize_slug_for_storage(&snapshot.slug);
-    let event_set_ids = snapshot
-        .events
-        .iter()
-        .map(|event| {
-            (
-                event.event_id.clone(),
-                event.sets.iter().map(|set| set.set_id.clone()).collect(),
-            )
-        })
-        .collect::<HashMap<_, _>>();
     let cache = PROGRESSION_CACHE.get_or_init(|| Mutex::new(None));
     let mut guard = cache.lock().unwrap_or_else(|error| error.into_inner());
 
-    if let Some(entry) = guard.as_mut().filter(|entry| entry.slug_key == slug_key) {
-        if entry.event_set_ids == event_set_ids {
-            entry.snapshot = snapshot.clone();
-            return;
+    let mut cached = guard.take().filter(|entry| entry.slug_key == slug_key);
+    let was_complete = cached.as_ref().is_some_and(|entry| entry.complete);
+    let mut merged_snapshot = if complete {
+        snapshot.clone()
+    } else {
+        cached
+            .as_ref()
+            .map(|entry| entry.snapshot.clone())
+            .unwrap_or_else(|| TournamentSnapshot {
+            tournament_id: snapshot.tournament_id.clone(),
+            slug: snapshot.slug.clone(),
+            name: snapshot.name.clone(),
+            events: Vec::new(),
+            updated_at: snapshot.updated_at,
+            })
+    };
+    for event in &snapshot.events {
+        if let Some(existing) = merged_snapshot
+            .events
+            .iter_mut()
+            .find(|existing| existing.event_id == event.event_id)
+        {
+            *existing = event.clone();
+        } else {
+            merged_snapshot.events.push(event.clone());
         }
     }
+    merged_snapshot.tournament_id = snapshot.tournament_id.clone();
+    merged_snapshot.slug = snapshot.slug.clone();
+    merged_snapshot.name = snapshot.name.clone();
+    merged_snapshot.updated_at = snapshot.updated_at;
 
-    let targets_by_event = snapshot
-        .events
-        .iter()
-        .map(|event| {
-            (
-                event.event_id.clone(),
-                build_progression_targets_by_source(snapshot, event),
-            )
-        })
-        .collect();
+    let mut event_set_ids = if complete {
+        HashMap::new()
+    } else {
+        cached
+            .as_mut()
+            .map(|entry| std::mem::take(&mut entry.event_set_ids))
+            .unwrap_or_default()
+    };
+    let mut targets_by_event = if complete {
+        HashMap::new()
+    } else {
+        cached
+            .as_mut()
+            .map(|entry| std::mem::take(&mut entry.targets_by_event))
+            .unwrap_or_default()
+    };
+    for event in &snapshot.events {
+        event_set_ids.insert(
+            event.event_id.clone(),
+            event.sets.iter().map(|set| set.set_id.clone()).collect(),
+        );
+        targets_by_event.insert(
+            event.event_id.clone(),
+            build_progression_targets_by_source(snapshot, event),
+        );
+    }
     *guard = Some(CachedProgressionSnapshot {
         slug_key,
-        snapshot: snapshot.clone(),
+        snapshot: merged_snapshot,
         event_set_ids,
         targets_by_event,
+        complete: complete || was_complete,
     });
 }
 
@@ -2936,6 +3173,27 @@ fn rebuild_progression_from_completed_sets(snapshot: &mut TournamentSnapshot) {
     });
 }
 
+fn rebuild_event_progression_from_completed_sets(snapshot: &mut TournamentSnapshot, event_id: &str) {
+    let Some(event_index) = snapshot
+        .events
+        .iter()
+        .position(|event| event.event_id == event_id)
+    else {
+        return;
+    };
+    let mut event_snapshot = TournamentSnapshot {
+        tournament_id: snapshot.tournament_id.clone(),
+        slug: snapshot.slug.clone(),
+        name: snapshot.name.clone(),
+        events: vec![snapshot.events[event_index].clone()],
+        updated_at: snapshot.updated_at.clone(),
+    };
+    rebuild_progression_from_completed_sets(&mut event_snapshot);
+    if let Some(event) = event_snapshot.events.pop() {
+        snapshot.events[event_index] = event;
+    }
+}
+
 fn normalize_completed_source_slots(event: &mut EventSnapshot) {
     let is_round_robin_set = |set: &crate::models::SetSnapshot| {
         event.phase_groups.iter().any(|group| {
@@ -3264,21 +3522,13 @@ fn apply_seed_sources_to_set_slots(event: &mut EventSnapshot) -> HashSet<String>
     invalidated_result_set_ids
 }
 
-fn load_pristine_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, String> {
-    if let Some(snapshot) = merge_event_snapshot_files(load_event_snapshot_files(app, slug, true)?)
-    {
-        return Ok(snapshot);
-    }
-    Err("原本スナップショット読込に失敗しました: 保存済みデータが見つかりません。".to_owned())
-}
-
 pub fn list_local_snapshot_events(
     app: &AppHandle,
 ) -> Result<Vec<LocalSnapshotEventListItem>, String> {
     let dir = snapshots_dir(app)?;
     let entries = fs::read_dir(&dir)
         .map_err(|e| format!("保存済みスナップショット一覧の取得に失敗しました: {e}"))?;
-    let mut items = Vec::new();
+    let mut items = HashMap::<(String, String), LocalSnapshotEventListItem>::new();
 
     for entry in entries {
         let entry = match entry {
@@ -3294,7 +3544,7 @@ pub fn list_local_snapshot_events(
             continue;
         };
 
-        if !file_name.ends_with("-graph.json") {
+        if !file_name.ends_with("-meta.json") {
             continue;
         }
 
@@ -3303,51 +3553,102 @@ pub fn list_local_snapshot_events(
             Err(_) => continue,
         };
 
-        let graph = match serde_json::from_str::<BracketGraphSnapshot>(&raw) {
+        let meta = match serde_json::from_str::<TournamentLocalMeta>(&raw) {
             Ok(value) => value,
             Err(_) => continue,
         };
-        let snapshot = TournamentSnapshot {
-            tournament_id: graph.tournament_id,
-            slug: graph.slug,
-            name: graph.tournament_name,
-            events: vec![graph.event],
-            updated_at: graph.updated_at,
-        };
-
-        for event in snapshot.events {
-            let (event_alias, last_selected_phase_name, last_selected_phase_group_name) =
-                load_local_meta(app, &snapshot.slug, &event.event_id)
-                    .ok()
-                    .and_then(|meta| {
-                        meta.events
-                            .into_iter()
-                            .find(|item| item.event_id == event.event_id)
-                            .map(|item| {
-                                (
-                                    item.event_alias,
-                                    item.last_selected_phase_name,
-                                    item.last_selected_phase_group_name,
-                                )
-                            })
-                    })
-                    .unwrap_or((None, None, None));
-
-            items.push(LocalSnapshotEventListItem {
-                tournament_id: snapshot.tournament_id.clone(),
-                slug: snapshot.slug.clone(),
-                tournament_name: snapshot.name.clone(),
-                updated_at: snapshot.updated_at,
-                event_id: event.event_id,
-                event_name: event.name,
-                event_alias,
-                last_selected_phase_name,
-                last_selected_phase_group_name,
-                set_count: event.sets.len(),
-            });
+        for event in &meta.events {
+            let item = LocalSnapshotEventListItem {
+                tournament_id: meta.tournament_id.clone(),
+                slug: meta.slug.clone(),
+                tournament_name: if meta.tournament_name.trim().is_empty() {
+                    meta.slug.clone()
+                } else {
+                    meta.tournament_name.clone()
+                },
+                updated_at: meta.updated_at,
+                event_id: event.event_id.clone(),
+                event_name: event.event_name.clone(),
+                event_alias: event.event_alias.clone(),
+                last_selected_phase_name: event.last_selected_phase_name.clone(),
+                last_selected_phase_group_name: event.last_selected_phase_group_name.clone(),
+                set_count: 0,
+            };
+            let key = (
+                normalize_slug_for_storage(&item.slug),
+                item.event_id.clone(),
+            );
+            match items.entry(key) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if item.updated_at > entry.get().updated_at {
+                        entry.insert(item);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(item);
+                }
+            }
         }
     }
 
+    let needs_graph_fallback = items.is_empty()
+        || items
+            .values()
+            .any(|item| item.tournament_name == item.slug);
+    if needs_graph_fallback {
+        for entry in fs::read_dir(&dir)
+            .map_err(|e| format!("保存済みスナップショット一覧の取得に失敗しました: {e}"))?
+        {
+            let entry = match entry {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !file_name.ends_with("-graph.json") {
+                continue;
+            }
+            let raw = match fs::read_to_string(&path) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let graph = match serde_json::from_str::<BracketGraphSnapshot>(&raw) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let key = (
+                normalize_slug_for_storage(&graph.slug),
+                graph.event.event_id.clone(),
+            );
+            match items.entry(key) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let item = entry.get_mut();
+                    if item.tournament_name == item.slug {
+                        item.tournament_name = graph.tournament_name;
+                    }
+                    item.set_count = graph.event.sets.len();
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(LocalSnapshotEventListItem {
+                        tournament_id: graph.tournament_id,
+                        slug: graph.slug,
+                        tournament_name: graph.tournament_name,
+                        updated_at: graph.updated_at,
+                        event_id: graph.event.event_id,
+                        event_name: graph.event.name,
+                        event_alias: None,
+                        last_selected_phase_name: None,
+                        last_selected_phase_group_name: None,
+                        set_count: graph.event.sets.len(),
+                    });
+                }
+            }
+        }
+    }
+
+    let mut items = items.into_values().collect::<Vec<_>>();
     items.sort_by(|left, right| {
         right
             .updated_at
@@ -5987,7 +6288,10 @@ fn round_robin_game_score_for_tiebreak(score: f64) -> f64 {
 
 #[cfg(test)]
 mod round_robin_completion_tests {
-    use super::is_completed_round_robin_group;
+    use super::{
+        is_completed_round_robin_group, rebuild_event_progression_from_completed_sets,
+        rebuild_progression_from_completed_sets,
+    };
     use crate::models::TournamentSnapshot;
 
     #[test]
@@ -6049,6 +6353,118 @@ mod round_robin_completion_tests {
             "event",
             "set-b",
         ));
+    }
+
+    #[test]
+    fn event_scoped_rebuild_matches_global_rebuild_without_mutating_other_events() {
+        let snapshot: TournamentSnapshot = serde_json::from_value(serde_json::json!({
+            "tournamentId": "tournament",
+            "slug": "tournament",
+            "name": "Tournament",
+            "updatedAt": "2026-10-01T00:00:00Z",
+            "events": [
+                {
+                    "eventId": "rr-event",
+                    "name": "Round Robin Event",
+                    "phases": [
+                        { "phaseId": "pool", "phaseOrder": 1 },
+                        { "phaseId": "finals", "phaseOrder": 2 }
+                    ],
+                    "phaseGroups": [
+                        {
+                            "phaseGroupId": "rr-group",
+                            "phaseId": "pool",
+                            "phaseOrder": 1,
+                            "displayIdentifier": "1",
+                            "bracketType": "ROUND_ROBIN",
+                            "setIds": ["rr-set"],
+                            "progressionsOut": [{
+                                "progressionId": "top-progression",
+                                "originPhaseId": "pool",
+                                "originPhaseOrder": 1,
+                                "originPhaseGroupId": "rr-group",
+                                "originPlacement": 1
+                            }],
+                            "seeds": [
+                                { "seedId": "rr-seed-a", "seedNum": 1, "entrantId": "a", "entrantName": "A" },
+                                { "seedId": "rr-seed-b", "seedNum": 2, "entrantId": "b", "entrantName": "B" }
+                            ]
+                        },
+                        {
+                            "phaseGroupId": "finals-group",
+                            "phaseId": "finals",
+                            "phaseOrder": 2,
+                            "displayIdentifier": "1",
+                            "setIds": ["final-set"],
+                            "seeds": [
+                                { "seedId": "final-seed", "progressionId": "top-progression" }
+                            ]
+                        }
+                    ],
+                    "sets": [
+                        {
+                            "setId": "rr-set",
+                            "phaseGroupId": "rr-group",
+                            "phaseOrder": 1,
+                            "fullRoundText": "Round 1",
+                            "state": 3,
+                            "winnerId": "a",
+                            "slots": [
+                                { "entrantId": "a", "entrantName": "A", "score": 2 },
+                                { "entrantId": "b", "entrantName": "B", "score": 1 }
+                            ]
+                        },
+                        {
+                            "setId": "final-set",
+                            "phaseGroupId": "finals-group",
+                            "phaseOrder": 2,
+                            "fullRoundText": "Round 1",
+                            "state": 1,
+                            "winnerId": null,
+                            "entrant1Source": { "sourceType": "seed", "typeId": "final-seed" },
+                            "slots": [
+                                { "seedId": "final-seed", "entrantName": "TBD", "entrantId": null, "score": null },
+                                { "entrantName": "TBD", "entrantId": null, "score": null }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "eventId": "untouched-event",
+                    "name": "Untouched Event",
+                    "phases": [],
+                    "phaseGroups": [],
+                    "sets": [{
+                        "setId": "invalid-result",
+                        "fullRoundText": "Round 1",
+                        "state": 3,
+                        "winnerId": "not-in-slots",
+                        "slots": [
+                            { "entrantId": "x", "entrantName": "X", "score": 1 },
+                            { "entrantId": "y", "entrantName": "Y", "score": 0 }
+                        ]
+                    }]
+                }
+            ]
+        }))
+        .expect("multi-event snapshot should deserialize");
+
+        let mut globally_rebuilt = snapshot.clone();
+        rebuild_progression_from_completed_sets(&mut globally_rebuilt);
+
+        let untouched_event_before = serde_json::to_value(&snapshot.events[1])
+            .expect("untouched event should serialize");
+        let mut event_rebuilt = snapshot;
+        rebuild_event_progression_from_completed_sets(&mut event_rebuilt, "rr-event");
+
+        assert_eq!(
+            serde_json::to_value(&event_rebuilt.events[0]).expect("rebuilt event should serialize"),
+            serde_json::to_value(&globally_rebuilt.events[0]).expect("global event should serialize"),
+        );
+        assert_eq!(
+            serde_json::to_value(&event_rebuilt.events[1]).expect("other event should serialize"),
+            untouched_event_before,
+        );
     }
 }
 
@@ -6731,7 +7147,7 @@ pub fn list_affected_set_ids_for_reset(
     event_id: &str,
     source_set_id: &str,
 ) -> Result<Vec<String>, String> {
-    let snapshot = load_snapshot(app, slug)?;
+    let snapshot = load_event_snapshot(app, slug, event_id)?;
     let event = snapshot
         .events
         .iter()
@@ -6748,7 +7164,7 @@ pub fn reset_local_set_result_with_dependencies(
     event_id: &str,
     source_set_id: &str,
 ) -> Result<(TournamentWorkspace, Vec<String>), String> {
-    let mut snapshot = load_snapshot(app, slug)?;
+    let mut snapshot = load_event_snapshot(app, slug, event_id)?;
     let mut local_meta = load_local_meta(app, slug, event_id)?;
 
     let event_index = snapshot
@@ -7226,7 +7642,7 @@ pub fn load_workspace(
     slug: &str,
     event_id: &str,
 ) -> Result<TournamentWorkspace, String> {
-    let snapshot = load_snapshot(app, slug)?;
+    let snapshot = load_event_snapshot(app, slug, event_id)?;
     let local_meta =
         merge_snapshot_into_meta(&snapshot, event_id, load_local_meta(app, slug, event_id)?);
 
@@ -7263,7 +7679,7 @@ pub fn restore_event_graph_from_snapshot(
     event_id: &str,
 ) -> Result<TournamentWorkspace, String> {
     let mut workspace = load_workspace(app, slug, event_id)?;
-    let pristine_snapshot = load_pristine_snapshot(app, slug)?;
+    let pristine_snapshot = load_pristine_event_snapshot(app, slug, event_id)?;
     replace_event_with_pristine_snapshot(&mut workspace.snapshot, &pristine_snapshot, event_id)?;
     let local_meta = discard_pending_set_results_for_snapshot_refresh(app, slug, event_id)?;
     let local_meta = merge_snapshot_into_meta(&workspace.snapshot, event_id, local_meta);
@@ -7309,7 +7725,7 @@ pub fn upsert_local_set_result(
         );
     }
 
-    let mut snapshot = load_snapshot(app, &input.slug)?;
+    let mut snapshot = load_event_snapshot(app, &input.slug, &input.event_id)?;
     if snapshot
         .events
         .iter()
@@ -7467,6 +7883,7 @@ pub fn upsert_local_set_result(
     }
 
     local_meta.slug = input.slug;
+    local_meta.tournament_name = snapshot.name.clone();
     local_meta.tournament_id = snapshot.tournament_id.clone();
     local_meta.updated_at = Utc::now();
 
@@ -7544,7 +7961,7 @@ pub fn upsert_local_set_result(
                         }
                     }
                 }
-                rebuild_progression_from_completed_sets(&mut snapshot);
+                rebuild_event_progression_from_completed_sets(&mut snapshot, &applied_event_id);
             }
 
             local_meta
@@ -7572,12 +7989,12 @@ pub fn upsert_local_set_result(
             || existing_set_state.0
             || is_completed_round_robin_group(&snapshot, &applied_event_id, &input.set_id);
         if should_rebuild_progression {
-            rebuild_progression_from_completed_sets(&mut snapshot);
+            rebuild_event_progression_from_completed_sets(&mut snapshot, &applied_event_id);
         }
     }
 
     save_local_meta(app, &applied_event_id, &local_meta)?;
-    cache_progression_snapshot(&snapshot);
+    cache_progression_snapshot(&snapshot, false);
     save_event_graph_snapshot(app, &snapshot, &applied_event_id)?;
 
     storage_perf_log(|| {
@@ -7598,7 +8015,7 @@ pub fn upsert_local_set_scores(
     input: LocalSetScoreUpdateInput,
 ) -> Result<TournamentWorkspace, String> {
     let started_at = Instant::now();
-    let mut snapshot = load_snapshot(app, &input.slug)?;
+    let mut snapshot = load_event_snapshot(app, &input.slug, &input.event_id)?;
     if snapshot
         .events
         .iter()
@@ -7716,7 +8133,7 @@ pub fn upsert_local_set_scores(
     local_meta.updated_at = Utc::now();
 
     save_local_meta(app, &applied_event_id, &local_meta)?;
-    cache_progression_snapshot(&snapshot);
+    cache_progression_snapshot(&snapshot, false);
     save_event_graph_snapshot(app, &snapshot, &applied_event_id)?;
 
     storage_perf_log(|| {
@@ -7770,9 +8187,9 @@ pub fn clear_pending_set_results(
         );
     }
 
-    let mut snapshot = load_snapshot(app, slug)?;
-    let pristine_snapshot =
-        load_pristine_snapshot(app, slug).or_else(|_| load_snapshot(app, slug))?;
+    let mut snapshot = load_event_snapshot(app, slug, event_id)?;
+    let pristine_snapshot = load_pristine_event_snapshot(app, slug, event_id)
+        .or_else(|_| load_event_snapshot(app, slug, event_id))?;
 
     let pending_set_ids = local_meta
         .pending_set_results
@@ -7873,8 +8290,8 @@ pub fn clear_pending_set_result_for_set(
         );
     }
 
-    let mut snapshot = load_snapshot(app, slug)?;
-    let pristine_snapshot = load_pristine_snapshot(app, slug).ok();
+    let mut snapshot = load_event_snapshot(app, slug, event_id)?;
+    let pristine_snapshot = load_pristine_event_snapshot(app, slug, event_id).ok();
 
     {
         let event = snapshot
@@ -8050,7 +8467,7 @@ pub fn upsert_local_set_play_side(
     app: &AppHandle,
     input: LocalSetPlaySideInput,
 ) -> Result<TournamentWorkspace, String> {
-    let snapshot = load_snapshot(app, &input.slug)?;
+    let snapshot = load_event_snapshot(app, &input.slug, &input.event_id)?;
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
 
     let set_snapshot = snapshot

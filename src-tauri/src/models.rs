@@ -92,6 +92,8 @@ pub struct EventManagementMeta {
 pub struct TournamentLocalMeta {
     pub tournament_id: String,
     pub slug: String,
+    #[serde(default)]
+    pub tournament_name: String,
     pub events: Vec<EventLocalMeta>,
     #[serde(default)]
     pub set_play_sides: Vec<SetPlaySideMeta>,

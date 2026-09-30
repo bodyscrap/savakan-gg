@@ -87,6 +87,7 @@ export type LocalGrandFinalResetResultMeta = {
 export type TournamentLocalMeta = {
   tournamentId: string;
   slug: string;
+  tournamentName?: string;
   events: EventLocalMeta[];
   setPlaySides?: SetPlaySideMeta[];
   pendingSetResults: LocalSetResultMeta[];
