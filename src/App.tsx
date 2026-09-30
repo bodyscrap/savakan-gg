@@ -2,12 +2,12 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import QRCode from "qrcode";
 import { CreateSnapshot } from "./CreateSnapshot";
 import { DqRequestDialog } from "./DqRequestDialog";
 import { useDqCameraScan } from "./useDqCameraScan";
 import { useSenderProfile, type SenderProfile } from "./useSenderProfile";
-import { localNetworkCandidateKey, type LocalNetworkSettingsCandidate } from "./localNetworkSettings";
+import { useMobileInputPortal } from "./useMobileInputPortal";
+import { localNetworkCandidateKey } from "./localNetworkSettings";
 import { toApiSlug, toEventApiSlug, toSlugInput } from "./slugUtils";
 import { SettingsScreen } from "./SettingMenu";
 import { StatusBoard, StatusBoardHero } from "./StatusBoard";
@@ -215,61 +215,6 @@ type SavePlayerMetaOptions = {
   manageBusy?: boolean;
 };
 
-type MobileInputPortalInfo = {
-  url: string;
-  accessUrls: string[];
-  token: string;
-};
-
-function mobileUrlDisplayIp(url: string): string {
-  const trimmed = url.trim();
-  if (trimmed === "") {
-    return "-";
-  }
-
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.hostname || trimmed;
-  } catch {
-    const normalized = trimmed.replace(/^https?:\/\//i, "");
-    const slashIndex = normalized.indexOf("/");
-    const hostWithPort = slashIndex >= 0 ? normalized.slice(0, slashIndex) : normalized;
-    const colonIndex = hostWithPort.lastIndexOf(":");
-    if (colonIndex > 0) {
-      return hostWithPort.slice(0, colonIndex);
-    }
-    return hostWithPort;
-  }
-}
-
-function mobileInputUrlHostKey(url: string): string {
-  const trimmed = url.trim();
-  if (trimmed === "") {
-    return "";
-  }
-
-  try {
-    return new URL(trimmed).hostname.trim();
-  } catch {
-    return mobileUrlDisplayIp(trimmed).trim();
-  }
-}
-
-function withMobileInputPollMsParam(url: string, pollMs: number): string {
-  const trimmed = url.trim();
-  if (trimmed === "") {
-    return trimmed;
-  }
-
-  try {
-    const parsed = new URL(trimmed);
-    parsed.searchParams.set("pollMs", String(normalizeMobileInputPollingMs(pollMs)));
-    return parsed.toString();
-  } catch {
-    return trimmed;
-  }
-}
-
 const STARTGG_FETCH_PER_PAGE_DEFAULT = 50;
 const MOBILE_INPUT_POLLING_MS_MIN = 500;
 const MOBILE_INPUT_POLLING_MS_MAX = 10000;
@@ -472,13 +417,7 @@ function App() {
   const [callingEntrantId, setCallingEntrantId] = useState("");
   const [disableLocalCommunication, setDisableLocalCommunication] = useState(false);
   const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
-  const [mobileInputPortalBusy, setMobileInputPortalBusy] = useState(false);
-  const [mobileInputPortalOpen, setMobileInputPortalOpen] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
-  const [mobileInputPortalDialog, setMobileInputPortalDialog] = useState<MobileInputPortalInfo | null>(null);
-  const [mobileInputPortalCandidates, setMobileInputPortalCandidates] = useState<LocalNetworkSettingsCandidate[]>([]);
-  const [mobileInputIssuedUrl, setMobileInputIssuedUrl] = useState("");
-  const [mobileInputPortalQrUrl, setMobileInputPortalQrUrl] = useState("");
   const [selectedTournamentEntrantId, setSelectedTournamentEntrantId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -690,50 +629,6 @@ function App() {
     handleCreateEventDropdownChange,
     createEventSnapshotBySlug,
   } = tournamentCreation;
-  useEffect(() => {
-    setMobileInputPortalOpen(false);
-    setMobileInputPortalDialog(null);
-    setMobileInputPortalCandidates([]);
-    setMobileInputIssuedUrl("");
-    setMobileInputPortalQrUrl("");
-  }, [slug, selectedEventId]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!mobileInputPortalDialog || mobileInputIssuedUrl.trim() === "") {
-      setMobileInputPortalQrUrl("");
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    (async () => {
-      try {
-        const dataUrl = await QRCode.toDataURL(mobileInputIssuedUrl, {
-          errorCorrectionLevel: "M",
-          margin: 1,
-          width: 320,
-          color: {
-            dark: "#0f172a",
-            light: "#ffffff",
-          },
-        });
-        if (!cancelled) {
-          setMobileInputPortalQrUrl(dataUrl);
-        }
-      } catch {
-        if (!cancelled) {
-          setMobileInputPortalQrUrl("");
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [mobileInputPortalDialog, mobileInputIssuedUrl]);
-
   useEffect(() => {
     let alive = true;
 
@@ -1043,6 +938,29 @@ function App() {
 
     return snapshot.events.find((event) => event.eventId === selectedEventId) ?? null;
   }, [snapshot, selectedEventId]);
+
+  const mobileInputPortal = useMobileInputPortal({
+    slug,
+    selectionKey: selectedEventId,
+    eventId: selectedEvent?.eventId ?? null,
+    pollingMs: normalizeMobileInputPollingMs(mobileInputPollingMs),
+    setError,
+    setMessage,
+  });
+  const {
+    busy: mobileInputPortalBusy,
+    open: mobileInputPortalOpen,
+    portalInfo: mobileInputPortalDialog,
+    candidates: mobileInputPortalCandidates,
+    issuedUrl: mobileInputIssuedUrl,
+    issuedUrlDisplayIp: mobileInputIssuedUrlDisplayIp,
+    qrUrl: mobileInputPortalQrUrl,
+    closeDialog: closeMobileInputPortalDialog,
+    openDialog: openMobileInputPortalDialog,
+    issueUrl: issueMobileInputPortalUrl,
+    refreshDialog: refreshMobileInputPortalDialog,
+    copyUrl: copyMobileInputUrl,
+  } = mobileInputPortal;
 
   const bracketReport = useBracketReport<TournamentWorkspace>({
     slug: toApiSlug(slug),
@@ -4521,168 +4439,6 @@ function App() {
     setDirectWinnerId(null);
   }
 
-  function closeMobileInputPortalDialog() {
-    setMobileInputPortalOpen(false);
-  }
-
-  async function refreshMobileInputPortalDialog() {
-    if (!selectedEvent) {
-      setError("先にイベントを選択してください。");
-      return;
-    }
-
-    const normalizedSlug = toApiSlug(slug);
-    if (normalizedSlug === "") {
-      setError("大会IDを入力してください。");
-      return;
-    }
-
-    const activeHost = mobileInputUrlHostKey(mobileInputIssuedUrl);
-    if (activeHost === "") {
-      setError("先にURLを発行してください。");
-      return;
-    }
-
-    setMobileInputPortalBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const portalInfo = await invoke<MobileInputPortalInfo>("get_mobile_input_portal_info", {
-        slug: normalizedSlug,
-        eventId: selectedEvent.eventId,
-      });
-      const pollingMs = normalizeMobileInputPollingMs(mobileInputPollingMs);
-      const patchedUrl = withMobileInputPollMsParam(portalInfo.url, pollingMs);
-      const patchedAccessUrls = Array.from(new Set(
-        portalInfo.accessUrls
-          .map((item) => withMobileInputPollMsParam(item, pollingMs))
-          .filter((item) => item.trim() !== ""),
-      ));
-      const nextPortalInfo: MobileInputPortalInfo = {
-        ...portalInfo,
-        url: patchedUrl,
-        accessUrls: patchedAccessUrls.length > 0 ? patchedAccessUrls : [patchedUrl],
-      };
-
-      const refreshedUrl = nextPortalInfo.accessUrls.find((item) => mobileInputUrlHostKey(item) === activeHost) ?? nextPortalInfo.url;
-
-      setMobileInputPortalDialog(nextPortalInfo);
-      setMobileInputIssuedUrl(refreshedUrl);
-      setMessage("スマートフォン向けURLを更新しました。新しい2次元コードを共有してください。");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setMobileInputPortalBusy(false);
-    }
-  }
-
-  async function issueMobileInputPortalUrl(bindIp: string) {
-    if (!selectedEvent) {
-      setError("先にイベントを選択してください。");
-      return;
-    }
-
-    const normalizedSlug = toApiSlug(slug);
-    if (normalizedSlug === "") {
-      setError("大会IDを入力してください。");
-      return;
-    }
-
-    const selectedHost = bindIp.trim();
-    if (selectedHost === "") {
-      setError("IPを選択してください。");
-      return;
-    }
-
-    setMobileInputPortalBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const portalInfo = await invoke<MobileInputPortalInfo>("get_mobile_input_portal_info", {
-        slug: normalizedSlug,
-        eventId: selectedEvent.eventId,
-      });
-      const pollingMs = normalizeMobileInputPollingMs(mobileInputPollingMs);
-      const patchedUrl = withMobileInputPollMsParam(portalInfo.url, pollingMs);
-      const patchedAccessUrls = Array.from(new Set(
-        portalInfo.accessUrls
-          .map((item) => withMobileInputPollMsParam(item, pollingMs))
-          .filter((item) => item.trim() !== ""),
-      ));
-      const nextPortalInfo: MobileInputPortalInfo = {
-        ...portalInfo,
-        url: patchedUrl,
-        accessUrls: patchedAccessUrls.length > 0 ? patchedAccessUrls : [patchedUrl],
-      };
-      const selectedUrl = nextPortalInfo.accessUrls.find((item) => mobileInputUrlHostKey(item) === selectedHost) ?? nextPortalInfo.url;
-
-      setMobileInputPortalDialog(nextPortalInfo);
-      setMobileInputIssuedUrl(selectedUrl);
-      setMessage("スマートフォン向けURLを発行しました。必要に応じてURLを更新できます。");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setMobileInputPortalBusy(false);
-    }
-  }
-
-  async function openMobileInputPortalDialog() {
-    if (!selectedEvent) {
-      setError("先にイベントを選択してください。");
-      return;
-    }
-
-    const normalizedSlug = toApiSlug(slug);
-    if (normalizedSlug === "") {
-      setError("大会IDを入力してください。");
-      return;
-    }
-
-    setMobileInputPortalOpen(true);
-    setError("");
-    setMessage("");
-
-    if (mobileInputPortalDialog && mobileInputIssuedUrl.trim() !== "") {
-      setMessage("発行中のURLを表示しています。必要に応じてURL更新で再発行できます。");
-      return;
-    }
-
-    try {
-      const listed = await invoke<LocalNetworkSettingsCandidate[]>("list_local_network_settings");
-      const candidates = Array.isArray(listed) ? listed : [];
-      setMobileInputPortalCandidates(candidates);
-
-      if (candidates.length === 0) {
-        setError("利用可能なIP候補が見つかりませんでした。");
-        return;
-      }
-
-      setMessage("IP候補を表示しました。URL発行を押すと結果を共有できます。");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setMobileInputPortalBusy(false);
-    }
-  }
-
-  async function copyMobileInputUrl(value: string) {
-    if (value.trim() === "") {
-      return;
-    }
-
-    try {
-      if (!navigator.clipboard || !navigator.clipboard.writeText) {
-        throw new Error("この環境ではクリップボードAPIが使用できません。");
-      }
-      await navigator.clipboard.writeText(value);
-      setMessage("スマホ入力URLをクリップボードへコピーしました。");
-    } catch {
-      setError("URLコピーに失敗しました。URLを手動で共有してください。");
-    }
-  }
-
   async function saveLocalResultForMatch(confirmed: boolean) {
     if (!selectedEvent) {
       setError("イベントが選択されていません。");
@@ -5747,12 +5503,12 @@ function App() {
             mobileInputCandidates={mobileInputPortalCandidates}
             mobileInputBusy={mobileInputPortalBusy}
             issuedUrl={mobileInputIssuedUrl}
-            issuedUrlDisplayIp={mobileUrlDisplayIp(mobileInputIssuedUrl)}
+            issuedUrlDisplayIp={mobileInputIssuedUrlDisplayIp}
             issuedQrUrl={mobileInputPortalQrUrl}
             showIssuedUrl={Boolean(mobileInputPortalDialog)}
             onCloseMobileInput={closeMobileInputPortalDialog}
             onIssueMobileUrl={(bindIp) => void issueMobileInputPortalUrl(bindIp)}
-            onCopyMobileUrl={() => void copyMobileInputUrl(mobileInputIssuedUrl)}
+            onCopyMobileUrl={() => void copyMobileInputUrl()}
             onRefreshMobileUrl={() => void refreshMobileInputPortalDialog()}
             conflictDialog={bracketReport.conflictDialog}
             forceOverwriteRemaining={bracketReport.forceOverwriteRemaining}
