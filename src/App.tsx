@@ -1,5 +1,4 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CreateSnapshot } from "./CreateSnapshot";
@@ -7,6 +6,8 @@ import { DqRequestDialog } from "./DqRequestDialog";
 import { useDqCameraScan } from "./useDqCameraScan";
 import { useSenderProfile } from "./useSenderProfile";
 import { useMobileInputPortal } from "./useMobileInputPortal";
+import { useCallSync } from "./useCallSync";
+import { resolveCallPhaseName, useCallMessageDraft } from "./useCallMessageDraft";
 import {
   BRACKET_ZOOM_LEVELS,
   MOBILE_INPUT_POLLING_MS_MAX,
@@ -111,14 +112,11 @@ import {
   type PhasePoolGroup,
 } from "./bracketDisplay";
 import {
-  buildCallSyncStatusTargets,
   extractMetaString,
   getMailboxMethodLabel,
   isDqRequestMessage,
   isValidIpv4,
   isValidSenderUserId,
-  normalizeCallPhaseGroupName,
-  normalizeCallPhaseName,
   parsePhasePoolKey,
   type MessageScope,
 } from "./messageUtils";
@@ -237,25 +235,6 @@ function generateRandomSenderUserId(): string {
   window.crypto.getRandomValues(array);
   const value = 10_000_000 + (array[0] % 90_000_000);
   return String(value);
-}
-
-function resolveCallPhaseName(event: EventSnapshot | null, rawValue: string, phaseOrder: number | null): string {
-  const normalized = normalizeCallPhaseName(rawValue);
-  const orderMatch = /^order:(\d+)$/.exec(normalized);
-  const resolvedPhaseOrder = phaseOrder ?? (orderMatch ? Number(orderMatch[1]) : null);
-  if (!orderMatch || resolvedPhaseOrder === null || !event) {
-    return normalized;
-  }
-
-  const phase = event.phaseGroups?.find((group) => group.phaseOrder === resolvedPhaseOrder);
-  if (phase?.phaseName?.trim()) {
-    return phase.phaseName.trim();
-  }
-
-  const set = event.sets.find(
-    (candidate) => candidate.phaseOrder === resolvedPhaseOrder && candidate.phaseName?.trim(),
-  );
-  return set?.phaseName?.trim() || normalized;
 }
 
 function eventSettingKey(slug: string, eventId: string): string {
@@ -1431,6 +1410,21 @@ function App() {
     && isValidIpv4(senderProfile.bindIp)
     && isValidIpv4(senderProfile.broadcastSubnetMask);
 
+  const {
+    requestUnresolvedCallSyncBroadcast,
+    clearCallListThreads,
+  } = useCallSync({
+    messages: genericMessages,
+    displayGroups: callListDisplayGroups,
+    senderProfile,
+    communicationDisabled: disableLocalCommunication,
+    canBroadcastSync: canBroadcastCallListSync,
+    shouldWarnIdentityChange: shouldRecommendMailboxClearForIdentityChange,
+    resetDisplay: resetCallListDisplay,
+    onError: setError,
+    onMessage: setMessage,
+  });
+
   function fillRandomSenderUserId() {
     const usedIds = new Set(genericMessages.map((item) => item.senderUserId));
     let nextId = generateRandomSenderUserId();
@@ -1452,100 +1446,6 @@ function App() {
 
   function resolveActiveThread() {
     void resolveMailboxThread();
-  }
-
-  async function requestUnresolvedCallSyncBroadcast() {
-    setError("");
-    setMessage("");
-
-    if (disableLocalCommunication) {
-      setError("ローカル通信を行わない設定のため、呼び出し同期は無効です。設定タブで解除してください。");
-      return;
-    }
-
-    if (!canBroadcastCallListSync) {
-      setError("設定タブで送信者名・8桁ユーザーID・自分のIP・ブロードキャスト用サブネットマスクを保存してから実行してください。");
-      return;
-    }
-
-    try {
-      // 同期開始時は表示キャッシュを破棄し、取得結果で最新状態に再構築する。
-      resetCallListDisplay({ clearOwnOnly: true, rebuild: true });
-
-      await invoke<GenericMessage>("send_mailbox_message", {
-        input: {
-          profile: senderProfile,
-          messageType: "normal",
-          method: "call_player_sync",
-          subject: "呼び出しの同期: 未補足の未解決呼び出しの収集",
-          body: "現在未解決のプレイヤー呼び出し情報を返信してください。",
-          messageMeta: {
-            syncPhase: "collect_unresolved",
-            requestedAt: new Date().toISOString(),
-          },
-          deliveryTargetMode: "broadcast",
-          deliveryTargetIp: null,
-          threadId: null,
-          parentMessageId: null,
-        },
-      });
-
-      const statusTargets = buildCallSyncStatusTargets(callListDisplayGroups, genericMessages);
-      if (statusTargets.length > 0) {
-        await invoke<GenericMessage>("send_mailbox_message", {
-          input: {
-            profile: senderProfile,
-            messageType: "normal",
-            method: "call_player_sync",
-            subject: "呼び出しの同期: 掲載済み呼び出しの確認",
-            body: "掲載中の呼び出しについて最新状態を確認します。",
-            messageMeta: {
-              syncPhase: "check_published_status",
-              requestedAt: new Date().toISOString(),
-              targets: statusTargets,
-            },
-            deliveryTargetMode: "broadcast",
-            deliveryTargetIp: null,
-            threadId: null,
-            parentMessageId: null,
-          },
-        });
-      }
-
-      setMessage("呼び出しの同期を実行しました。未補足の未解決呼び出しを収集し、掲載済み呼び出しの状態確認を開始しました。");
-    } catch (err) {
-      setError(String(err));
-    }
-  }
-
-  function clearCallListThreads() {
-    const callRoots = genericMessages.filter((item) =>
-      item.parentMessageId === null
-      && item.method === "call_player"
-      && item.messageType === "normal"
-    );
-    const callThreadIds = new Set(callRoots.map((item) => item.threadId));
-
-    if (shouldRecommendMailboxClearForIdentityChange) {
-      window.alert("送信者情報が変更されています。意図しない挙動になることがあります。");
-    }
-
-    const confirmed = window.confirm(
-      "呼び出しリスト表示をいったん全クリアします。\n保持中の呼び出しデータから再描画します。\nメッセージデータ自体は削除しません。実行しますか？",
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    const unresolvedCount = callRoots.filter((root) =>
-      !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve")
-    ).length;
-
-    setError("");
-    setMessage("");
-    // 表示キャッシュのみを初期化し、呼び出しデータ本体や表示フィルタは変更しない。
-    resetCallListDisplay({ rebuild: true });
-    setMessage(`呼び出しリスト表示を初期化しました（未解決 ${unresolvedCount} 件 / 全呼び出しスレッド ${callThreadIds.size} 件保持）。`);
   }
 
   function forceClearMailboxMessages() {
@@ -1579,79 +1479,6 @@ function App() {
     setSenderIdentityChangedSinceMailboxClear(false);
 
     setMessage(`メッセージボックスを強制クリアしました（${genericMessages.length} 件削除）。`);
-  }
-
-  async function sendCallMessageFromMatch(slot: SetSlot, entrantId: string) {
-    setError("");
-    setMessage("");
-
-    if (disableLocalCommunication) {
-      setError("ローカル通信を行わない設定のため、プレイヤー呼び出しメッセージは作成できません。設定タブで解除してください。");
-      return;
-    }
-
-    if (!snapshot || !selectedEvent || !activeMatch) {
-      setError("呼び出し元の試合情報が見つかりません。もう一度試してください。");
-      return;
-    }
-
-    setCallingEntrantId(entrantId);
-
-    try {
-      const targetSetId = activeMatch.setId;
-      const [playerId] = await invoke<string[]>("derive_player_ids", {
-        tournamentId: snapshot.tournamentId,
-        eventId: selectedEvent.eventId,
-        entrantIds: [entrantId],
-      });
-      if (!playerId) {
-        throw new Error("選手IDを生成できませんでした。");
-      }
-      const eventAlias = selectedEventMeta?.eventAlias?.trim() || selectedEvent.name;
-      const phaseName = resolveCallPhaseName(selectedEvent, activeMatch.phaseName ?? "", activeMatch.phaseOrder);
-      const phaseGroupName = normalizeCallPhaseGroupName(activeMatch.phaseGroupName ?? "");
-      const senderLine = senderProfile.senderName.trim() !== ""
-        && isValidSenderUserId(senderProfile.senderUserId)
-        && isValidIpv4(senderProfile.bindIp)
-        ? `${senderProfile.senderName} (${senderProfile.senderUserId}) / ${senderProfile.bindIp}`
-        : "未設定 (設定タブで送信者情報を設定してください)";
-
-      const fixedBody = [
-        "【呼び出しメッセージ】",
-        `送信者: ${senderLine}`,
-        `呼び出しプレイヤー: ${slot.entrantName}`,
-        `entrantID: ${entrantId}`,
-        `イベントエイリアス: ${eventAlias}`,
-        `呼び出し元 tournament/event: ${snapshot.name} / ${selectedEvent.name}`,
-        `呼び出し元 phase/pool: ${phaseName} / ${phaseGroupName}`,
-      ].join("\n");
-
-      setComposeMessageMeta({
-        callId: `${snapshot.tournamentId}:${selectedEvent.eventId}:${phaseName}:${phaseGroupName}:${targetSetId}:${entrantId}`,
-        playerId,
-        callEntrantId: entrantId,
-        callEntrantName: slot.entrantName,
-        tournamentId: snapshot.tournamentId,
-        tournamentName: snapshot.name,
-        eventId: selectedEvent.eventId,
-        eventName: selectedEvent.name,
-        eventAlias,
-        phaseName,
-        phaseGroupName,
-        setId: targetSetId,
-      });
-      setMailboxMethodDraft("call_player");
-      setMailboxSubjectDraft(`${slot.entrantName}(${eventAlias})`);
-      setComposeFixedBodyDraft(fixedBody);
-      setGenericMessageBodyDraft("");
-      closeMatchDialog();
-      setActiveTab("message");
-      setMessage(`呼び出しメッセージの下書きを作成しました: ${slot.entrantName} / 補足入力後に「スレッド開始」で送信してください。`);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setCallingEntrantId("");
-    }
   }
 
   useEffect(() => {
@@ -2102,6 +1929,25 @@ function App() {
       ? resolvedEventSetsById.get(set.setId) ?? set
       : null;
   }, [resolvedEventSetsById, selectedEvent, selectedPhasePoolGroup, activeMatchSetId]);
+
+  const { sendCallMessageFromMatch } = useCallMessageDraft({
+    tournament: snapshot ? { tournamentId: snapshot.tournamentId, name: snapshot.name } : null,
+    event: selectedEvent,
+    activeMatch,
+    eventAlias: selectedEventMeta?.eventAlias ?? "",
+    senderProfile,
+    communicationDisabled: disableLocalCommunication,
+    setCallingEntrantId,
+    setComposeMessageMeta,
+    setMailboxMethodDraft,
+    setMailboxSubjectDraft,
+    setComposeFixedBodyDraft,
+    setGenericMessageBodyDraft,
+    closeMatchDialog,
+    setActiveTab,
+    onError: setError,
+    onMessage: setMessage,
+  });
 
   const activeObsOverlaySet = useMemo(() => {
     if (!obsOverlayState?.active || !obsOverlayState.currentSetId) {
