@@ -50,8 +50,8 @@ import {
 import { BracketTab } from "./BracketTab";
 import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
 import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDialog";
-import type { EliminationBracketSectionView } from "./EliminationBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
+import { buildEliminationBracketSections } from "./eliminationBracketDisplay";
 import { buildRoundRobinMatrixRows } from "./roundRobinMatrixDisplay";
 import { buildRoundRobinBoardData } from "./roundRobinBoardBuilder";
 
@@ -65,8 +65,6 @@ import {
   buildScoreDraftsFromResult,
   buildScoreDraftsFromSet,
   buildSlotScoresForSave,
-  getPendingSetChangeClass,
-  getSetResultVisualStatus,
   hasDqScoreInDrafts,
   isConfirmedSetResult,
   isDqScoreValue,
@@ -100,14 +98,15 @@ import {
 import {
   loadLastSlug,
   loadLastSnapshotSelection,
-  saveEventPhasePoolSelection,
   saveLastSnapshotSelection,
 } from "./tournamentWorkspaceRepository";
+import { usePersistSnapshotSelection } from "./usePersistSnapshotSelection";
 import {
   buildTbdSourceLabelBySlotKey as buildBracketTbdSourceLabelBySlotKey,
   buildSetDisplayCodeById,
   buildBracketSections,
   buildBracketSectionsForView,
+  getBracketVerticalLayoutScale,
   getDisplaySlotsForSet,
   buildPhaseNames,
   buildPhasePoolGroups,
@@ -118,6 +117,7 @@ import {
   resolveSelectedPhasePoolGroup,
   resolveTbdSourceLabel as resolveBracketTbdSourceLabel,
   selectPhaseScopedPoolGroups,
+  scaleBracketSectionsForZoom,
   type EventSnapshot,
 } from "./bracketDisplay";
 import {
@@ -375,8 +375,6 @@ function App() {
   const startupAutoRestoreDoneRef = useRef(false);
   const startupDirectRestoreTriedRef = useRef(false);
   const startupListRestoreRetryCountRef = useRef(0);
-  const lastPersistedSnapshotSelectionRef = useRef("");
-  const lastPersistedEventMetaPhasePoolRef = useRef("");
   const tabSelectionAutoLoadInFlightRef = useRef(false);
   const {
     cameraActive: dqCameraActive,
@@ -818,86 +816,15 @@ function App() {
     return resolveEventItemList(listId, selectedEventItemListSnapshots, itemLists);
   }
 
-  useEffect(() => {
-    if (!snapshot || !selectedEvent) {
-      return;
-    }
-
-    const slugKey = toSlugInput(snapshot.slug);
-    const eventIdKey = selectedEvent.eventId.trim();
-    if (slugKey === "" || eventIdKey === "") {
-      return;
-    }
-
-    const selectionKey = [
-      slugKey,
-      eventIdKey,
-      selectedMessageScope?.phaseName.trim() ?? "",
-      selectedMessageScope?.phaseGroupName.trim() ?? "",
-    ].join("::");
-    if (selectionKey === lastPersistedSnapshotSelectionRef.current) {
-      return;
-    }
-
-    lastPersistedSnapshotSelectionRef.current = selectionKey;
-    void saveLastSnapshotSelection({
-      slug: snapshot.slug,
-      eventId: selectedEvent.eventId,
-      phaseName: selectedMessageScope?.phaseName ?? null,
-      phaseGroupName: selectedMessageScope?.phaseGroupName ?? null,
-    }).catch((err) => {
-      lastPersistedSnapshotSelectionRef.current = "";
-      setError(String(err));
-    });
-  }, [selectedEvent, selectedMessageScope, snapshot]);
-
-  useEffect(() => {
-    if (!snapshot || !selectedEvent) {
-      return;
-    }
-
-    const parsed = parsePhasePoolKey(selectedPhasePoolKey);
-    const phaseName = (parsed?.phaseName ?? selectedPhaseName).trim();
-    const phaseGroupName = (parsed?.phaseGroupName ?? "").trim();
-    if (phaseName === "" || phaseGroupName === "") {
-      return;
-    }
-
-    const slugKey = toSlugInput(snapshot.slug);
-    const eventIdKey = selectedEvent.eventId.trim();
-    if (slugKey === "" || eventIdKey === "") {
-      return;
-    }
-
-    const persistKey = `${slugKey}::${eventIdKey}::${phaseName}::${phaseGroupName}`;
-    if (persistKey === lastPersistedEventMetaPhasePoolRef.current) {
-      return;
-    }
-
-    lastPersistedEventMetaPhasePoolRef.current = persistKey;
-    setLocalSnapshotEvents((current) => current.map((item) => {
-      if (!sameSnapshotEventKey(item.slug, item.eventId, snapshot.slug, selectedEvent.eventId)) {
-        return item;
-      }
-
-      return {
-        ...item,
-        lastSelectedPhaseName: phaseName,
-        lastSelectedPhaseGroupName: phaseGroupName,
-      };
-    }));
-
-    void saveEventPhasePoolSelection({
-      slug: snapshot.slug,
-      eventId: selectedEvent.eventId,
-      eventName: selectedEvent.name,
-      phaseName,
-      phaseGroupName,
-    }).catch((err) => {
-      lastPersistedEventMetaPhasePoolRef.current = "";
-      setError(String(err));
-    });
-  }, [selectedEvent, selectedPhaseName, selectedPhasePoolKey, snapshot]);
+  const { resetLastPersistedSnapshotSelection } = usePersistSnapshotSelection({
+    snapshot,
+    selectedEvent,
+    selectedMessageScope,
+    selectedPhaseName,
+    selectedPhasePoolKey,
+    setLocalSnapshotEvents,
+    setError,
+  });
 
   const selectedEventSettingKey = useMemo(() => {
     if (!snapshot || !selectedEvent) {
@@ -1496,28 +1423,13 @@ function App() {
     ["--bracket-scale" as string]: String(bracketZoomLevel),
   } satisfies CSSProperties), [bracketZoomLevel]);
 
-  const bracketVerticalLayoutScale = useMemo(() => {
-    if (bracketZoomLevel >= 0.9) {
-      return 1;
-    }
-    if (bracketZoomLevel >= 0.6) {
-      return 0.72;
-    }
-    return 0.58;
-  }, [bracketZoomLevel]);
+  const bracketVerticalLayoutScale = useMemo(
+    () => getBracketVerticalLayoutScale(bracketZoomLevel),
+    [bracketZoomLevel],
+  );
 
   const renderedBracketSectionsForView = useMemo(() => {
-    return selectedBracketSectionsForView.map((section) => ({
-      ...section,
-      columns: section.columns.map((column) => ({
-        ...column,
-        height: column.height * bracketVerticalLayoutScale,
-        positionedSets: column.positionedSets.map((item) => ({
-          ...item,
-          y: item.y * bracketVerticalLayoutScale,
-        })),
-      })),
-    }));
+    return scaleBracketSectionsForZoom(selectedBracketSectionsForView, bracketVerticalLayoutScale);
   }, [bracketVerticalLayoutScale, selectedBracketSectionsForView]);
 
   const setDisplayCodeById = useMemo(
@@ -1567,88 +1479,19 @@ function App() {
     [interimScoreDraftsBySetId, obsOverlayState, pendingResultBySetId, roundRobinBoardData, setDisplayCodeById],
   );
 
-  const eliminationBracketSections: EliminationBracketSectionView[] = renderedBracketSectionsForView.map((section) => ({
-    key: section.key,
-    title: section.title,
-    setCount: section.setCount,
-    columns: section.columns.map((column) => ({
-      key: column.key,
-      title: column.title,
-      round: column.round,
-      height: column.height,
-      hidden: column.hidden,
-      cards: column.positionedSets.map(({ set, y }) => {
-        const displaySet = resolvedEventSetsById.get(set.setId) ?? set;
-        const pendingResult = pendingResultBySetId.get(set.setId);
-        const resultStatus = getSetResultVisualStatus(
-          set,
-          pendingResult,
-          interimScoreDraftsBySetId[set.setId],
-        );
-        const resultStatusLabel = resultStatus === "confirmed"
-          ? "確定"
-          : resultStatus === "reset"
-            ? "取消待ち"
-            : resultStatus === "draft"
-              ? "下書き"
-              : resultStatus === "inprogress"
-                ? "途中"
-                : "";
-        const finishedSet = isCompletedSet(set);
-        const matchupReady = isMatchupReady(displaySet);
-        const setDisplay = getSetScoresForDisplay(displaySet);
-        const winnerId = setDisplay.winnerId ?? set.winnerId;
-
-        return {
-          set,
-          positionY: y,
-          displayCode: setDisplayCodeById.get(set.setId),
-          changeClass: pendingResult ? getPendingSetChangeClass(pendingResult) : "",
-          resultStatus,
-          resultStatusLabel,
-          isLiveOverlaySet: Boolean(
-            obsOverlayState?.active
-            && obsOverlayState.currentSetId === set.setId
-            && obsOverlayState.currentSetId !== "__test__",
-          ),
-          slots: displaySet.slots.map((slot, index) => {
-            const entrantId = slot.entrantId;
-            const tbdSourceLabel = resolveTbdSourceLabel(set, index, slot);
-            const entrantName = !entrantId && tbdSourceLabel ? tbdSourceLabel : slot.entrantName;
-            const isWinner = entrantId && winnerId ? entrantId === winnerId : false;
-            const sideLabel = getSetSlotSideLabel(set.setId, entrantId, {
-              fallbackBySlotIndex: index,
-              finishedSet,
-              matchupReady,
-            });
-            const sideBadgeClass = sideLabel === "1P"
-              ? (finishedSet ? "side-1p-finished" : "side-1p")
-              : sideLabel === "2P"
-                ? (finishedSet ? "side-2p-finished" : "side-2p")
-                : "side-none";
-            const gameWins = entrantId
-              ? (setDisplay.scores[entrantId]
-                ?? (slot.score !== null
-                  ? (isDqScoreValue(slot.score) ? "DQ" : formatScoreValue(slot.score))
-                  : (winnerId ? (isWinner ? "✓" : "-") : "-")))
-              : "-";
-            const scoreClass = (isDqScoreValue(slot.score) || setDisplay.isDq)
-              ? (isWinner ? "win" : "dq")
-              : (isWinner ? "win" : "lose");
-
-            return {
-              key: `${set.setId}-${index}`,
-              sideLabel,
-              sideBadgeClass,
-              entrantName,
-              gameWins,
-              scoreClass,
-            };
-          }),
-        };
-      }),
-    })),
-  }));
+  const eliminationBracketSections = buildEliminationBracketSections({
+    sections: renderedBracketSectionsForView,
+    resolvedEventSetsById,
+    pendingResultBySetId,
+    interimScoreDraftsBySetId,
+    activeOverlay: obsOverlayState,
+    setDisplayCodeById,
+    getTbdSourceLabel: resolveTbdSourceLabel,
+    getSideLabel: getSetSlotSideLabel,
+    getScoresForSet: getSetScoresForDisplay,
+    formatScoreValue,
+    isDqScoreValue,
+  });
 
   useEffect(() => {
     if (phaseNames.length === 0) {
@@ -1710,7 +1553,7 @@ function App() {
         setSelectedPhasePoolKey("");
         startupSavedSlugRef.current = "";
         startupSavedEventIdRef.current = "";
-        lastPersistedSnapshotSelectionRef.current = "";
+        resetLastPersistedSnapshotSelection();
         await saveLastSnapshotSelection({
           slug: "",
           eventId: "",
@@ -1727,7 +1570,7 @@ function App() {
         setHomeSelectedSnapshotKey("");
         startupSavedSlugRef.current = "";
         startupSavedEventIdRef.current = "";
-        lastPersistedSnapshotSelectionRef.current = "";
+        resetLastPersistedSnapshotSelection();
       }
     } catch (err) {
       setError(String(err));

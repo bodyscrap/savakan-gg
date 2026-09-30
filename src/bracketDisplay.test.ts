@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSetDisplayCodeById,
+  getBracketVerticalLayoutScale,
+  scaleBracketSectionsForZoom,
   buildTbdSourceLabelBySlotKey,
   formatAlphabetSequence,
   getDisplaySlotsForSet,
@@ -172,5 +174,41 @@ describe("phase and pool selection", () => {
     expect(resolveSelectedPhasePoolGroup(phaseGroups, "stale-key")).toBe(phaseGroups[0]);
     expect(resolveSelectedPhasePoolGroup(phaseGroups, "phase-a-pool-2")).toBe(phaseGroups[1]);
     expect(resolveSelectedPhasePoolGroup([], "phase-a-pool-1")).toBeNull();
+  });
+});
+
+describe("bracket zoom layout", () => {
+  it("uses the existing vertical scale thresholds", () => {
+    expect(getBracketVerticalLayoutScale(0.9)).toBe(1);
+    expect(getBracketVerticalLayoutScale(0.89)).toBe(0.72);
+    expect(getBracketVerticalLayoutScale(0.6)).toBe(0.72);
+    expect(getBracketVerticalLayoutScale(0.59)).toBe(0.58);
+  });
+
+  it("scales column height and set positions without mutating sections", () => {
+    const sections: BracketSectionForView[] = [{
+      key: "winners",
+      title: "Winners",
+      setCount: 1,
+      columns: [{
+        key: "round-1",
+        title: "Round 1",
+        round: 1,
+        positionedSets: [{ set: { setId: "set-1" } as SetSnapshot, y: 20 }],
+        height: 100,
+        hidden: false,
+      }],
+    }];
+
+    const scaled = scaleBracketSectionsForZoom(sections, 0.5);
+
+    expect(scaled[0].columns[0]).toMatchObject({
+      height: 50,
+      positionedSets: [{ y: 10 }],
+    });
+    expect(sections[0].columns[0]).toMatchObject({
+      height: 100,
+      positionedSets: [{ y: 20 }],
+    });
   });
 });

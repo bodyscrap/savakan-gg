@@ -64,6 +64,33 @@ export type BracketSectionForView = Omit<BracketSection, "columns"> & {
   columns: PositionedRoundColumn[];
 };
 
+export function getBracketVerticalLayoutScale(zoomLevel: number): number {
+  if (zoomLevel >= 0.9) {
+    return 1;
+  }
+  if (zoomLevel >= 0.6) {
+    return 0.72;
+  }
+  return 0.58;
+}
+
+export function scaleBracketSectionsForZoom(
+  sections: BracketSectionForView[],
+  scale: number,
+): BracketSectionForView[] {
+  return sections.map((section) => ({
+    ...section,
+    columns: section.columns.map((column) => ({
+      ...column,
+      height: column.height * scale,
+      positionedSets: column.positionedSets.map((item) => ({
+        ...item,
+        y: item.y * scale,
+      })),
+    })),
+  }));
+}
+
 export function formatAlphabetSequence(index: number): string {
   let remaining = index;
   let label = "";
