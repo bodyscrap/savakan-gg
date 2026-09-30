@@ -1,7 +1,9 @@
 import type { LocalSetResultMeta } from "./useTournamentWorkspace";
+import type { PhaseGroupSnapshot } from "./bracketDisplay";
 import type {
   RoundRobinStanding,
   RoundRobinTieBreakRule,
+  PhaseGroupSeedSnapshot,
   SetEntrantSource,
   SetSlot,
   SetSnapshot,
@@ -34,6 +36,188 @@ export type RoundRobinBoardData = {
   tieBreakRules: RoundRobinTieBreakRule[];
 };
 
+export type RoundRobinSeedIndexes = {
+  byId: Map<string, PhaseGroupSeedSnapshot>;
+  byNum: Map<number, PhaseGroupSeedSnapshot>;
+  byOriginPlacement: Map<number, PhaseGroupSeedSnapshot>;
+  seedIdByEntrantId: Map<string, string>;
+  orderedSeeds: PhaseGroupSeedSnapshot[];
+};
+
+export function buildRoundRobinSeedIndexes(seeds: PhaseGroupSeedSnapshot[]): RoundRobinSeedIndexes {
+  const byId = new Map(
+    seeds.filter((seed) => Boolean(seed.seedId)).map((seed) => [seed.seedId, seed]),
+  );
+  const byNum = new Map(
+    seeds
+      .filter((seed) => seed.seedNum !== null && seed.seedNum !== undefined)
+      .map((seed) => [seed.seedNum as number, seed]),
+  );
+  const byOriginPlacement = new Map(
+    seeds
+      .filter((seed) => seed.originPlacement !== null && seed.originPlacement !== undefined)
+      .map((seed) => [seed.originPlacement as number, seed]),
+  );
+  const seedIdByEntrantId = new Map(
+    seeds
+      .filter((seed) => Boolean(seed.seedId && seed.entrantId))
+      .map((seed) => [seed.entrantId as string, seed.seedId]),
+  );
+  const orderedSeeds = [...seeds]
+    .filter((seed) => Boolean(seed.seedId))
+    .sort((left, right) => {
+      if (left.seedNum !== null && left.seedNum !== undefined
+        && right.seedNum !== null && right.seedNum !== undefined
+        && left.seedNum !== right.seedNum) {
+        return left.seedNum - right.seedNum;
+      }
+      if (left.seedNum !== null && left.seedNum !== undefined) {
+        return -1;
+      }
+      if (right.seedNum !== null && right.seedNum !== undefined) {
+        return 1;
+      }
+      return left.seedId.localeCompare(right.seedId);
+    });
+
+  return { byId, byNum, byOriginPlacement, seedIdByEntrantId, orderedSeeds };
+}
+
+export function findRoundRobinPhaseGroupSeed(
+  slot: SetSlot,
+  source: SetEntrantSource | null | undefined,
+  indexes: Pick<RoundRobinSeedIndexes, "byId" | "byNum" | "byOriginPlacement">,
+): PhaseGroupSeedSnapshot | undefined {
+  return (slot.seedId ? indexes.byId.get(slot.seedId) : undefined)
+    ?? (slot.seedNum !== null ? indexes.byNum.get(slot.seedNum) : undefined)
+    ?? (source?.seedNum !== null && source?.seedNum !== undefined
+      ? indexes.byNum.get(source.seedNum)
+      : undefined)
+    ?? (source?.groupSeedNum !== null && source?.groupSeedNum !== undefined
+      ? indexes.byNum.get(source.groupSeedNum)
+      : undefined)
+    ?? (source?.placement !== null && source?.placement !== undefined
+      ? indexes.byOriginPlacement.get(source.placement)
+      : undefined);
+}
+
+export type RoundRobinSeedColumns = {
+  fixedEntrants: string[];
+  entrantNames: Map<string, string>;
+  entrantIdsByColumnKey: Map<string, string | null>;
+  entrantSeedIds: Map<string, string>;
+  entrantSeedNumbers: Map<string, number>;
+  standingByEntrantId: Map<string, RoundRobinStanding>;
+};
+
+export type RoundRobinResolvedSlot = {
+  entrantId: string;
+  entrantName: string;
+  isPlaceholder: boolean;
+  seedId?: string | null;
+  seedNum?: number | null;
+  originPlacement?: number | null;
+  originDisplayIdentifier?: string | null;
+  originOrder?: number | null;
+};
+
+export function buildRoundRobinSeedColumns(
+  seeds: PhaseGroupSeedSnapshot[],
+  seedSlotById: Map<string, SetSlot>,
+): RoundRobinSeedColumns {
+  const fixedEntrants: string[] = [];
+  const entrantNames = new Map<string, string>();
+  const entrantIdsByColumnKey = new Map<string, string | null>();
+  const entrantSeedIds = new Map<string, string>();
+  const entrantSeedNumbers = new Map<string, number>();
+  const standingByEntrantId = new Map<string, RoundRobinStanding>();
+
+  for (const seed of seeds) {
+    const columnKey = `seed:${seed.seedId}`;
+    fixedEntrants.push(columnKey);
+    entrantIdsByColumnKey.set(columnKey, seed.entrantId ?? null);
+    if (seed.entrantId) {
+      entrantSeedIds.set(seed.entrantId, seed.seedId);
+      if (seed.seedNum !== null && seed.seedNum !== undefined) {
+        entrantSeedNumbers.set(seed.entrantId, seed.seedNum);
+      }
+    }
+    if (seed.entrantId && seed.entrantName?.trim()) {
+      entrantNames.set(columnKey, seed.entrantName.trim());
+    } else {
+      entrantNames.set(
+        columnKey,
+        seed.placeholderName?.trim()
+          || seedSlotById.get(seed.seedId)?.seedPlaceholderName?.trim()
+          || seed.entrantName?.trim()
+          || "TBD",
+      );
+    }
+  }
+
+  for (const seed of seeds) {
+    if (!seed.entrantId || standingByEntrantId.has(seed.entrantId)) {
+      continue;
+    }
+    standingByEntrantId.set(seed.entrantId, {
+      entrantId: seed.entrantId,
+      entrantName: seed.entrantName?.trim() || seed.entrantId,
+      isPlaceholder: false,
+      wins: 0,
+      losses: 0,
+      gameWins: 0,
+      gameLosses: 0,
+      h2hPoints: 0,
+      qualified: false,
+    });
+  }
+
+  return {
+    fixedEntrants,
+    entrantNames,
+    entrantIdsByColumnKey,
+    entrantSeedIds,
+    entrantSeedNumbers,
+    standingByEntrantId,
+  };
+}
+
+export function buildRoundRobinProgressionSeeds(sets: SetSnapshot[]): Map<string, RoundRobinResolvedSlot> {
+  const progressionSeedById = new Map<string, RoundRobinResolvedSlot>();
+  for (const set of sets) {
+    const progressionSeeds = [
+      {
+        seedId: set.winnerProgressionSeedId,
+        placeholderName: set.winnerProgressionSeedPlaceholderName,
+        originDisplayIdentifier: set.winnerProgressionOriginPhaseGroupDisplayIdentifier,
+        originPhaseOrder: set.winnerProgressionOriginPhaseOrder,
+        originPlacement: set.winnerProgressionOriginPlacement,
+      },
+      {
+        seedId: set.loserProgressionSeedId,
+        placeholderName: set.loserProgressionSeedPlaceholderName,
+        originDisplayIdentifier: set.loserProgressionOriginPhaseGroupDisplayIdentifier,
+        originPhaseOrder: set.loserProgressionOriginPhaseOrder,
+        originPlacement: set.loserProgressionOriginPlacement,
+      },
+    ];
+    for (const progressionSeed of progressionSeeds) {
+      if (!progressionSeed.seedId || progressionSeedById.has(progressionSeed.seedId)) {
+        continue;
+      }
+      progressionSeedById.set(progressionSeed.seedId, {
+        entrantId: `placeholder:${progressionSeed.seedId}`,
+        entrantName: progressionSeed.placeholderName?.trim() || progressionSeed.seedId,
+        isPlaceholder: true,
+        seedId: progressionSeed.seedId,
+        originPlacement: progressionSeed.originPlacement,
+        originDisplayIdentifier: progressionSeed.originDisplayIdentifier,
+      });
+    }
+  }
+  return progressionSeedById;
+}
+
 export function roundRobinPairKey(leftEntrantId: string, rightEntrantId: string): string {
   return [leftEntrantId, rightEntrantId].sort((left, right) => left.localeCompare(right, "ja")).join("::");
 }
@@ -49,6 +233,264 @@ export function roundRobinPlaceholderId(slot: SetSlot, source?: SetEntrantSource
     || slot.entrantName
     || "unknown";
   return `placeholder:${identity}`;
+}
+
+export function resolveRoundRobinOriginOrder(
+  phaseGroups: PhaseGroupSnapshot[],
+  originPhaseOrder: number | null | undefined,
+  originDisplayIdentifier: string | null | undefined,
+  originPlacement: number | null | undefined,
+): number | null {
+  if (originPlacement === null || originPlacement === undefined) {
+    return null;
+  }
+
+  const normalizedDisplayIdentifier = originDisplayIdentifier?.trim() || null;
+  const sourceGroup = phaseGroups.find((group) =>
+    group.phaseOrder === originPhaseOrder
+    && (group.displayIdentifier?.trim() || null) === normalizedDisplayIdentifier,
+  );
+  return sourceGroup?.progressionsOut
+    ?.filter((progression) => progression.originPlacement === originPlacement)
+    .map((progression) => progression.originOrder)
+    .filter((order): order is number => order !== null)
+    .sort((left, right) => left - right)[0] ?? null;
+}
+
+export function createRoundRobinSourceSlotResolver(input: {
+  setById: Map<string, SetSnapshot>;
+  phaseGroupSeedById: Map<string, PhaseGroupSeedSnapshot>;
+  phaseGroupSeedByNum: Map<number, PhaseGroupSeedSnapshot>;
+  phaseGroupSeedByOriginPlacement: Map<number, PhaseGroupSeedSnapshot>;
+  seedSlotById: Map<string, SetSlot>;
+  progressionSeedById: Map<string, RoundRobinResolvedSlot>;
+  resolveOriginOrder: (
+    originPhaseOrder: number | null | undefined,
+    originDisplayIdentifier: string | null | undefined,
+    originPlacement: number | null | undefined,
+  ) => number | null;
+}): (source: SetEntrantSource | null | undefined, visited: Set<string>) => RoundRobinResolvedSlot | null {
+  const resolveSourceSlot = (
+    source: SetEntrantSource | null | undefined,
+    visited: Set<string>,
+  ): RoundRobinResolvedSlot | null => {
+    if (!source) {
+      return null;
+    }
+
+    if (source.sourceType?.trim().toLowerCase() === "seed" && source.typeId) {
+      const phaseGroupSeed = input.phaseGroupSeedById.get(source.typeId)
+        ?? (source.seedNum !== null && source.seedNum !== undefined
+          ? input.phaseGroupSeedByNum.get(source.seedNum)
+          : undefined)
+        ?? (source.groupSeedNum !== null && source.groupSeedNum !== undefined
+          ? input.phaseGroupSeedByNum.get(source.groupSeedNum)
+          : undefined)
+        ?? (source.placement !== null && source.placement !== undefined
+          ? input.phaseGroupSeedByOriginPlacement.get(source.placement)
+          : undefined);
+      if (phaseGroupSeed?.entrantId) {
+        return {
+          entrantId: phaseGroupSeed.entrantId,
+          entrantName: phaseGroupSeed.entrantName?.trim() || phaseGroupSeed.entrantId,
+          isPlaceholder: false,
+          seedId: phaseGroupSeed.seedId,
+          seedNum: source.seedNum ?? phaseGroupSeed.seedNum,
+          originPlacement: source.placement ?? phaseGroupSeed.originPlacement,
+          originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
+            ?? phaseGroupSeed.originPhaseGroupDisplayIdentifier,
+          originOrder: input.resolveOriginOrder(
+            source.originPhaseOrder ?? phaseGroupSeed.originPhaseOrder,
+            source.originPhaseGroupDisplayIdentifier
+              ?? phaseGroupSeed.originPhaseGroupDisplayIdentifier,
+            source.placement ?? phaseGroupSeed.originPlacement,
+          ),
+        };
+      }
+      const seedSlot = input.seedSlotById.get(source.typeId);
+      if (seedSlot) {
+        const placeholderName = source.placeholderName?.trim()
+          || seedSlot.seedPlaceholderName?.trim()
+          || source.conditionString?.trim();
+        if (seedSlot.entrantId) {
+          return {
+            entrantId: seedSlot.entrantId,
+            entrantName: seedSlot.entrantName,
+            isPlaceholder: false,
+            seedId: seedSlot.seedId,
+            seedNum: source.seedNum ?? seedSlot.seedNum,
+            originPlacement: source.placement ?? seedSlot.seedOriginPlacement,
+            originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
+              ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
+            originOrder: input.resolveOriginOrder(
+              source.originPhaseOrder ?? seedSlot.seedOriginPhaseOrder,
+              source.originPhaseGroupDisplayIdentifier ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
+              source.placement ?? seedSlot.seedOriginPlacement,
+            ),
+          };
+        }
+        if (placeholderName) {
+          return {
+            entrantId: roundRobinPlaceholderId(seedSlot, source),
+            entrantName: placeholderName,
+            isPlaceholder: true,
+            seedId: seedSlot.seedId,
+            seedNum: source.seedNum ?? seedSlot.seedNum,
+            originPlacement: source.placement ?? seedSlot.seedOriginPlacement,
+            originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
+              ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
+            originOrder: input.resolveOriginOrder(
+              source.originPhaseOrder ?? seedSlot.seedOriginPhaseOrder,
+              source.originPhaseGroupDisplayIdentifier ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
+              source.placement ?? seedSlot.seedOriginPlacement,
+            ),
+          };
+        }
+      }
+      const progressionSeed = input.progressionSeedById.get(source.typeId);
+      if (progressionSeed?.entrantName && progressionSeed.entrantName !== progressionSeed.seedId) {
+        return {
+          ...progressionSeed,
+          entrantName: source.placeholderName?.trim() || progressionSeed.entrantName,
+          seedNum: source.seedNum ?? progressionSeed.seedNum,
+          originPlacement: source.originPlacement ?? progressionSeed.originPlacement,
+          originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
+            ?? progressionSeed.originDisplayIdentifier,
+          originOrder: input.resolveOriginOrder(
+            source.originPhaseOrder,
+            source.originPhaseGroupDisplayIdentifier ?? progressionSeed.originDisplayIdentifier,
+            source.originPlacement ?? progressionSeed.originPlacement,
+          ),
+        };
+      }
+    }
+
+    const sourceSetId = source.resolvedSetId ?? source.typeId;
+    const sourceSet = sourceSetId ? input.setById.get(sourceSetId) : undefined;
+    if (!sourceSet || visited.has(sourceSet.setId)) {
+      const placeholderName = source.placeholderName?.trim() || source.conditionString?.trim();
+      return placeholderName
+        ? {
+          entrantId: roundRobinPlaceholderId({
+            entrantId: null,
+            entrantName: placeholderName,
+            seedId: null,
+            seedNum: null,
+            seedPlaceholderName: null,
+            score: null,
+          }, source),
+          entrantName: placeholderName,
+          isPlaceholder: true,
+        }
+        : null;
+    }
+
+    const nextVisited = new Set(visited);
+    nextVisited.add(sourceSet.setId);
+    const condition = source.condition?.trim().toLowerCase();
+    if ((condition === "winner" || condition === "loser") && sourceSet.winnerId) {
+      const candidate = sourceSet.slots.find((slot) => {
+        if (!slot.entrantId) {
+          return false;
+        }
+        return condition === "winner"
+          ? slot.entrantId === sourceSet.winnerId
+          : slot.entrantId !== sourceSet.winnerId;
+      });
+      if (candidate?.entrantId) {
+        return {
+          entrantId: candidate.entrantId,
+          entrantName: candidate.entrantName,
+          isPlaceholder: false,
+          seedId: candidate.seedId,
+          seedNum: candidate.seedNum,
+          originPlacement: candidate.seedOriginPlacement,
+          originDisplayIdentifier: candidate.seedOriginPhaseGroupDisplayIdentifier,
+          originOrder: input.resolveOriginOrder(
+            source.originPhaseOrder,
+            source.originPhaseGroupDisplayIdentifier ?? candidate.seedOriginPhaseGroupDisplayIdentifier,
+            source.originPlacement ?? candidate.seedOriginPlacement,
+          ),
+        };
+      }
+    }
+
+    const nestedSources = [sourceSet.entrant1Source, sourceSet.entrant2Source];
+    return nestedSources
+      .map((nestedSource) => resolveSourceSlot(nestedSource, nextVisited))
+      .find((resolved): resolved is RoundRobinResolvedSlot => resolved !== null)
+      ?? (source.placeholderName?.trim()
+        ? {
+          entrantId: roundRobinPlaceholderId({
+            entrantId: null,
+            entrantName: source.placeholderName.trim(),
+            seedId: null,
+            seedNum: null,
+            seedPlaceholderName: source.placeholderName.trim(),
+            score: null,
+          }, source),
+          entrantName: source.placeholderName.trim(),
+          isPlaceholder: true,
+        }
+        : null);
+  };
+
+  return resolveSourceSlot;
+}
+
+export function buildRoundRobinOriginAxisOrder(
+  entrantOriginPlacements: Map<string, number>,
+  entrantOriginDisplayIdentifiers: Map<string, string>,
+  originDisplayIdentifiers: Iterable<string>,
+): Map<string, number> {
+  const orderedDisplayIdentifiers = [...new Set(originDisplayIdentifiers)]
+    .sort((left, right) => left.localeCompare(right, "ja"));
+  const displayIdentifierOrder = new Map(
+    orderedDisplayIdentifiers.map((displayIdentifier, index) => [displayIdentifier, index]),
+  );
+  const groupCount = orderedDisplayIdentifiers.length;
+  const axisOrderByEntrantId = new Map<string, number>();
+
+  for (const [entrantId, placement] of entrantOriginPlacements) {
+    const groupIdentifier = entrantOriginDisplayIdentifiers.get(entrantId);
+    const groupOrder = groupIdentifier === undefined
+      ? groupCount
+      : displayIdentifierOrder.get(groupIdentifier) ?? groupCount;
+    if (groupCount === 0 || groupOrder === groupCount) {
+      axisOrderByEntrantId.set(entrantId, placement * (groupCount + 1));
+      continue;
+    }
+
+    const groupOrderInPlacement = placement % 2 === 0
+      ? groupCount - 1 - groupOrder
+      : groupOrder;
+    axisOrderByEntrantId.set(entrantId, (placement - 1) * groupCount + groupOrderInPlacement);
+  }
+
+  return axisOrderByEntrantId;
+}
+
+export function indexRoundRobinSeedSlotsById(sets: SetSnapshot[]): Map<string, SetSlot> {
+  const seedSlotById = new Map<string, SetSlot>();
+  for (const set of sets) {
+    for (const slot of set.slots) {
+      if (!slot.seedId) {
+        continue;
+      }
+
+      const current = seedSlotById.get(slot.seedId);
+      const slotHasOrigin = slot.seedOriginPlacement !== null
+        && slot.seedOriginPlacement !== undefined
+        && Boolean(slot.seedOriginPhaseGroupDisplayIdentifier?.trim());
+      const currentHasOrigin = current?.seedOriginPlacement !== null
+        && current?.seedOriginPlacement !== undefined
+        && Boolean(current?.seedOriginPhaseGroupDisplayIdentifier?.trim());
+      if (!current || (slotHasOrigin && !currentHasOrigin)) {
+        seedSlotById.set(slot.seedId, slot);
+      }
+    }
+  }
+  return seedSlotById;
 }
 
 type BuildRoundRobinMatrixRowsInput = {

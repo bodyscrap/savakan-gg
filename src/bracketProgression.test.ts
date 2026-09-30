@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { collectEventEntrants, sortEventEntrants } from "./bracketProgression";
-import type { SetSnapshot } from "./bracketProgression";
+import {
+  calculateRoundRobinHeadToHeadPoints,
+  collectEventEntrants,
+  resolveRoundRobinTieBreakRules,
+  sortEventEntrants,
+} from "./bracketProgression";
+import type { RoundRobinStanding, SetSnapshot } from "./bracketProgression";
 
 function makeSet(setId: string, slots: SetSnapshot["slots"]): SetSnapshot {
   return { setId, slots } as SetSnapshot;
@@ -48,5 +53,44 @@ describe("event entrants from sets", () => {
       "unseeded-b",
       "seed-1",
     ]);
+  });
+});
+
+describe("round-robin head-to-head tie-break", () => {
+  it("counts wins only among entrants tied by the preceding rule", () => {
+    const standings: RoundRobinStanding[] = [
+      { entrantId: "a", entrantName: "A", isPlaceholder: false, wins: 2, losses: 0, gameWins: 4, gameLosses: 1, h2hPoints: 0, qualified: false },
+      { entrantId: "b", entrantName: "B", isPlaceholder: false, wins: 2, losses: 0, gameWins: 3, gameLosses: 2, h2hPoints: 0, qualified: false },
+      { entrantId: "c", entrantName: "C", isPlaceholder: false, wins: 1, losses: 1, gameWins: 2, gameLosses: 2, h2hPoints: 0, qualified: false },
+    ];
+    const headToHeadWins = new Map([
+      ["a", new Map([["b", 1], ["c", 1]])],
+      ["b", new Map([["a", 1]])],
+      ["c", new Map<string, number>()],
+    ]);
+
+    expect(calculateRoundRobinHeadToHeadPoints(
+      standings,
+      ["total_sets_won", "head_to_head"],
+      headToHeadWins,
+    )).toEqual(new Map([["a", 1], ["b", 1], ["c", 0]]));
+    expect(standings.every((standing) => standing.h2hPoints === 0)).toBe(true);
+  });
+
+  it("returns no calculated values when head-to-head is not configured", () => {
+    expect(calculateRoundRobinHeadToHeadPoints([], ["total_sets_won"], new Map())).toEqual(new Map());
+  });
+
+  it("uses the default rule when no tie-break rules are configured", () => {
+    expect(resolveRoundRobinTieBreakRules([])).toEqual(["total_sets_won"]);
+  });
+
+  it("normalizes configured rules, removes unknown rules, and keeps first occurrence", () => {
+    expect(resolveRoundRobinTieBreakRules([
+      "GAME_WINS",
+      "UNKNOWN_RULE",
+      "HEAD_TO_HEAD",
+      "GAMEWINS",
+    ])).toEqual(["game_wins", "head_to_head"]);
   });
 });

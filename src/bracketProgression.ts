@@ -223,6 +223,16 @@ export function roundRobinTieBreakRuleFromApi(value: string): RoundRobinTieBreak
   return null;
 }
 
+export function resolveRoundRobinTieBreakRules(configuredRules: string[] | null | undefined): RoundRobinTieBreakRule[] {
+  if (!configuredRules || configuredRules.length === 0) {
+    return [...DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES];
+  }
+
+  return [...new Set(configuredRules
+    .map((rule) => roundRobinTieBreakRuleFromApi(rule))
+    .filter((rule): rule is RoundRobinTieBreakRule => rule !== null))];
+}
+
 function roundRobinGameWinPercentage(standing: RoundRobinStanding): number {
   const totalGames = standing.gameWins + standing.gameLosses;
   return totalGames > 0 ? standing.gameWins / totalGames : 0;
@@ -243,6 +253,35 @@ export function compareRoundRobinTieBreakRule(
     return roundRobinGameWinPercentage(right) - roundRobinGameWinPercentage(left);
   }
   return right.h2hPoints - left.h2hPoints;
+}
+
+export function calculateRoundRobinHeadToHeadPoints(
+  standings: RoundRobinStanding[],
+  tieBreakRules: RoundRobinTieBreakRule[],
+  headToHeadWins: Map<string, Map<string, number>>,
+): Map<string, number> {
+  const headToHeadRuleIndex = tieBreakRules.indexOf("head_to_head");
+  const pointsByEntrantId = new Map<string, number>();
+  if (headToHeadRuleIndex < 0) {
+    return pointsByEntrantId;
+  }
+
+  const precedingRules = tieBreakRules.slice(0, headToHeadRuleIndex);
+  for (const standing of standings) {
+    const tiedEntrantIds = new Set(
+      standings
+        .filter((candidate) => precedingRules.every((rule) =>
+          compareRoundRobinTieBreakRule(candidate, standing, rule) === 0,
+        ))
+        .map((candidate) => candidate.entrantId),
+    );
+    const points = [...(headToHeadWins.get(standing.entrantId)?.entries() ?? [])]
+      .filter(([opponentId]) => tiedEntrantIds.has(opponentId))
+      .reduce((total, [, wins]) => total + wins, 0);
+    pointsByEntrantId.set(standing.entrantId, points);
+  }
+
+  return pointsByEntrantId;
 }
 
 export function calculateRoundRobinQualifyingCount(input: {

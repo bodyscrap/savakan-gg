@@ -53,7 +53,15 @@ import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDial
 import type { EliminationBracketSectionView } from "./EliminationBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
 import {
+  buildRoundRobinOriginAxisOrder,
   buildRoundRobinMatrixRows,
+  buildRoundRobinProgressionSeeds,
+  buildRoundRobinSeedColumns,
+  buildRoundRobinSeedIndexes,
+  createRoundRobinSourceSlotResolver,
+  findRoundRobinPhaseGroupSeed,
+  indexRoundRobinSeedSlotsById,
+  resolveRoundRobinOriginOrder,
   roundRobinPairKey,
   roundRobinPlaceholderId,
   type RoundRobinBoardData,
@@ -141,19 +149,16 @@ import {
 } from "./snapshotDisplay";
 import {
   calculateRoundRobinQualifyingCount,
-  compareRoundRobinTieBreakRule,
+  calculateRoundRobinHeadToHeadPoints,
   createSetEntrantResolver,
   DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES,
   getBracketProgressionModel,
   parseRoundRobinGameScore,
   rankRoundRobinStandings,
-  roundRobinTieBreakRuleFromApi,
+  resolveRoundRobinTieBreakRules,
   collectEventEntrants,
   sortEventEntrants,
-  type RoundRobinStanding,
-  type RoundRobinTieBreakRule,
   type EventEntrantSnapshot,
-  type SetEntrantSource,
   type SetSlot,
   type SetSnapshot,
 } from "./bracketProgression";
@@ -1582,8 +1587,6 @@ function App() {
       };
     }
 
-    const entrantNames = new Map<string, string>();
-    const entrantSeedIds = new Map<string, string>();
     const sourceDiagnostics: string[] = [];
     const candidateSetCount = selectedPhasePoolGroup?.sets.length ?? 0;
     let twoSlotSetCount = 0;
@@ -1592,340 +1595,53 @@ function App() {
     const unresolvedSetIds: string[] = [];
     const unresolvedSetReasons: string[] = [];
     const isLaterPhase = (selectedPhasePoolGroup?.phaseOrder ?? 1) > 1;
-    const entrantSeedNumbers = new Map<string, number>();
     const entrantOriginPlacements = new Map<string, number>();
     const entrantOriginOrders = new Map<string, number>();
     const entrantOriginDisplayIdentifiers = new Map<string, string>();
     const originDisplayIdentifiers = new Set<string>();
     const setsByPair = new Map<string, SetSnapshot>();
-    const standingByEntrantId = new Map<string, RoundRobinStanding>();
     const headToHeadWins = new Map<string, Map<string, number>>();
     const setById = new Map((selectedEvent?.sets ?? []).map((set) => [set.setId, set]));
-    const phaseGroupSeedById = new Map(
-      (selectedPhasePoolGroup?.seeds ?? [])
-        .filter((seed) => Boolean(seed.seedId))
-        .map((seed) => [seed.seedId, seed]),
-    );
-    const phaseGroupSeedByNum = new Map(
-      (selectedPhasePoolGroup?.seeds ?? [])
-        .filter((seed) => seed.seedNum !== null && seed.seedNum !== undefined)
-        .map((seed) => [seed.seedNum as number, seed]),
-    );
-    const phaseGroupSeedByOriginPlacement = new Map(
-      (selectedPhasePoolGroup?.seeds ?? [])
-        .filter((seed) => seed.originPlacement !== null && seed.originPlacement !== undefined)
-        .map((seed) => [seed.originPlacement as number, seed]),
-    );
-    const phaseGroupSeedIdByEntrantId = new Map(
-      (selectedPhasePoolGroup?.seeds ?? [])
-        .filter((seed) => Boolean(seed.seedId && seed.entrantId))
-        .map((seed) => [seed.entrantId as string, seed.seedId]),
-    );
-    const phaseGroupSeeds = [...(selectedPhasePoolGroup?.seeds ?? [])]
-      .filter((seed) => Boolean(seed.seedId))
-      .sort((left, right) => {
-        if (left.seedNum !== null && left.seedNum !== undefined
-          && right.seedNum !== null && right.seedNum !== undefined
-          && left.seedNum !== right.seedNum) {
-          return left.seedNum - right.seedNum;
-        }
-        if (left.seedNum !== null && left.seedNum !== undefined) {
-          return -1;
-        }
-        if (right.seedNum !== null && right.seedNum !== undefined) {
-          return 1;
-        }
-        return left.seedId.localeCompare(right.seedId);
-      });
-    const seedSlotById = new Map<string, SetSlot>();
-    for (const set of selectedPhasePoolGroup?.sets ?? []) {
-      for (const slot of set.slots) {
-        if (!slot.seedId) {
-          continue;
-        }
-        const current = seedSlotById.get(slot.seedId);
-        const slotHasOrigin = slot.seedOriginPlacement !== null
-          && slot.seedOriginPlacement !== undefined
-          && Boolean(slot.seedOriginPhaseGroupDisplayIdentifier?.trim());
-        const currentHasOrigin = current?.seedOriginPlacement !== null
-          && current?.seedOriginPlacement !== undefined
-          && Boolean(current?.seedOriginPhaseGroupDisplayIdentifier?.trim());
-        if (!current || (slotHasOrigin && !currentHasOrigin)) {
-          seedSlotById.set(slot.seedId, slot);
-        }
-      }
-    }
+    const phaseGroupSeedIndexes = buildRoundRobinSeedIndexes(selectedPhasePoolGroup?.seeds ?? []);
+    const {
+      byId: phaseGroupSeedById,
+      byNum: phaseGroupSeedByNum,
+      byOriginPlacement: phaseGroupSeedByOriginPlacement,
+      seedIdByEntrantId: phaseGroupSeedIdByEntrantId,
+      orderedSeeds: phaseGroupSeeds,
+    } = phaseGroupSeedIndexes;
+    const seedSlotById = indexRoundRobinSeedSlotsById(selectedPhasePoolGroup?.sets ?? []);
 
-    const fixedEntrants: string[] = [];
-    const entrantIdsByColumnKey = new Map<string, string | null>();
-    for (const seed of phaseGroupSeeds) {
-      const seedId = seed.seedId;
-      const columnKey = `seed:${seedId}`;
-      fixedEntrants.push(columnKey);
-      entrantIdsByColumnKey.set(columnKey, seed?.entrantId ?? null);
-      if (seed.entrantId) {
-        entrantSeedIds.set(seed.entrantId, seed.seedId);
-        if (seed.seedNum !== null && seed.seedNum !== undefined) {
-          entrantSeedNumbers.set(seed.entrantId, seed.seedNum);
-        }
-      }
-      if (seed?.entrantId && seed.entrantName?.trim()) {
-        entrantNames.set(columnKey, seed.entrantName.trim());
-      } else {
-        entrantNames.set(
-          columnKey,
-          seed?.placeholderName?.trim()
-            || seedSlotById.get(seedId)?.seedPlaceholderName?.trim()
-            || seed?.entrantName?.trim()
-            || "TBD",
-        );
-      }
-    }
-
-    for (const seed of phaseGroupSeeds) {
-      if (!seed.entrantId || standingByEntrantId.has(seed.entrantId)) {
-        continue;
-      }
-      standingByEntrantId.set(seed.entrantId, {
-        entrantId: seed.entrantId,
-        entrantName: seed.entrantName?.trim() || seed.entrantId,
-        isPlaceholder: false,
-        wins: 0,
-        losses: 0,
-        gameWins: 0,
-        gameLosses: 0,
-        h2hPoints: 0,
-        qualified: false,
-      });
-    }
-
-    type ResolvedRoundRobinSlot = {
-      entrantId: string;
-      entrantName: string;
-      isPlaceholder: boolean;
-      seedId?: string | null;
-      seedNum?: number | null;
-      originPlacement?: number | null;
-      originDisplayIdentifier?: string | null;
-      originOrder?: number | null;
-    };
+    const {
+      fixedEntrants,
+      entrantNames,
+      entrantIdsByColumnKey,
+      entrantSeedIds,
+      entrantSeedNumbers,
+      standingByEntrantId,
+    } = buildRoundRobinSeedColumns(phaseGroupSeeds, seedSlotById);
 
     const findOriginOrder = (
       originPhaseOrder: number | null | undefined,
       originDisplayIdentifier: string | null | undefined,
       originPlacement: number | null | undefined,
-    ): number | null => {
-      if (originPlacement === null || originPlacement === undefined) {
-        return null;
-      }
-      const sourceGroup = (selectedEvent?.phaseGroups ?? []).find((group) =>
-        group.phaseOrder === originPhaseOrder
-        && (group.displayIdentifier?.trim() || null) === (originDisplayIdentifier?.trim() || null),
-      );
-      return sourceGroup?.progressionsOut
-        ?.filter((progression) => progression.originPlacement === originPlacement)
-        .map((progression) => progression.originOrder)
-        .filter((order): order is number => order !== null)
-        .sort((left, right) => left - right)[0] ?? null;
-    };
+    ): number | null => resolveRoundRobinOriginOrder(
+      selectedEvent?.phaseGroups ?? [],
+      originPhaseOrder,
+      originDisplayIdentifier,
+      originPlacement,
+    );
 
-    const progressionSeedById = new Map<string, ResolvedRoundRobinSlot>();
-    for (const set of selectedEvent?.sets ?? []) {
-      const progressionSeeds = [
-        {
-          seedId: set.winnerProgressionSeedId,
-          placeholderName: set.winnerProgressionSeedPlaceholderName,
-          originDisplayIdentifier: set.winnerProgressionOriginPhaseGroupDisplayIdentifier,
-          originPhaseOrder: set.winnerProgressionOriginPhaseOrder,
-          originPlacement: set.winnerProgressionOriginPlacement,
-        },
-        {
-          seedId: set.loserProgressionSeedId,
-          placeholderName: set.loserProgressionSeedPlaceholderName,
-          originDisplayIdentifier: set.loserProgressionOriginPhaseGroupDisplayIdentifier,
-          originPhaseOrder: set.loserProgressionOriginPhaseOrder,
-          originPlacement: set.loserProgressionOriginPlacement,
-        },
-      ];
-      for (const progressionSeed of progressionSeeds) {
-        if (!progressionSeed.seedId || progressionSeedById.has(progressionSeed.seedId)) {
-          continue;
-        }
-        progressionSeedById.set(progressionSeed.seedId, {
-          entrantId: `placeholder:${progressionSeed.seedId}`,
-          entrantName: progressionSeed.placeholderName?.trim() || progressionSeed.seedId,
-          isPlaceholder: true,
-          seedId: progressionSeed.seedId,
-          originPlacement: progressionSeed.originPlacement,
-          originDisplayIdentifier: progressionSeed.originDisplayIdentifier,
-        });
-      }
-    }
-
-    const resolveSourceSlot = (
-      source: SetEntrantSource | null | undefined,
-      visited: Set<string>,
-    ): ResolvedRoundRobinSlot | null => {
-      if (!source) {
-        return null;
-      }
-
-      if (source.sourceType?.trim().toLowerCase() === "seed" && source.typeId) {
-        const phaseGroupSeed = phaseGroupSeedById.get(source.typeId)
-          ?? (source.seedNum !== null && source.seedNum !== undefined
-            ? phaseGroupSeedByNum.get(source.seedNum)
-            : undefined)
-          ?? (source.groupSeedNum !== null && source.groupSeedNum !== undefined
-            ? phaseGroupSeedByNum.get(source.groupSeedNum)
-            : undefined)
-          ?? (source.placement !== null && source.placement !== undefined
-            ? phaseGroupSeedByOriginPlacement.get(source.placement)
-            : undefined);
-        if (phaseGroupSeed?.entrantId) {
-          return {
-            entrantId: phaseGroupSeed.entrantId,
-            entrantName: phaseGroupSeed.entrantName?.trim() || phaseGroupSeed.entrantId,
-            isPlaceholder: false,
-            seedId: phaseGroupSeed.seedId,
-            seedNum: source.seedNum ?? phaseGroupSeed.seedNum,
-            originPlacement: source.placement ?? phaseGroupSeed.originPlacement,
-            originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
-              ?? phaseGroupSeed.originPhaseGroupDisplayIdentifier,
-            originOrder: findOriginOrder(
-              source.originPhaseOrder ?? phaseGroupSeed.originPhaseOrder,
-              source.originPhaseGroupDisplayIdentifier
-                ?? phaseGroupSeed.originPhaseGroupDisplayIdentifier,
-              source.placement ?? phaseGroupSeed.originPlacement,
-            ),
-          };
-        }
-        const seedSlot = seedSlotById.get(source.typeId);
-        if (seedSlot) {
-          const placeholderName = source.placeholderName?.trim()
-            || seedSlot.seedPlaceholderName?.trim()
-            || source.conditionString?.trim();
-          if (seedSlot.entrantId) {
-            return {
-              entrantId: seedSlot.entrantId,
-              entrantName: seedSlot.entrantName,
-              isPlaceholder: false,
-              seedId: seedSlot.seedId,
-              seedNum: source.seedNum ?? seedSlot.seedNum,
-              originPlacement: source.placement ?? seedSlot.seedOriginPlacement,
-              originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
-                ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
-              originOrder: findOriginOrder(
-                source.originPhaseOrder ?? seedSlot.seedOriginPhaseOrder,
-                source.originPhaseGroupDisplayIdentifier ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
-                source.placement ?? seedSlot.seedOriginPlacement,
-              ),
-            };
-          }
-          if (placeholderName) {
-            return {
-              entrantId: roundRobinPlaceholderId(seedSlot, source),
-              entrantName: placeholderName,
-              isPlaceholder: true,
-              seedId: seedSlot.seedId,
-              seedNum: source.seedNum ?? seedSlot.seedNum,
-              originPlacement: source.placement ?? seedSlot.seedOriginPlacement,
-              originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
-                ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
-              originOrder: findOriginOrder(
-                source.originPhaseOrder ?? seedSlot.seedOriginPhaseOrder,
-                source.originPhaseGroupDisplayIdentifier ?? seedSlot.seedOriginPhaseGroupDisplayIdentifier,
-                source.placement ?? seedSlot.seedOriginPlacement,
-              ),
-            };
-          }
-        }
-        const progressionSeed = progressionSeedById.get(source.typeId);
-        if (progressionSeed?.entrantName && progressionSeed.entrantName !== progressionSeed.seedId) {
-          return {
-            ...progressionSeed,
-            entrantName: source.placeholderName?.trim() || progressionSeed.entrantName,
-            seedNum: source.seedNum ?? progressionSeed.seedNum,
-            originPlacement: source.originPlacement ?? progressionSeed.originPlacement,
-            originDisplayIdentifier: source.originPhaseGroupDisplayIdentifier
-              ?? progressionSeed.originDisplayIdentifier,
-            originOrder: findOriginOrder(
-              source.originPhaseOrder,
-              source.originPhaseGroupDisplayIdentifier ?? progressionSeed.originDisplayIdentifier,
-              source.originPlacement ?? progressionSeed.originPlacement,
-            ),
-          };
-        }
-      }
-
-      const sourceSetId = source.resolvedSetId ?? source.typeId;
-      const sourceSet = sourceSetId ? setById.get(sourceSetId) : undefined;
-      if (!sourceSet || visited.has(sourceSet.setId)) {
-        const placeholderName = source.placeholderName?.trim() || source.conditionString?.trim();
-        return placeholderName
-          ? {
-            entrantId: roundRobinPlaceholderId({
-              entrantId: null,
-              entrantName: placeholderName,
-              seedId: null,
-              seedNum: null,
-              seedPlaceholderName: null,
-              score: null,
-            }, source),
-            entrantName: placeholderName,
-            isPlaceholder: true,
-          }
-          : null;
-      }
-
-      const nextVisited = new Set(visited);
-      nextVisited.add(sourceSet.setId);
-      const condition = source.condition?.trim().toLowerCase();
-      if ((condition === "winner" || condition === "loser") && sourceSet.winnerId) {
-        const candidate = sourceSet.slots.find((slot) => {
-          if (!slot.entrantId) {
-            return false;
-          }
-          return condition === "winner"
-            ? slot.entrantId === sourceSet.winnerId
-            : slot.entrantId !== sourceSet.winnerId;
-        });
-        if (candidate?.entrantId) {
-          return {
-            entrantId: candidate.entrantId,
-            entrantName: candidate.entrantName,
-            isPlaceholder: false,
-            seedId: candidate.seedId,
-            seedNum: candidate.seedNum,
-            originPlacement: candidate.seedOriginPlacement,
-            originDisplayIdentifier: candidate.seedOriginPhaseGroupDisplayIdentifier,
-            originOrder: findOriginOrder(
-              source.originPhaseOrder,
-              source.originPhaseGroupDisplayIdentifier ?? candidate.seedOriginPhaseGroupDisplayIdentifier,
-              source.originPlacement ?? candidate.seedOriginPlacement,
-            ),
-          };
-        }
-      }
-
-      const nestedSources = [sourceSet.entrant1Source, sourceSet.entrant2Source];
-      return nestedSources
-        .map((nestedSource) => resolveSourceSlot(nestedSource, nextVisited))
-        .find((resolved): resolved is ResolvedRoundRobinSlot => resolved !== null)
-        ?? (source.placeholderName?.trim()
-          ? {
-            entrantId: roundRobinPlaceholderId({
-              entrantId: null,
-              entrantName: source.placeholderName.trim(),
-              seedId: null,
-              seedNum: null,
-              seedPlaceholderName: source.placeholderName.trim(),
-              score: null,
-            }, source),
-            entrantName: source.placeholderName.trim(),
-            isPlaceholder: true,
-          }
-          : null);
-    };
+    const progressionSeedById = buildRoundRobinProgressionSeeds(selectedEvent?.sets ?? []);
+    const resolveSourceSlot = createRoundRobinSourceSlotResolver({
+      setById,
+      phaseGroupSeedById,
+      phaseGroupSeedByNum,
+      phaseGroupSeedByOriginPlacement,
+      seedSlotById,
+      progressionSeedById,
+      resolveOriginOrder: findOriginOrder,
+    });
 
     for (const set of selectedPhasePoolGroup?.sets ?? []) {
       if (set.slots.length === 2) {
@@ -1957,19 +1673,7 @@ function App() {
             `condition=${source?.conditionString || ""}`,
           ].join(" | "));
         }
-        const slotSeed = (slot.seedId ? phaseGroupSeedById.get(slot.seedId) : undefined)
-          ?? (slot.seedNum !== null && slot.seedNum !== undefined
-            ? phaseGroupSeedByNum.get(slot.seedNum)
-            : undefined)
-          ?? (source?.seedNum !== null && source?.seedNum !== undefined
-            ? phaseGroupSeedByNum.get(source.seedNum)
-            : undefined)
-          ?? (source?.groupSeedNum !== null && source?.groupSeedNum !== undefined
-            ? phaseGroupSeedByNum.get(source.groupSeedNum)
-            : undefined)
-          ?? (source?.placement !== null && source?.placement !== undefined
-            ? phaseGroupSeedByOriginPlacement.get(source.placement)
-            : undefined);
+        const slotSeed = findRoundRobinPhaseGroupSeed(slot, source, phaseGroupSeedIndexes);
         const slotSeedSlot = slot.seedId ? seedSlotById.get(slot.seedId) : undefined;
         const resolved = slot.entrantId
           ? {
@@ -2174,26 +1878,16 @@ function App() {
       }
     }
 
-    const configuredTieBreakOrder: string[] = selectedPhasePoolGroup?.tiebreakOrder ?? [];
-    const tieBreakRules = configuredTieBreakOrder.length === 0
-      ? [...DEFAULT_ROUND_ROBIN_TIE_BREAK_RULES]
-      : [...new Set<RoundRobinTieBreakRule>(configuredTieBreakOrder
-        .map((rule) => roundRobinTieBreakRuleFromApi(rule))
-        .filter((rule): rule is RoundRobinTieBreakRule => rule !== null))];
-    const headToHeadRuleIndex = tieBreakRules.indexOf("head_to_head");
-    if (headToHeadRuleIndex >= 0) {
-      const standingsBeforeHeadToHead = [...standingByEntrantId.values()];
-      const precedingRules = tieBreakRules.slice(0, headToHeadRuleIndex);
-      for (const standing of standingsBeforeHeadToHead) {
-        const tiedEntrantIds = new Set(
-          standingsBeforeHeadToHead
-            .filter((candidate) => precedingRules.every((rule) =>
-              compareRoundRobinTieBreakRule(candidate, standing, rule) === 0))
-            .map((candidate) => candidate.entrantId),
-        );
-        standing.h2hPoints = [...(headToHeadWins.get(standing.entrantId)?.entries() ?? [])]
-          .filter(([opponentId]) => tiedEntrantIds.has(opponentId))
-          .reduce((points, [, wins]) => points + wins, 0);
+    const tieBreakRules = resolveRoundRobinTieBreakRules(selectedPhasePoolGroup?.tiebreakOrder);
+    const headToHeadPoints = calculateRoundRobinHeadToHeadPoints(
+      [...standingByEntrantId.values()],
+      tieBreakRules,
+      headToHeadWins,
+    );
+    for (const [entrantId, points] of headToHeadPoints) {
+      const standing = standingByEntrantId.get(entrantId);
+      if (standing) {
+        standing.h2hPoints = points;
       }
     }
 
@@ -2218,31 +1912,11 @@ function App() {
       const seedId = entrantSeedIds.get(entrantId);
       return seedId === undefined ? undefined : seedOrderById.get(seedId);
     };
-    const orderedOriginDisplayIdentifiers = [...originDisplayIdentifiers].sort((left, right) =>
-      left.localeCompare(right, "ja"),
+    const entrantAxisOrder = buildRoundRobinOriginAxisOrder(
+      entrantOriginPlacements,
+      entrantOriginDisplayIdentifiers,
+      originDisplayIdentifiers,
     );
-    const originDisplayIdentifierOrder = new Map(
-      orderedOriginDisplayIdentifiers.map((displayIdentifier, index) => [displayIdentifier, index]),
-    );
-    const originGroupCount = orderedOriginDisplayIdentifiers.length;
-    const entrantAxisOrder = (entrantId: string): number => {
-      const placement = entrantOriginPlacements.get(entrantId);
-      const groupIdentifier = entrantOriginDisplayIdentifiers.get(entrantId);
-      const groupOrder = groupIdentifier === undefined
-        ? originGroupCount
-        : originDisplayIdentifierOrder.get(groupIdentifier) ?? originGroupCount;
-      if (placement === undefined) {
-        return Number.MAX_SAFE_INTEGER;
-      }
-      if (originGroupCount === 0 || groupOrder === originGroupCount) {
-        return placement * (originGroupCount + 1);
-      }
-
-      const groupOrderInPlacement = placement % 2 === 0
-        ? originGroupCount - 1 - groupOrder
-        : groupOrder;
-      return (placement - 1) * originGroupCount + groupOrderInPlacement;
-    };
     const sortedEntrants = [...standingByEntrantId.keys()].sort((leftEntrantId, rightEntrantId) => {
       const leftSeedOrder = entrantSeedOrder(leftEntrantId);
       const rightSeedOrder = entrantSeedOrder(rightEntrantId);
@@ -2279,7 +1953,8 @@ function App() {
           }
         }
 
-        const byDisplayIdentifier = entrantAxisOrder(leftEntrantId) - entrantAxisOrder(rightEntrantId);
+        const byDisplayIdentifier = (entrantAxisOrder.get(leftEntrantId) ?? Number.MAX_SAFE_INTEGER)
+          - (entrantAxisOrder.get(rightEntrantId) ?? Number.MAX_SAFE_INTEGER);
         if (byDisplayIdentifier !== 0) {
           return byDisplayIdentifier;
         }
