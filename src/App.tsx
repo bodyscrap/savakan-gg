@@ -7,7 +7,7 @@ import QRCode from "qrcode";
 import jsQR from "jsqr";
 import { CreateSnapshot, type EventSnapshotProgress, type TournamentEventPreviewItem, type TournamentPreview } from "./CreateSnapshot";
 import { SettingsScreen } from "./SettingMenu";
-import { StatusBoard, StatusBoardHero, type CallListEventGroup, type CallListEventSortStrategy } from "./StatusBoard";
+import { StatusBoard, StatusBoardHero } from "./StatusBoard";
 import { PlayerListInfo } from "./PlayerListInfo";
 import { MessageBox, type GenericMessage } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
@@ -43,6 +43,21 @@ import { useUserCards } from "./useUserCards";
 import { useItemLists } from "./useItemLists";
 import { useMailbox } from "./useMailbox";
 import {
+  CALL_LIST_COLOR_SECONDS_MAX,
+  CALL_LIST_COLOR_SECONDS_MIN,
+  CALL_LIST_ROTATE_SECONDS_MAX,
+  CALL_LIST_ROTATE_SECONDS_MIN,
+  normalizeCallListColorSeconds,
+  normalizeCallListRotateSeconds,
+  useCallList,
+} from "./useCallList";
+import {
+  useTournamentWorkspace,
+  type LocalSetResultMeta,
+  type PlaySide,
+  type TournamentWorkspace,
+} from "./useTournamentWorkspace";
+import {
   buildBracketSections,
   buildBracketSectionsForView,
   buildPhaseNames,
@@ -61,15 +76,10 @@ import {
   type PhasePoolGroup,
 } from "./bracketDisplay";
 import {
-  buildCallListDedupKey,
   buildCallSyncStatusTargets,
-  compareCallListEventGroup,
-  compareCallListEventGroupByMaxElapsed,
-  extractCallEventMeta,
-  extractCallThreadIdentity,
+  extractMetaString,
   extractPlayerIdFromBarcodeResults,
   extractPlayerIdFromQrRawValue,
-  extractMetaString,
   getMailboxMethodLabel,
   isLikelyPlayerId,
   isDqRequestMessage,
@@ -170,88 +180,9 @@ function normalizeSourceText(kind: "winners" | "losers", setCode: string): strin
   return `${kind === "winners" ? "winner" : "loser"} of ${setCode}`;
 }
 
-type TournamentSnapshot = {
-  tournamentId: string;
-  slug: string;
-  name: string;
-  events: EventSnapshot[];
-  updatedAt: string;
-};
-
-type PlaySide = "1P" | "2P";
-
-type EventEntrantMeta = {
-  entrantId: string;
-  entrantName: string;
-  playSide: PlaySide | null;
-  characterNames: string[];
-  authCode: string;
-  notes: string | null;
-};
-
-type EventLocalMeta = {
-  eventId: string;
-  eventName: string;
-  eventAlias: string | null;
-  lastSelectedPhaseName?: string | null;
-  lastSelectedPhaseGroupName?: string | null;
-  eventManagement?: EventManagementMeta | null;
-  entrants: EventEntrantMeta[];
-};
-
-type SetPlaySideMeta = {
-  setId: string;
-  entrantId: string;
-  playSide: PlaySide;
-};
-
-type LocalSetResultMeta = {
-  eventId: string;
-  eventName: string;
-  setId: string;
-  winnerId: string;
-  scoreCsv: string;
-  directWin?: boolean;
-  confirmed?: boolean;
-  slotScores?: Array<{ entrantId: string; score: number }>;
-  recordedAt: string;
-};
-
-type LocalGrandFinalResetResultMeta = {
-  eventId: string;
-  eventName: string;
-  sourceGrandFinalSetId: string;
-  winnerId: string;
-  scoreCsv: string;
-  directWin?: boolean;
-  confirmed?: boolean;
-  slotScores?: Array<{ entrantId: string; score: number }>;
-  recordedAt: string;
-};
-
 type SavePlayerMetaOptions = {
   silent?: boolean;
   manageBusy?: boolean;
-};
-
-type TournamentLocalMeta = {
-  tournamentId: string;
-  slug: string;
-  events: EventLocalMeta[];
-  setPlaySides?: SetPlaySideMeta[];
-  pendingSetResults: LocalSetResultMeta[];
-  pendingGrandFinalResetResults?: LocalGrandFinalResetResultMeta[];
-  updatedAt: string;
-};
-
-type TournamentWorkspace = {
-  snapshot: TournamentSnapshot;
-  localMeta: TournamentLocalMeta;
-};
-
-type WorkspaceUpdatedEvent = {
-  slug: string;
-  eventId: string;
 };
 
 type ObsOverlaySetInput = {
@@ -268,7 +199,6 @@ type ObsOverlaySetInput = {
 };
 
 const EVENT_SNAPSHOT_PROGRESS_EVENT = "event_snapshot_progress";
-const WORKSPACE_UPDATED_EVENT = "workspace_updated";
 const OBS_OVERLAY_STATE_CHANGED_EVENT = "obs_overlay_state_changed";
 
 type PlayerMetaDraft = {
@@ -349,23 +279,6 @@ function withMobileInputPollMsParam(url: string, pollMs: number): string {
   }
 }
 
-type EventManagementMeta = {
-  sideDecisionMethod: "upper_1p" | "upper_2p" | "random";
-  itemListSnapshots: ItemListConfig[];
-  categoryMinCounts?: number[];
-  categoryMaxCounts?: number[];
-  categoryAllowDuplicates?: boolean[];
-  totalMinCount?: number;
-  totalMaxCount?: number;
-};
-
-const CALL_LIST_EVENT_PAGE_SIZE = 3;
-const CALL_LIST_ROTATE_SECONDS_MIN = 1;
-const CALL_LIST_ROTATE_SECONDS_MAX = 180;
-const CALL_LIST_ROTATE_SECONDS_DEFAULT = 7;
-const CALL_LIST_COLOR_SECONDS_MIN = 30;
-const CALL_LIST_COLOR_SECONDS_MAX = 3600;
-const CALL_LIST_COLOR_SECONDS_DEFAULT = 600;
 const STARTGG_FETCH_PER_PAGE_DEFAULT = 50;
 const MOBILE_INPUT_POLLING_MS_MIN = 500;
 const MOBILE_INPUT_POLLING_MS_MAX = 10000;
@@ -391,40 +304,6 @@ function normalizeEventSettingStorageKey(rawKey: string): string {
   }
 
   return `${normalizeSlugForSettingKey(slugPart)}::${eventId}`;
-}
-
-function normalizeCallListRotateSeconds(rawValue: unknown, fallback = CALL_LIST_ROTATE_SECONDS_DEFAULT): number {
-  const numeric = Number(rawValue);
-  if (!Number.isFinite(numeric)) {
-    return fallback;
-  }
-
-  const rounded = Math.trunc(numeric);
-  if (rounded < CALL_LIST_ROTATE_SECONDS_MIN) {
-    return CALL_LIST_ROTATE_SECONDS_MIN;
-  }
-  if (rounded > CALL_LIST_ROTATE_SECONDS_MAX) {
-    return CALL_LIST_ROTATE_SECONDS_MAX;
-  }
-
-  return rounded;
-}
-
-function normalizeCallListColorSeconds(rawValue: unknown, fallback = CALL_LIST_COLOR_SECONDS_DEFAULT): number {
-  const numeric = Number(rawValue);
-  if (!Number.isFinite(numeric)) {
-    return fallback;
-  }
-
-  const rounded = Math.trunc(numeric);
-  if (rounded < CALL_LIST_COLOR_SECONDS_MIN) {
-    return CALL_LIST_COLOR_SECONDS_MIN;
-  }
-  if (rounded > CALL_LIST_COLOR_SECONDS_MAX) {
-    return CALL_LIST_COLOR_SECONDS_MAX;
-  }
-
-  return rounded;
 }
 
 function normalizeStartggFetchPerPage(rawValue: unknown, fallback = STARTGG_FETCH_PER_PAGE_DEFAULT): number {
@@ -569,8 +448,6 @@ function isSameEventManagementSetting(
 
 const EVENT_MGMT_STORAGE_KEY = "savakan-gg.event-mgmt.v1";
 const SENDER_PROFILE_STORAGE_KEY = "savakan-gg.sender-profile.v1";
-const CALL_LIST_ROTATE_SECONDS_STORAGE_KEY = "savakan-gg.call-list-rotate-seconds.v1";
-const CALL_LIST_COLOR_SECONDS_STORAGE_KEY = "savakan-gg.call-list-color-seconds.v1";
 const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
 const BRACKET_ZOOM_LEVEL_STORAGE_KEY = "savakan-gg.bracket-zoom-level.v1";
 const STARTGG_FETCH_PER_PAGE_STORAGE_KEY = "savakan-gg.startgg-fetch-per-page.v1";
@@ -1066,9 +943,7 @@ function App() {
   const [eventAliasDraft, setEventAliasDraft] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
   const [createSnapshotProgress, setCreateSnapshotProgress] = useState<EventSnapshotProgress | null>(null);
-  const [workspace, setWorkspace] = useState<TournamentWorkspace | null>(null);
   const [selectedEventId, setSelectedEventId] = useState("");
-  const workspacePollingBlockedRef = useRef(false);
   const [selectedPhaseName, setSelectedPhaseName] = useState("");
   const [selectedPhasePoolKey, setSelectedPhasePoolKey] = useState("");
   const [activeMatchSetId, setActiveMatchSetId] = useState("");
@@ -1086,10 +961,8 @@ function App() {
   } = useSetResultDrafts();
   const [activeMatchSideDrafts, setActiveMatchSideDrafts] = useState<Record<string, PlaySide | "">>({});
   const [metaDrafts, setMetaDrafts] = useState<Record<string, PlayerMetaDraft>>({});
-  const [localSnapshotEvents, setLocalSnapshotEvents] = useState<LocalSnapshotEventListItem[]>([]);
   const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
   const [homeSelectedSnapshotKey, setHomeSelectedSnapshotKey] = useState("");
-  const [loadingLocalSnapshotEvents, setLoadingLocalSnapshotEvents] = useState(false);
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
   const [eventMgmtSettings, setEventMgmtSettings] = useState<Record<string, EventManagementSetting>>({});
   const [eventMgmtSettingsReady, setEventMgmtSettingsReady] = useState(false);
@@ -1104,21 +977,11 @@ function App() {
   const [senderNetworkCandidatesLoading, setSenderNetworkCandidatesLoading] = useState(false);
   const [senderIdentityChangedSinceMailboxClear, setSenderIdentityChangedSinceMailboxClear] = useState(false);
   const [dqCameraActive, setDqCameraActive] = useState(false);
-  const [callListPageIndex, setCallListPageIndex] = useState(0);
-  const [callListPageRotateSeconds, setCallListPageRotateSeconds] = useState(CALL_LIST_ROTATE_SECONDS_DEFAULT);
-  const [callListColorSeconds, setCallListColorSeconds] = useState(CALL_LIST_COLOR_SECONDS_DEFAULT);
-  const [callListEventSortStrategy, setCallListEventSortStrategy] = useState<CallListEventSortStrategy>("alias");
-  const [callListFocusOwnUnresolved, setCallListFocusOwnUnresolved] = useState(false);
   const [displayBracketPlayersBySide, setDisplayBracketPlayersBySide] = useState(true);
   const [bracketZoomLevel, setBracketZoomLevel] = useState<number>(Number(BRACKET_ZOOM_LEVELS[0]));
   const [mobileInputPollingMs, setMobileInputPollingMs] = useState<number>(MOBILE_INPUT_POLLING_MS_DEFAULT);
   const [overlaySwitchConfirm, setOverlaySwitchConfirm] = useState<{ targetSetId: string; targetSetLabel: string } | null>(null);
   const [resultConfirmation, setResultConfirmation] = useState<ResultConfirmationState | null>(null);
-  const [callListPageSwitchedAtMs, setCallListPageSwitchedAtMs] = useState(() => Date.now());
-  const [callListProgressNowMs, setCallListProgressNowMs] = useState(() => Date.now());
-  const [callListDisplayGroups, setCallListDisplayGroups] = useState<CallListEventGroup[]>([]);
-  const [callListRebuildToken, setCallListRebuildToken] = useState(0);
-  const [callListCycleCount, setCallListCycleCount] = useState(0);
   const [callingEntrantId, setCallingEntrantId] = useState("");
   const [disableLocalCommunication, setDisableLocalCommunication] = useState(false);
   const [sideDecisionMethod, setSideDecisionMethod] = useState<EventManagementSetting["sideDecisionMethod"]>("upper_1p");
@@ -1145,9 +1008,56 @@ function App() {
   const [totalItemMaxCount, setTotalItemMaxCount] = useState(3);
   const [selectedTournamentEntrantId, setSelectedTournamentEntrantId] = useState("");
   const [busy, setBusy] = useState(false);
-  workspacePollingBlockedRef.current = busy || createBusy || loadingLocalSnapshotEvents;
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const {
+    workspace,
+    setWorkspace,
+    localSnapshotEvents,
+    setLocalSnapshotEvents,
+    loadingLocalSnapshotEvents,
+    fetchLocalSnapshotEvents,
+    loadWorkspace,
+    refreshRemoteSnapshot,
+    restoreWorkspaceGraph,
+    saveEventManagementMeta,
+    saveEventAlias,
+    saveLocalPlayerMeta,
+    saveLocalSetPlaySide,
+  } = useTournamentWorkspace({
+    activeTab,
+    slug,
+    selectedEventId,
+    busy,
+    createBusy,
+    onWorkspaceUpdated: (result) => {
+      clearAllDrafts();
+
+      const refreshedSet = result.snapshot.events
+        .find((event) => event.eventId === selectedEventId)
+        ?.sets.find((set) => set.setId === activeMatchSetId);
+      if (!refreshedSet) {
+        return;
+      }
+
+      const refreshedPending = result.localMeta.pendingSetResults.find(
+        (item) => item.eventId === selectedEventId && item.setId === activeMatchSetId,
+      );
+      setScoreDrafts(
+        refreshedPending
+          ? buildScoreDraftsFromResult(refreshedSet, refreshedPending)
+          : buildScoreDraftsFromSet(refreshedSet),
+      );
+      setDirectWinnerId(refreshedPending?.directWin ? refreshedPending.winnerId : null);
+      const refreshedSideDrafts: Record<string, PlaySide | ""> = {};
+      for (const slot of refreshedSet.slots) {
+        if (slot.entrantId) {
+          refreshedSideDrafts[slot.entrantId] = getSetSlotSide(refreshedSet.setId, slot.entrantId);
+        }
+      }
+      setActiveMatchSideDrafts(refreshedSideDrafts);
+    },
+  });
   const {
     saveLocalResult: persistLocalSetResult,
     discardAllLocalDrafts,
@@ -1338,72 +1248,6 @@ function App() {
 
     void (async () => {
       try {
-        const off = await listen<WorkspaceUpdatedEvent>(WORKSPACE_UPDATED_EVENT, (event) => {
-          if (!alive) {
-            return;
-          }
-
-          if (toApiSlug(event.payload.slug) !== toApiSlug(slug) || event.payload.eventId !== selectedEventId) {
-            return;
-          }
-
-          void (async () => {
-            try {
-              const result = await invoke<TournamentWorkspace>("load_local_tournament_workspace", {
-                slug: toApiSlug(slug),
-                eventId: selectedEventId,
-              });
-              if (alive) {
-                setWorkspace(result);
-                clearAllDrafts();
-
-                const refreshedSet = result.snapshot.events
-                  .find((event) => event.eventId === selectedEventId)
-                  ?.sets.find((set) => set.setId === activeMatchSetId);
-                if (refreshedSet) {
-                  const refreshedPending = result.localMeta.pendingSetResults.find(
-                    (item) => item.eventId === selectedEventId && item.setId === activeMatchSetId,
-                  );
-                  setScoreDrafts(
-                    refreshedPending
-                      ? buildScoreDraftsFromResult(refreshedSet, refreshedPending)
-                      : buildScoreDraftsFromSet(refreshedSet),
-                  );
-                  setDirectWinnerId(refreshedPending?.directWin ? refreshedPending.winnerId : null);
-                  const refreshedSideDrafts: Record<string, PlaySide | ""> = {};
-                  for (const slot of refreshedSet.slots) {
-                    if (slot.entrantId) {
-                      refreshedSideDrafts[slot.entrantId] = getSetSlotSide(refreshedSet.setId, slot.entrantId);
-                    }
-                  }
-                  setActiveMatchSideDrafts(refreshedSideDrafts);
-                }
-              }
-            } catch {
-              // ignore refresh errors from mobile-triggered updates
-            }
-          })();
-        });
-        unlisten = off;
-      } catch {
-        // ignore listener setup failure in non-Tauri environments
-      }
-    })();
-
-    return () => {
-      alive = false;
-      if (unlisten) {
-        unlisten();
-      }
-    };
-  }, [activeMatchSetId, selectedEventId, slug]);
-
-  useEffect(() => {
-    let alive = true;
-    let unlisten: (() => void) | null = null;
-
-    void (async () => {
-      try {
         const off = await listen<ObsOverlayState>(OBS_OVERLAY_STATE_CHANGED_EVENT, (event) => {
           if (!alive) {
             return;
@@ -1500,24 +1344,6 @@ function App() {
 
   useEffect(() => {
     try {
-      const rawRotateSeconds = window.localStorage.getItem(CALL_LIST_ROTATE_SECONDS_STORAGE_KEY);
-      if (rawRotateSeconds !== null) {
-        setCallListPageRotateSeconds(normalizeCallListRotateSeconds(rawRotateSeconds));
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      const rawColorSeconds = window.localStorage.getItem(CALL_LIST_COLOR_SECONDS_STORAGE_KEY);
-      if (rawColorSeconds !== null) {
-        setCallListColorSeconds(normalizeCallListColorSeconds(rawColorSeconds));
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
       const rawBracketSideOrderDisplay = window.localStorage.getItem(BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY);
       if (rawBracketSideOrderDisplay !== null) {
         setDisplayBracketPlayersBySide(rawBracketSideOrderDisplay === "true");
@@ -1564,28 +1390,6 @@ function App() {
       // ignore
     }
   }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        CALL_LIST_ROTATE_SECONDS_STORAGE_KEY,
-        String(normalizeCallListRotateSeconds(callListPageRotateSeconds)),
-      );
-    } catch {
-      // ignore
-    }
-  }, [callListPageRotateSeconds]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        CALL_LIST_COLOR_SECONDS_STORAGE_KEY,
-        String(normalizeCallListColorSeconds(callListColorSeconds)),
-      );
-    } catch {
-      // ignore
-    }
-  }, [callListColorSeconds]);
 
   useEffect(() => {
     try {
@@ -1818,46 +1622,6 @@ function App() {
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeTab !== "bracket") {
-      return;
-    }
-
-    const normalizedSlug = toApiSlug(slug);
-    if (normalizedSlug === "" || selectedEventId.trim() === "") {
-      return;
-    }
-
-    const workspaceAlreadyLoaded = workspace
-      && toApiSlug(workspace.snapshot.slug) === normalizedSlug
-      && workspace.snapshot.events.some((event) => event.eventId === selectedEventId);
-    if (workspaceAlreadyLoaded) {
-      return;
-    }
-
-    if (workspacePollingBlockedRef.current) {
-      return;
-    }
-
-    let disposed = false;
-    void invoke<TournamentWorkspace>("load_local_tournament_workspace", {
-      slug: normalizedSlug,
-      eventId: selectedEventId,
-    })
-      .then((result) => {
-        if (!disposed) {
-          setWorkspace(result);
-        }
-      })
-      .catch(() => {
-        // Ignore refresh failures when opening the bracket.
-      });
-
-    return () => {
-      disposed = true;
-    };
-  }, [activeTab, selectedEventId, slug, workspace]);
-
-  useEffect(() => {
     if (startupAutoRestoreDoneRef.current) {
       return;
     }
@@ -1883,14 +1647,10 @@ function App() {
 
       void (async () => {
         try {
-          const result = await invoke<TournamentWorkspace>("load_local_tournament_workspace", {
-            slug: savedSlug,
-            eventId: savedEventId,
-          });
+          await loadWorkspace(savedSlug, savedEventId);
 
           setSlug(toSlugInput(savedSlug));
           setSelectedEventId(savedEventId);
-          setWorkspace(result);
           startupAutoRestoreDoneRef.current = true;
         } catch {
           // Direct restore can fail when old slug formats remain in persisted data.
@@ -2123,6 +1883,31 @@ function App() {
     onError: setError,
     onMessage: setMessage,
     onStopDqCameraScan: stopDqCameraScan,
+  });
+
+  const {
+    displayGroups: callListDisplayGroups,
+    eventGroups: unresolvedCallEventGroups,
+    activePage: activeUnresolvedCallEventPage,
+    rootCounts: unresolvedCallRootCounts,
+    focusOwnUnresolved: callListFocusOwnUnresolved,
+    eventSortStrategy: callListEventSortStrategy,
+    toggleSort: toggleCallListSort,
+    currentPage: callListCurrentPage,
+    totalPages: callListTotalPages,
+    pageSwitchedAtMs: callListPageSwitchedAtMs,
+    pageProgressPercent: normalizedCallListPageProgressPercent,
+    pageRotateSeconds: callListPageRotateSeconds,
+    setPageRotateSeconds: setCallListPageRotateSeconds,
+    colorSeconds: callListColorSeconds,
+    setColorSeconds: setCallListColorSeconds,
+    colorToRedSeconds: callListColorToRedSeconds,
+    resetDisplay: resetCallListDisplay,
+    advancePage: advanceCallListPage,
+  } = useCallList({
+    activeTab,
+    genericMessages,
+    senderUserId: senderProfile.senderUserId,
   });
 
   const selectedEventItemListSnapshots = useMemo(() => {
@@ -2554,172 +2339,6 @@ function App() {
     onMessage: setMessage,
   });
 
-  const unresolvedCallEventGroupsLatest = useMemo(() => {
-    const roots = genericMessages.filter((item) =>
-      item.parentMessageId === null
-      && item.method === "call_player"
-      && item.messageType === "normal"
-      && (!callListFocusOwnUnresolved || item.senderUserId.trim() === senderProfile.senderUserId.trim())
-    );
-
-    const groups = new Map<string, CallListEventGroup>();
-    const dedupKeys = new Set<string>();
-
-    for (const root of roots) {
-      const resolved = genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve");
-      if (resolved) {
-        continue;
-      }
-
-      const dedupKey = buildCallListDedupKey(root);
-      if (!callListFocusOwnUnresolved) {
-        if (dedupKeys.has(dedupKey)) {
-          continue;
-        }
-        dedupKeys.add(dedupKey);
-      }
-
-      const callIdentity = extractCallThreadIdentity(root);
-      const entrantName = callIdentity?.callEntrantName
-        || extractMetaString(root.messageMeta, "callEntrantName")
-        || extractMetaString(root.messageMeta, "callEntrantId")
-        || "不明プレイヤー";
-      const eventMeta = extractCallEventMeta(root);
-      const eventAlias = eventMeta.eventAlias;
-      const eventName = eventMeta.eventName;
-      const tournamentName = eventMeta.tournamentName;
-      const phaseName = eventMeta.phaseName;
-      const phaseGroupName = eventMeta.phaseGroupName;
-      const groupKey = [
-        eventMeta.tournamentId,
-        tournamentName,
-        eventMeta.eventId,
-        eventName,
-        eventAlias,
-        phaseName,
-        phaseGroupName,
-      ].join("::") || "__unknown__";
-      const found = groups.get(groupKey);
-
-      if (found) {
-        found.players.push({
-          threadId: root.threadId,
-          entrantName,
-          createdAt: root.createdAt,
-          senderName: root.senderName,
-        });
-      } else {
-        groups.set(groupKey, {
-          key: groupKey,
-          eventAlias,
-          tournamentName,
-          eventName,
-          eventId: eventMeta.eventId,
-          phaseName,
-          phaseGroupName,
-          players: [{
-            threadId: root.threadId,
-            entrantName,
-            createdAt: root.createdAt,
-            senderName: root.senderName,
-          }],
-        });
-      }
-    }
-
-    return [...groups.values()]
-      .map((group) => ({
-        ...group,
-        players: group.players
-          .slice()
-          .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
-      }));
-  }, [callListFocusOwnUnresolved, genericMessages, senderProfile.senderUserId]);
-
-  const callListEventGroupComparator = useMemo(() => {
-    if (callListEventSortStrategy === "max-elapsed") {
-      return (left: CallListEventGroup, right: CallListEventGroup) =>
-        compareCallListEventGroupByMaxElapsed(left, right, callListPageSwitchedAtMs);
-    }
-
-    return compareCallListEventGroup;
-  }, [callListEventSortStrategy, callListPageSwitchedAtMs]);
-
-  const unresolvedCallEventGroupsLatestMap = useMemo(
-    () => new Map(unresolvedCallEventGroupsLatest.map((group) => [group.key, group] as const)),
-    [unresolvedCallEventGroupsLatest],
-  );
-
-  useEffect(() => {
-    setCallListDisplayGroups((current) => {
-      if (current.length === 0) {
-        return [...unresolvedCallEventGroupsLatest].sort(callListEventGroupComparator);
-      }
-
-      const currentKeySet = new Set(current.map((item) => item.key));
-      const next = current.map((item) => unresolvedCallEventGroupsLatestMap.get(item.key) ?? item);
-
-      for (const group of unresolvedCallEventGroupsLatest) {
-        if (!currentKeySet.has(group.key)) {
-          // 新規イベントは末尾へ追加し、ページ数を即時増加させる。
-          next.push(group);
-        }
-      }
-
-      return next;
-    });
-  }, [callListEventGroupComparator, callListRebuildToken, unresolvedCallEventGroupsLatest, unresolvedCallEventGroupsLatestMap]);
-
-  useEffect(() => {
-    setCallListDisplayGroups((current) => current.slice().sort(callListEventGroupComparator));
-  }, [callListEventGroupComparator]);
-
-  const unresolvedCallEventGroups = callListDisplayGroups;
-
-  const unresolvedCallRootCounts = useMemo(() => {
-    const unresolvedRoots = genericMessages.filter((root) =>
-      root.parentMessageId === null
-      && root.method === "call_player"
-      && root.messageType === "normal"
-      && !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve")
-    );
-
-    const ownUnresolvedCount = unresolvedRoots.filter(
-      (root) => root.senderUserId.trim() === senderProfile.senderUserId.trim(),
-    ).length;
-
-    return {
-      total: unresolvedRoots.length,
-      own: ownUnresolvedCount,
-      hidden: Math.max(0, unresolvedRoots.length - ownUnresolvedCount),
-    };
-  }, [genericMessages, senderProfile.senderUserId]);
-
-  const unresolvedCallEventPages = useMemo(() => {
-    if (unresolvedCallEventGroups.length === 0) {
-      return [] as typeof unresolvedCallEventGroups[];
-    }
-
-    const pages: Array<typeof unresolvedCallEventGroups> = [];
-    for (let index = 0; index < unresolvedCallEventGroups.length; index += CALL_LIST_EVENT_PAGE_SIZE) {
-      pages.push(unresolvedCallEventGroups.slice(index, index + CALL_LIST_EVENT_PAGE_SIZE));
-    }
-    return pages;
-  }, [unresolvedCallEventGroups]);
-
-  const activeUnresolvedCallEventPage = unresolvedCallEventPages[callListPageIndex] ?? [];
-  const callListCurrentPage = unresolvedCallEventPages.length === 0
-    ? 0
-    : Math.min(callListPageIndex + 1, unresolvedCallEventPages.length);
-  const callListTotalPages = unresolvedCallEventPages.length;
-  const callListRotateSeconds = normalizeCallListRotateSeconds(callListPageRotateSeconds);
-  const callListColorToRedSeconds = normalizeCallListColorSeconds(callListColorSeconds);
-  const callListRotateMs = callListRotateSeconds * 1000;
-  const elapsedFromPageSwitchMs = Math.max(0, callListProgressNowMs - callListPageSwitchedAtMs);
-  const normalizedCallListPageProgressPercent = unresolvedCallEventPages.length === 0
-    ? 0
-    : Math.max(0, Math.min(100, (elapsedFromPageSwitchMs / callListRotateMs) * 100));
-
   const createSnapshotProgressPercent = useMemo(() => {
     if (!createSnapshotProgress) {
       return 0;
@@ -2799,98 +2418,6 @@ function App() {
     const isManualBracketRefresh = activeTab === "bracket" && busy && createSnapshotProgress !== null;
     return (isReportSnapshotRefresh || isManualBracketRefresh) && createSnapshotProgress !== null;
   }, [activeTab, bracketReport.progress, busy, createSnapshotProgress]);
-
-  useEffect(() => {
-    if (callListCycleCount === 0) {
-      return;
-    }
-
-    // 1周ごとに未解決が消えたイベントを除外し、ソートルールで再整列する。
-    setCallListDisplayGroups([...unresolvedCallEventGroupsLatest].sort(callListEventGroupComparator));
-  }, [callListCycleCount, callListEventGroupComparator, unresolvedCallEventGroupsLatest]);
-
-  useEffect(() => {
-    if (unresolvedCallEventPages.length === 0) {
-      if (callListPageIndex !== 0) {
-        setCallListPageIndex(0);
-      }
-      return;
-    }
-
-    if (callListPageIndex >= unresolvedCallEventPages.length) {
-      setCallListPageIndex(0);
-    }
-  }, [callListPageIndex, unresolvedCallEventPages.length]);
-
-  useEffect(() => {
-    if (activeTab !== "call-list" || unresolvedCallEventPages.length === 0) {
-      return;
-    }
-
-    const now = Date.now();
-    const rotateMs = callListRotateSeconds * 1000;
-    const elapsedMs = Math.max(0, now - callListPageSwitchedAtMs);
-    const missedTurns = Math.floor(elapsedMs / rotateMs);
-    if (missedTurns <= 0) {
-      return;
-    }
-
-    setCallListPageSwitchedAtMs((current) => current + missedTurns * rotateMs);
-    setCallListPageIndex((current) => {
-      const pageCount = unresolvedCallEventPages.length;
-      if (pageCount <= 0) {
-        return 0;
-      }
-
-      const advanced = current + missedTurns;
-      const next = advanced % pageCount;
-      const completedCycles = pageCount === 1 ? missedTurns : Math.floor(advanced / pageCount);
-      if (completedCycles > 0) {
-        setCallListCycleCount((cycle) => cycle + completedCycles);
-      }
-
-      return next;
-    });
-    setCallListProgressNowMs(now);
-  }, [activeTab, callListPageSwitchedAtMs, callListRotateSeconds, unresolvedCallEventPages.length]);
-
-  useEffect(() => {
-    if (activeTab !== "call-list" || unresolvedCallEventPages.length === 0) {
-      setCallListProgressNowMs(Date.now());
-      return;
-    }
-
-    setCallListProgressNowMs(Date.now());
-    const tickerId = window.setInterval(() => {
-      setCallListProgressNowMs(Date.now());
-    }, 100);
-
-    return () => {
-      window.clearInterval(tickerId);
-    };
-  }, [activeTab, unresolvedCallEventPages.length]);
-
-  useEffect(() => {
-    if (activeTab !== "call-list" || unresolvedCallEventPages.length === 0) {
-      setCallListProgressNowMs(Date.now());
-      return;
-    }
-
-    const timerId = window.setInterval(() => {
-      setCallListPageSwitchedAtMs(Date.now());
-      setCallListPageIndex((current) => {
-        const next = (current + 1) % unresolvedCallEventPages.length;
-        if (next === 0) {
-          setCallListCycleCount((cycle) => cycle + 1);
-        }
-        return next;
-      });
-    }, callListRotateSeconds * 1000);
-
-    return () => {
-      window.clearInterval(timerId);
-    };
-  }, [activeTab, callListRotateSeconds, unresolvedCallEventPages.length]);
 
   const normalizedSenderNameDraft = senderNameDraft.trim();
   const normalizedSenderUserIdDraft = senderUserIdDraft.replace(/\D/g, "").slice(0, 8);
@@ -3249,14 +2776,8 @@ function App() {
     }
 
     try {
-      setCallListFocusOwnUnresolved(false);
       // 同期開始時は表示キャッシュを破棄し、取得結果で最新状態に再構築する。
-      setCallListDisplayGroups([]);
-      setCallListRebuildToken((current) => current + 1);
-      setCallListPageIndex(0);
-      setCallListCycleCount(0);
-      setCallListPageSwitchedAtMs(Date.now());
-      setCallListProgressNowMs(Date.now());
+      resetCallListDisplay({ clearOwnOnly: true, rebuild: true });
 
       await invoke<GenericMessage>("send_mailbox_message", {
         input: {
@@ -3330,12 +2851,7 @@ function App() {
     setError("");
     setMessage("");
     // 表示キャッシュのみを初期化し、呼び出しデータ本体や表示フィルタは変更しない。
-    setCallListDisplayGroups([]);
-    setCallListRebuildToken((current) => current + 1);
-    setCallListPageIndex(0);
-    setCallListCycleCount(0);
-    setCallListPageSwitchedAtMs(Date.now());
-    setCallListProgressNowMs(Date.now());
+    resetCallListDisplay({ rebuild: true });
     setMessage(`呼び出しリスト表示を初期化しました（未解決 ${unresolvedCount} 件 / 全呼び出しスレッド ${callThreadIds.size} 件保持）。`);
   }
 
@@ -3366,12 +2882,7 @@ function App() {
     setSelectedThreadId("");
     setReplyBodyDraft("");
     resetDqRequestDialog();
-    setCallListDisplayGroups([]);
-    setCallListFocusOwnUnresolved(false);
-    setCallListPageIndex(0);
-    setCallListCycleCount(0);
-    setCallListPageSwitchedAtMs(Date.now());
-    setCallListProgressNowMs(Date.now());
+    resetCallListDisplay({ clearOwnOnly: true });
     setSenderIdentityChangedSinceMailboxClear(false);
 
     setMessage(`メッセージボックスを強制クリアしました（${genericMessages.length} 件削除）。`);
@@ -4356,24 +3867,21 @@ function App() {
       });
 
       const normalizedSlug = toApiSlug(slug);
-      const result = await invoke<TournamentWorkspace>("save_event_management_meta", {
-        input: {
-          slug: normalizedSlug,
-          eventId: selectedEvent.eventId,
-          eventName: selectedEvent.name,
-          setting: {
-            sideDecisionMethod,
-            itemListSnapshots,
-            categoryMinCounts: normalizedMinCounts,
-            categoryMaxCounts: normalizedMaxCounts,
-            categoryAllowDuplicates: normalizedAllowDuplicates,
-            totalMinCount: normalizedTotalMinCount,
-            totalMaxCount: normalizedTotalMaxCount,
-          },
+      await saveEventManagementMeta({
+        slug: normalizedSlug,
+        eventId: selectedEvent.eventId,
+        eventName: selectedEvent.name,
+        setting: {
+          sideDecisionMethod,
+          itemListSnapshots,
+          categoryMinCounts: normalizedMinCounts,
+          categoryMaxCounts: normalizedMaxCounts,
+          categoryAllowDuplicates: normalizedAllowDuplicates,
+          totalMinCount: normalizedTotalMinCount,
+          totalMaxCount: normalizedTotalMaxCount,
         },
       });
 
-      setWorkspace(result);
       setEventMgmtSettings((current) => ({
         ...current,
         [selectedEventSettingKey]: nextSetting,
@@ -6298,11 +5806,8 @@ function App() {
   }
 
   async function refreshLocalSnapshotEvents() {
-    setLoadingLocalSnapshotEvents(true);
-
     try {
-      const items = await invoke<LocalSnapshotEventListItem[]>("list_local_snapshot_events");
-      setLocalSnapshotEvents(items);
+      const items = await fetchLocalSnapshotEvents();
 
       const savedSlug = startupSavedSlugRef.current.trim();
       const savedEventId = startupSavedEventIdRef.current.trim();
@@ -6338,7 +5843,6 @@ function App() {
       setError(String(err));
     } finally {
       localSnapshotEventsLoadedOnceRef.current = true;
-      setLoadingLocalSnapshotEvents(false);
     }
   }
 
@@ -6362,10 +5866,7 @@ function App() {
         phaseName: savedPhaseName === "" ? null : savedPhaseName,
         phaseGroupName: savedPhaseGroupName === "" ? null : savedPhaseGroupName,
       });
-      const result = await invoke<TournamentWorkspace>("load_local_tournament_workspace", {
-        slug: item.slug,
-        eventId: item.eventId,
-      });
+      await loadWorkspace(item.slug, item.eventId);
 
       setSlug(toSlugInput(item.slug));
       setSelectedEventId(item.eventId);
@@ -6376,7 +5877,6 @@ function App() {
         setSelectedPhaseName("");
         setSelectedPhasePoolKey("");
       }
-      setWorkspace(result);
       closeMatchDialog();
       setMessage(`イベントを読み込みました: ${item.tournamentName} / ${item.eventName}`);
     } catch (err) {
@@ -6457,13 +5957,11 @@ function App() {
     setMessage("");
 
     try {
-      const result = await invoke<TournamentWorkspace>("save_event_alias", {
-        slug: normalizedSlug,
-        eventId: selectedEvent.eventId,
-        eventAlias: trimmed === "" ? null : trimmed,
-      });
-
-      setWorkspace(result);
+      await saveEventAlias(
+        normalizedSlug,
+        selectedEvent.eventId,
+        trimmed === "" ? null : trimmed,
+      );
       await refreshLocalSnapshotEvents();
       setMessage(trimmed === "" ? "エイリアス名を未設定にしました。" : `エイリアス名を保存しました: ${trimmed}`);
     } catch (err) {
@@ -6493,12 +5991,11 @@ function App() {
     });
 
     try {
-      const result = await invoke<TournamentWorkspace>("refresh_local_event_snapshot_from_remote", {
-        slug: normalizedSlug,
+      await refreshRemoteSnapshot(
+        normalizedSlug,
         eventId,
-        perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
-      });
-      setWorkspace(result);
+        normalizeStartggFetchPerPage(startggFetchPerPage),
+      );
       clearAllDrafts();
       closeMatchDialog();
       setCreateSnapshotProgress(null);
@@ -6526,11 +6023,7 @@ function App() {
     setMessage("");
 
     try {
-      const result = await invoke<TournamentWorkspace>("restore_local_event_graph_from_snapshot", {
-        slug: normalizedSlug,
-        eventId,
-      });
-      setWorkspace(result);
+      await restoreWorkspaceGraph(normalizedSlug, eventId);
       clearAllDrafts();
       closeMatchDialog();
       setMessage("最後に取得したスナップショット時点に復元しました。対象eventの未報告結果は破棄されました。");
@@ -7270,20 +6763,17 @@ function App() {
     }
 
     try {
-      const result = await invoke<TournamentWorkspace>("save_local_player_meta", {
-        input: {
-          slug: normalizedSlug,
-          eventId: eventSnapshot.eventId,
-          eventName: eventSnapshot.name,
-          entrantId,
-          entrantName,
-          playSide: null,
-          characterNames: validated.flattened,
-          notes: null,
-        },
+      await saveLocalPlayerMeta({
+        slug: normalizedSlug,
+        eventId: eventSnapshot.eventId,
+        eventName: eventSnapshot.name,
+        entrantId,
+        entrantName,
+        playSide: null,
+        characterNames: validated.flattened,
+        notes: null,
       });
 
-      setWorkspace(result);
       dirtyMetaDraftKeysRef.current.delete(getMetaDraftKey(eventSnapshot.eventId, entrantId));
       if (!silent) {
         setMessage("ローカルメタを保存しました。");
@@ -7318,20 +6808,17 @@ function App() {
 
     try {
       const normalizedSlug = toApiSlug(slug);
-      const result = await invoke<TournamentWorkspace>("save_local_set_play_side", {
-        input: {
-          slug: normalizedSlug,
-          eventId: eventSnapshot.eventId,
-          setId: setSnapshot.setId,
-          entrantId,
-          opponentEntrantId: setSnapshot.slots
-            .map((slot) => slot.entrantId)
-            .find((candidate) => candidate && candidate !== entrantId) ?? null,
-          playSide: playSide === "" ? null : playSide,
-        },
+      await saveLocalSetPlaySide({
+        slug: normalizedSlug,
+        eventId: eventSnapshot.eventId,
+        setId: setSnapshot.setId,
+        entrantId,
+        opponentEntrantId: setSnapshot.slots
+          .map((slot) => slot.entrantId)
+          .find((candidate) => candidate && candidate !== entrantId) ?? null,
+        playSide: playSide === "" ? null : playSide,
       });
 
-      setWorkspace(result);
       if (!silent) {
         setMessage("setサイドを保存しました。");
       }
@@ -7587,19 +7074,10 @@ function App() {
           currentPage={callListCurrentPage}
           totalPages={callListTotalPages}
           sortStrategy={callListEventSortStrategy}
-          onToggleSort={() => setCallListEventSortStrategy((current) => (current === "alias" ? "max-elapsed" : "alias"))}
+          onToggleSort={toggleCallListSort}
           canBroadcastSync={canBroadcastCallListSync}
           onBroadcastSync={() => void requestUnresolvedCallSyncBroadcast()}
-          onNextPage={() => {
-            setCallListPageSwitchedAtMs(Date.now());
-            setCallListPageIndex((current) => {
-              const next = (current + 1) % unresolvedCallEventPages.length;
-              if (next === 0) {
-                setCallListCycleCount((cycle) => cycle + 1);
-              }
-              return next;
-            });
-          }}
+          onNextPage={advanceCallListPage}
           pageProgressPercent={normalizedCallListPageProgressPercent}
         />
       ) : null}
@@ -7777,12 +7255,7 @@ function App() {
           hiddenUnresolvedCount={unresolvedCallRootCounts.hidden}
           focusOwnUnresolved={callListFocusOwnUnresolved}
           onShowAllUnresolved={() => {
-            setCallListFocusOwnUnresolved(false);
-            setCallListDisplayGroups([]);
-            setCallListPageIndex(0);
-            setCallListCycleCount(0);
-            setCallListPageSwitchedAtMs(Date.now());
-            setCallListProgressNowMs(Date.now());
+            resetCallListDisplay({ clearOwnOnly: true });
             setMessage("呼び出しリストを全未解決表示に戻しました。");
           }}
           resolvePhaseName={(eventId, phaseName) => resolveCallPhaseName(
