@@ -43,7 +43,7 @@ import { AppShell, type AppTab } from "./AppShell";
 import { OverlayControl } from "./OverlayControl";
 import {
   abbreviateOverlayRoundText,
-  scoreToOverlayGameWins,
+  resolveOverlaySidesForSet,
   useObsOverlay,
 } from "./useObsOverlay";
 import { BracketTab } from "./BracketTab";
@@ -1649,7 +1649,9 @@ function App() {
     const phasePoolLabel = `${set.phaseName?.trim() || "-"} / Pool ${set.phaseGroupDisplayIdentifier?.trim() || "-"}`;
     const setName = set.identifier?.trim() || displayCode || "-";
     const nextRoundText = `${phasePoolLabel} / Set ${setName}\n${nextRoundLabel}`;
-    const overlaySides = resolveOverlaySidesForSet(set);
+    const overlaySides = resolveOverlaySidesForSet(set, {
+      getSavedSide: getSetSlotSide,
+    });
 
     await toggleObsOverlaySet({
       enabled: !isSameActive,
@@ -1689,70 +1691,6 @@ function App() {
     await toggleActiveMatchOverlay(set);
   }
 
-  function resolveOverlaySidesForSet(
-    set: SetSnapshot,
-    scoreByEntrantId?: Map<string, number>,
-    sideOverrides?: Record<string, PlaySide | "">,
-  ): { redPlayerName: string; bluePlayerName: string; redSetWins: number; blueSetWins: number } {
-    const slots = set.slots.slice(0, 2);
-    const slot0 = slots[0] ?? null;
-    const slot1 = slots[1] ?? null;
-
-    const sideOf = (slot: SetSlot | null): PlaySide | "" => {
-      if (!slot || !slot.entrantId) {
-        return "";
-      }
-      return sideOverrides?.[slot.entrantId] || getSetSlotSide(set.setId, slot.entrantId);
-    };
-
-    const getScore = (slot: SetSlot | null): number | null => {
-      if (!slot) {
-        return null;
-      }
-      if (slot.entrantId && scoreByEntrantId?.has(slot.entrantId)) {
-        return scoreByEntrantId.get(slot.entrantId) ?? null;
-      }
-      return slot.score ?? null;
-    };
-
-    let onePSlot: SetSlot | null = null;
-    let twoPSlot: SetSlot | null = null;
-
-    const slot0Side = sideOf(slot0);
-    const slot1Side = sideOf(slot1);
-    if (slot0Side === "1P") {
-      onePSlot = slot0;
-    }
-    if (slot0Side === "2P") {
-      twoPSlot = slot0;
-    }
-    if (slot1Side === "1P") {
-      onePSlot = slot1;
-    }
-    if (slot1Side === "2P") {
-      twoPSlot = slot1;
-    }
-
-    if (!onePSlot) {
-      onePSlot = slot0;
-    }
-    if (!twoPSlot) {
-      twoPSlot = onePSlot === slot0 ? slot1 : slot0;
-    }
-
-    const redPlayerName = onePSlot?.entrantName?.trim() || "RED";
-    const bluePlayerName = twoPSlot?.entrantName?.trim() || "BLUE";
-    const redSetWins = scoreToOverlayGameWins(getScore(onePSlot));
-    const blueSetWins = scoreToOverlayGameWins(getScore(twoPSlot));
-
-    return {
-      redPlayerName,
-      bluePlayerName,
-      redSetWins,
-      blueSetWins,
-    };
-  }
-
   async function syncObsOverlayScoresForSet(
     set: SetSnapshot,
     slotScores: Array<{ entrantId: string; score: number }>,
@@ -1788,7 +1726,11 @@ function App() {
     const nextRoundLabel = abbreviateOverlayRoundText(set.fullRoundText);
     const phasePoolLabel = `${set.phaseName?.trim() || "-"} / Pool ${set.phaseGroupDisplayIdentifier?.trim() || "-"}`;
     const setName = set.identifier?.trim() || displayCode || "-";
-    const overlaySides = resolveOverlaySidesForSet(set, scoreByEntrantId, sideOverrides);
+    const overlaySides = resolveOverlaySidesForSet(set, {
+      scoreByEntrantId,
+      sideOverrides,
+      getSavedSide: getSetSlotSide,
+    });
 
     await toggleObsOverlaySet({
       enabled: true,

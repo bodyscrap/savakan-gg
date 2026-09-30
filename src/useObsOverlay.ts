@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppTab } from "./AppShell";
+import type { SetSlot, SetSnapshot } from "./bracketProgression";
 
 export type ObsOverlayState = {
   active: boolean;
@@ -56,6 +57,69 @@ export function abbreviateOverlayRoundText(value: string): string {
     .replace(/\bGF\s+Reset\b/gi, "GF Reset")
     .replace(/\bGrand\s+Finals?\b/gi, "GF")
     .trim();
+}
+
+type OverlayPlaySide = "1P" | "2P" | "";
+
+export function resolveOverlaySidesForSet(
+  set: SetSnapshot,
+  options: {
+    scoreByEntrantId?: Map<string, number>;
+    sideOverrides?: Record<string, OverlayPlaySide>;
+    getSavedSide: (setId: string, entrantId: string) => OverlayPlaySide;
+  },
+): { redPlayerName: string; bluePlayerName: string; redSetWins: number; blueSetWins: number } {
+  const slots = set.slots.slice(0, 2);
+  const slot0 = slots[0] ?? null;
+  const slot1 = slots[1] ?? null;
+
+  const sideOf = (slot: SetSlot | null): OverlayPlaySide => {
+    if (!slot?.entrantId) {
+      return "";
+    }
+    return options.sideOverrides?.[slot.entrantId] || options.getSavedSide(set.setId, slot.entrantId);
+  };
+
+  const getScore = (slot: SetSlot | null): number | null => {
+    if (!slot) {
+      return null;
+    }
+    if (slot.entrantId && options.scoreByEntrantId?.has(slot.entrantId)) {
+      return options.scoreByEntrantId.get(slot.entrantId) ?? null;
+    }
+    return slot.score ?? null;
+  };
+
+  let onePSlot: SetSlot | null = null;
+  let twoPSlot: SetSlot | null = null;
+  const slot0Side = sideOf(slot0);
+  const slot1Side = sideOf(slot1);
+  if (slot0Side === "1P") {
+    onePSlot = slot0;
+  }
+  if (slot0Side === "2P") {
+    twoPSlot = slot0;
+  }
+  if (slot1Side === "1P") {
+    onePSlot = slot1;
+  }
+  if (slot1Side === "2P") {
+    twoPSlot = slot1;
+  }
+
+  if (!onePSlot) {
+    onePSlot = slot0;
+  }
+  if (!twoPSlot) {
+    twoPSlot = onePSlot === slot0 ? slot1 : slot0;
+  }
+
+  return {
+    redPlayerName: onePSlot?.entrantName?.trim() || "RED",
+    bluePlayerName: twoPSlot?.entrantName?.trim() || "BLUE",
+    redSetWins: scoreToOverlayGameWins(getScore(onePSlot)),
+    blueSetWins: scoreToOverlayGameWins(getScore(twoPSlot)),
+  };
 }
 
 function normalizeObsFontScale(value: number): number {
