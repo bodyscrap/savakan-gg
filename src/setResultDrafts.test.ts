@@ -6,14 +6,19 @@ import {
   buildDraftStateFromPending,
   buildScoreDraftsFromResult,
   buildSlotScoresForSave,
+  getPendingSetChangeClass,
+  getSetScoresForDisplay,
+  getSetResultVisualStatus,
+  isConfirmedSetResult,
   isDqScoreCsvText,
+  isResetPendingResult,
   parseDraftScoreValue,
   parseScoreCsvText,
   resolveWinnerIdFromDrafts,
   toIntegerScore,
 } from "./setResultDrafts";
 
-function createSet(slots = [
+function createSet(slots: SetSnapshot["slots"] = [
   { entrantId: "red", entrantName: "Red", seedId: null, seedNum: null, score: null },
   { entrantId: "blue", entrantName: "Blue", seedId: null, seedNum: null, score: null },
 ]): SetSnapshot {
@@ -71,6 +76,74 @@ describe("score parsing", () => {
 });
 
 describe("result drafts", () => {
+  it("builds display values from interim drafts and direct wins", () => {
+    const set = createSet();
+    expect(getSetScoresForDisplay(set, undefined, { red: "2", blue: "-" })).toEqual({
+      scores: { red: "2", blue: "DQ" },
+      isDq: true,
+      winnerId: "red",
+    });
+    expect(getSetScoresForDisplay(set, undefined, { red: "W" })).toEqual({
+      scores: { red: "W", blue: "L" },
+      isDq: false,
+      winnerId: "red",
+    });
+  });
+
+  it("builds display values from pending result scores and legacy CSV", () => {
+    const set = createSet();
+    expect(getSetScoresForDisplay(set, createResult({
+      slotScores: [{ entrantId: "red", score: 3 }, { entrantId: "blue", score: -1 }],
+    }))).toEqual({
+      scores: { red: "3", blue: "DQ" },
+      isDq: true,
+      winnerId: "red",
+    });
+    expect(getSetScoresForDisplay(set, createResult({ scoreCsv: "DQ" }))).toEqual({
+      scores: { red: "✓", blue: "DQ" },
+      isDq: true,
+      winnerId: "red",
+    });
+  });
+
+  it("falls back to snapshot scores and winner state", () => {
+    const set = createSet([
+      { entrantId: "red", entrantName: "Red", seedId: null, seedNum: null, score: 2 },
+      { entrantId: "blue", entrantName: "Blue", seedId: null, seedNum: null, score: null },
+    ]);
+    set.winnerId = "red";
+
+    expect(getSetScoresForDisplay(set)).toEqual({
+      scores: { red: "W", blue: "L" },
+      isDq: false,
+      winnerId: "red",
+    });
+  });
+
+  it("classifies pending result and visual status states", () => {
+    const reset = createResult({ winnerId: "", scoreCsv: "", slotScores: [] });
+    const draft = createResult({ confirmed: false });
+    expect(isConfirmedSetResult(draft)).toBe(false);
+    expect(isResetPendingResult(reset)).toBe(true);
+    expect(getPendingSetChangeClass(reset)).toBe("set-card-changed-reset");
+    expect(getPendingSetChangeClass(draft)).toBe("set-card-changed-draft");
+    expect(getSetResultVisualStatus(createSet(), reset, { red: "2" })).toBe("reset");
+    expect(getSetResultVisualStatus(createSet(), draft)).toBe("draft");
+    expect(getSetResultVisualStatus(createSet(), undefined, { red: "1" })).toBe("inprogress");
+  });
+
+  it("classifies snapshot progress and completion", () => {
+    const inProgress = createSet([
+      { entrantId: "red", entrantName: "Red", seedId: null, seedNum: null, score: 2 },
+      { entrantId: "blue", entrantName: "Blue", seedId: null, seedNum: null, score: 1 },
+    ]);
+    const completed = { ...createSet(), state: 3, winnerId: "red" };
+
+    expect(getSetResultVisualStatus(inProgress, undefined)).toBe("inprogress");
+    expect(getSetResultVisualStatus(completed, undefined)).toBe("confirmed");
+    expect(getSetResultVisualStatus(createSet(), undefined)).toBeNull();
+  });
+
   it("resolves the higher score and leaves ties or incomplete scores unresolved", () => {
     const set = createSet();
     expect(resolveWinnerIdFromDrafts(set, { red: "2", blue: "1" })).toBe("red");

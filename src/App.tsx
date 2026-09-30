@@ -56,18 +56,18 @@ import { useBracketReport } from "./useBracketReport";
 import { useSetResultDrafts, type SetResultDraftState } from "./useSetResultDrafts";
 import {
   applyScoreDraftWithOpponentDefault,
+  getSetScoresForDisplay as buildSetScoresForDisplay,
   buildDraftStateFromPending,
   buildScoreDraftsFromResult,
   buildScoreDraftsFromSet,
   buildSlotScoresForSave,
+  getPendingSetChangeClass,
+  getSetResultVisualStatus,
   hasDqScoreInDrafts,
-  isDqScoreCsvText,
+  isConfirmedSetResult,
   isDqScoreValue,
-  parseDraftScoreValue,
-  parseScoreCsvText,
   resolveWinnerIdFromDrafts,
   stepScoreDraftValue,
-  toIntegerScore,
 } from "./setResultDrafts";
 import { useSetResultPersistence } from "./useSetResultPersistence";
 import { usePlayerMetaDrafts } from "./usePlayerMetaDrafts";
@@ -212,29 +212,6 @@ function roundRobinPlaceholderId(slot: SetSlot, source?: SetEntrantSource | null
     || slot.entrantName
     || "unknown";
   return `placeholder:${identity}`;
-}
-
-function isConfirmedSetResult(result: { confirmed?: boolean }): boolean {
-  return result.confirmed !== false;
-}
-
-function isResetPendingResult(result: {
-  confirmed?: boolean;
-  winnerId: string;
-  scoreCsv: string;
-  slotScores?: unknown[];
-}): boolean {
-  return isConfirmedSetResult(result)
-    && result.winnerId.trim() === ""
-    && result.scoreCsv.trim() === ""
-    && (result.slotScores?.length ?? 0) === 0;
-}
-
-function getPendingSetChangeClass(result: LocalSetResultMeta): string {
-  if (isResetPendingResult(result)) {
-    return "set-card-changed-reset";
-  }
-  return isConfirmedSetResult(result) ? "set-card-changed-confirmed" : "set-card-changed-draft";
 }
 
 function oppositePlaySide(side: PlaySide): PlaySide {
@@ -3012,7 +2989,11 @@ function App() {
 
         const setDisplay = getSetScoresForDisplay(set);
         const pendingResult = pendingResultBySetId.get(set.setId);
-        const resultStatus = getSetResultVisualStatus(set);
+        const resultStatus = getSetResultVisualStatus(
+          set,
+          pendingResult,
+          interimScoreDraftsBySetId[set.setId],
+        );
         const resultStatusClass = resultStatus ? `set-card-status-${resultStatus}` : "";
         const resultStatusLabel = resultStatus === "confirmed"
           ? "確定"
@@ -3108,7 +3089,11 @@ function App() {
       cards: column.positionedSets.map(({ set, y }) => {
         const displaySet = resolvedEventSetsById.get(set.setId) ?? set;
         const pendingResult = pendingResultBySetId.get(set.setId);
-        const resultStatus = getSetResultVisualStatus(set);
+        const resultStatus = getSetResultVisualStatus(
+          set,
+          pendingResult,
+          interimScoreDraftsBySetId[set.setId],
+        );
         const resultStatusLabel = resultStatus === "confirmed"
           ? "確定"
           : resultStatus === "reset"
@@ -3485,225 +3470,11 @@ function App() {
   }
 
   function getSetScoresForDisplay(set: SetSnapshot): { scores: Record<string, string>; isDq: boolean; winnerId: string | null } {
-    const result = pendingResultBySetId.get(set.setId);
-    const interimDrafts = interimScoreDraftsBySetId[set.setId];
-
-    if (!result && interimDrafts) {
-      const directWinner = set.slots.find((slot) => slot.entrantId && interimDrafts[slot.entrantId] === "W")?.entrantId;
-      if (directWinner) {
-        return {
-          scores: Object.fromEntries(
-            set.slots
-              .filter((slot) => slot.entrantId)
-              .map((slot) => [slot.entrantId as string, slot.entrantId === directWinner ? "W" : "L"]),
-          ),
-          isDq: false,
-          winnerId: directWinner,
-        };
-      }
-      const scores: Record<string, string> = {};
-      let hasDq = false;
-
-      for (const slot of set.slots) {
-        if (!slot.entrantId) {
-          continue;
-        }
-
-        const parsed = parseDraftScoreValue(interimDrafts[slot.entrantId] ?? "");
-        if (parsed === null) {
-          continue;
-        }
-
-        if (parsed < 0) {
-          scores[slot.entrantId] = "DQ";
-          hasDq = true;
-        } else {
-          scores[slot.entrantId] = String(parsed);
-        }
-      }
-
-      const resolvedWinnerId = resolveWinnerIdFromDrafts(set, interimDrafts);
-
-      return {
-        scores,
-        isDq: hasDq,
-        winnerId: resolvedWinnerId === "" ? null : resolvedWinnerId,
-      };
-    }
-
-    if (!result) {
-      const winnerId = set.winnerId;
-      if (winnerId) {
-        const winnerSlot = set.slots.find((slot) => slot.entrantId === winnerId);
-        const loserSlot = set.slots.find((slot) => slot.entrantId !== null && slot.entrantId !== winnerId);
-        const winnerScore = winnerSlot ? toIntegerScore(winnerSlot.score) : null;
-        const loserScore = loserSlot ? toIntegerScore(loserSlot.score) : null;
-        const loserIsDq = loserSlot ? isDqScoreValue(loserSlot.score) : false;
-
-        if (winnerSlot && loserSlot && !loserIsDq && (winnerScore === null || loserScore === null)) {
-          const scores: Record<string, string> = {};
-          scores[winnerId] = "W";
-          if (loserSlot.entrantId) {
-            scores[loserSlot.entrantId] = "L";
-          }
-          return {
-            scores,
-            isDq: false,
-            winnerId,
-          };
-        }
-
-        if (winnerScore === null && loserScore === null && !loserIsDq) {
-          const scores: Record<string, string> = {};
-          for (const slot of set.slots) {
-            if (slot.entrantId) {
-              scores[slot.entrantId] = slot.entrantId === winnerId ? "W" : "L";
-            }
-          }
-          return {
-            scores,
-            isDq: false,
-            winnerId,
-          };
-        }
-
-        if (winnerScore !== null && (loserScore === null || loserIsDq)) {
-          const scores: Record<string, string> = {};
-          for (const slot of set.slots) {
-            if (!slot.entrantId) {
-              continue;
-            }
-            scores[slot.entrantId] = slot.entrantId === winnerId ? "✓" : "DQ";
-          }
-
-          return {
-            scores,
-            isDq: true,
-            winnerId,
-          };
-        }
-      }
-
-      return {
-        scores: {},
-        isDq: false,
-        winnerId,
-      };
-    }
-
-    const slotScores = result.slotScores ?? [];
-
-    if (result.directWin) {
-      const scores: Record<string, string> = {};
-      for (const slot of set.slots) {
-        if (slot.entrantId) {
-          scores[slot.entrantId] = slot.entrantId === result.winnerId ? "W" : "L";
-        }
-      }
-      return { scores, isDq: false, winnerId: result.winnerId };
-    }
-
-    if (slotScores.length > 0) {
-      const scores: Record<string, string> = {};
-      const matchedEntrantIds = new Set<string>();
-      const unresolvedSlots: SetSlot[] = [];
-      for (const slot of set.slots) {
-        if (!slot.entrantId) {
-          continue;
-        }
-        const matchedScore = slotScores.find((score) => score.entrantId === slot.entrantId);
-        if (matchedScore) {
-          scores[slot.entrantId] = matchedScore.score < 0 ? "DQ" : String(matchedScore.score);
-          matchedEntrantIds.add(matchedScore.entrantId);
-        } else {
-          unresolvedSlots.push(slot);
-        }
-      }
-
-      const unresolvedScores = slotScores.filter((slot) => !matchedEntrantIds.has(slot.entrantId));
-      for (const [index, slot] of unresolvedSlots.entries()) {
-        const fallbackScore = unresolvedScores[index];
-        if (slot.entrantId && fallbackScore) {
-          scores[slot.entrantId] = fallbackScore.score < 0 ? "DQ" : String(fallbackScore.score);
-        }
-      }
-
-      return {
-        scores,
-        isDq: slotScores.some((slot) => slot.score < 0),
-        winnerId: result.winnerId,
-      };
-    }
-
-    if (isDqScoreCsvText(result.scoreCsv)) {
-      const scores: Record<string, string> = {};
-      for (const slot of set.slots) {
-        if (!slot.entrantId) {
-          continue;
-        }
-        scores[slot.entrantId] = slot.entrantId === result.winnerId ? "✓" : "DQ";
-      }
-
-      return {
-        scores,
-        isDq: true,
-        winnerId: result.winnerId,
-      };
-    }
-
-    const parsed = parseScoreCsvText(result.scoreCsv);
-    if (!parsed) {
-      return {
-        scores: {},
-        isDq: false,
-        winnerId: result.winnerId,
-      };
-    }
-
-    const scores: Record<string, string> = {};
-    for (const slot of set.slots) {
-      if (!slot.entrantId) {
-        continue;
-      }
-
-      if (slot.entrantId === result.winnerId) {
-        scores[slot.entrantId] = String(parsed.winnerWins);
-      } else {
-        scores[slot.entrantId] = String(parsed.loserWins);
-      }
-    }
-
-    return {
-      scores,
-      isDq: false,
-      winnerId: result.winnerId,
-    };
-  }
-
-  function getSetResultVisualStatus(set: SetSnapshot): "inprogress" | "draft" | "confirmed" | "reset" | null {
-    const pending = pendingResultBySetId.get(set.setId);
-    if (pending) {
-      if (isResetPendingResult(pending)) {
-        return "reset";
-      }
-      return isConfirmedSetResult(pending) ? "confirmed" : "draft";
-    }
-
-    const interimDrafts = interimScoreDraftsBySetId[set.setId];
-    if (interimDrafts) {
-      return "inprogress";
-    }
-
-    const hasSnapshotScores = set.slots.some((slot) => slot.score !== null);
-    if (!set.winnerId && hasSnapshotScores) {
-      return "inprogress";
-    }
-
-    if (isCompletedSet(set) && Boolean(set.winnerId?.trim())) {
-      return "confirmed";
-    }
-
-    return null;
+    return buildSetScoresForDisplay(
+      set,
+      pendingResultBySetId.get(set.setId),
+      interimScoreDraftsBySetId[set.setId],
+    );
   }
 
   function openMatchDialog(set: SetSnapshot, forcedDraftState?: SetResultDraftState) {
