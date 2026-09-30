@@ -42,6 +42,34 @@ function sameSetting(leftRaw: EventManagementSetting | undefined, rightRaw: Even
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+export function shouldHydrateEventManagementSettings(
+  ready: boolean,
+  selectedEventSettingKey: string,
+  hydratedEventSettingKey: string,
+): boolean {
+  return ready
+    && selectedEventSettingKey !== ""
+    && selectedEventSettingKey !== hydratedEventSettingKey;
+}
+
+export function resolveCommittedEventManagementSetting(
+  eventManagement: EventManagementMeta | null | undefined,
+): EventManagementSetting | null {
+  if (!eventManagement) {
+    return null;
+  }
+
+  return normalizeEventManagementSetting({
+    sideDecisionMethod: eventManagement.sideDecisionMethod,
+    itemListIds: (eventManagement.itemListSnapshots ?? []).map((item) => normalizeItemListConfig(item).id),
+    categoryMinCounts: eventManagement.categoryMinCounts,
+    categoryMaxCounts: eventManagement.categoryMaxCounts,
+    categoryAllowDuplicates: eventManagement.categoryAllowDuplicates,
+    totalMinCount: eventManagement.totalMinCount,
+    totalMaxCount: eventManagement.totalMaxCount,
+  });
+}
+
 type UseEventManagementSettingsOptions = {
   selectedEventSettingKey: string;
   selectedEventMeta: EventLocalMeta | null;
@@ -73,6 +101,7 @@ export function useEventManagementSettings({
   setMessage,
 }: UseEventManagementSettingsOptions) {
   const [eventMgmtSettings, setEventMgmtSettings] = useState<Record<string, EventManagementSetting>>({});
+  const [appliedEventMgmtSettings, setAppliedEventMgmtSettings] = useState<Record<string, EventManagementSetting>>({});
   const [eventMgmtSettingsReady, setEventMgmtSettingsReady] = useState(false);
   const [sideDecisionMethod, setSideDecisionMethod] = useState<EventManagementSetting["sideDecisionMethod"]>("upper_1p");
   const [categorySlotListIds, setCategorySlotListIds] = useState<string[]>(["", "", ""]);
@@ -140,23 +169,30 @@ export function useEventManagementSettings({
 
   useEffect(() => {
     if (selectedEventSettingKey === "") {
+      eventSettingHydratedKeyRef.current = "";
       return;
     }
-    const eventMetaSetting = selectedEventMeta?.eventManagement;
-    const rawSetting = eventMetaSetting
-      ? normalizeEventManagementSetting({
-        sideDecisionMethod: eventMetaSetting.sideDecisionMethod,
-        itemListIds: (eventMetaSetting.itemListSnapshots ?? []).map((item) => normalizeItemListConfig(item).id),
-        categoryMinCounts: eventMetaSetting.categoryMinCounts,
-        categoryMaxCounts: eventMetaSetting.categoryMaxCounts,
-        categoryAllowDuplicates: eventMetaSetting.categoryAllowDuplicates,
-        totalMinCount: eventMetaSetting.totalMinCount,
-        totalMaxCount: eventMetaSetting.totalMaxCount,
-      })
-      : eventMgmtSettings[selectedEventSettingKey];
+    if (!shouldHydrateEventManagementSettings(
+      eventMgmtSettingsReady,
+      selectedEventSettingKey,
+      eventSettingHydratedKeyRef.current,
+    )) {
+      return;
+    }
+
+    const committedSetting = resolveCommittedEventManagementSetting(selectedEventMeta?.eventManagement);
+    const rawSetting = committedSetting ?? eventMgmtSettings[selectedEventSettingKey];
     if (!rawSetting) {
       suppressEventSettingAutosaveRef.current = true;
       eventSettingHydratedKeyRef.current = selectedEventSettingKey;
+      setAppliedEventMgmtSettings((current) => {
+        if (!(selectedEventSettingKey in current)) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[selectedEventSettingKey];
+        return next;
+      });
       setSideDecisionMethod("upper_1p");
       setCategorySlotListIds(["", "", ""]);
       setCategorySlotMinCounts([0, 0, 0]);
@@ -168,6 +204,17 @@ export function useEventManagementSettings({
     }
 
     const setting = normalizeEventManagementSetting(rawSetting);
+    setAppliedEventMgmtSettings((current) => {
+      if (committedSetting) {
+        return { ...current, [selectedEventSettingKey]: committedSetting };
+      }
+      if (!(selectedEventSettingKey in current)) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[selectedEventSettingKey];
+      return next;
+    });
     const nextIds = setting.itemListIds.slice(0, MAX_CATEGORY_SLOTS);
     while (nextIds.length < MAX_CATEGORY_SLOTS) {
       nextIds.push("");
@@ -181,7 +228,7 @@ export function useEventManagementSettings({
     setCategorySlotAllowDuplicates(normalizeAllowDuplicatesArray(setting.categoryAllowDuplicates));
     setTotalItemMinCount(clampNonNegativeInteger(Number(setting.totalMinCount ?? 0), 0));
     setTotalItemMaxCount(clampNonNegativeInteger(Number(setting.totalMaxCount ?? 3), 3));
-  }, [eventMgmtSettingsReady, selectedEventMeta, selectedEventSettingKey]);
+  }, [eventMgmtSettingsReady, selectedEventSettingKey]);
 
   useEffect(() => {
     if (
@@ -258,8 +305,54 @@ export function useEventManagementSettings({
     setCategorySlotMaxCounts((current) => current.map((value, index) => index === slotIndex && value < 1 ? 1 : value));
   }
 
+  function handleCategorySlotMinChange(slotIndex: number, value: string) {
+    const nextMin = clampNonNegativeInteger(Number(value), 0);
+    setCategorySlotMinCounts((current) => {
+      const next = [...current];
+      next[slotIndex] = nextMin;
+      return next;
+    });
+    setCategorySlotMaxCounts((current) => {
+      const next = [...current];
+      if ((next[slotIndex] ?? 0) < nextMin) {
+        next[slotIndex] = nextMin;
+      }
+      return next;
+    });
+  }
+
+  function handleCategorySlotMaxChange(slotIndex: number, value: string) {
+    const rawMax = clampNonNegativeInteger(Number(value), 0);
+    const ensuredMax = Math.max(rawMax, categorySlotMinCounts[slotIndex] ?? 0);
+    setCategorySlotMaxCounts((current) => {
+      const next = [...current];
+      next[slotIndex] = ensuredMax;
+      return next;
+    });
+  }
+
+  function handleCategorySlotAllowDuplicatesChange(slotIndex: number, allowed: boolean) {
+    setCategorySlotAllowDuplicates((current) => {
+      const next = [...current];
+      next[slotIndex] = allowed;
+      return next;
+    });
+  }
+
+  function handleTotalItemMinChange(value: string) {
+    const nextMin = clampNonNegativeInteger(Number(value), 0);
+    setTotalItemMinCount(nextMin);
+    setTotalItemMaxCount((current) => Math.max(current, nextMin));
+  }
+
+  function handleTotalItemMaxChange(value: string) {
+    const nextMax = clampNonNegativeInteger(Number(value), 0);
+    setTotalItemMaxCount(Math.max(nextMax, totalItemMinCount));
+  }
+
   function removeItemListSettings(itemListId: string) {
     setEventMgmtSettings((current) => removeItemListFromEventManagementSettings(current, itemListId));
+    setAppliedEventMgmtSettings((current) => removeItemListFromEventManagementSettings(current, itemListId));
     const nextListIds = categorySlotListIds.map((id) => id === itemListId ? "" : id);
     setCategorySlotListIds(nextListIds);
     setCategorySlotMinCounts((current) => current.map((value, index) => nextListIds[index] === "" && categorySlotListIds[index] === itemListId ? 0 : value));
@@ -336,6 +429,7 @@ export function useEventManagementSettings({
         },
       });
       setEventMgmtSettings((current) => ({ ...current, [selectedEventSettingKey]: nextSetting }));
+      setAppliedEventMgmtSettings((current) => ({ ...current, [selectedEventSettingKey]: nextSetting }));
       setMessage("大会管理設定を保存しました。");
     } catch (error) {
       setError(String(error));
@@ -346,6 +440,7 @@ export function useEventManagementSettings({
 
   return {
     eventMgmtSettings,
+    appliedEventMgmtSettings,
     eventMgmtSettingsReady,
     sideDecisionMethod,
     setSideDecisionMethod,
@@ -363,6 +458,11 @@ export function useEventManagementSettings({
     setTotalItemMaxCount,
     setEventMgmtSettings,
     setCategoryListSlot,
+    handleCategorySlotMinChange,
+    handleCategorySlotMaxChange,
+    handleCategorySlotAllowDuplicatesChange,
+    handleTotalItemMinChange,
+    handleTotalItemMaxChange,
     removeItemListSettings,
     saveEventManagementSetting,
   };

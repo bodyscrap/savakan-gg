@@ -48,6 +48,7 @@ import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
 import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDialog";
 import type { EliminationBracketSectionView } from "./EliminationBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
+import { buildRoundRobinMatrixRows, roundRobinPairKey, type RoundRobinBoardData } from "./roundRobinMatrixDisplay";
 
 import { useBracketReport } from "./useBracketReport";
 import { useSetResultDrafts, type SetResultDraftState } from "./useSetResultDrafts";
@@ -69,6 +70,7 @@ import {
 import { useSetResultPersistence } from "./useSetResultPersistence";
 import { usePlayerMetaDrafts } from "./usePlayerMetaDrafts";
 import { useEventManagementSettings } from "./useEventManagementSettings";
+import { useEventSnapshotMaintenance } from "./useEventSnapshotMaintenance";
 import { useSetSideAssignment } from "./useSetSideAssignment";
 import { useTournamentCreation } from "./useTournamentCreation";
 import { useUserCards } from "./useUserCards";
@@ -92,9 +94,7 @@ import {
 import {
   loadLastSlug,
   loadLastSnapshotSelection,
-  removeSnapshotEvent,
   saveEventPhasePoolSelection,
-  saveLastSlug,
   saveLastSnapshotSelection,
 } from "./tournamentWorkspaceRepository";
 import {
@@ -152,25 +152,6 @@ import {
 } from "./bracketProgression";
 import "./App.css";
 
-type RoundRobinBoardData = {
-  entrants: string[];
-  entrantNames: Map<string, string>;
-  entrantIdsByColumnKey: Map<string, string | null>;
-  entrantSeedIds: Map<string, string>;
-  entrantSeedNumbers: Map<string, number>;
-  sourceDiagnostics: string[];
-  setsByPair: Map<string, SetSnapshot>;
-  candidateSetCount: number;
-  twoSlotSetCount: number;
-  resolvedSetCount: number;
-  registeredSetCount: number;
-  unresolvedSetIds: string[];
-  unresolvedSetReasons: string[];
-  standings: RoundRobinStanding[];
-  qualifyingCount: number;
-  tieBreakRules: RoundRobinTieBreakRule[];
-};
-
 type SavePlayerMetaOptions = {
   silent?: boolean;
   manageBusy?: boolean;
@@ -193,10 +174,6 @@ function generateRandomSenderUserId(): string {
 
 function eventSettingKey(slug: string, eventId: string): string {
   return `${normalizeSlugForSettingKey(slug)}::${eventId}`;
-}
-
-function roundRobinPairKey(leftEntrantId: string, rightEntrantId: string): string {
-  return [leftEntrantId, rightEntrantId].sort((left, right) => left.localeCompare(right, "ja")).join("::");
 }
 
 function roundRobinPlaceholderId(slot: SetSlot, source?: SetEntrantSource | null): string {
@@ -960,21 +937,22 @@ function App() {
 
   const {
     eventMgmtSettings,
+    appliedEventMgmtSettings,
     sideDecisionMethod,
     setSideDecisionMethod,
     categorySlotListIds,
     categorySlotMinCounts,
-    setCategorySlotMinCounts,
     categorySlotMaxCounts,
-    setCategorySlotMaxCounts,
     categorySlotAllowDuplicates,
-    setCategorySlotAllowDuplicates,
     totalItemMinCount,
-    setTotalItemMinCount,
     totalItemMaxCount,
-    setTotalItemMaxCount,
     setEventMgmtSettings,
     setCategoryListSlot,
+    handleCategorySlotMinChange,
+    handleCategorySlotMaxChange,
+    handleCategorySlotAllowDuplicatesChange,
+    handleTotalItemMinChange,
+    handleTotalItemMaxChange,
     removeItemListSettings,
     saveEventManagementSetting,
   } = useEventManagementSettings({
@@ -990,6 +968,41 @@ function App() {
     setMessage,
   });
 
+  const {
+    selectLocalSnapshotEvent,
+    deleteLocalSnapshotEvent,
+    saveSelectedEventAlias,
+    updateSnapshot,
+    restoreGraphFromSnapshot,
+  } = useEventSnapshotMaintenance({
+    slug,
+    selectedEventId,
+    selectedEvent,
+    eventAliasDraft,
+    perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
+    setBusy,
+    setError,
+    setMessage,
+    setCreateSnapshotProgress,
+    setRestoreDialogOpen,
+    setSlug,
+    setSelectedEventId,
+    setSelectedPhaseName,
+    setSelectedPhasePoolKey,
+    setDeletingSnapshotKey,
+    setWorkspace,
+    setEventMgmtSettings,
+    eventSettingKey,
+    snapshot,
+    saveEventAlias,
+    refreshRemoteSnapshot,
+    restoreWorkspaceGraph,
+    refreshLocalSnapshotEvents,
+    loadWorkspace,
+    clearAllDrafts,
+    closeMatchDialog,
+  });
+
   const configuredCategorySlots = useMemo(() => {
     const slots: Array<{
       slotIndex: number;
@@ -998,9 +1011,10 @@ function App() {
       maxCount: number;
       allowDuplicates: boolean;
     }> = [];
+    const appliedSetting = appliedEventMgmtSettings[selectedEventSettingKey];
 
     for (let slotIndex = 0; slotIndex < MAX_CATEGORY_SLOTS; slotIndex += 1) {
-      const listId = categorySlotListIds[slotIndex] ?? "";
+      const listId = appliedSetting?.itemListIds[slotIndex] ?? "";
       if (listId.trim() === "") {
         continue;
       }
@@ -1010,9 +1024,9 @@ function App() {
         continue;
       }
 
-      const minCount = clampNonNegativeInteger(categorySlotMinCounts[slotIndex] ?? 0, 0);
+      const minCount = clampNonNegativeInteger(appliedSetting?.categoryMinCounts?.[slotIndex] ?? 0, 0);
       const maxCount = Math.max(
-        clampNonNegativeInteger(categorySlotMaxCounts[slotIndex] ?? 1, 1),
+        clampNonNegativeInteger(appliedSetting?.categoryMaxCounts?.[slotIndex] ?? 1, 1),
         minCount,
       );
 
@@ -1021,17 +1035,15 @@ function App() {
         list,
         minCount,
         maxCount,
-        allowDuplicates: Boolean(categorySlotAllowDuplicates[slotIndex]),
+        allowDuplicates: Boolean(appliedSetting?.categoryAllowDuplicates?.[slotIndex]),
       });
     }
 
     return slots;
   }, [
-    categorySlotAllowDuplicates,
-    categorySlotListIds,
-    categorySlotMaxCounts,
-    categorySlotMinCounts,
+    appliedEventMgmtSettings,
     itemLists,
+    selectedEventSettingKey,
     selectedEventItemListSnapshots,
   ]);
 
@@ -2790,130 +2802,16 @@ function App() {
     };
   }, [interimScoreDraftsBySetId, pendingResultBySetId, selectedEvent, selectedPhasePoolGroup]);
 
-  const roundRobinMatrixRows = useMemo<RoundRobinMatrixRowView[]>(() => {
-    return roundRobinBoardData.entrants.map((rowEntrantId) => {
-      const rowSeedId = rowEntrantId.startsWith("seed:")
-        ? rowEntrantId.slice("seed:".length)
-        : roundRobinBoardData.entrantSeedIds.get(rowEntrantId);
-      const rowColumnEntrantId = roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId);
-      const standing = roundRobinBoardData.standings.find((item) =>
-        item.entrantId === rowColumnEntrantId
-        || (rowSeedId !== undefined
-          && roundRobinBoardData.entrantSeedIds.get(item.entrantId) === rowSeedId)
-        || (!rowEntrantId.startsWith("seed:") && item.entrantId === rowEntrantId),
-      );
-
-      const cells = roundRobinBoardData.entrants.map((columnEntrantId) => {
-        const isDiagonal = rowEntrantId === columnEntrantId;
-        const columnSeedId = columnEntrantId.startsWith("seed:")
-          ? columnEntrantId.slice("seed:".length)
-          : roundRobinBoardData.entrantSeedIds.get(columnEntrantId);
-        const set = isDiagonal
-          ? null
-          : roundRobinBoardData.setsByPair.get(roundRobinPairKey(
-            roundRobinBoardData.entrantIdsByColumnKey.get(rowEntrantId) ?? rowEntrantId,
-            roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId) ?? columnEntrantId,
-          ))
-            ?? roundRobinBoardData.setsByPair.get(roundRobinPairKey(
-              rowSeedId ?? rowEntrantId,
-              columnSeedId ?? columnEntrantId,
-            ));
-
-        if (!set) {
-          return {
-            key: columnEntrantId,
-            kind: isDiagonal ? "diagonal" as const : "empty" as const,
-          };
-        }
-
-        const setDisplay = getSetScoresForDisplay(set);
-        const pendingResult = pendingResultBySetId.get(set.setId);
-        const resultStatus = getSetResultVisualStatus(
-          set,
-          pendingResult,
-          interimScoreDraftsBySetId[set.setId],
-        );
-        const resultStatusClass = resultStatus ? `set-card-status-${resultStatus}` : "";
-        const resultStatusLabel = resultStatus === "confirmed"
-          ? "確定"
-          : resultStatus === "reset"
-            ? "取消待ち"
-            : resultStatus === "draft"
-              ? "下書き"
-              : resultStatus === "inprogress"
-                ? "進行中"
-                : "";
-        const winnerId = setDisplay.winnerId ?? set.winnerId;
-        const columnColumnEntrantId = roundRobinBoardData.entrantIdsByColumnKey.get(columnEntrantId);
-        const rowSlot = set.slots.find((slot) =>
-          rowColumnEntrantId !== null && rowColumnEntrantId !== undefined
-          && slot.entrantId === rowColumnEntrantId,
-        ) ?? set.slots.find((slot) => rowSeedId && slot.seedId === rowSeedId);
-        const columnSlot = set.slots.find((slot) =>
-          columnColumnEntrantId !== null && columnColumnEntrantId !== undefined
-          && slot.entrantId === columnColumnEntrantId,
-        ) ?? set.slots.find((slot) => columnSeedId && slot.seedId === columnSeedId);
-        const rowEntrantIdForSet = rowSlot?.entrantId ?? null;
-        const columnEntrantIdForSet = columnSlot?.entrantId ?? null;
-        const rowGameScore = rowEntrantIdForSet
-          ? setDisplay.scores[rowEntrantIdForSet]
-            ?? (rowSlot?.score !== null && rowSlot?.score !== undefined ? String(rowSlot.score) : "-")
-          : "-";
-        const columnGameScore = columnEntrantIdForSet
-          ? setDisplay.scores[columnEntrantIdForSet]
-            ?? (columnSlot?.score !== null && columnSlot?.score !== undefined ? String(columnSlot.score) : "-")
-          : "-";
-        const changeClass = pendingResult ? getPendingSetChangeClass(pendingResult) : "";
-        const outcomeClass = winnerId === null
-          ? ""
-          : winnerId === rowEntrantIdForSet
-            ? "round-robin-match-win"
-            : winnerId === columnEntrantIdForSet
-              ? "round-robin-match-loss"
-              : "";
-        const isLiveOverlaySet = Boolean(
-          obsOverlayState?.active
-          && obsOverlayState.currentSetId === set.setId
-          && obsOverlayState.currentSetId !== "__test__",
-        );
-        const roundLabel = set.fullRoundText.trim() || `Round ${set.round ?? "-"}`;
-        const setLabel = `Set ${setDisplayCodeById.get(set.setId) ?? set.identifier?.trim() ?? "-"}`;
-
-        return {
-          key: columnEntrantId,
-          kind: "match" as const,
-          match: {
-            set,
-            className: `round-robin-match ${outcomeClass} ${changeClass} ${resultStatusClass} ${isLiveOverlaySet ? "set-card-live" : ""}`,
-            title: `${roundLabel} / ${setLabel}: ${roundRobinBoardData.entrantNames.get(rowEntrantId) || "-"} vs ${roundRobinBoardData.entrantNames.get(columnEntrantId) || "-"}`,
-            roundLabel,
-            setLabel,
-            resultStatus,
-            resultStatusLabel,
-            isLiveOverlaySet,
-            rowGameScore,
-            columnGameScore,
-          },
-        };
-      });
-
-      return {
-        key: rowEntrantId,
-        entrantName: roundRobinBoardData.entrantNames.get(rowEntrantId) || "-",
-        cells,
-        setSummary: standing ? `${standing.wins}-${standing.losses}` : "-",
-        gameSummary: standing ? `${standing.gameWins}-${standing.gameLosses}` : "-",
-      };
-    });
-  }, [
-    getSetResultVisualStatus,
-    getSetScoresForDisplay,
-    interimScoreDraftsBySetId,
-    obsOverlayState,
-    pendingResultBySetId,
-    roundRobinBoardData,
-    setDisplayCodeById,
-  ]);
+  const roundRobinMatrixRows = useMemo<RoundRobinMatrixRowView[]>(
+    () => buildRoundRobinMatrixRows({
+      boardData: roundRobinBoardData,
+      pendingResultBySetId,
+      interimScoreDraftsBySetId,
+      obsOverlayState,
+      setDisplayCodeById,
+    }),
+    [interimScoreDraftsBySetId, obsOverlayState, pendingResultBySetId, roundRobinBoardData, setDisplayCodeById],
+  );
 
   const eliminationBracketSections: EliminationBracketSectionView[] = renderedBracketSectionsForView.map((section) => ({
     key: section.key,
@@ -3081,191 +2979,6 @@ function App() {
       setError(String(err));
     } finally {
       localSnapshotEventsLoadedOnceRef.current = true;
-    }
-  }
-
-  async function selectLocalSnapshotEvent(item: LocalSnapshotEventListItem) {
-    setBusy(true);
-    setError("");
-    setMessage("");
-
-    const savedPhaseName = typeof item.lastSelectedPhaseName === "string"
-      ? item.lastSelectedPhaseName.trim()
-      : "";
-    const savedPhaseGroupName = typeof item.lastSelectedPhaseGroupName === "string"
-      ? item.lastSelectedPhaseGroupName.trim()
-      : "";
-
-    try {
-      await saveLastSlug(item.slug);
-      await saveLastSnapshotSelection({
-        slug: item.slug,
-        eventId: item.eventId,
-        phaseName: savedPhaseName === "" ? null : savedPhaseName,
-        phaseGroupName: savedPhaseGroupName === "" ? null : savedPhaseGroupName,
-      });
-      await loadWorkspace(item.slug, item.eventId);
-
-      setSlug(toSlugInput(item.slug));
-      setSelectedEventId(item.eventId);
-      if (savedPhaseName !== "" && savedPhaseGroupName !== "") {
-        setSelectedPhaseName(savedPhaseName);
-        setSelectedPhasePoolKey(`${savedPhaseName}::${savedPhaseGroupName}`);
-      } else {
-        setSelectedPhaseName("");
-        setSelectedPhasePoolKey("");
-      }
-      closeMatchDialog();
-      setMessage(`イベントを読み込みました: ${item.tournamentName} / ${item.eventName}`);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setCreateSnapshotProgress(null);
-      setBusy(false);
-    }
-  }
-
-  async function deleteLocalSnapshotEvent(item: LocalSnapshotEventListItem) {
-    const displayEventName = item.eventAlias && item.eventAlias.trim() !== ""
-      ? item.eventAlias
-      : item.eventName;
-    const confirmed = window.confirm(
-      `このローカルスナップショットを削除しますか？\n${item.tournamentName} / ${displayEventName}`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    const deletingKey = `${item.slug}:${item.eventId}`;
-    setDeletingSnapshotKey(deletingKey);
-    setError("");
-    setMessage("");
-
-    try {
-      await removeSnapshotEvent(item.slug, item.eventId);
-
-      const removedSettingKey = eventSettingKey(item.slug, item.eventId);
-      setEventMgmtSettings((current) => {
-        if (!(removedSettingKey in current)) {
-          return current;
-        }
-
-        const next = { ...current };
-        delete next[removedSettingKey];
-        return next;
-      });
-
-      if (
-        snapshot
-        && selectedEvent
-        && sameSnapshotEventKey(snapshot.slug, selectedEvent.eventId, item.slug, item.eventId)
-      ) {
-        setWorkspace(null);
-        setSelectedEventId("");
-        closeMatchDialog();
-      }
-
-      await refreshLocalSnapshotEvents();
-      setMessage(`削除しました: ${item.tournamentName} / ${displayEventName}`);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setDeletingSnapshotKey("");
-    }
-  }
-
-  async function saveSelectedEventAlias() {
-    if (!selectedEvent) {
-      setError("先にイベントを選択してください。");
-      return;
-    }
-
-    const normalizedSlug = toApiSlug(slug);
-    if (normalizedSlug === "") {
-      setError("大会slugが確認できません。イベントを選択してください。");
-      return;
-    }
-
-    const trimmed = eventAliasDraft.trim();
-    setBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      await saveEventAlias(
-        normalizedSlug,
-        selectedEvent.eventId,
-        trimmed === "" ? null : trimmed,
-      );
-      await refreshLocalSnapshotEvents();
-      setMessage(trimmed === "" ? "エイリアス名を未設定にしました。" : `エイリアス名を保存しました: ${trimmed}`);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function updateSnapshot() {
-    const normalizedSlug = toApiSlug(slug);
-    const eventId = selectedEvent?.eventId ?? selectedEventId;
-    if (normalizedSlug === "" || eventId === "") {
-      setError("先にイベントを選択してください。");
-      return;
-    }
-
-    setBusy(true);
-    setError("");
-    setMessage("");
-    setCreateSnapshotProgress({
-      phase: "starting",
-      completedSets: 0,
-      totalSets: null,
-      currentPage: null,
-      currentSetId: null,
-    });
-
-    try {
-      await refreshRemoteSnapshot(
-        normalizedSlug,
-        eventId,
-        normalizeStartggFetchPerPage(startggFetchPerPage),
-      );
-      clearAllDrafts();
-      closeMatchDialog();
-      setCreateSnapshotProgress(null);
-      await refreshLocalSnapshotEvents();
-      setMessage("スナップショットを更新しました。未報告のローカル結果・途中経過は破棄され、start.gg状態に合わせました。");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setCreateSnapshotProgress(null);
-      setBusy(false);
-    }
-  }
-
-  async function restoreGraphFromSnapshot() {
-    const normalizedSlug = toApiSlug(slug);
-    const eventId = selectedEvent?.eventId ?? selectedEventId;
-    if (normalizedSlug === "" || eventId === "") {
-      setError("先にイベントを選択してください。");
-      return;
-    }
-
-    setRestoreDialogOpen(false);
-    setBusy(true);
-    setError("");
-    setMessage("");
-
-    try {
-      await restoreWorkspaceGraph(normalizedSlug, eventId);
-      clearAllDrafts();
-      closeMatchDialog();
-      setMessage("最後に取得したスナップショット時点に復元しました。対象eventの未報告結果は破棄されました。");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -3733,51 +3446,6 @@ function App() {
     return sideOverrides;
   }
 
-  function handleTournamentCategoryMinChange(slotIndex: number, value: string) {
-    const nextMin = clampNonNegativeInteger(Number(value), 0);
-    setCategorySlotMinCounts((current) => {
-      const next = [...current];
-      next[slotIndex] = nextMin;
-      return next;
-    });
-    setCategorySlotMaxCounts((current) => {
-      const next = [...current];
-      if ((next[slotIndex] ?? 0) < nextMin) {
-        next[slotIndex] = nextMin;
-      }
-      return next;
-    });
-  }
-
-  function handleTournamentCategoryMaxChange(slotIndex: number, value: string) {
-    const rawMax = clampNonNegativeInteger(Number(value), 0);
-    const ensuredMax = Math.max(rawMax, categorySlotMinCounts[slotIndex] ?? 0);
-    setCategorySlotMaxCounts((current) => {
-      const next = [...current];
-      next[slotIndex] = ensuredMax;
-      return next;
-    });
-  }
-
-  function handleTournamentCategoryAllowDuplicatesChange(slotIndex: number, allowed: boolean) {
-    setCategorySlotAllowDuplicates((current) => {
-      const next = [...current];
-      next[slotIndex] = allowed;
-      return next;
-    });
-  }
-
-  function handleTournamentTotalMinChange(value: string) {
-    const nextMin = clampNonNegativeInteger(Number(value), 0);
-    setTotalItemMinCount(nextMin);
-    setTotalItemMaxCount((current) => Math.max(current, nextMin));
-  }
-
-  function handleTournamentTotalMaxChange(value: string) {
-    const nextMax = clampNonNegativeInteger(Number(value), 0);
-    setTotalItemMaxCount(Math.max(nextMax, totalItemMinCount));
-  }
-
   function addSelectedEntrantDraftSelection(slot: EventSettingCategorySlot, itemName: string) {
     if (!selectedEvent || !selectedTournamentEntrant) {
       return;
@@ -3934,11 +3602,11 @@ function App() {
               onSideDecisionMethodChange: setSideDecisionMethod,
               onApplySideDecisionMethod: () => void applySideDecisionMethodToAllUnconfirmedSets(),
               onCategoryListChange: setCategoryListSlot,
-              onCategoryMinChange: handleTournamentCategoryMinChange,
-              onCategoryMaxChange: handleTournamentCategoryMaxChange,
-              onCategoryAllowDuplicatesChange: handleTournamentCategoryAllowDuplicatesChange,
-              onTotalItemMinChange: handleTournamentTotalMinChange,
-              onTotalItemMaxChange: handleTournamentTotalMaxChange,
+              onCategoryMinChange: handleCategorySlotMinChange,
+              onCategoryMaxChange: handleCategorySlotMaxChange,
+              onCategoryAllowDuplicatesChange: handleCategorySlotAllowDuplicatesChange,
+              onTotalItemMinChange: handleTotalItemMinChange,
+              onTotalItemMaxChange: handleTotalItemMaxChange,
               onSaveEventManagementSetting: saveEventManagementSetting,
               onSelectEntrant: setSelectedTournamentEntrantId,
               onAddDraftSelection: addSelectedEntrantDraftSelection,
