@@ -28,6 +28,7 @@ import {
 } from "./itemList";
 import { EventSelector, localSnapshotAliasLabel, localSnapshotItemKey, type LocalSnapshotEventListItem } from "./EventSelector";
 import { EventSetting, type EventSettingCategorySlot } from "./EventSetting";
+import { AppShell, type AppTab } from "./AppShell";
 import { OverlayControl, type ObsOverlayState } from "./OverlayControl";
 import { BracketTab } from "./BracketTab";
 import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
@@ -349,8 +350,6 @@ function withMobileInputPollMsParam(url: string, pollMs: number): string {
   }
 }
 
-type AppTab = "home" | "create" | "tournament" | "message" | "call-list" | "bracket" | "item-list" | "users" | "settings" | "overlay";
-
 type EventManagementMeta = {
   sideDecisionMethod: "upper_1p" | "upper_2p" | "random";
   itemListSnapshots: ItemListConfig[];
@@ -597,19 +596,6 @@ function normalizeBracketZoomLevel(value: unknown): number {
 
   return Number(BRACKET_ZOOM_LEVELS[0]);
 }
-
-const APP_TABS: Array<{ id: AppTab; label: string; icon: string; implemented: boolean }> = [
-  { id: "create", label: "新規作成", icon: "➕", implemented: true },
-  { id: "home", label: "大会一覧", icon: "🏠", implemented: true },
-  { id: "tournament", label: "大会管理", icon: "⚙", implemented: true },
-  { id: "bracket", label: "ブラケット", icon: "🏆", implemented: true },
-  { id: "overlay", label: "オーバーレイ", icon: "📺", implemented: true },
-  { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
-  { id: "message", label: "メッセージ", icon: "💬", implemented: true },
-  { id: "call-list", label: "呼び出しリスト", icon: "📣", implemented: true },
-  { id: "users", label: "プレイヤーリスト", icon: "👥", implemented: true },
-  { id: "settings", label: "設定", icon: "🔧", implemented: true },
-];
 
 function eventSettingKey(slug: string, eventId: string): string {
   return `${normalizeSlugForSettingKey(slug)}::${eventId}`;
@@ -7579,102 +7565,41 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="sidebar-head">
-          <div className="sidebar-head-title">
-            <h1>savakan-gg</h1>
-            {appVersion !== "" ? <span className="app-version">v{appVersion}</span> : null}
-          </div>
-          <p>大会運営コンソール</p>
-        </div>
-
-        <div className="sidebar-summary">
-          <p className="meta">選択中の大会</p>
-          {snapshot ? (
-            <>
-              <p className="summary-name">{selectedSummaryName}</p>
-              <p className="summary-meta">slug: {snapshot.slug}</p>
-              <p className="summary-meta">events: {snapshot.events.length}</p>
-            </>
-          ) : selectedSidebarItem ? (
-            <>
-              <p className="summary-name">{selectedSummaryName}</p>
-              <p className="summary-meta">slug: {selectedSidebarItem.slug}</p>
-              <p className="summary-meta">tournament: {selectedSidebarItem.tournamentName}</p>
-            </>
-          ) : (
-            <p className="summary-meta">未選択</p>
-          )}
-        </div>
-
-        <nav className="tab-nav" role="tablist" aria-label="メインタブ">
-          {APP_TABS.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              className={`tab-trigger ${activeTab === tab.id ? "active" : ""}`}
-              aria-selected={activeTab === tab.id}
-              disabled={!tab.implemented}
-              title={tab.implemented ? tab.label : `${tab.label} は未実装です`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              <span aria-hidden="true">{tab.icon}</span>
-              <span>{tab.label}</span>
-              {tab.id === "message" && unreadMessageCount > 0 && (
-                <span className="tab-count-badge" aria-label={`未読メッセージ ${unreadMessageCount}件`}>
-                  {unreadMessageCount >= 10 ? "9+" : unreadMessageCount}
-                </span>
-              )}
-              {tab.id === "call-list" && unresolvedCallRootCounts.total > 0 && (
-                <span className="tab-count-badge" aria-label={`未解決の呼び出し ${unresolvedCallRootCounts.total}件`}>
-                  {unresolvedCallRootCounts.total >= 10 ? "9+" : unresolvedCallRootCounts.total}
-                </span>
-              )}
-            </button>
-          ))}
-        </nav>
-      </aside>
-
-      <main className={`content ${activeTab === "call-list" ? "call-list-mode" : ""}`}>
-        <section className="hero">
-          {activeTab === "call-list" ? (
-            <StatusBoardHero
-              currentPage={callListCurrentPage}
-              totalPages={callListTotalPages}
-              sortStrategy={callListEventSortStrategy}
-              onToggleSort={() => setCallListEventSortStrategy((current) => (current === "alias" ? "max-elapsed" : "alias"))}
-              canBroadcastSync={canBroadcastCallListSync}
-              onBroadcastSync={() => void requestUnresolvedCallSyncBroadcast()}
-              onNextPage={() => {
-                setCallListPageSwitchedAtMs(Date.now());
-                setCallListPageIndex((current) => {
-                  const next = (current + 1) % unresolvedCallEventPages.length;
-                  if (next === 0) {
-                    setCallListCycleCount((cycle) => cycle + 1);
-                  }
-                  return next;
-                });
-              }}
-              pageProgressPercent={normalizedCallListPageProgressPercent}
-            />
-          ) : (
-            <>
-              <h2>{activeTab === "create" ? "新規作成" : (APP_TABS.find((tab) => tab.id === activeTab)?.label ?? "大会管理")}</h2>
-              {activeTab !== "create" && (
-                <>
-                  <p className="description">start.ggのローカルスナップショットをベースにした大会データ単位で管理</p>
-                </>
-              )}
-            </>
-          )}
-        </section>
-
-        <section className="message-stack" aria-live="polite">
-          <p className={`message success ${message === "" ? "empty" : ""}`}>{message === "" ? " " : message}</p>
-          <p className={`message error ${error === "" ? "empty" : ""}`}>{error === "" ? " " : error}</p>
-        </section>
+    <AppShell
+      appVersion={appVersion}
+      activeTab={activeTab}
+      onTabSelect={setActiveTab}
+      unreadMessageCount={unreadMessageCount}
+      unresolvedCallCount={unresolvedCallRootCounts.total}
+      sidebarSummary={snapshot
+        ? { name: selectedSummaryName, slug: snapshot.slug, eventCount: snapshot.events.length }
+        : selectedSidebarItem
+          ? { name: selectedSummaryName, slug: selectedSidebarItem.slug, tournamentName: selectedSidebarItem.tournamentName }
+          : null}
+      headerContent={activeTab === "call-list" ? (
+        <StatusBoardHero
+          currentPage={callListCurrentPage}
+          totalPages={callListTotalPages}
+          sortStrategy={callListEventSortStrategy}
+          onToggleSort={() => setCallListEventSortStrategy((current) => (current === "alias" ? "max-elapsed" : "alias"))}
+          canBroadcastSync={canBroadcastCallListSync}
+          onBroadcastSync={() => void requestUnresolvedCallSyncBroadcast()}
+          onNextPage={() => {
+            setCallListPageSwitchedAtMs(Date.now());
+            setCallListPageIndex((current) => {
+              const next = (current + 1) % unresolvedCallEventPages.length;
+              if (next === 0) {
+                setCallListCycleCount((cycle) => cycle + 1);
+              }
+              return next;
+            });
+          }}
+          pageProgressPercent={normalizedCallListPageProgressPercent}
+        />
+      ) : null}
+      message={message}
+      error={error}
+    >
 
         {activeTab === "home" && (
           <EventSelector
@@ -8406,8 +8331,7 @@ function App() {
           />
         </>
       )}
-      </main>
-    </div>
+    </AppShell>
   );
 }
 
