@@ -3,9 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import QRCode from "qrcode";
-import jsQR from "jsqr";
 import { CreateSnapshot } from "./CreateSnapshot";
 import { DqRequestDialog } from "./DqRequestDialog";
+import { useDqCameraScan } from "./useDqCameraScan";
 import { toApiSlug, toEventApiSlug, toSlugInput } from "./slugUtils";
 import { SettingsScreen } from "./SettingMenu";
 import { StatusBoard, StatusBoardHero } from "./StatusBoard";
@@ -102,10 +102,7 @@ import {
 import {
   buildCallSyncStatusTargets,
   extractMetaString,
-  extractPlayerIdFromBarcodeResults,
-  extractPlayerIdFromQrRawValue,
   getMailboxMethodLabel,
-  isLikelyPlayerId,
   isDqRequestMessage,
   isValidIpv4,
   isValidSenderUserId,
@@ -381,22 +378,6 @@ function resolveCallPhaseName(event: EventSnapshot | null, rawValue: string, pha
   return set?.phaseName?.trim() || normalized;
 }
 
-function createQrBarcodeDetector(): {
-  detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
-} | null {
-  const barcodeDetectorCtor = (window as unknown as {
-    BarcodeDetector?: new (options?: { formats?: string[] }) => {
-      detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
-    };
-  }).BarcodeDetector;
-
-  if (!barcodeDetectorCtor) {
-    return null;
-  }
-
-  return new barcodeDetectorCtor({ formats: ["qr_code"] });
-}
-
 const SENDER_PROFILE_STORAGE_KEY = "savakan-gg.sender-profile.v1";
 const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
 const BRACKET_ZOOM_LEVEL_STORAGE_KEY = "savakan-gg.bracket-zoom-level.v1";
@@ -531,7 +512,6 @@ function App() {
   const [selectedSenderNetworkCandidateKey, setSelectedSenderNetworkCandidateKey] = useState("");
   const [senderNetworkCandidatesLoading, setSenderNetworkCandidatesLoading] = useState(false);
   const [senderIdentityChangedSinceMailboxClear, setSenderIdentityChangedSinceMailboxClear] = useState(false);
-  const [dqCameraActive, setDqCameraActive] = useState(false);
   const [displayBracketPlayersBySide, setDisplayBracketPlayersBySide] = useState(true);
   const [bracketZoomLevel, setBracketZoomLevel] = useState<number>(Number(BRACKET_ZOOM_LEVELS[0]));
   const [mobileInputPollingMs, setMobileInputPollingMs] = useState<number>(MOBILE_INPUT_POLLING_MS_DEFAULT);
@@ -699,14 +679,13 @@ function App() {
   const lastPersistedEventMetaPhasePoolRef = useRef("");
   const autoIpFillTriedRef = useRef(false);
   const tabSelectionAutoLoadInFlightRef = useRef(false);
-  const dqCameraVideoRef = useRef<HTMLVideoElement | null>(null);
-  const dqCameraCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const dqCameraStreamRef = useRef<MediaStream | null>(null);
-  const dqCameraRafRef = useRef<number | null>(null);
-  const dqCameraDetectingRef = useRef(false);
-  const dqCameraDetectorRef = useRef<{
-    detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>>;
-  } | null>(null);
+  const {
+    cameraActive: dqCameraActive,
+    videoRef: dqCameraVideoRef,
+    canvasRef: dqCameraCanvasRef,
+    startDqCameraScan,
+    stopDqCameraScan,
+  } = useDqCameraScan();
   const tournamentCreation = useTournamentCreation({
     slug,
     perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
@@ -1992,136 +1971,6 @@ function App() {
     setMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK)`);
   }
 
-  function stopDqCameraScan() {
-    if (dqCameraRafRef.current !== null) {
-      cancelAnimationFrame(dqCameraRafRef.current);
-      dqCameraRafRef.current = null;
-    }
-    dqCameraDetectingRef.current = false;
-    if (dqCameraStreamRef.current) {
-      dqCameraStreamRef.current.getTracks().forEach((track) => track.stop());
-      dqCameraStreamRef.current = null;
-    }
-    if (dqCameraVideoRef.current) {
-      dqCameraVideoRef.current.srcObject = null;
-    }
-    dqCameraDetectorRef.current = null;
-    setDqCameraActive(false);
-  }
-
-  async function startDqCameraScan() {
-    if (!dqDialog) {
-      setDqDialogError("DQ申請対象が見つかりません。再度開き直してください。");
-      return;
-    }
-
-    stopDqCameraScan();
-    setDqDialogError("");
-
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setDqDialogError("この環境ではカメラアクセスに対応していません。PLAYER IDを手入力してください。");
-      return;
-    }
-
-    const detector = createQrBarcodeDetector();
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: "environment",
-        },
-        audio: false,
-      });
-
-      dqCameraStreamRef.current = stream;
-  dqCameraDetectorRef.current = detector;
-
-      const video = dqCameraVideoRef.current;
-      if (!video) {
-        stopDqCameraScan();
-        setDqDialogError("カメラプレビューの初期化に失敗しました。");
-        return;
-      }
-
-      const scanCanvas = dqCameraCanvasRef.current;
-      if (!scanCanvas) {
-        stopDqCameraScan();
-        setDqDialogError("カメラスキャンの初期化に失敗しました。");
-        return;
-      }
-
-      video.srcObject = stream;
-      await video.play();
-      setDqCameraActive(true);
-
-      const tick = () => {
-        void (async () => {
-          if (!dqCameraVideoRef.current) {
-            return;
-          }
-          if (dqCameraVideoRef.current.readyState < 2) {
-            dqCameraRafRef.current = requestAnimationFrame(tick);
-            return;
-          }
-          if (dqCameraDetectingRef.current) {
-            dqCameraRafRef.current = requestAnimationFrame(tick);
-            return;
-          }
-
-          dqCameraDetectingRef.current = true;
-          try {
-            let playerId = "";
-            if (dqCameraDetectorRef.current) {
-              const results = await dqCameraDetectorRef.current.detect(dqCameraVideoRef.current);
-              playerId = extractPlayerIdFromBarcodeResults(results);
-            }
-
-            if (playerId === "" && dqCameraVideoRef.current) {
-              const videoWidth = dqCameraVideoRef.current.videoWidth;
-              const videoHeight = dqCameraVideoRef.current.videoHeight;
-              if (videoWidth > 0 && videoHeight > 0) {
-                if (scanCanvas.width !== videoWidth || scanCanvas.height !== videoHeight) {
-                  scanCanvas.width = videoWidth;
-                  scanCanvas.height = videoHeight;
-                }
-
-                const ctx = scanCanvas.getContext("2d", { willReadFrequently: true });
-                if (ctx) {
-                  ctx.drawImage(dqCameraVideoRef.current, 0, 0, scanCanvas.width, scanCanvas.height);
-                  const imageData = ctx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
-                  const decoded = jsQR(imageData.data, imageData.width, imageData.height, {
-                    inversionAttempts: "attemptBoth",
-                  });
-                  const raw = decoded?.data?.trim() ?? "";
-                  const normalized = extractPlayerIdFromQrRawValue(raw);
-                  playerId = isLikelyPlayerId(normalized) ? normalized : "";
-                }
-              }
-            }
-
-            if (playerId !== "") {
-              setDqPlayerIdDraft(playerId);
-              setMessage("カメラでPLAYER IDを読み取りました。");
-              stopDqCameraScan();
-              return;
-            }
-          } catch {
-            // keep scanning
-          } finally {
-            dqCameraDetectingRef.current = false;
-          }
-
-          dqCameraRafRef.current = requestAnimationFrame(tick);
-        })();
-      };
-
-      dqCameraRafRef.current = requestAnimationFrame(tick);
-    } catch (err) {
-      stopDqCameraScan();
-      setDqDialogError(`カメラを起動できませんでした: ${String(err)}`);
-    }
-  }
-
   useEffect(() => {
     if (dqDialog) {
       return;
@@ -2129,12 +1978,6 @@ function App() {
 
     stopDqCameraScan();
   }, [dqDialog]);
-
-  useEffect(() => {
-    return () => {
-      stopDqCameraScan();
-    };
-  }, []);
 
   function resolveActiveThread() {
     void resolveMailboxThread();
@@ -5675,7 +5518,12 @@ function App() {
           cameraActive={dqCameraActive}
           videoRef={dqCameraVideoRef}
           canvasRef={dqCameraCanvasRef}
-          onStartCameraScan={() => void startDqCameraScan()}
+          onStartCameraScan={() => void startDqCameraScan({
+            dialogOpen: Boolean(dqDialog),
+            onPlayerIdFound: setDqPlayerIdDraft,
+            onDialogError: setDqDialogError,
+            onMessage: setMessage,
+          })}
           onStopCameraScan={stopDqCameraScan}
           onClose={closeDqRequestDialog}
           onSubmit={() => void submitDqRequest()}
