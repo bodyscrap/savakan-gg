@@ -14,6 +14,7 @@ import {
   isResetPendingResult,
   parseDraftScoreValue,
   parseScoreCsvText,
+  resolveSetSlotSideLabel,
   resolveWinnerIdFromDrafts,
   toIntegerScore,
 } from "./setResultDrafts";
@@ -76,6 +77,14 @@ describe("score parsing", () => {
 });
 
 describe("result drafts", () => {
+  it("hides side labels until the matchup is ready and then applies saved or slot fallback sides", () => {
+    expect(resolveSetSlotSideLabel("red", "2P")).toBe("-");
+    expect(resolveSetSlotSideLabel("red", "2P", { matchupReady: true })).toBe("2P");
+    expect(resolveSetSlotSideLabel("red", "", { finishedSet: true, fallbackBySlotIndex: 0 })).toBe("1P");
+    expect(resolveSetSlotSideLabel("red", "", { matchupReady: true, fallbackBySlotIndex: 1 })).toBe("2P");
+    expect(resolveSetSlotSideLabel(null, "1P", { matchupReady: true, fallbackBySlotIndex: 0 })).toBe("-");
+  });
+
   it("builds display values from interim drafts and direct wins", () => {
     const set = createSet();
     expect(getSetScoresForDisplay(set, undefined, { red: "2", blue: "-" })).toEqual({

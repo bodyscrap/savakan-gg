@@ -65,6 +65,7 @@ import {
   hasDqScoreInDrafts,
   isConfirmedSetResult,
   isDqScoreValue,
+  resolveSetSlotSideLabel,
   resolveWinnerIdFromDrafts,
   stepScoreDraftValue,
 } from "./setResultDrafts";
@@ -2599,30 +2600,7 @@ function App() {
     entrantId: string | null,
     options?: { fallbackBySlotIndex?: number; finishedSet?: boolean; matchupReady?: boolean },
   ): string {
-    if (!entrantId) {
-      return "-";
-    }
-
-    // 対戦カードが未確定の間は、保存済みサイドが残っていても表示しない。
-    if (!options?.finishedSet && !options?.matchupReady) {
-      return "-";
-    }
-
-    const side = getSetSlotSide(setId, entrantId);
-    if (side !== "") {
-      return side;
-    }
-
-    if ((options?.finishedSet || options?.matchupReady) && options.fallbackBySlotIndex !== undefined) {
-      if (options.fallbackBySlotIndex === 0) {
-        return "1P";
-      }
-      if (options.fallbackBySlotIndex === 1) {
-        return "2P";
-      }
-    }
-
-    return "-";
+    return resolveSetSlotSideLabel(entrantId, getSetSlotSide(setId, entrantId), options);
   }
 
   function getSetScoresForDisplay(set: SetSnapshot): { scores: Record<string, string>; isDq: boolean; winnerId: string | null } {

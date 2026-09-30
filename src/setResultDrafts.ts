@@ -1,9 +1,32 @@
-import type { LocalSetResultMeta } from "./useTournamentWorkspace";
+import type { LocalSetResultMeta, PlaySide } from "./useTournamentWorkspace";
 import type { SetResultDraftState, SetScoreDraft } from "./useSetResultDrafts";
 import type { SetSlot, SetSnapshot } from "./bracketProgression";
 import { isCompletedSet } from "./bracketDisplay";
 
 export type SetResultVisualStatus = "inprogress" | "draft" | "confirmed" | "reset" | null;
+
+export function resolveSetSlotSideLabel(
+  entrantId: string | null,
+  side: PlaySide | "",
+  options?: { fallbackBySlotIndex?: number; finishedSet?: boolean; matchupReady?: boolean },
+): string {
+  if (!entrantId || (!options?.finishedSet && !options?.matchupReady)) {
+    return "-";
+  }
+
+  if (side !== "") {
+    return side;
+  }
+
+  if (options.fallbackBySlotIndex === 0) {
+    return "1P";
+  }
+  if (options.fallbackBySlotIndex === 1) {
+    return "2P";
+  }
+
+  return "-";
+}
 
 export function isConfirmedSetResult(result: { confirmed?: boolean }): boolean {
   return result.confirmed !== false;
