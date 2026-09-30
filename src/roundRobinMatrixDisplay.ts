@@ -8,6 +8,7 @@ import type {
   SetSlot,
   SetSnapshot,
 } from "./bracketProgression";
+import { parseRoundRobinGameScore } from "./bracketProgression";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
 import {
   getPendingSetChangeClass,
@@ -438,6 +439,221 @@ export function createRoundRobinSourceSlotResolver(input: {
   return resolveSourceSlot;
 }
 
+export function resolveRoundRobinSlotEntrant(input: {
+  slot: SetSlot;
+  source: SetEntrantSource | null | undefined;
+  setId: string;
+  phaseGroupSeedIndexes: RoundRobinSeedIndexes;
+  phaseGroupSeedIdByEntrantId: Map<string, string>;
+  seedSlotById: Map<string, SetSlot>;
+  resolveSourceSlot: (
+    source: SetEntrantSource | null | undefined,
+    visited: Set<string>,
+  ) => RoundRobinResolvedSlot | null;
+  resolveOriginOrder: (
+    originPhaseOrder: number | null | undefined,
+    originDisplayIdentifier: string | null | undefined,
+    originPlacement: number | null | undefined,
+  ) => number | null;
+}): RoundRobinResolvedSlot & { slot: SetSlot } {
+  const { slot, source } = input;
+  const slotSeed = findRoundRobinPhaseGroupSeed(slot, source, input.phaseGroupSeedIndexes);
+  const slotSeedSlot = slot.seedId ? input.seedSlotById.get(slot.seedId) : undefined;
+  const resolved = slot.entrantId
+    ? {
+      entrantId: slot.entrantId,
+      entrantName: slot.entrantName,
+      isPlaceholder: false,
+      seedId: slot.seedId,
+      seedNum: slot.seedNum,
+      originPlacement: slot.seedOriginPlacement,
+      originDisplayIdentifier: slot.seedOriginPhaseGroupDisplayIdentifier,
+      originOrder: input.resolveOriginOrder(
+        source?.originPhaseOrder ?? null,
+        source?.originPhaseGroupDisplayIdentifier ?? slot.seedOriginPhaseGroupDisplayIdentifier,
+        source?.originPlacement ?? slot.seedOriginPlacement,
+      ),
+    }
+    : (slotSeed?.entrantId
+      ? {
+        entrantId: slotSeed.entrantId,
+        entrantName: slotSeed.entrantName?.trim() || slotSeed.entrantId,
+        isPlaceholder: false,
+        seedId: slotSeed.seedId,
+        seedNum: slot.seedNum ?? slotSeed.seedNum,
+        originPlacement: slot.seedOriginPlacement ?? slotSeed.originPlacement,
+        originDisplayIdentifier: slot.seedOriginPhaseGroupDisplayIdentifier
+          ?? slotSeed.originPhaseGroupDisplayIdentifier,
+        originOrder: slotSeed.originOrder,
+      }
+      : slotSeedSlot?.entrantId
+        ? {
+          entrantId: slotSeedSlot.entrantId,
+          entrantName: slotSeedSlot.entrantName,
+          isPlaceholder: false,
+          seedId: slotSeedSlot.seedId,
+          seedNum: slot.seedNum ?? slotSeedSlot.seedNum,
+          originPlacement: slot.seedOriginPlacement ?? slotSeedSlot.seedOriginPlacement,
+          originDisplayIdentifier: slot.seedOriginPhaseGroupDisplayIdentifier
+            ?? slotSeedSlot.seedOriginPhaseGroupDisplayIdentifier,
+          originOrder: null,
+        }
+        : input.resolveSourceSlot(source, new Set([input.setId])))
+      ?? (slot.seedPlaceholderName?.trim()
+        ? {
+          entrantId: roundRobinPlaceholderId(slot, source),
+          entrantName: slot.seedPlaceholderName.trim(),
+          isPlaceholder: true,
+          seedId: slot.seedId,
+          seedNum: slot.seedNum,
+          originPlacement: slot.seedOriginPlacement,
+          originDisplayIdentifier: slot.seedOriginPhaseGroupDisplayIdentifier,
+        }
+        : null);
+  const entrantId = resolved?.entrantId ?? roundRobinPlaceholderId(slot, source);
+  const sourcePlaceholderName = source?.placeholderName?.trim()
+    || source?.conditionString?.trim();
+  const entrantName = resolved && !resolved.isPlaceholder
+    ? resolved.entrantName
+    : sourcePlaceholderName
+      ?? resolved?.entrantName
+      ?? slot.seedPlaceholderName?.trim()
+      ?? sourcePlaceholderName
+      ?? slot.entrantName
+      ?? "TBD";
+  const effectiveSeedId = input.phaseGroupSeedIdByEntrantId.get(entrantId)
+    ?? resolved?.seedId
+    ?? slot.seedId;
+
+  return {
+    slot,
+    entrantId,
+    entrantName,
+    isPlaceholder: resolved?.isPlaceholder ?? slot.entrantId === null,
+    seedId: effectiveSeedId,
+    seedNum: source?.seedNum ?? resolved?.seedNum,
+    originPlacement: source?.placement ?? resolved?.originPlacement,
+    originDisplayIdentifier: source?.originPhaseGroupDisplayIdentifier
+      ?? resolved?.originDisplayIdentifier,
+    originOrder: resolved?.originOrder ?? input.resolveOriginOrder(
+      source?.originPhaseOrder ?? null,
+      source?.originPhaseGroupDisplayIdentifier ?? slot.seedOriginPhaseGroupDisplayIdentifier,
+      source?.originPlacement ?? slot.seedOriginPlacement,
+    ),
+  };
+}
+
+export type RoundRobinResolvedSet = {
+  set: SetSnapshot;
+  entrants: (RoundRobinResolvedSlot & { slot: SetSlot })[];
+  hasUnassignedSlot: boolean;
+};
+
+export type RoundRobinSetStandingStats = Pick<
+  RoundRobinStanding,
+  "wins" | "losses" | "gameWins" | "gameLosses"
+>;
+
+export function aggregateRoundRobinSetResults(
+  resolvedSets: RoundRobinResolvedSet[],
+  getScoresForSet: (set: SetSnapshot) => ReturnType<typeof getSetScoresForDisplay> = getSetScoresForDisplay,
+): {
+  twoSlotSetCount: number;
+  resolvedSetCount: number;
+  registeredSetCount: number;
+  unresolvedSetIds: string[];
+  unresolvedSetReasons: string[];
+  setsByPair: Map<string, SetSnapshot>;
+  headToHeadWins: Map<string, Map<string, number>>;
+  standingStatsByEntrantId: Map<string, RoundRobinSetStandingStats>;
+} {
+  let twoSlotSetCount = 0;
+  let resolvedSetCount = 0;
+  const registeredSetIds = new Set<string>();
+  const unresolvedSetIds: string[] = [];
+  const unresolvedSetReasons: string[] = [];
+  const setsByPair = new Map<string, SetSnapshot>();
+  const headToHeadWins = new Map<string, Map<string, number>>();
+  const standingStatsByEntrantId = new Map<string, RoundRobinSetStandingStats>();
+
+  const getStandingStats = (entrantId: string): RoundRobinSetStandingStats => {
+    let stats = standingStatsByEntrantId.get(entrantId);
+    if (!stats) {
+      stats = { wins: 0, losses: 0, gameWins: 0, gameLosses: 0 };
+      standingStatsByEntrantId.set(entrantId, stats);
+    }
+    return stats;
+  };
+
+  for (const { set, entrants, hasUnassignedSlot } of resolvedSets) {
+    if (set.slots.length === 2) {
+      twoSlotSetCount += 1;
+    }
+    if (entrants.length !== 2 || entrants[0].entrantId === entrants[1].entrantId) {
+      unresolvedSetIds.push(set.setId);
+      unresolvedSetReasons.push([
+        set.setId,
+        `slots=${set.slots.length}`,
+        `unassigned=${hasUnassignedSlot}`,
+        `entrantIds=${entrants.map((entrant) => entrant.entrantId).join(",")}`,
+        `seedIds=${entrants.map((entrant) => entrant.seedId ?? "").join(",")}`,
+      ].join(" | "));
+      continue;
+    }
+
+    resolvedSetCount += 1;
+    registeredSetIds.add(set.setId);
+    setsByPair.set(roundRobinPairKey(entrants[0].entrantId, entrants[1].entrantId), set);
+    if (entrants[0].seedId && entrants[1].seedId) {
+      setsByPair.set(roundRobinPairKey(entrants[0].seedId, entrants[1].seedId), set);
+    }
+
+    const setDisplay = getScoresForSet(set);
+    const winnerId = setDisplay.winnerId ?? set.winnerId;
+    if (!winnerId || !entrants.some((entrant) => entrant.entrantId === winnerId)) {
+      continue;
+    }
+
+    const winner = entrants.find((entrant) => entrant.entrantId === winnerId);
+    const loser = entrants.find((entrant) => entrant.entrantId !== winnerId);
+    if (!winner || !loser) {
+      continue;
+    }
+
+    const winnerStats = getStandingStats(winner.entrantId);
+    const loserStats = getStandingStats(loser.entrantId);
+    winnerStats.wins += 1;
+    loserStats.losses += 1;
+    const winnerHeadToHead = headToHeadWins.get(winner.entrantId) ?? new Map<string, number>();
+    winnerHeadToHead.set(loser.entrantId, (winnerHeadToHead.get(loser.entrantId) ?? 0) + 1);
+    headToHeadWins.set(winner.entrantId, winnerHeadToHead);
+
+    const winnerScore = parseRoundRobinGameScore(
+      setDisplay.scores[winner.entrantId] ?? winner.slot.score ?? undefined,
+    );
+    const loserScore = parseRoundRobinGameScore(
+      setDisplay.scores[loser.entrantId] ?? loser.slot.score ?? undefined,
+    );
+    if (winnerScore !== null && loserScore !== null) {
+      winnerStats.gameWins += winnerScore;
+      winnerStats.gameLosses += loserScore;
+      loserStats.gameWins += loserScore;
+      loserStats.gameLosses += winnerScore;
+    }
+  }
+
+  return {
+    twoSlotSetCount,
+    resolvedSetCount,
+    registeredSetCount: registeredSetIds.size,
+    unresolvedSetIds,
+    unresolvedSetReasons,
+    setsByPair,
+    headToHeadWins,
+    standingStatsByEntrantId,
+  };
+}
+
 export function buildRoundRobinOriginAxisOrder(
   entrantOriginPlacements: Map<string, number>,
   entrantOriginDisplayIdentifiers: Map<string, string>,
@@ -468,6 +684,114 @@ export function buildRoundRobinOriginAxisOrder(
   }
 
   return axisOrderByEntrantId;
+}
+
+export function orderRoundRobinEntrantColumns(input: {
+  entrantIds: Iterable<string>;
+  entrantSeedIds: Map<string, string>;
+  seedOrder: string[];
+  isLaterPhase: boolean;
+  entrantOriginPlacements: Map<string, number>;
+  entrantOriginOrders: Map<string, number>;
+  entrantOriginDisplayIdentifiers: Map<string, string>;
+  originDisplayIdentifiers: Iterable<string>;
+  entrantSeedNumbers: Map<string, number>;
+  entrantNames: Map<string, string>;
+  phaseGroupSeedCount: number;
+  fixedEntrants: string[];
+  entrantIdsByColumnKey: Map<string, string | null>;
+}): {
+  fixedEntrants: string[];
+  entrantIdsByColumnKey: Map<string, string | null>;
+  entrantOrder: Map<string, number>;
+} {
+  const seedOrderById = new Map(input.seedOrder.map((seedId, index) => [seedId, index]));
+  const entrantSeedOrder = (entrantId: string): number | undefined => {
+    const seedId = input.entrantSeedIds.get(entrantId);
+    return seedId === undefined ? undefined : seedOrderById.get(seedId);
+  };
+  const entrantAxisOrder = buildRoundRobinOriginAxisOrder(
+    input.entrantOriginPlacements,
+    input.entrantOriginDisplayIdentifiers,
+    input.originDisplayIdentifiers,
+  );
+  const sortedEntrants = [...input.entrantIds].sort((leftEntrantId, rightEntrantId) => {
+    const leftSeedOrder = entrantSeedOrder(leftEntrantId);
+    const rightSeedOrder = entrantSeedOrder(rightEntrantId);
+    if (leftSeedOrder !== undefined || rightSeedOrder !== undefined) {
+      if (leftSeedOrder === undefined || rightSeedOrder === undefined) {
+        return leftSeedOrder === undefined ? 1 : -1;
+      }
+      if (leftSeedOrder !== rightSeedOrder) {
+        return leftSeedOrder - rightSeedOrder;
+      }
+    }
+
+    if (input.isLaterPhase) {
+      const leftPlacement = input.entrantOriginPlacements.get(leftEntrantId);
+      const rightPlacement = input.entrantOriginPlacements.get(rightEntrantId);
+      if (leftPlacement !== undefined || rightPlacement !== undefined) {
+        if (leftPlacement === undefined || rightPlacement === undefined) {
+          return leftPlacement === undefined ? 1 : -1;
+        }
+      }
+
+      if (leftPlacement !== undefined
+        && rightPlacement !== undefined
+        && leftPlacement === rightPlacement) {
+        const leftOriginOrder = input.entrantOriginOrders.get(leftEntrantId);
+        const rightOriginOrder = input.entrantOriginOrders.get(rightEntrantId);
+        if (leftOriginOrder !== undefined || rightOriginOrder !== undefined) {
+          if (leftOriginOrder === undefined || rightOriginOrder === undefined) {
+            return leftOriginOrder === undefined ? 1 : -1;
+          }
+          if (leftOriginOrder !== rightOriginOrder) {
+            return leftOriginOrder - rightOriginOrder;
+          }
+        }
+      }
+
+      const byDisplayIdentifier = (entrantAxisOrder.get(leftEntrantId) ?? Number.MAX_SAFE_INTEGER)
+        - (entrantAxisOrder.get(rightEntrantId) ?? Number.MAX_SAFE_INTEGER);
+      if (byDisplayIdentifier !== 0) {
+        return byDisplayIdentifier;
+      }
+    }
+
+    const leftSeedNumber = input.entrantSeedNumbers.get(leftEntrantId);
+    const rightSeedNumber = input.entrantSeedNumbers.get(rightEntrantId);
+    if (leftSeedNumber !== undefined && rightSeedNumber !== undefined && leftSeedNumber !== rightSeedNumber) {
+      return leftSeedNumber - rightSeedNumber;
+    }
+    if (leftSeedNumber !== undefined || rightSeedNumber !== undefined) {
+      return leftSeedNumber === undefined ? 1 : -1;
+    }
+    const byName = (input.entrantNames.get(leftEntrantId) ?? "")
+      .localeCompare(input.entrantNames.get(rightEntrantId) ?? "", "ja");
+    return byName || leftEntrantId.localeCompare(rightEntrantId, "ja");
+  });
+
+  const fixedEntrants = [...input.fixedEntrants];
+  const entrantIdsByColumnKey = new Map(input.entrantIdsByColumnKey);
+  if (input.phaseGroupSeedCount === 0) {
+    const fixedEntrantIds = new Set(
+      [...entrantIdsByColumnKey.values()].filter((entrantId): entrantId is string => entrantId !== null),
+    );
+    for (const entrantId of sortedEntrants) {
+      if (fixedEntrantIds.has(entrantId)) {
+        continue;
+      }
+      fixedEntrants.push(entrantId);
+      entrantIdsByColumnKey.set(entrantId, entrantId);
+      fixedEntrantIds.add(entrantId);
+    }
+  }
+
+  return {
+    fixedEntrants,
+    entrantIdsByColumnKey,
+    entrantOrder: new Map(fixedEntrants.map((entrantId, index) => [entrantId, index])),
+  };
 }
 
 export function indexRoundRobinSeedSlotsById(sets: SetSnapshot[]): Map<string, SetSlot> {

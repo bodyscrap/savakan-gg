@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
+import type { EventSnapshot, PhasePoolGroup } from "./bracketDisplay";
 import type { PhaseGroupSeedSnapshot, RoundRobinStanding, SetSnapshot } from "./bracketProgression";
+import { buildRoundRobinBoardData } from "./roundRobinBoardBuilder";
 import {
+  aggregateRoundRobinSetResults,
   buildRoundRobinOriginAxisOrder,
   buildRoundRobinSeedIndexes,
   buildRoundRobinMatrixRows,
   buildRoundRobinProgressionSeeds,
   createRoundRobinSourceSlotResolver,
   findRoundRobinPhaseGroupSeed,
+  resolveRoundRobinSlotEntrant,
   indexRoundRobinSeedSlotsById,
+  orderRoundRobinEntrantColumns,
   resolveRoundRobinOriginOrder,
   roundRobinPairKey,
   roundRobinPlaceholderId,
@@ -273,6 +278,86 @@ describe("buildRoundRobinSeedIndexes", () => {
   });
 });
 
+describe("aggregateRoundRobinSetResults", () => {
+  it("indexes resolved sets and aggregates set, game, and head-to-head results", () => {
+    const set = makeSet();
+    const firstSlot = { ...set.slots[0], seedId: "seed-a" };
+    const secondSlot = { ...set.slots[1], seedId: "seed-b" };
+    const result = aggregateRoundRobinSetResults([{
+      set: { ...set, slots: [firstSlot, secondSlot] },
+      entrants: [
+        { slot: firstSlot, entrantId: "a", entrantName: "Alpha", isPlaceholder: false, seedId: "seed-a" },
+        { slot: secondSlot, entrantId: "b", entrantName: "Bravo", isPlaceholder: false, seedId: "seed-b" },
+      ],
+      hasUnassignedSlot: false,
+    }]);
+
+    expect(result).toMatchObject({
+      twoSlotSetCount: 1,
+      resolvedSetCount: 1,
+      registeredSetCount: 1,
+      unresolvedSetIds: [],
+    });
+    expect(result.setsByPair.get(roundRobinPairKey("a", "b"))?.setId).toBe(set.setId);
+    expect(result.setsByPair.has(roundRobinPairKey("seed-a", "seed-b"))).toBe(true);
+    expect(result.headToHeadWins).toEqual(new Map([["a", new Map([["b", 1]])]]));
+    expect(result.standingStatsByEntrantId).toEqual(new Map([
+      ["a", { wins: 1, losses: 0, gameWins: 2, gameLosses: 1 }],
+      ["b", { wins: 0, losses: 1, gameWins: 1, gameLosses: 2 }],
+    ]));
+  });
+
+  it("reports sets with duplicate entrant IDs as unresolved", () => {
+    const set = makeSet();
+    const firstSlot = set.slots[0];
+    const secondSlot = set.slots[1];
+    const result = aggregateRoundRobinSetResults([{
+      set,
+      entrants: [
+        { slot: firstSlot, entrantId: "same", entrantName: "Same", isPlaceholder: false },
+        { slot: secondSlot, entrantId: "same", entrantName: "Same", isPlaceholder: false },
+      ],
+      hasUnassignedSlot: false,
+    }]);
+
+    expect(result.unresolvedSetIds).toEqual([set.setId]);
+    expect(result.unresolvedSetReasons[0]).toContain("entrantIds=same,same");
+    expect(result.resolvedSetCount).toBe(0);
+  });
+
+  it("uses the supplied pending score display when calculating results", () => {
+    const set = makeSet();
+    const entrants = set.slots.map((slot) => ({
+      slot,
+      entrantId: slot.entrantId as string,
+      entrantName: slot.entrantName,
+      isPlaceholder: false,
+    }));
+    const result = aggregateRoundRobinSetResults([{
+      set,
+      entrants,
+      hasUnassignedSlot: false,
+    }], () => ({
+      scores: { a: "2", b: "3" },
+      isDq: false,
+      winnerId: "b",
+    }));
+
+    expect(result.standingStatsByEntrantId.get("a")).toMatchObject({
+      wins: 0,
+      losses: 1,
+      gameWins: 2,
+      gameLosses: 3,
+    });
+    expect(result.standingStatsByEntrantId.get("b")).toMatchObject({
+      wins: 1,
+      losses: 0,
+      gameWins: 3,
+      gameLosses: 2,
+    });
+  });
+});
+
 describe("buildRoundRobinProgressionSeeds", () => {
   it("creates placeholder entrant metadata and keeps the first occurrence of a seed", () => {
     const sets = [
@@ -370,6 +455,67 @@ describe("createRoundRobinSourceSlotResolver", () => {
   });
 });
 
+describe("resolveRoundRobinSlotEntrant", () => {
+  it("prefers a resolved entrant and keeps its slot metadata", () => {
+    const slot = {
+      entrantId: "player-a",
+      entrantName: "Player A",
+      seedId: "slot-seed",
+      seedNum: 2,
+      seedOriginPlacement: 3,
+      seedOriginPhaseGroupDisplayIdentifier: "Pool A",
+      score: null,
+    };
+    const resolvedEntrant = resolveRoundRobinSlotEntrant({
+      slot,
+      source: null,
+      setId: "current-set",
+      phaseGroupSeedIndexes: buildRoundRobinSeedIndexes([]),
+      phaseGroupSeedIdByEntrantId: new Map([["player-a", "canonical-seed"]]),
+      seedSlotById: new Map(),
+      resolveSourceSlot: () => null,
+      resolveOriginOrder: () => 7,
+    });
+
+    expect(resolvedEntrant).toMatchObject({
+      slot,
+      entrantId: "player-a",
+      entrantName: "Player A",
+      seedId: "canonical-seed",
+      seedNum: 2,
+      originPlacement: 3,
+      originDisplayIdentifier: "Pool A",
+      originOrder: 7,
+      isPlaceholder: false,
+    });
+  });
+
+  it("falls back to the source placeholder when a slot is unresolved", () => {
+    const resolvedEntrant = resolveRoundRobinSlotEntrant({
+      slot: { entrantId: null, entrantName: "TBD", seedId: null, seedNum: null, score: null },
+      source: {
+        sourceType: "seed",
+        typeId: "future-seed",
+        condition: null,
+        conditionString: null,
+        placeholderName: "Winner placeholder",
+      },
+      setId: "current-set",
+      phaseGroupSeedIndexes: buildRoundRobinSeedIndexes([]),
+      phaseGroupSeedIdByEntrantId: new Map(),
+      seedSlotById: new Map(),
+      resolveSourceSlot: () => null,
+      resolveOriginOrder: () => null,
+    });
+
+    expect(resolvedEntrant).toMatchObject({
+      entrantName: "Winner placeholder",
+      isPlaceholder: true,
+      seedId: null,
+    });
+  });
+});
+
 describe("buildRoundRobinOriginAxisOrder", () => {
   it("snake-seeds placements across sorted origin groups", () => {
     const placements = new Map([
@@ -399,5 +545,102 @@ describe("buildRoundRobinOriginAxisOrder", () => {
       new Map([["a", "A"]]),
       ["A"],
     )).toEqual(new Map([["a", 0], ["b", 4]]));
+  });
+});
+
+describe("orderRoundRobinEntrantColumns", () => {
+  it("orders later-phase entrants in a snake pattern and preserves fixed columns", () => {
+    const fixedEntrants = ["seed:fixed"];
+    const entrantIdsByColumnKey = new Map([["seed:fixed", "a1"]]);
+    const result = orderRoundRobinEntrantColumns({
+      entrantIds: ["a1", "b1", "a2", "b2"],
+      entrantSeedIds: new Map(),
+      seedOrder: [],
+      isLaterPhase: true,
+      entrantOriginPlacements: new Map([["a1", 1], ["b1", 1], ["a2", 2], ["b2", 2]]),
+      entrantOriginOrders: new Map(),
+      entrantOriginDisplayIdentifiers: new Map([["a1", "A"], ["b1", "B"], ["a2", "A"], ["b2", "B"]]),
+      originDisplayIdentifiers: ["B", "A"],
+      entrantSeedNumbers: new Map(),
+      entrantNames: new Map(),
+      phaseGroupSeedCount: 0,
+      fixedEntrants,
+      entrantIdsByColumnKey,
+    });
+
+    expect(result.fixedEntrants).toEqual(["seed:fixed", "b1", "b2", "a2"]);
+    expect([...result.entrantOrder.keys()]).toEqual(result.fixedEntrants);
+    expect(result.entrantIdsByColumnKey.get("seed:fixed")).toBe("a1");
+    expect(fixedEntrants).toEqual(["seed:fixed"]);
+    expect(entrantIdsByColumnKey.size).toBe(1);
+  });
+
+  it("uses configured seed order before seed numbers", () => {
+    const result = orderRoundRobinEntrantColumns({
+      entrantIds: ["a", "b"],
+      entrantSeedIds: new Map([["a", "seed-a"], ["b", "seed-b"]]),
+      seedOrder: ["seed-b", "seed-a"],
+      isLaterPhase: false,
+      entrantOriginPlacements: new Map(),
+      entrantOriginOrders: new Map(),
+      entrantOriginDisplayIdentifiers: new Map(),
+      originDisplayIdentifiers: [],
+      entrantSeedNumbers: new Map([["a", 1], ["b", 2]]),
+      entrantNames: new Map(),
+      phaseGroupSeedCount: 0,
+      fixedEntrants: [],
+      entrantIdsByColumnKey: new Map(),
+    });
+
+    expect(result.fixedEntrants).toEqual(["b", "a"]);
+  });
+});
+
+describe("buildRoundRobinBoardData", () => {
+  it("returns an empty board for non-round-robin phase groups", () => {
+    const board = buildRoundRobinBoardData({
+      event: null,
+      phasePoolGroup: { bracketType: "SINGLE_ELIMINATION" } as PhasePoolGroup,
+      pendingResultBySetId: new Map(),
+      interimScoreDraftsBySetId: {},
+    });
+
+    expect(board.entrants).toEqual([]);
+    expect(board.standings).toEqual([]);
+    expect(board.tieBreakRules).toEqual(["total_sets_won"]);
+  });
+
+  it("builds standings and set pair indexes for a round-robin group", () => {
+    const set = makeSet();
+    const event = {
+      eventId: "event",
+      name: "Event",
+      sets: [set],
+      phaseGroups: [],
+    } as EventSnapshot;
+    const phasePoolGroup = {
+      bracketType: "ROUND_ROBIN",
+      phaseOrder: 1,
+      phaseGroupDisplayIdentifier: "A",
+      sets: [set],
+      seeds: [],
+      seedOrder: [],
+      tiebreakOrder: [],
+      progressionsOut: [],
+    } as unknown as PhasePoolGroup;
+
+    const board = buildRoundRobinBoardData({
+      event,
+      phasePoolGroup,
+      pendingResultBySetId: new Map(),
+      interimScoreDraftsBySetId: {},
+    });
+
+    expect(board.standings).toMatchObject([
+      { entrantId: "a", wins: 1, losses: 0, gameWins: 2, gameLosses: 1 },
+      { entrantId: "b", wins: 0, losses: 1, gameWins: 1, gameLosses: 2 },
+    ]);
+    expect(board.setsByPair.get(roundRobinPairKey("a", "b"))?.setId).toBe(set.setId);
+    expect(board.resolvedSetCount).toBe(1);
   });
 });
