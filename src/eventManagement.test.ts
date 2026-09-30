@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCategoryUsageList,
+  resolveMatchSideAssignment,
   resolveSideDecisionMethod,
   resolveSidesByDecisionMethod,
 } from "./eventManagement";
 
 describe("event side decision", () => {
+  it("resolves a coherent pair from upper and lower candidates", () => {
+    expect(resolveMatchSideAssignment("2P", "1P")).toEqual({ upperSide: "2P", lowerSide: "1P" });
+    expect(resolveMatchSideAssignment("", "2P")).toEqual({ upperSide: "1P", lowerSide: "2P" });
+    expect(resolveMatchSideAssignment("1P", "")).toEqual({ upperSide: "1P", lowerSide: "2P" });
+    expect(resolveMatchSideAssignment("", "")).toBeNull();
+  });
+
   it("normalizes unsupported methods to upper 1P", () => {
     expect(resolveSideDecisionMethod("unknown")).toBe("upper_1p");
     expect(resolveSideDecisionMethod("upper_2p")).toBe("upper_2p");

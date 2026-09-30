@@ -28,6 +28,7 @@ import { ItemListEditor } from "./ItemListEditor";
 import {
   buildCategoryUsageList,
   clampNonNegativeInteger,
+  resolveMatchSideAssignment,
 } from "./eventManagement";
 import {
   MAX_CATEGORY_SLOTS,
@@ -180,10 +181,6 @@ function roundRobinPlaceholderId(slot: SetSlot, source?: SetEntrantSource | null
     || slot.entrantName
     || "unknown";
   return `placeholder:${identity}`;
-}
-
-function oppositePlaySide(side: PlaySide): PlaySide {
-  return side === "1P" ? "2P" : "1P";
 }
 
 function App() {
@@ -2938,20 +2935,12 @@ function App() {
     const draftUpper = sideDrafts[upperId] || currentUpper || toPlaySide(fallbackUpper);
     const draftLower = sideDrafts[lowerId] || currentLower || toPlaySide(fallbackLower);
 
-    let resolvedUpper: PlaySide | "" = "";
-    if (draftUpper !== "" && draftLower !== "") {
-      resolvedUpper = draftUpper;
-    } else if (draftUpper !== "") {
-      resolvedUpper = draftUpper;
-    } else if (draftLower !== "") {
-      resolvedUpper = oppositePlaySide(draftLower);
-    }
-
-    if (resolvedUpper === "") {
+    const sideAssignment = resolveMatchSideAssignment(draftUpper, draftLower);
+    if (!sideAssignment) {
       return;
     }
 
-    const resolvedLower = oppositePlaySide(resolvedUpper);
+    const { upperSide: resolvedUpper, lowerSide: resolvedLower } = sideAssignment;
     const sideOverrides = {
       [upperId]: resolvedUpper,
       [lowerId]: resolvedLower,

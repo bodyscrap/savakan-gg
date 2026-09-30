@@ -15,6 +15,28 @@ export type PlaySideAssignment = {
   lowerSide: "1P" | "2P";
 };
 
+export function resolveMatchSideAssignment(
+  upperCandidate: PlaySideAssignment["upperSide"] | "",
+  lowerCandidate: PlaySideAssignment["lowerSide"] | "",
+): PlaySideAssignment | null {
+  const upperSide = upperCandidate !== ""
+    ? upperCandidate
+    : lowerCandidate === "1P"
+      ? "2P"
+      : lowerCandidate === "2P"
+        ? "1P"
+        : "";
+
+  if (upperSide === "") {
+    return null;
+  }
+
+  return {
+    upperSide,
+    lowerSide: upperSide === "1P" ? "2P" : "1P",
+  };
+}
+
 export type CategoryUsageSlot = {
   slotIndex: number;
   list: Pick<ItemListConfig, "categoryName" | "name" | "items">;
