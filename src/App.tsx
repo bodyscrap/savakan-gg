@@ -103,6 +103,7 @@ import {
   buildBracketSections,
   buildBracketSectionsForView,
   formatAlphabetSequence,
+  getDisplaySlotsForSet,
   buildPhaseNames,
   buildPhasePoolGroups,
   normalizeSourceText,
@@ -3483,57 +3484,6 @@ function App() {
     return "-";
   }
 
-  function getDisplaySlotsForSet(
-    set: SetSnapshot,
-    options?: {
-      finishedSet?: boolean;
-      matchupReady?: boolean;
-      sideDrafts?: Record<string, PlaySide | "">;
-    },
-  ): Array<{ slot: SetSlot; slotIndex: number }> {
-    const indexed = set.slots.map((slot, slotIndex) => ({ slot, slotIndex }));
-    if (!displayBracketPlayersBySide) {
-      return indexed;
-    }
-
-    const sideRank = (label: string): number => {
-      if (label === "1P") {
-        return 0;
-      }
-      if (label === "2P") {
-        return 2;
-      }
-      return 1;
-    };
-
-    return indexed
-      .slice()
-      .sort((left, right) => {
-        const leftDraftSide = left.slot.entrantId ? (options?.sideDrafts?.[left.slot.entrantId] ?? "") : "";
-        const rightDraftSide = right.slot.entrantId ? (options?.sideDrafts?.[right.slot.entrantId] ?? "") : "";
-        const leftSide = getSetSlotSideLabel(set.setId, left.slot.entrantId, {
-          fallbackBySlotIndex: left.slotIndex,
-          finishedSet: options?.finishedSet,
-          matchupReady: options?.matchupReady,
-        });
-        const rightSide = getSetSlotSideLabel(set.setId, right.slot.entrantId, {
-          fallbackBySlotIndex: right.slotIndex,
-          finishedSet: options?.finishedSet,
-          matchupReady: options?.matchupReady,
-        });
-
-        const resolvedLeftSide = leftDraftSide !== "" ? leftDraftSide : leftSide;
-        const resolvedRightSide = rightDraftSide !== "" ? rightDraftSide : rightSide;
-
-        const bySide = sideRank(resolvedLeftSide) - sideRank(resolvedRightSide);
-        if (bySide !== 0) {
-          return bySide;
-        }
-
-        return left.slotIndex - right.slotIndex;
-      });
-  }
-
   function getSetScoresForDisplay(set: SetSnapshot): { scores: Record<string, string>; isDq: boolean; winnerId: string | null } {
     const result = pendingResultBySetId.get(set.setId);
     const interimDrafts = interimScoreDraftsBySetId[set.setId];
@@ -4771,8 +4721,10 @@ function App() {
               onDisplayPlayersBySideChange={setDisplayBracketPlayersBySide}
               randomNotice={matchSideRandomNotice}
               players={getDisplaySlotsForSet(activeMatch, {
+                displayBySide: displayBracketPlayersBySide,
                 matchupReady: isMatchupReady(activeMatch),
                 sideDrafts: activeMatchSideDrafts,
+                getSideLabel: getSetSlotSideLabel,
               }).map(({ slot, slotIndex }) => {
                 const entrantId = slot.entrantId;
                 const tbdLabel = resolveTbdSourceLabel(activeMatch, slotIndex, slot);

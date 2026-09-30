@@ -115,6 +115,60 @@ export function normalizeSourceText(kind: "winners" | "losers", setCode: string)
   return `${kind === "winners" ? "winner" : "loser"} of ${setCode}`;
 }
 
+type DisplaySlotOptions = {
+  fallbackBySlotIndex: number;
+  finishedSet?: boolean;
+  matchupReady?: boolean;
+};
+
+export function getDisplaySlotsForSet(
+  set: SetSnapshot,
+  options: {
+    displayBySide: boolean;
+    finishedSet?: boolean;
+    matchupReady?: boolean;
+    sideDrafts?: Record<string, "1P" | "2P" | "">;
+    getSideLabel: (setId: string, entrantId: string | null, options: DisplaySlotOptions) => string;
+  },
+): Array<{ slot: SetSlot; slotIndex: number }> {
+  const indexed = set.slots.map((slot, slotIndex) => ({ slot, slotIndex }));
+  if (!options.displayBySide) {
+    return indexed;
+  }
+
+  const sideRank = (label: string): number => {
+    if (label === "1P") {
+      return 0;
+    }
+    if (label === "2P") {
+      return 2;
+    }
+    return 1;
+  };
+
+  return indexed
+    .slice()
+    .sort((left, right) => {
+      const leftDraftSide = left.slot.entrantId ? (options.sideDrafts?.[left.slot.entrantId] ?? "") : "";
+      const rightDraftSide = right.slot.entrantId ? (options.sideDrafts?.[right.slot.entrantId] ?? "") : "";
+      const leftSide = options.getSideLabel(set.setId, left.slot.entrantId, {
+        fallbackBySlotIndex: left.slotIndex,
+        finishedSet: options.finishedSet,
+        matchupReady: options.matchupReady,
+      });
+      const rightSide = options.getSideLabel(set.setId, right.slot.entrantId, {
+        fallbackBySlotIndex: right.slotIndex,
+        finishedSet: options.finishedSet,
+        matchupReady: options.matchupReady,
+      });
+
+      const resolvedLeftSide = leftDraftSide !== "" ? leftDraftSide : leftSide;
+      const resolvedRightSide = rightDraftSide !== "" ? rightDraftSide : rightSide;
+      const bySide = sideRank(resolvedLeftSide) - sideRank(resolvedRightSide);
+      return bySide !== 0 ? bySide : left.slotIndex - right.slotIndex;
+    });
+}
+
 export function buildPhasePoolGroups(event: EventSnapshot | null): PhasePoolGroup[] {
   if (!event) {
     return [];
