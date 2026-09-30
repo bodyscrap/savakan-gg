@@ -5,6 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import QRCode from "qrcode";
 import jsQR from "jsqr";
 import { CreateSnapshot } from "./CreateSnapshot";
+import { DqRequestDialog } from "./DqRequestDialog";
 import { SettingsScreen } from "./SettingMenu";
 import { StatusBoard, StatusBoardHero } from "./StatusBoard";
 import { PlayerListInfo } from "./PlayerListInfo";
@@ -5717,100 +5718,22 @@ function App() {
       )}
 
       {dqDialog && (
-        <div className="dialog-backdrop" onClick={closeDqRequestDialog}>
-          <section
-            className="dialog-panel conflict-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="DQ申請認証"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="dialog-head">
-              <div>
-                <h3>DQ申請認証</h3>
-                <p className="meta">呼び出しプレイヤー本人確認のため、PLAYER IDを入力してください。</p>
-              </div>
-              <button type="button" className="ghost" disabled={dqSubmitting} onClick={closeDqRequestDialog}>閉じる</button>
-            </div>
-
-            <div className="dialog-body">
-              <p className="meta">対象: {dqDialog.callEntrantName || dqDialog.callEntrantId}</p>
-              <label>
-                PLAYER ID (伏字入力)
-                <input
-                  type="password"
-                  value={dqPlayerIdDraft}
-                  onChange={(event) => setDqPlayerIdDraft(event.currentTarget.value)}
-                  placeholder="PG-..."
-                  autoComplete="off"
-                />
-              </label>
-              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.55rem" }}>
-                <button
-                  type="button"
-                  className="ghost"
-                  disabled={dqSubmitting}
-                  onClick={() => {
-                    void startDqCameraScan();
-                  }}
-                >
-                  カメラで2次元コードを読む
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  disabled={dqSubmitting || !dqCameraActive}
-                  onClick={stopDqCameraScan}
-                >
-                  カメラ停止
-                </button>
-              </div>
-
-              <div style={{ marginTop: "0.7rem" }}>
-                <p className="meta">
-                  {dqCameraActive
-                    ? "カメラをコードに向けると、自動でPLAYER IDを入力します。"
-                    : "「カメラで2次元コードを読む」を押すとプレビューが起動します。"}
-                </p>
-                <video
-                  ref={dqCameraVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  style={{
-                    width: "100%",
-                    maxWidth: "420px",
-                    borderRadius: "10px",
-                    border: "1px solid var(--line)",
-                    background: "#0f172a",
-                    display: dqCameraActive ? "block" : "none",
-                  }}
-                />
-                <canvas ref={dqCameraCanvasRef} style={{ display: "none" }} />
-              </div>
-
-              <label style={{ marginTop: "0.7rem" }}>
-                申請理由 (任意)
-                <textarea
-                  value={dqReasonDraft}
-                  onChange={(event) => setDqReasonDraft(event.currentTarget.value)}
-                  rows={3}
-                  placeholder="理由を補足する場合に入力"
-                  style={{ width: "100%" }}
-                />
-              </label>
-
-              {dqDialogError !== "" && <p className="message error">{dqDialogError}</p>}
-            </div>
-
-            <div className="dialog-actions dialog-actions-split">
-              <button type="button" className="ghost" disabled={dqSubmitting} onClick={closeDqRequestDialog}>キャンセル</button>
-              <button type="button" disabled={dqSubmitting} onClick={() => void submitDqRequest()}>
-                {dqSubmitting ? "申請中..." : "認証してDQ申請"}
-              </button>
-            </div>
-          </section>
-        </div>
+        <DqRequestDialog
+          dialog={dqDialog}
+          playerIdDraft={dqPlayerIdDraft}
+          onPlayerIdChange={setDqPlayerIdDraft}
+          reasonDraft={dqReasonDraft}
+          onReasonChange={setDqReasonDraft}
+          error={dqDialogError}
+          submitting={dqSubmitting}
+          cameraActive={dqCameraActive}
+          videoRef={dqCameraVideoRef}
+          canvasRef={dqCameraCanvasRef}
+          onStartCameraScan={() => void startDqCameraScan()}
+          onStopCameraScan={stopDqCameraScan}
+          onClose={closeDqRequestDialog}
+          onSubmit={() => void submitDqRequest()}
+        />
       )}
 
         {activeTab === "item-list" && (
