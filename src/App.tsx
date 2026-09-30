@@ -42,7 +42,6 @@ import { useSetResultPersistence } from "./useSetResultPersistence";
 import { useUserCards } from "./useUserCards";
 import { useItemLists } from "./useItemLists";
 import { useMailbox } from "./useMailbox";
-import { deriveEncryptedPlayerId } from "./userCardCanvas";
 import {
   buildBracketSections,
   buildBracketSectionsForView,
@@ -3396,7 +3395,14 @@ function App() {
 
     try {
       const targetSetId = activeMatch.setId;
-      const playerId = await deriveEncryptedPlayerId(snapshot.tournamentId, selectedEvent.eventId, entrantId);
+      const [playerId] = await invoke<string[]>("derive_player_ids", {
+        tournamentId: snapshot.tournamentId,
+        eventId: selectedEvent.eventId,
+        entrantIds: [entrantId],
+      });
+      if (!playerId) {
+        throw new Error("選手IDを生成できませんでした。");
+      }
       const eventAlias = selectedEventMeta?.eventAlias?.trim() || selectedEvent.name;
       const phaseName = resolveCallPhaseName(selectedEvent, activeMatch.phaseName ?? "", activeMatch.phaseOrder);
       const phaseGroupName = normalizeCallPhaseGroupName(activeMatch.phaseGroupName ?? "");

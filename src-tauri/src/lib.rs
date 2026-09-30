@@ -22,6 +22,7 @@ use models::{
     SenderProfile, SetSnapshot, TournamentPreview, TournamentSnapshot, TournamentWorkspace,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::Emitter;
 use tiny_http::{Header, Response, Server};
 use tokio::time::sleep;
@@ -6685,6 +6686,66 @@ fn save_local_player_meta(
 }
 
 #[tauri::command]
+fn derive_player_ids(
+    tournament_id: String,
+    event_id: String,
+    entrant_ids: Vec<String>,
+) -> Vec<String> {
+    entrant_ids
+        .iter()
+        .map(|entrant_id| derive_player_id(&tournament_id, &event_id, entrant_id))
+        .collect()
+}
+
+fn derive_player_id(tournament_id: &str, event_id: &str, entrant_id: &str) -> String {
+    const BASE32_ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+    let mut hasher = Sha256::new();
+    hasher.update(tournament_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(event_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(entrant_id.as_bytes());
+    let digest = hasher.finalize();
+
+    let mut output = String::with_capacity(20);
+    let mut buffer = 0_u32;
+    let mut bits_left = 0_u32;
+    for byte in digest.iter().take(12) {
+        buffer = (buffer << 8) | u32::from(*byte);
+        bits_left += 8;
+
+        while bits_left >= 5 {
+            let index = ((buffer >> (bits_left - 5)) & 31) as usize;
+            output.push(BASE32_ALPHABET[index] as char);
+            bits_left -= 5;
+        }
+
+        buffer &= (1 << bits_left) - 1;
+    }
+
+    if bits_left > 0 {
+        let index = ((buffer << (5 - bits_left)) & 31) as usize;
+        output.push(BASE32_ALPHABET[index] as char);
+    }
+
+    format!("PG-{output}")
+}
+
+#[cfg(test)]
+mod player_id_tests {
+    use super::derive_player_id;
+
+    #[test]
+    fn preserves_the_existing_player_id_format() {
+        assert_eq!(
+            derive_player_id("tournament", "event", "entrant"),
+            "PG-X27RO6ABKZTEBCPNLJ4A"
+        );
+    }
+}
+
+#[tauri::command]
 fn save_local_set_play_side(
     app: tauri::AppHandle,
     input: LocalSetPlaySideInput,
@@ -6913,6 +6974,7 @@ pub fn run() {
             clear_local_set_result_drafts,
             clear_local_set_result_draft_for_set,
             save_local_player_meta,
+            derive_player_ids,
             save_local_set_play_side,
             save_local_set_result,
             save_local_set_scores,

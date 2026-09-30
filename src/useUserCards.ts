@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   buildPlayerCardFileName,
   buildPrintedPlayerCardPageFileName,
   canvasToBlob,
-  deriveEncryptedPlayerId,
   renderPlayerCardCanvas,
   triggerBlobDownload,
   type UserCardPlayer,
@@ -53,18 +53,24 @@ export function useUserCards({
 
     void (async () => {
       try {
-        const rows = await Promise.all(
-          entrants.map(async (entrant) => ({
-            tournamentId,
-            tournamentName,
-            eventId,
-            eventName,
-            eventAlias: eventAlias?.trim() ? eventAlias.trim() : null,
-            entrantId: entrant.entrantId,
-            entrantName: entrant.entrantName,
-            playerId: await deriveEncryptedPlayerId(tournamentId, eventId, entrant.entrantId),
-          })),
-        );
+        const playerIds = await invoke<string[]>("derive_player_ids", {
+          tournamentId,
+          eventId,
+          entrantIds: entrants.map((entrant) => entrant.entrantId),
+        });
+        if (playerIds.length !== entrants.length) {
+          throw new Error("選手IDの生成結果が参加者数と一致しません。");
+        }
+        const rows = entrants.map((entrant, index) => ({
+          tournamentId,
+          tournamentName,
+          eventId,
+          eventName,
+          eventAlias: eventAlias?.trim() ? eventAlias.trim() : null,
+          entrantId: entrant.entrantId,
+          entrantName: entrant.entrantName,
+          playerId: playerIds[index],
+        }));
 
         if (!alive) {
           return;

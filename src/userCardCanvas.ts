@@ -11,38 +11,6 @@ export type UserCardPlayer = {
   playerId: string;
 };
 
-function bytesToBase32(bytes: Uint8Array): string {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-  let buffer = 0;
-  let bitsLeft = 0;
-  let output = "";
-
-  for (const byte of bytes) {
-    buffer = (buffer << 8) | byte;
-    bitsLeft += 8;
-
-    while (bitsLeft >= 5) {
-      const index = (buffer >>> (bitsLeft - 5)) & 31;
-      output += alphabet[index];
-      bitsLeft -= 5;
-    }
-  }
-
-  if (bitsLeft > 0) {
-    const index = (buffer << (5 - bitsLeft)) & 31;
-    output += alphabet[index];
-  }
-
-  return output;
-}
-
-export async function deriveEncryptedPlayerId(tournamentId: string, eventId: string, entrantId: string): Promise<string> {
-  const source = `${tournamentId}:${eventId}:${entrantId}`;
-  const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
-  const token = bytesToBase32(new Uint8Array(digest).slice(0, 12));
-  return `PG-${token}`;
-}
-
 function sanitizeFileSegment(value: string): string {
   const normalized = value
     .trim()
