@@ -10,6 +10,7 @@ import {
   type EventManagementSetting,
 } from "./eventManagement";
 import type { SetSnapshot } from "./bracketProgression";
+import { toApiSlug } from "./slugUtils";
 import type { PlaySide } from "./useTournamentWorkspace";
 
 type SaveSetPlaySideOptions = {
@@ -18,38 +19,89 @@ type SaveSetPlaySideOptions = {
 };
 
 type UseSetSideAssignmentOptions = {
+  slug: string;
   selectedEvent: EventSnapshot | null;
   resolvedEventSetsById: Map<string, SetSnapshot>;
   setPlaySideMap: Map<string, PlaySide>;
   selectedEventSettingKey: string;
   sideDecisionMethod: EventManagementSetting["sideDecisionMethod"];
   eventMgmtSettings: Record<string, EventManagementSetting>;
-  saveSetPlaySide: (
-    eventSnapshot: EventSnapshot,
-    setSnapshot: SetSnapshot,
-    entrantId: string,
-    playSide: PlaySide | "",
-    options?: SaveSetPlaySideOptions,
-  ) => Promise<void>;
+  saveLocalSetPlaySide: (input: {
+    slug: string;
+    eventId: string;
+    setId: string;
+    entrantId: string;
+    opponentEntrantId: string | null;
+    playSide: PlaySide | null;
+  }) => Promise<unknown>;
   setBusy: (busy: boolean) => void;
   setError: (error: string) => void;
   setMessage: (message: string) => void;
 };
 
 export function useSetSideAssignment({
+  slug,
   selectedEvent,
   resolvedEventSetsById,
   setPlaySideMap,
   selectedEventSettingKey,
   sideDecisionMethod,
   eventMgmtSettings,
-  saveSetPlaySide,
+  saveLocalSetPlaySide,
   setBusy,
   setError,
   setMessage,
 }: UseSetSideAssignmentOptions) {
   const autoAssigningSidesRef = useRef(false);
   const standbyReadinessRef = useRef<Record<string, string>>({});
+
+  async function saveSetPlaySide(
+    eventSnapshot: EventSnapshot,
+    setSnapshot: SetSnapshot,
+    entrantId: string,
+    playSide: PlaySide | "",
+    options?: SaveSetPlaySideOptions,
+  ) {
+    const silent = options?.silent ?? true;
+    const manageBusy = options?.manageBusy ?? true;
+
+    if (manageBusy) {
+      setBusy(true);
+    }
+    setError("");
+    if (!silent) {
+      setMessage("");
+    }
+
+    try {
+      await saveLocalSetPlaySide({
+        slug: toApiSlug(slug),
+        eventId: eventSnapshot.eventId,
+        setId: setSnapshot.setId,
+        entrantId,
+        opponentEntrantId: setSnapshot.slots
+          .map((slot) => slot.entrantId)
+          .find((candidate) => candidate && candidate !== entrantId) ?? null,
+        playSide: playSide === "" ? null : playSide,
+      });
+
+      if (!silent) {
+        setMessage("setサイドを保存しました。");
+      }
+    } catch (err) {
+      const errorMessage = String(err);
+      const isTransientSideAssignmentError = errorMessage.includes("対戦カードが確定していないsetはサイド設定できません");
+      if (!silent || !isTransientSideAssignmentError) {
+        setError(errorMessage);
+        throw err;
+      }
+    } finally {
+      if (manageBusy) {
+        setBusy(false);
+      }
+    }
+  }
+
   const saveSetPlaySideRef = useRef(saveSetPlaySide);
   saveSetPlaySideRef.current = saveSetPlaySide;
 
@@ -220,5 +272,5 @@ export function useSetSideAssignment({
     }
   }
 
-  return { applySideDecisionMethodToAllUnconfirmedSets };
+  return { applySideDecisionMethodToAllUnconfirmedSets, saveSetPlaySide };
 }

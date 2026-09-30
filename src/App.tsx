@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CreateSnapshot } from "./CreateSnapshot";
@@ -51,24 +51,19 @@ import { buildInitialMatchDialogDraft, resolveExistingMatchDialogDraft } from ".
 import { BracketTab } from "./BracketTab";
 import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
 import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDialog";
-import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
-import { buildEliminationBracketSections } from "./eliminationBracketDisplay";
-import { buildRoundRobinMatrixRows } from "./roundRobinMatrixDisplay";
-import { buildRoundRobinBoardData } from "./roundRobinBoardBuilder";
+import { useBracketContentView } from "./useBracketContentView";
+import { useSelectedEventEntrants } from "./useSelectedEventEntrants";
 
 import { useBracketReport } from "./useBracketReport";
 import { useSetResultDrafts, type SetResultDraftState } from "./useSetResultDrafts";
 import {
   applyScoreDraftWithOpponentDefault,
-  buildPendingSetResultsById,
-  getSetScoresForDisplay as buildSetScoresForDisplay,
   buildDraftStateFromPending,
   buildScoreDraftsFromResult,
   buildScoreDraftsFromSet,
   buildSlotScoresForSave,
-  hasDqScoreInDrafts,
-  isConfirmedSetResult,
   isDqScoreValue,
+  isConfirmedSetResult,
   resolveSetSlotSideLabel,
   resolveWinnerIdFromDrafts,
   stepScoreDraftValue,
@@ -101,23 +96,13 @@ import {
 } from "./tournamentWorkspaceRepository";
 import { usePersistSnapshotSelection } from "./usePersistSnapshotSelection";
 import { useSnapshotStartupRestore } from "./useSnapshotStartupRestore";
+import { useBracketSectionView } from "./useBracketSectionView";
 import {
-  buildTbdSourceLabelBySlotKey as buildBracketTbdSourceLabelBySlotKey,
-  buildSetDisplayCodeById,
-  buildBracketSections,
-  buildBracketSectionsForView,
-  getBracketVerticalLayoutScale,
   getDisplaySlotsForSet,
-  buildPhaseNames,
-  buildPhasePoolGroups,
   isCompletedSet,
   isDisplayableSet,
   isInactiveGrandFinalReset,
   isMatchupReady,
-  resolveSelectedPhasePoolGroup,
-  resolveTbdSourceLabel as resolveBracketTbdSourceLabel,
-  selectPhaseScopedPoolGroups,
-  scaleBracketSectionsForZoom,
   type EventSnapshot,
 } from "./bracketDisplay";
 import {
@@ -137,9 +122,6 @@ import {
 } from "./snapshotDisplay";
 import {
   createSetEntrantResolver,
-  collectEventEntrants,
-  sortEventEntrants,
-  type EventEntrantSnapshot,
   type SetSlot,
   type SetSnapshot,
 } from "./bracketProgression";
@@ -195,7 +177,6 @@ function App() {
   const [callingEntrantId, setCallingEntrantId] = useState("");
   const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
-  const [selectedTournamentEntrantId, setSelectedTournamentEntrantId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -862,35 +843,11 @@ function App() {
     () => buildCategoryUsageList(configuredCategorySlots, selectedEventMeta?.entrants ?? []),
     [configuredCategorySlots, selectedEventMeta],
   );
-  const selectedEventEntrants = useMemo(() => {
-    if (!selectedEvent) {
-      return [] as EventEntrantSnapshot[];
-    }
-
-    const entrants = collectEventEntrants(selectedEvent.sets);
-
-    console.groupCollapsed(`[seed-debug] event=${selectedEvent.eventId} entrants=${entrants.length}`);
-    console.table(
-      entrants.map((item, index) => ({
-        order: index + 1,
-        entrantId: item.entrantId,
-        entrantName: item.entrantName,
-        seedId: item.seedId,
-        seedNum: item.seedNum,
-        firstSeenSetId: item.firstSeenSetId,
-      })),
-    );
-    console.groupEnd();
-
-    return sortEventEntrants(entrants);
-  }, [selectedEvent]);
-  const selectedTournamentEntrant = useMemo(() => {
-    if (selectedTournamentEntrantId === "") {
-      return selectedEventEntrants[0] ?? null;
-    }
-
-    return selectedEventEntrants.find((entrant) => entrant.entrantId === selectedTournamentEntrantId) ?? selectedEventEntrants[0] ?? null;
-  }, [selectedEventEntrants, selectedTournamentEntrantId]);
+  const {
+    entrants: selectedEventEntrants,
+    selectedEntrant: selectedTournamentEntrant,
+    setSelectedEntrantId: setSelectedTournamentEntrantId,
+  } = useSelectedEventEntrants(selectedEvent);
 
   const {
     getMetaDraft,
@@ -1049,21 +1006,6 @@ function App() {
   }
 
   useEffect(() => {
-    if (selectedEventEntrants.length === 0) {
-      if (selectedTournamentEntrantId !== "") {
-        setSelectedTournamentEntrantId("");
-      }
-      return;
-    }
-
-    if (selectedTournamentEntrantId !== "" && selectedEventEntrants.some((entrant) => entrant.entrantId === selectedTournamentEntrantId)) {
-      return;
-    }
-
-    setSelectedTournamentEntrantId(selectedEventEntrants[0].entrantId);
-  }, [selectedEventEntrants, selectedTournamentEntrantId]);
-
-  useEffect(() => {
     if (!matchSideRandomNotice) {
       return;
     }
@@ -1082,14 +1024,15 @@ function App() {
     };
   }, [matchSideRandomNotice]);
 
-  const { applySideDecisionMethodToAllUnconfirmedSets } = useSetSideAssignment({
+  const { applySideDecisionMethodToAllUnconfirmedSets, saveSetPlaySide } = useSetSideAssignment({
+    slug,
     selectedEvent,
     resolvedEventSetsById,
     setPlaySideMap,
     selectedEventSettingKey,
     sideDecisionMethod,
     eventMgmtSettings,
-    saveSetPlaySide,
+    saveLocalSetPlaySide,
     setBusy,
     setError,
     setMessage,
@@ -1205,33 +1148,29 @@ function App() {
     });
   }
 
-  const phasePoolGroups = useMemo(() => buildPhasePoolGroups(selectedEvent), [selectedEvent]);
-
-  const phaseNames = useMemo(
-    () => buildPhaseNames(phasePoolGroups, selectedEvent?.phases),
-    [phasePoolGroups, selectedEvent?.phases],
-  );
-
-  const phaseScopedPoolGroups = useMemo(
-    () => selectPhaseScopedPoolGroups(phasePoolGroups, selectedPhaseName),
-    [phasePoolGroups, selectedPhaseName],
-  );
-
-  const selectedPhasePoolGroup = useMemo(
-    () => resolveSelectedPhasePoolGroup(phaseScopedPoolGroups, selectedPhasePoolKey),
-    [phaseScopedPoolGroups, selectedPhasePoolKey],
-  );
-
-  const activeMatch = useMemo(() => {
-    if (!selectedPhasePoolGroup || activeMatchSetId.trim() === "") {
-      return null;
-    }
-
-    const set = selectedPhasePoolGroup.sets.find((candidate) => candidate.setId === activeMatchSetId);
-    return set
-      ? resolvedEventSetsById.get(set.setId) ?? set
-      : null;
-  }, [resolvedEventSetsById, selectedEvent, selectedPhasePoolGroup, activeMatchSetId]);
+  const {
+    phaseNames,
+    phaseScopedPoolGroups,
+    selectedPhasePoolGroup,
+    activeMatch,
+    activeObsOverlaySet,
+    isActiveMatchDqDraft,
+    renderedBracketSectionsForView,
+    bracketScaleStyle,
+    setDisplayCodeById,
+    resolveTbdSourceLabel,
+  } = useBracketSectionView({
+    selectedEvent,
+    allSets,
+    resolvedEventSetsById,
+    selectedPhaseName,
+    selectedPhasePoolKey,
+    activeMatchSetId,
+    pendingGrandFinalResetResults,
+    bracketZoomLevel,
+    obsOverlayState,
+    scoreDrafts,
+  });
 
   const { sendCallMessageFromMatch } = useCallMessageDraft({
     tournament: snapshot ? { tournamentId: snapshot.tournamentId, name: snapshot.name } : null,
@@ -1252,105 +1191,24 @@ function App() {
     onMessage: setMessage,
   });
 
-  const activeObsOverlaySet = useMemo(() => {
-    if (!obsOverlayState?.active || !obsOverlayState.currentSetId) {
-      return null;
-    }
-    return allSets.find((entry) => entry.set.setId === obsOverlayState.currentSetId) ?? null;
-  }, [allSets, obsOverlayState]);
-
-  const isActiveMatchDqDraft = useMemo(() => {
-    if (!activeMatch) {
-      return false;
-    }
-
-    return hasDqScoreInDrafts(activeMatch, scoreDrafts);
-  }, [activeMatch, scoreDrafts]);
-
-  const selectedBracketSections = useMemo(
-    () => buildBracketSections(selectedPhasePoolGroup),
-    [selectedPhasePoolGroup],
-  );
-
-  const selectedBracketSectionsForView = useMemo(() => buildBracketSectionsForView({
-    sections: selectedBracketSections,
-    phaseGroupSets: selectedPhasePoolGroup?.sets ?? [],
-    event: selectedEvent,
-    pendingResetSetIds: new Set(
-      pendingGrandFinalResetResults.map((result) => result.sourceGrandFinalSetId),
-    ),
-  }), [pendingGrandFinalResetResults, selectedEvent, selectedPhasePoolGroup, selectedBracketSections]);
-
-  const bracketScaleStyle = useMemo(() => ({
-    ["--bracket-scale" as string]: String(bracketZoomLevel),
-  } satisfies CSSProperties), [bracketZoomLevel]);
-
-  const bracketVerticalLayoutScale = useMemo(
-    () => getBracketVerticalLayoutScale(bracketZoomLevel),
-    [bracketZoomLevel],
-  );
-
-  const renderedBracketSectionsForView = useMemo(() => {
-    return scaleBracketSectionsForZoom(selectedBracketSectionsForView, bracketVerticalLayoutScale);
-  }, [bracketVerticalLayoutScale, selectedBracketSectionsForView]);
-
-  const setDisplayCodeById = useMemo(
-    () => buildSetDisplayCodeById(selectedBracketSectionsForView),
-    [selectedBracketSectionsForView],
-  );
-
-  const tbdSourceLabelBySlotKey = useMemo(
-    () => buildBracketTbdSourceLabelBySlotKey(selectedBracketSections, setDisplayCodeById),
-    [selectedBracketSections, setDisplayCodeById],
-  );
-
-  function resolveTbdSourceLabel(set: SetSnapshot, slotIndex: number, slot: SetSlot): string | null {
-    return resolveBracketTbdSourceLabel(
-      set,
-      slotIndex,
-      slot,
-      selectedEvent,
-      setDisplayCodeById,
-      tbdSourceLabelBySlotKey,
-    );
-  }
-
-  const pendingResultBySetId = useMemo(
-    () => buildPendingSetResultsById(pendingSetResults, pendingGrandFinalResetResults),
-    [pendingGrandFinalResetResults, pendingSetResults],
-  );
-
-  const roundRobinBoardData = useMemo(
-    () => buildRoundRobinBoardData({
-      event: selectedEvent,
-      phasePoolGroup: selectedPhasePoolGroup,
-      pendingResultBySetId,
-      interimScoreDraftsBySetId,
-    }),
-    [interimScoreDraftsBySetId, pendingResultBySetId, selectedEvent, selectedPhasePoolGroup],
-  );
-
-  const roundRobinMatrixRows = useMemo<RoundRobinMatrixRowView[]>(
-    () => buildRoundRobinMatrixRows({
-      boardData: roundRobinBoardData,
-      pendingResultBySetId,
-      interimScoreDraftsBySetId,
-      obsOverlayState,
-      setDisplayCodeById,
-    }),
-    [interimScoreDraftsBySetId, obsOverlayState, pendingResultBySetId, roundRobinBoardData, setDisplayCodeById],
-  );
-
-  const eliminationBracketSections = buildEliminationBracketSections({
-    sections: renderedBracketSectionsForView,
-    resolvedEventSetsById,
+  const {
     pendingResultBySetId,
+    roundRobinBoardData,
+    roundRobinMatrixRows,
+    eliminationBracketSections,
+    getSetScoresForDisplay,
+  } = useBracketContentView({
+    selectedEvent,
+    selectedPhasePoolGroup,
+    renderedSections: renderedBracketSectionsForView,
+    resolvedEventSetsById,
+    pendingSetResults,
+    pendingGrandFinalResetResults,
     interimScoreDraftsBySetId,
-    activeOverlay: obsOverlayState,
+    obsOverlayState,
     setDisplayCodeById,
     getTbdSourceLabel: resolveTbdSourceLabel,
     getSideLabel: getSetSlotSideLabel,
-    getScoresForSet: getSetScoresForDisplay,
     formatScoreValue,
     isDqScoreValue,
   });
@@ -1432,14 +1290,6 @@ function App() {
     options?: { fallbackBySlotIndex?: number; finishedSet?: boolean; matchupReady?: boolean },
   ): string {
     return resolveSetSlotSideLabel(entrantId, getSetSlotSide(setId, entrantId), options);
-  }
-
-  function getSetScoresForDisplay(set: SetSnapshot): { scores: Record<string, string>; isDq: boolean; winnerId: string | null } {
-    return buildSetScoresForDisplay(
-      set,
-      pendingResultBySetId.get(set.setId),
-      interimScoreDraftsBySetId[set.setId],
-    );
   }
 
   function openMatchDialog(set: SetSnapshot, forcedDraftState?: SetResultDraftState) {
@@ -1584,54 +1434,6 @@ function App() {
       setId: activeMatch.setId,
       perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
     });
-  }
-
-  async function saveSetPlaySide(
-    eventSnapshot: EventSnapshot,
-    setSnapshot: SetSnapshot,
-    entrantId: string,
-    playSide: PlaySide | "",
-    options?: { silent?: boolean; manageBusy?: boolean },
-  ) {
-    const silent = options?.silent ?? true;
-    const manageBusy = options?.manageBusy ?? true;
-
-    if (manageBusy) {
-      setBusy(true);
-    }
-    setError("");
-    if (!silent) {
-      setMessage("");
-    }
-
-    try {
-      const normalizedSlug = toApiSlug(slug);
-      await saveLocalSetPlaySide({
-        slug: normalizedSlug,
-        eventId: eventSnapshot.eventId,
-        setId: setSnapshot.setId,
-        entrantId,
-        opponentEntrantId: setSnapshot.slots
-          .map((slot) => slot.entrantId)
-          .find((candidate) => candidate && candidate !== entrantId) ?? null,
-        playSide: playSide === "" ? null : playSide,
-      });
-
-      if (!silent) {
-        setMessage("setサイドを保存しました。");
-      }
-    } catch (err) {
-      const errorMessage = String(err);
-      const isTransientSideAssignmentError = errorMessage.includes("対戦カードが確定していないsetはサイド設定できません");
-      if (!silent || !isTransientSideAssignmentError) {
-        setError(errorMessage);
-        throw err;
-      }
-    } finally {
-      if (manageBusy) {
-        setBusy(false);
-      }
-    }
   }
 
   const { swapMatchSides, randomizeMatchSides } = useMatchSideDraftActions({
