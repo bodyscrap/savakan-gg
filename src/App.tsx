@@ -13,7 +13,6 @@ import { MessageBox, type GenericMessage } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
 import {
   clampNonNegativeInteger,
-  emptyCategorySelections,
   normalizeAllowDuplicatesArray,
   normalizeEventManagementSetting,
   normalizeSelectionCountArrays,
@@ -56,6 +55,7 @@ import {
   toIntegerScore,
 } from "./setResultDrafts";
 import { useSetResultPersistence } from "./useSetResultPersistence";
+import { usePlayerMetaDrafts } from "./usePlayerMetaDrafts";
 import { useUserCards } from "./useUserCards";
 import { useItemLists } from "./useItemLists";
 import { useMailbox } from "./useMailbox";
@@ -223,11 +223,6 @@ type SavePlayerMetaOptions = {
 };
 
 const EVENT_SNAPSHOT_PROGRESS_EVENT = "event_snapshot_progress";
-
-type PlayerMetaDraft = {
-  playSide: PlaySide | "";
-  categorySelections: string[][];
-};
 
 type SenderProfile = {
   senderName: string;
@@ -651,7 +646,6 @@ function App() {
     clearAllDrafts,
   } = useSetResultDrafts();
   const [activeMatchSideDrafts, setActiveMatchSideDrafts] = useState<Record<string, PlaySide | "">>({});
-  const [metaDrafts, setMetaDrafts] = useState<Record<string, PlayerMetaDraft>>({});
   const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
   const [homeSelectedSnapshotKey, setHomeSelectedSnapshotKey] = useState("");
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
@@ -842,7 +836,6 @@ function App() {
   const lastPersistedEventMetaPhasePoolRef = useRef("");
   const eventSettingHydratedKeyRef = useRef("");
   const suppressEventSettingAutosaveRef = useRef(false);
-  const dirtyMetaDraftKeysRef = useRef(new Set<string>());
   const autoIpFillTriedRef = useRef(false);
   const tabSelectionAutoLoadInFlightRef = useRef(false);
   const dqCameraVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -1938,6 +1931,26 @@ function App() {
   }, [selectedEventEntrants, selectedTournamentEntrantId]);
 
   const {
+    getMetaDraft,
+    setMetaDraft,
+    getDraftCategorySelections,
+    addDraftCategorySelection,
+    removeDraftCategorySelection,
+    buildValidatedSelections,
+    clearDirtyDraft,
+  } = usePlayerMetaDrafts({
+    selectedEvent,
+    selectedEventMeta,
+    selectedEventEntrants,
+    categorySlotListIds,
+    categorySlotAllowDuplicates,
+    totalItemMinCount,
+    totalItemMaxCount,
+    itemLists,
+    selectedEventItemListSnapshots,
+  });
+
+  const {
     players: userCardPlayers,
     selectedPlayerIds: selectedUserCardPlayerIds,
     selectedPlayer: selectedUserCardPlayer,
@@ -2583,78 +2596,6 @@ function App() {
   }
 
   useEffect(() => {
-    if (!selectedEvent) {
-      setMetaDrafts({});
-      return;
-    }
-
-    setMetaDrafts((current) => {
-      const next = { ...current };
-
-      for (const entrant of selectedEventEntrants) {
-        const key = `${selectedEvent.eventId}:${entrant.entrantId}`;
-
-        const existingMeta = selectedEventMeta?.entrants.find(
-          (item) => item.entrantId === entrant.entrantId,
-        );
-
-        const categorySelections = emptyCategorySelections();
-        const remaining = [...(existingMeta?.characterNames ?? [])]
-          .map((value) => value.trim())
-          .filter((value) => value !== "");
-
-        for (let slotIndex = 0; slotIndex < MAX_CATEGORY_SLOTS; slotIndex += 1) {
-          const listId = categorySlotListIds[slotIndex] ?? "";
-          if (listId.trim() === "") {
-            continue;
-          }
-
-          const itemList = resolveItemListForSelectedEvent(listId);
-          if (!itemList) {
-            continue;
-          }
-
-          const allowDuplicates = Boolean(categorySlotAllowDuplicates[slotIndex]);
-          const selections: string[] = [];
-
-          for (let index = 0; index < remaining.length; index += 1) {
-            const itemName = remaining[index];
-            if (!itemList.items.includes(itemName)) {
-              continue;
-            }
-            if (!allowDuplicates && selections.includes(itemName)) {
-              continue;
-            }
-
-            selections.push(itemName);
-            remaining.splice(index, 1);
-            index -= 1;
-          }
-
-          categorySelections[slotIndex] = selections;
-        }
-
-        if (!current[key] || !dirtyMetaDraftKeysRef.current.has(key)) {
-          next[key] = {
-            playSide: existingMeta?.playSide ?? "",
-            categorySelections,
-          };
-        }
-      }
-
-      return next;
-    });
-  }, [
-    categorySlotAllowDuplicates,
-    categorySlotListIds,
-    itemLists,
-    selectedEvent,
-    selectedEventEntrants,
-    selectedEventItemListSnapshots,
-    selectedEventMeta,
-  ]);
-
-  useEffect(() => {
     if (selectedEventSettingKey === "") {
       return;
     }
@@ -2908,95 +2849,6 @@ function App() {
     })();
   }, [selectedEvent, resolvedEventSetsById, setPlaySideMap, sideDecisionMethod, eventMgmtSettings, selectedEventSettingKey]);
 
-  function getMetaDraftKey(eventId: string, entrantId: string): string {
-    return `${eventId}:${entrantId}`;
-  }
-
-  function getMetaDraft(eventId: string, entrantId: string): PlayerMetaDraft {
-    const key = getMetaDraftKey(eventId, entrantId);
-    const existingMeta = localMeta?.events
-      .find((event) => event.eventId === eventId)
-      ?.entrants.find((entrant) => entrant.entrantId === entrantId);
-
-    const categorySelections = emptyCategorySelections();
-    const remaining = [...(existingMeta?.characterNames ?? [])]
-      .map((value) => value.trim())
-      .filter((value) => value !== "");
-
-    for (let slotIndex = 0; slotIndex < MAX_CATEGORY_SLOTS; slotIndex += 1) {
-      const listId = categorySlotListIds[slotIndex] ?? "";
-      if (listId.trim() === "") {
-        continue;
-      }
-
-      const itemList = resolveItemListForSelectedEvent(listId);
-      if (!itemList) {
-        continue;
-      }
-
-      const allowDuplicates = Boolean(categorySlotAllowDuplicates[slotIndex]);
-      const selections: string[] = [];
-
-      for (let index = 0; index < remaining.length; index += 1) {
-        const itemName = remaining[index];
-        if (!itemList.items.includes(itemName)) {
-          continue;
-        }
-        if (!allowDuplicates && selections.includes(itemName)) {
-          continue;
-        }
-
-        selections.push(itemName);
-        remaining.splice(index, 1);
-        index -= 1;
-      }
-
-      categorySelections[slotIndex] = selections;
-    }
-
-    return (
-      metaDrafts[key] ?? {
-        playSide: existingMeta?.playSide ?? "",
-        categorySelections,
-      }
-    );
-  }
-
-  function setMetaDraft(eventId: string, entrantId: string, patch: Partial<PlayerMetaDraft>) {
-    const key = getMetaDraftKey(eventId, entrantId);
-    const existingMeta = localMeta?.events
-      .find((event) => event.eventId === eventId)
-      ?.entrants.find((entrant) => entrant.entrantId === entrantId);
-
-    dirtyMetaDraftKeysRef.current.add(key);
-    setMetaDrafts((current) => {
-      const baseDraft = current[key] ?? {
-        playSide: existingMeta?.playSide ?? "",
-        categorySelections: emptyCategorySelections(),
-      };
-
-      const nextSelections = patch.categorySelections
-        ? patch.categorySelections.slice(0, MAX_CATEGORY_SLOTS).map((items) =>
-          Array.isArray(items)
-            ? items.map((value) => value.trim()).filter((value) => value !== "")
-            : [],
-        )
-        : baseDraft.categorySelections;
-      while (nextSelections.length < MAX_CATEGORY_SLOTS) {
-        nextSelections.push([]);
-      }
-
-      return {
-        ...current,
-        [key]: {
-          ...baseDraft,
-          ...patch,
-          categorySelections: nextSelections,
-        },
-      };
-    });
-  }
-
   function getConfiguredSideDecisionMethod(): EventManagementSetting["sideDecisionMethod"] {
     if (selectedEventSettingKey === "") {
       return "upper_1p";
@@ -3094,132 +2946,6 @@ function App() {
       autoAssigningSidesRef.current = false;
       setBusy(false);
     }
-  }
-
-  function getDraftCategorySelections(draft: PlayerMetaDraft, slotIndex: number): string[] {
-    return (draft.categorySelections[slotIndex] ?? [])
-      .map((value) => value.trim())
-      .filter((value) => value !== "");
-  }
-
-  function setDraftCategorySelections(
-    eventId: string,
-    entrantId: string,
-    slotIndex: number,
-    nextSelections: string[],
-  ) {
-    const draft = getMetaDraft(eventId, entrantId);
-    const categorySelections = draft.categorySelections
-      .slice(0, MAX_CATEGORY_SLOTS)
-      .map((items) => [...items]);
-    while (categorySelections.length < MAX_CATEGORY_SLOTS) {
-      categorySelections.push([]);
-    }
-
-    categorySelections[slotIndex] = nextSelections
-      .map((value) => value.trim())
-      .filter((value) => value !== "");
-
-    setMetaDraft(eventId, entrantId, { categorySelections });
-  }
-
-  function addDraftCategorySelection(
-    eventId: string,
-    entrantId: string,
-    slotIndex: number,
-    list: ItemListConfig,
-    allowDuplicates: boolean,
-    maxCount: number,
-    itemName: string,
-  ) {
-    const normalizedItem = itemName.trim();
-    if (normalizedItem === "") {
-      return;
-    }
-    if (!list.items.includes(normalizedItem)) {
-      return;
-    }
-
-    const draft = getMetaDraft(eventId, entrantId);
-    const currentSelections = getDraftCategorySelections(draft, slotIndex);
-
-    if (!allowDuplicates && currentSelections.includes(normalizedItem)) {
-      return;
-    }
-
-    if (currentSelections.length >= maxCount) {
-      return;
-    }
-
-    setDraftCategorySelections(eventId, entrantId, slotIndex, [...currentSelections, normalizedItem]);
-  }
-
-  function removeDraftCategorySelection(
-    eventId: string,
-    entrantId: string,
-    slotIndex: number,
-    removeIndex: number,
-  ) {
-    const draft = getMetaDraft(eventId, entrantId);
-    const currentSelections = getDraftCategorySelections(draft, slotIndex);
-    if (removeIndex < 0 || removeIndex >= currentSelections.length) {
-      return;
-    }
-
-    const next = currentSelections.filter((_, index) => index !== removeIndex);
-    setDraftCategorySelections(eventId, entrantId, slotIndex, next);
-  }
-
-  function buildValidatedSelections(
-    draft: PlayerMetaDraft,
-    slots: Array<{
-      slotIndex: number;
-      list: ItemListConfig;
-      minCount: number;
-      maxCount: number;
-      allowDuplicates: boolean;
-    }>,
-  ): { normalizedBySlot: string[][]; flattened: string[]; errors: string[] } {
-    const normalizedBySlot = emptyCategorySelections();
-    const flattened: string[] = [];
-    const errors: string[] = [];
-
-    for (const slot of slots) {
-      const allowedItems = new Set(slot.list.items);
-      let selections = getDraftCategorySelections(draft, slot.slotIndex)
-        .filter((value) => allowedItems.has(value));
-
-      if (!slot.allowDuplicates) {
-        const unique: string[] = [];
-        for (const value of selections) {
-          if (!unique.includes(value)) {
-            unique.push(value);
-          }
-        }
-        selections = unique;
-      }
-
-      if (selections.length < slot.minCount) {
-        errors.push(`${slot.list.categoryName}: 最低 ${slot.minCount} 件必要です。`);
-      }
-      if (selections.length > slot.maxCount) {
-        errors.push(`${slot.list.categoryName}: 最大 ${slot.maxCount} 件までです。`);
-      }
-
-      normalizedBySlot[slot.slotIndex] = selections;
-      flattened.push(...selections);
-    }
-
-    const totalMin = clampNonNegativeInteger(totalItemMinCount, 0);
-    const totalMax = Math.max(clampNonNegativeInteger(totalItemMaxCount, 0), totalMin);
-    if (flattened.length < totalMin) {
-      errors.push(`全体の選択数が不足しています (最低 ${totalMin} 件)。`);
-    }
-    if (flattened.length > totalMax) {
-      errors.push(`全体の選択数が超過しています (最大 ${totalMax} 件)。`);
-    }
-
-    return { normalizedBySlot, flattened, errors };
   }
 
   function setCategoryListSlot(slotIndex: number, itemListId: string) {
@@ -6116,7 +5842,7 @@ function App() {
         notes: null,
       });
 
-      dirtyMetaDraftKeysRef.current.delete(getMetaDraftKey(eventSnapshot.eventId, entrantId));
+      clearDirtyDraft(eventSnapshot.eventId, entrantId);
       if (!silent) {
         setMessage("ローカルメタを保存しました。");
       }
