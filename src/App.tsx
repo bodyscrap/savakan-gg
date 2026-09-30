@@ -5,7 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { CreateSnapshot } from "./CreateSnapshot";
 import { DqRequestDialog } from "./DqRequestDialog";
 import { useDqCameraScan } from "./useDqCameraScan";
-import { useSenderProfile, type SenderProfile } from "./useSenderProfile";
+import { useSenderProfile } from "./useSenderProfile";
 import { useMobileInputPortal } from "./useMobileInputPortal";
 import { localNetworkCandidateKey } from "./localNetworkSettings";
 import { toApiSlug, toEventApiSlug, toSlugInput } from "./slugUtils";
@@ -408,7 +408,6 @@ function App() {
   const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
   const [homeSelectedSnapshotKey, setHomeSelectedSnapshotKey] = useState("");
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
-  const [senderIdentityChangedSinceMailboxClear, setSenderIdentityChangedSinceMailboxClear] = useState(false);
   const [displayBracketPlayersBySide, setDisplayBracketPlayersBySide] = useState(true);
   const [bracketZoomLevel, setBracketZoomLevel] = useState<number>(Number(BRACKET_ZOOM_LEVELS[0]));
   const [mobileInputPollingMs, setMobileInputPollingMs] = useState<number>(MOBILE_INPUT_POLLING_MS_DEFAULT);
@@ -424,21 +423,26 @@ function App() {
   const [error, setError] = useState("");
   const {
     senderProfile,
-    setSenderProfile,
     senderProfileReady,
     senderNameDraft,
     setSenderNameDraft,
     senderUserIdDraft,
     setSenderUserIdDraft,
-    senderBindIpDraft,
-    senderBroadcastSubnetMaskDraft,
+    normalizedSenderNameDraft,
+    normalizedSenderUserIdDraft,
+    normalizedBindIpDraft: normalizedSenderBindIpDraft,
+    normalizedSubnetMaskDraft: normalizedBroadcastSubnetMaskDraft,
     networkCandidates: senderNetworkCandidates,
     selectedNetworkCandidateKey: selectedSenderNetworkCandidateKey,
     setSelectedNetworkCandidateKey: setSelectedSenderNetworkCandidateKey,
     networkCandidatesLoading: senderNetworkCandidatesLoading,
     selectedNetworkCandidate: selectedSenderNetworkCandidate,
     refreshNetworkCandidates: refreshLocalNetworkSettingsCandidates,
-  } = useSenderProfile(setError, activeTab);
+    shouldRecommendMailboxClearForIdentityChange,
+    setIdentityChangedSinceMailboxClear: setSenderIdentityChangedSinceMailboxClear,
+    canSaveSenderProfile,
+    saveSenderProfile,
+  } = useSenderProfile(setError, setMessage, activeTab);
   const {
     obsOverlayState,
     obsOverlayBusy,
@@ -1557,10 +1561,6 @@ function App() {
     return (isReportSnapshotRefresh || isManualBracketRefresh) && createSnapshotProgress !== null;
   }, [activeTab, bracketReport.progress, busy, createSnapshotProgress]);
 
-  const normalizedSenderNameDraft = senderNameDraft.trim();
-  const normalizedSenderUserIdDraft = senderUserIdDraft.replace(/\D/g, "").slice(0, 8);
-  const normalizedSenderBindIpDraft = senderBindIpDraft.trim();
-  const normalizedBroadcastSubnetMaskDraft = senderBroadcastSubnetMaskDraft.trim();
   const hasSelectedSenderNetworkDevice = selectedSenderNetworkCandidate !== null;
   const senderIdCollision = useMemo(() => {
     if (!isValidSenderUserId(normalizedSenderUserIdDraft)) {
@@ -1569,33 +1569,6 @@ function App() {
 
     return genericMessages.some((item) => item.senderUserId === normalizedSenderUserIdDraft && item.senderName !== normalizedSenderNameDraft);
   }, [genericMessages, normalizedSenderNameDraft, normalizedSenderUserIdDraft]);
-
-  const senderIdentityChanged = useMemo(() => {
-    const currentId = senderProfile.senderUserId.trim();
-    const currentName = senderProfile.senderName.trim();
-    if (currentId === "" && currentName === "") {
-      return false;
-    }
-
-    const idChanged = normalizedSenderUserIdDraft !== currentId;
-    const nameChanged = normalizedSenderNameDraft !== currentName;
-    return idChanged || nameChanged;
-  }, [
-    normalizedSenderNameDraft,
-    normalizedSenderUserIdDraft,
-    senderProfile.senderName,
-    senderProfile.senderUserId,
-  ]);
-
-  const shouldRecommendMailboxClearForIdentityChange = senderIdentityChanged
-    || senderIdentityChangedSinceMailboxClear;
-
-  const canSaveSenderProfile = normalizedSenderNameDraft !== ""
-    && isValidSenderUserId(normalizedSenderUserIdDraft)
-    && hasSelectedSenderNetworkDevice
-    && isValidIpv4(normalizedSenderBindIpDraft)
-    && isValidIpv4(normalizedBroadcastSubnetMaskDraft)
-    && !senderIdCollision;
 
   const isSenderProfileReadyForMessaging = senderProfile.senderName.trim() !== ""
     && isValidSenderUserId(senderProfile.senderUserId)
@@ -1616,75 +1589,6 @@ function App() {
     }
 
     setSenderUserIdDraft(nextId);
-  }
-
-  async function saveSenderProfileSettings() {
-    setError("");
-    setMessage("");
-
-    if (normalizedSenderNameDraft === "") {
-      setError("送信者名を入力してください。");
-      return;
-    }
-
-    if (!isValidSenderUserId(normalizedSenderUserIdDraft)) {
-      setError("ユーザーIDは8桁の数字で入力してください。");
-      return;
-    }
-
-    if (!hasSelectedSenderNetworkDevice) {
-      setError("ネットワークデバイスを選択してください。");
-      return;
-    }
-
-    if (!isValidIpv4(normalizedBroadcastSubnetMaskDraft)) {
-      setError("ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0");
-      return;
-    }
-
-    if (senderIdCollision) {
-      setError("既存メッセージ内で同じユーザーIDが別名義に使われています。別のIDを設定してください。");
-      return;
-    }
-
-    if (senderIdentityChanged) {
-      const confirmed = window.confirm(
-        "送信者名またはユーザーIDを変更して保存しようとしています。\n"
-        + "状態不整合を防ぐため、先に設定タブ下部の「メッセージボックスを強制クリア」を実行することを推奨します。\n"
-        + "このまま保存しますか？",
-      );
-      if (!confirmed) {
-        setSenderNameDraft(senderProfile.senderName);
-        setSenderUserIdDraft(senderProfile.senderUserId);
-        setError("送信者設定の保存を中止し、送信者名/ユーザーIDを元の値に戻しました。");
-        return;
-      }
-    }
-
-    const nextProfile: SenderProfile = {
-      senderName: normalizedSenderNameDraft,
-      senderUserId: normalizedSenderUserIdDraft,
-      bindIp: normalizedSenderBindIpDraft,
-      broadcastSubnetMask: normalizedBroadcastSubnetMaskDraft,
-    };
-
-    try {
-      await invoke<string>("test_sender_network", {
-        profile: nextProfile,
-      });
-    } catch (err) {
-      setError(`ネットワークテストに失敗したため保存を中止しました: ${String(err)}`);
-      return;
-    }
-
-    setSenderProfile(nextProfile);
-    if (senderIdentityChanged) {
-      setSenderIdentityChangedSinceMailboxClear(true);
-      setMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK) / 注意: 状態整合のため、可能なタイミングでメッセージボックス強制クリアを実行してください。`);
-      return;
-    }
-
-    setMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK)`);
   }
 
   useEffect(() => {
@@ -5178,8 +5082,8 @@ function App() {
                       : "デバイス選択後、IP/サブネットは自動適用されます。"}
             onRefreshNetworkCandidates={() => void refreshLocalNetworkSettingsCandidates(true)}
             onRandomizeSenderUserId={fillRandomSenderUserId}
-            onSaveSenderProfile={() => void saveSenderProfileSettings()}
-            canSaveSenderProfile={canSaveSenderProfile}
+            onSaveSenderProfile={() => void saveSenderProfile(senderIdCollision)}
+            canSaveSenderProfile={canSaveSenderProfile(senderIdCollision)}
             startggFetchPerPage={normalizeStartggFetchPerPage(startggFetchPerPage)}
             onStartggFetchPerPageChange={(value) => {
               const next = normalizeStartggFetchPerPage(value, startggFetchPerPage);

@@ -37,7 +37,11 @@ function normalizeSenderProfile(rawValue: unknown): SenderProfile {
   };
 }
 
-export function useSenderProfile(onError: (error: string) => void, activeTab: string) {
+export function useSenderProfile(
+  onError: (error: string) => void,
+  onMessage: (message: string) => void,
+  activeTab: string,
+) {
   const [senderProfile, setSenderProfile] = useState<SenderProfile>({
     senderName: "",
     senderUserId: "",
@@ -52,11 +56,21 @@ export function useSenderProfile(onError: (error: string) => void, activeTab: st
   const [networkCandidates, setNetworkCandidates] = useState<LocalNetworkSettingsCandidate[]>([]);
   const [selectedNetworkCandidateKey, setSelectedNetworkCandidateKey] = useState("");
   const [networkCandidatesLoading, setNetworkCandidatesLoading] = useState(false);
+  const [identityChangedSinceMailboxClear, setIdentityChangedSinceMailboxClear] = useState(false);
   const autoIpFillTriedRef = useRef(false);
 
   const selectedNetworkCandidate = networkCandidates.find(
     (candidate) => localNetworkCandidateKey(candidate) === selectedNetworkCandidateKey,
   ) ?? null;
+  const normalizedSenderNameDraft = senderNameDraft.trim();
+  const normalizedSenderUserIdDraft = senderUserIdDraft.replace(/\D/g, "").slice(0, 8);
+  const normalizedBindIpDraft = senderBindIpDraft.trim();
+  const normalizedSubnetMaskDraft = senderBroadcastSubnetMaskDraft.trim();
+  const currentSenderId = senderProfile.senderUserId.trim();
+  const currentSenderName = senderProfile.senderName.trim();
+  const senderIdentityChanged = (currentSenderId !== "" || currentSenderName !== "")
+    && (normalizedSenderUserIdDraft !== currentSenderId || normalizedSenderNameDraft !== currentSenderName);
+  const shouldRecommendMailboxClearForIdentityChange = senderIdentityChanged || identityChangedSinceMailboxClear;
 
   useEffect(() => {
     let alive = true;
@@ -208,6 +222,82 @@ export function useSenderProfile(onError: (error: string) => void, activeTab: st
     setSenderBroadcastSubnetMaskDraft(selectedNetworkCandidate.broadcastSubnetMask.trim());
   }, [selectedNetworkCandidate]);
 
+  function canSaveSenderProfile(senderIdCollision: boolean) {
+    return normalizedSenderNameDraft !== ""
+      && isValidSenderUserId(normalizedSenderUserIdDraft)
+      && selectedNetworkCandidate !== null
+      && isValidIpv4(normalizedBindIpDraft)
+      && isValidIpv4(normalizedSubnetMaskDraft)
+      && !senderIdCollision;
+  }
+
+  async function saveSenderProfile(senderIdCollision: boolean) {
+    onError("");
+    onMessage("");
+
+    if (normalizedSenderNameDraft === "") {
+      onError("送信者名を入力してください。");
+      return;
+    }
+
+    if (!isValidSenderUserId(normalizedSenderUserIdDraft)) {
+      onError("ユーザーIDは8桁の数字で入力してください。");
+      return;
+    }
+
+    if (!selectedNetworkCandidate) {
+      onError("ネットワークデバイスを選択してください。");
+      return;
+    }
+
+    if (!isValidIpv4(normalizedSubnetMaskDraft)) {
+      onError("ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0");
+      return;
+    }
+
+    if (senderIdCollision) {
+      onError("既存メッセージ内で同じユーザーIDが別名義に使われています。別のIDを設定してください。");
+      return;
+    }
+
+    if (senderIdentityChanged) {
+      const confirmed = window.confirm(
+        "送信者名またはユーザーIDを変更して保存しようとしています。\n"
+        + "状態不整合を防ぐため、先に設定タブ下部の「メッセージボックスを強制クリア」を実行することを推奨します。\n"
+        + "このまま保存しますか？",
+      );
+      if (!confirmed) {
+        setSenderNameDraft(senderProfile.senderName);
+        setSenderUserIdDraft(senderProfile.senderUserId);
+        onError("送信者設定の保存を中止し、送信者名/ユーザーIDを元の値に戻しました。");
+        return;
+      }
+    }
+
+    const nextProfile: SenderProfile = {
+      senderName: normalizedSenderNameDraft,
+      senderUserId: normalizedSenderUserIdDraft,
+      bindIp: normalizedBindIpDraft,
+      broadcastSubnetMask: normalizedSubnetMaskDraft,
+    };
+
+    try {
+      await invoke<string>("test_sender_network", { profile: nextProfile });
+    } catch (error) {
+      onError(`ネットワークテストに失敗したため保存を中止しました: ${String(error)}`);
+      return;
+    }
+
+    setSenderProfile(nextProfile);
+    if (senderIdentityChanged) {
+      setIdentityChangedSinceMailboxClear(true);
+      onMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK) / 注意: 状態整合のため、可能なタイミングでメッセージボックス強制クリアを実行してください。`);
+      return;
+    }
+
+    onMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK)`);
+  }
+
   return {
     senderProfile,
     setSenderProfile,
@@ -224,5 +314,13 @@ export function useSenderProfile(onError: (error: string) => void, activeTab: st
     networkCandidatesLoading,
     selectedNetworkCandidate,
     refreshNetworkCandidates,
+    normalizedSenderNameDraft,
+    normalizedSenderUserIdDraft,
+    normalizedBindIpDraft,
+    normalizedSubnetMaskDraft,
+    shouldRecommendMailboxClearForIdentityChange,
+    setIdentityChangedSinceMailboxClear,
+    canSaveSenderProfile,
+    saveSenderProfile,
   };
 }
