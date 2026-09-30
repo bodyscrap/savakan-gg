@@ -2,9 +2,11 @@ import { buildPositionedRoundColumns, type PositionedRoundColumn, type RoundColu
 import type {
   PhaseGroupProgressionSnapshot,
   PhaseGroupSeedSnapshot,
+  SetEntrantSource,
   SetSlot,
   SetSnapshot,
 } from "./bracketProgression";
+import { isResolvedEntrantName } from "./bracketProgression";
 
 export type EventSnapshot = {
   eventId: string;
@@ -73,6 +75,90 @@ export function formatAlphabetSequence(index: number): string {
   } while (remaining >= 0);
 
   return label;
+}
+
+export function buildSetDisplayCodeById(
+  sections: BracketSectionForView[],
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const used = new Set<string>();
+  const orderedSets: SetSnapshot[] = [];
+
+  const orderedSections = [...sections].sort((left, right) => {
+    const weight = (key: string): number => {
+      if (key === "winners") {
+        return 0;
+      }
+      if (key === "losers") {
+        return 1;
+      }
+      return 2;
+    };
+
+    return weight(left.key) - weight(right.key);
+  });
+
+  for (const section of orderedSections) {
+    for (const column of section.columns) {
+      const setsInColumn = [...column.positionedSets].sort((left, right) => {
+        const byY = left.y - right.y;
+        if (Math.abs(byY) > 0.0001) {
+          return byY;
+        }
+        return left.set.setId.localeCompare(right.set.setId, "ja");
+      });
+
+      for (const item of setsInColumn) {
+        orderedSets.push(item.set);
+      }
+    }
+  }
+
+  for (const set of orderedSets) {
+    const identifier = set.identifier?.trim();
+    if (identifier) {
+      map.set(set.setId, identifier);
+    }
+  }
+
+  let fallbackIndex = 0;
+  let gfSeen = false;
+  let reservedAfterGf = false;
+  for (const set of orderedSets) {
+    if (map.has(set.setId)) {
+      continue;
+    }
+
+    const currentIsLosers = isLosersBracketSet(set);
+    const currentIsGf = isGrandFinalText(set.fullRoundText);
+    const currentIsReset = isGrandFinalResetSet(set);
+
+    if (currentIsLosers && gfSeen && reservedAfterGf && !currentIsReset) {
+      fallbackIndex += 1;
+      reservedAfterGf = false;
+    }
+
+    let code = formatAlphabetSequence(fallbackIndex);
+    while (used.has(code)) {
+      fallbackIndex += 1;
+      code = formatAlphabetSequence(fallbackIndex);
+    }
+
+    map.set(set.setId, code);
+    used.add(code);
+    fallbackIndex += 1;
+
+    if (currentIsGf) {
+      gfSeen = true;
+      reservedAfterGf = true;
+    }
+
+    if (currentIsReset) {
+      reservedAfterGf = false;
+    }
+  }
+
+  return map;
 }
 
 export function pickPairSourceIds(previousSetIds: string[], currentCount: number, currentIndex: number): string[] {
@@ -561,6 +647,232 @@ export function isSlotTbd(slot: SetSlot): boolean {
     || unresolvedLabel.startsWith("loser of ")
     || slot.entrantName.trim().startsWith("勝者")
     || slot.entrantName.trim().startsWith("敗者");
+}
+
+export function buildTbdSourceLabelBySlotKey(
+  sections: BracketSection[],
+  setDisplayCodeById: Map<string, string>,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const winnersSection = sections.find((section) => section.key === "winners") ?? null;
+  const losersSection = sections.find((section) => section.key === "losers") ?? null;
+  const winnersColumnsOrdered = winnersSection?.columns ?? [];
+  const losersColumnsOrdered = losersSection?.columns ?? [];
+  const winnersRoundOneIds = winnersColumnsOrdered[0]?.sets.map((set) => set.setId) ?? [];
+  const losersRoundOne = losersColumnsOrdered[0];
+
+  if (losersRoundOne && winnersRoundOneIds.length > 0) {
+    losersRoundOne.sets.forEach((set, currentIndex) => {
+      const sources = pickPairSourceIds(winnersRoundOneIds, losersRoundOne.sets.length, currentIndex)
+        .map((setId) => setDisplayCodeById.get(setId))
+        .filter((code): code is string => Boolean(code));
+
+      sources.forEach((code, sourceIndex) => {
+        map.set(`${set.setId}:${sourceIndex}`, normalizeSourceText("losers", code));
+      });
+    });
+  }
+
+  for (let columnIndex = 1; columnIndex < winnersColumnsOrdered.length; columnIndex += 1) {
+    const previousColumn = winnersColumnsOrdered[columnIndex - 1];
+    const currentColumn = winnersColumnsOrdered[columnIndex];
+    const previousIds = previousColumn.sets.map((set) => set.setId);
+
+    currentColumn.sets.forEach((set, currentIndex) => {
+      const sources = pickPairSourceIds(previousIds, currentColumn.sets.length, currentIndex)
+        .map((setId) => setDisplayCodeById.get(setId))
+        .filter((code): code is string => Boolean(code));
+
+      sources.forEach((code, sourceIndex) => {
+        map.set(`${set.setId}:${sourceIndex}`, normalizeSourceText("winners", code));
+      });
+    });
+  }
+
+  const winnersColumnsByCount = new Map<number, string[][]>();
+  for (const column of winnersColumnsOrdered) {
+    const ids = column.sets.map((set) => set.setId);
+    if (ids.length === 0) {
+      continue;
+    }
+    const found = winnersColumnsByCount.get(ids.length);
+    if (found) {
+      found.push(ids);
+    } else {
+      winnersColumnsByCount.set(ids.length, [ids]);
+    }
+  }
+
+  const winnersCountUseCursor = new Map<number, number>();
+  for (let columnIndex = 1; columnIndex < losersColumnsOrdered.length; columnIndex += 1) {
+    const previousColumn = losersColumnsOrdered[columnIndex - 1];
+    const currentColumn = losersColumnsOrdered[columnIndex];
+    const previousIds = previousColumn.sets.map((set) => set.setId);
+    const currentCount = currentColumn.sets.length;
+
+    if (currentCount <= 0) {
+      continue;
+    }
+
+    if (previousIds.length === currentCount) {
+      const candidateWinnersColumns = winnersColumnsByCount.get(currentCount) ?? [];
+      const winnerCursor = winnersCountUseCursor.get(currentCount) ?? 0;
+      const winnersSourceIds = candidateWinnersColumns[winnerCursor] ?? [];
+      if (candidateWinnersColumns.length > winnerCursor) {
+        winnersCountUseCursor.set(currentCount, winnerCursor + 1);
+      }
+
+      currentColumn.sets.forEach((set, currentIndex) => {
+        const losersCode = setDisplayCodeById.get(previousIds[currentIndex]);
+        if (losersCode) {
+          map.set(`${set.setId}:0`, normalizeSourceText("winners", losersCode));
+        }
+
+        const winnersSourceId = winnersSourceIds[currentIndex];
+        const winnersCode = winnersSourceId ? setDisplayCodeById.get(winnersSourceId) : undefined;
+        if (winnersCode) {
+          map.set(`${set.setId}:1`, normalizeSourceText("losers", winnersCode));
+        }
+      });
+      continue;
+    }
+
+    currentColumn.sets.forEach((set, currentIndex) => {
+      const sources = pickPairSourceIds(previousIds, currentCount, currentIndex)
+        .map((setId) => setDisplayCodeById.get(setId))
+        .filter((code): code is string => Boolean(code));
+      sources.forEach((code, sourceIndex) => {
+        map.set(`${set.setId}:${sourceIndex}`, normalizeSourceText("winners", code));
+      });
+    });
+  }
+
+  const winnersAllSets = winnersColumnsOrdered.flatMap((column) => column.sets);
+  const losersAllSets = losersColumnsOrdered.flatMap((column) => column.sets);
+  const winnersFinalSet = winnersAllSets.find((set) => isWinnersFinalText(set.fullRoundText))
+    ?? winnersAllSets.filter((set) => !isGrandFinalText(set.fullRoundText)).slice(-1)[0];
+  const losersFinalSet = losersAllSets.find((set) => isLosersFinalText(set.fullRoundText))
+    ?? losersAllSets.slice(-1)[0];
+  const winnersFinalCode = winnersFinalSet ? setDisplayCodeById.get(winnersFinalSet.setId) : undefined;
+  const losersFinalCode = losersFinalSet ? setDisplayCodeById.get(losersFinalSet.setId) : undefined;
+
+  if (winnersFinalCode || losersFinalCode) {
+    for (const set of winnersAllSets) {
+      if (!isGrandFinalText(set.fullRoundText)) {
+        continue;
+      }
+      if (winnersFinalCode) {
+        map.set(`${set.setId}:0`, normalizeSourceText("winners", winnersFinalCode));
+      }
+      if (losersFinalCode) {
+        map.set(`${set.setId}:1`, normalizeSourceText("winners", losersFinalCode));
+      }
+    }
+  }
+
+  return map;
+}
+
+export function resolveTbdSourceLabel(
+  set: SetSnapshot,
+  slotIndex: number,
+  slot: SetSlot,
+  event: EventSnapshot | null,
+  setDisplayCodeById: Map<string, string>,
+  sourceLabelsBySlotKey: Map<string, string>,
+): string | null {
+  if (!isSlotTbd(slot)) {
+    return null;
+  }
+
+  const source = slotIndex === 0 ? set.entrant1Source : set.entrant2Source;
+  const resolveSource = (
+    currentSource: SetEntrantSource | null | undefined,
+    visited: Set<string>,
+  ): string | null => {
+    if (!currentSource) {
+      return null;
+    }
+    const sourceSetId = currentSource.resolvedSetId ?? currentSource.typeId;
+    const sourceSet = sourceSetId
+      ? event?.sets.find((candidate) => candidate.setId === sourceSetId)
+      : undefined;
+    if (!sourceSetId || !sourceSet || visited.has(sourceSetId)) {
+      return currentSource.placeholderName?.trim() || null;
+    }
+
+    const nextVisited = new Set(visited);
+    nextVisited.add(sourceSetId);
+    const sourceCondition = currentSource.condition?.trim().toLowerCase();
+    if (sourceSet.winnerId && (sourceCondition === "winner" || sourceCondition === "loser")) {
+      const resolvedSlot = sourceSet.slots.find((candidate) => {
+        if (candidate.entrantId === null || !isResolvedEntrantName(candidate.entrantName)) {
+          return false;
+        }
+        const isWinner = candidate.entrantId === sourceSet.winnerId;
+        return sourceCondition === "winner" ? isWinner : !isWinner;
+      });
+      if (resolvedSlot) {
+        return resolvedSlot.entrantName.trim();
+      }
+    }
+
+    if (
+      sourceSet.isIntermediate
+      && !sourceSet.winnerId
+      && sourceCondition !== "winner"
+      && sourceCondition !== "loser"
+    ) {
+      const resolvedSlots = sourceSet.slots.filter(
+        (candidate) => candidate.entrantId !== null && isResolvedEntrantName(candidate.entrantName),
+      );
+      if (resolvedSlots.length === 1) {
+        return resolvedSlots[0].entrantName.trim();
+      }
+    }
+
+    if (sourceSet.isIntermediate) {
+      const nested = [sourceSet.entrant1Source, sourceSet.entrant2Source]
+        .map((nestedSource) => resolveSource(nestedSource, nextVisited))
+        .find((label): label is string => Boolean(label));
+      if (nested) {
+        return nested;
+      }
+    }
+
+    const sourceSetCode = setDisplayCodeById.get(sourceSetId);
+    if (currentSource.placeholderName?.trim()) {
+      return currentSource.placeholderName.trim();
+    }
+    if (sourceSetCode && (sourceCondition === "winner" || sourceCondition === "loser")) {
+      return normalizeSourceText(sourceCondition === "winner" ? "winners" : "losers", sourceSetCode);
+    }
+    return null;
+  };
+
+  const resolvedSourceLabel = resolveSource(source, new Set<string>());
+  if (resolvedSourceLabel) {
+    return resolvedSourceLabel;
+  }
+
+  const own = sourceLabelsBySlotKey.get(`${set.setId}:${slotIndex}`);
+  if (own) {
+    return own;
+  }
+
+  const conditionString = source?.conditionString?.trim();
+  if (conditionString) {
+    return conditionString;
+  }
+
+  if (set.slots.length === 2) {
+    const other = sourceLabelsBySlotKey.get(`${set.setId}:${slotIndex === 0 ? 1 : 0}`);
+    if (other) {
+      return other;
+    }
+  }
+
+  return null;
 }
 
 export function isDisplayableSet(set: SetSnapshot, event: EventSnapshot | null): boolean {
