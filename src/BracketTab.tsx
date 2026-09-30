@@ -166,41 +166,46 @@ export function BracketTab({
           <p className="meta">start.ggのevent名: {eventName}</p>
 
           <div className="event-toolbar">
-            <label htmlFor="phase-select">対象フェーズ</label>
-            <select
-              id="phase-select"
-              value={selectedPhaseName}
-              onChange={(event) => onPhaseNameChange(event.currentTarget.value)}
-              disabled={phaseNames.length === 0}
-            >
-              {phaseNames.length === 0 ? (
-                <option value="">フェーズがありません</option>
-              ) : (
-                phaseNames.map((phaseName) => (
-                  <option key={phaseName} value={phaseName}>
-                    {phaseName}
-                  </option>
-                ))
-              )}
-            </select>
+            <div className="bracket-scope-controls" aria-label="ブラケット表示範囲">
+              <label className="bracket-scope-field" htmlFor="phase-select">
+                対象フェーズ
+                <select
+                  id="phase-select"
+                  value={selectedPhaseName}
+                  onChange={(event) => onPhaseNameChange(event.currentTarget.value)}
+                  disabled={phaseNames.length === 0}
+                >
+                  {phaseNames.length === 0 ? (
+                    <option value="">フェーズがありません</option>
+                  ) : (
+                    phaseNames.map((phaseName) => (
+                      <option key={phaseName} value={phaseName}>
+                        {phaseName}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
 
-            <label htmlFor="phase-pool-select">対象プール</label>
-            <select
-              id="phase-pool-select"
-              value={selectedPhasePoolGroup?.key ?? ""}
-              onChange={(event) => onPhasePoolChange(event.currentTarget.value)}
-              disabled={phaseScopedPoolGroups.length === 0}
-            >
-              {phaseScopedPoolGroups.length === 0 ? (
-                <option value="">フェーズ/プールがありません</option>
-              ) : (
-                phaseScopedPoolGroups.map((group) => (
-                  <option key={group.key} value={group.key}>
-                    {group.phaseName} / Pool {group.phaseGroupName} ({group.sets.length} sets)
-                  </option>
-                ))
-              )}
-            </select>
+              <label className="bracket-scope-field" htmlFor="phase-pool-select">
+                対象プール
+                <select
+                  id="phase-pool-select"
+                  value={selectedPhasePoolGroup?.key ?? ""}
+                  onChange={(event) => onPhasePoolChange(event.currentTarget.value)}
+                  disabled={phaseScopedPoolGroups.length === 0}
+                >
+                  {phaseScopedPoolGroups.length === 0 ? (
+                    <option value="">フェーズ/プールがありません</option>
+                  ) : (
+                    phaseScopedPoolGroups.map((group) => (
+                      <option key={group.key} value={group.key}>
+                        {group.phaseName} / Pool {group.phaseGroupName} ({group.sets.length} sets)
+                      </option>
+                    ))
+                  )}
+                </select>
+              </label>
 
             <div className="bracket-view-tools" style={bracketScaleStyle}>
               <label htmlFor="bracket-zoom-select">
@@ -218,8 +223,9 @@ export function BracketTab({
                 </select>
               </label>
             </div>
+            </div>
 
-            <div style={{ display: "flex", gap: "0.5rem" }}>
+            <div className="bracket-actions">
               <button type="button" className="ghost" disabled={!canOpenMobileInput} onClick={onOpenMobileInput}>
                 スマートフォンでアクセス
               </button>

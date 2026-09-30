@@ -565,19 +565,37 @@ button:disabled {
 
 .event-toolbar {
   margin-top: 0.75rem;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.55rem;
-  align-items: center;
+  align-items: end;
 }
 
-.event-toolbar label {
+.bracket-scope-controls {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(220px, 1.3fr) auto;
+  gap: 0.55rem;
+  align-items: end;
+  min-width: 0;
+}
+
+.bracket-scope-field {
+  display: grid;
+  gap: 0.25rem;
   color: var(--muted);
   font-size: 0.87rem;
 }
 
 .event-toolbar select {
-  min-width: 250px;
+  min-width: 0;
+  width: 100%;
+}
+
+.bracket-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .tournament-settings {
@@ -1311,7 +1329,7 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  margin-left: 0.3rem;
+  margin-left: 0;
 }
 
 .bracket-view-tools label {
@@ -2097,6 +2115,14 @@ li {
   .round-robin-layout {
     grid-template-columns: 1fr;
   }
+
+  .event-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .bracket-actions {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 640px) {
@@ -2128,9 +2154,27 @@ li {
     grid-template-columns: 1fr;
   }
 
-  .event-toolbar select {
-    min-width: 0;
+  .bracket-scope-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bracket-view-tools,
+  .bracket-view-tools label {
+    display: grid;
     width: 100%;
+  }
+
+  .bracket-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bracket-actions button {
+    min-height: 2.75rem;
+  }
+
+  .bracket-actions button:last-child {
+    grid-column: 1 / -1;
   }
 
   .setting-row-fields,
