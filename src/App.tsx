@@ -555,12 +555,9 @@ function App() {
   });
   refreshLocalSnapshotEventsRef.current = refreshSnapshotEventList;
 
-  const selectedEventSettingKey = useMemo(() => {
-    if (!snapshot || !selectedEvent) {
-      return "";
-    }
-    return buildEventManagementSettingKey(snapshot.slug, selectedEvent.eventId);
-  }, [snapshot, selectedEvent]);
+  const selectedEventSettingKey = snapshot && selectedEvent
+    ? buildEventManagementSettingKey(snapshot.slug, selectedEvent.eventId)
+    : "";
 
   const {
     eventMgmtSettings,
