@@ -44,11 +44,9 @@ import { useSnapshotEventListRefresh } from "./useSnapshotEventListRefresh";
 import { useBracketReport } from "./useBracketReport";
 import {
   useSetResultDrafts,
-  type SetResultDraftState,
 } from "./useSetResultDrafts";
 import {
   applyScoreDraftWithOpponentDefault,
-  buildDraftStateFromPending,
   buildScoreDraftsFromResult,
   buildScoreDraftsFromSet,
   buildSlotScoresForSave,
@@ -63,6 +61,7 @@ import { usePlayerMetaDrafts } from "./usePlayerMetaDrafts";
 import { useEventManagementSettings } from "./useEventManagementSettings";
 import { useEventSnapshotMaintenance } from "./useEventSnapshotMaintenance";
 import { useSetSideAssignment } from "./useSetSideAssignment";
+import { useMatchDialogActions } from "./useMatchDialogActions";
 import { useTournamentCreation } from "./useTournamentCreation";
 import { useUserCards } from "./useUserCards";
 import { useItemLists } from "./useItemLists";
@@ -91,7 +90,6 @@ import {
   getDisplaySlotsForSet,
   isCompletedSet,
   isDisplayableSet,
-  isInactiveGrandFinalReset,
   isMatchupReady,
   type EventSnapshot,
 } from "./bracketDisplay";
@@ -822,18 +820,6 @@ function App() {
     onMessage: setMessage,
   });
 
-  const { processDqRequestFromMessage } = useDqRequestNavigation({
-    event: selectedEvent,
-    mailboxThreadSummaries,
-    resolvedSetsById: resolvedEventSetsById,
-    setSelectedPhaseName,
-    setSelectedPhasePoolKey,
-    setActiveTab,
-    openMatchDialog,
-    onError: setError,
-    onMessage: setMessage,
-  });
-
   function resolveActiveThread() {
     void resolveMailboxThread();
   }
@@ -923,7 +909,7 @@ function App() {
     toggleObsOverlaySet,
   });
 
-  const { sendCallMessageFromMatch } = useCallMessageDraft({
+  const { sendCallMessageFromMatch, cancelCallMessageDraft } = useCallMessageDraft({
     tournament: snapshot ? { tournamentId: snapshot.tournamentId, name: snapshot.name } : null,
     event: selectedEvent,
     activeMatch,
@@ -934,6 +920,8 @@ function App() {
     setComposeMessageMeta,
     setMailboxMethodDraft,
     setMailboxSubjectDraft,
+    setMessageDeliveryMode,
+    setMessageDeliveryIpDraft,
     setComposeFixedBodyDraft,
     setGenericMessageBodyDraft,
     closeMatchDialog,
@@ -1000,28 +988,28 @@ function App() {
     getSetSlotSide,
   });
 
-  function openMatchDialog(set: SetSnapshot, forcedDraftState?: SetResultDraftState) {
-    if (!isDisplayableSet(set, selectedEvent)) {
-      return;
-    }
-    if (isInactiveGrandFinalReset(set, selectedEvent)) {
-      return;
-    }
-    const inputSet = resolvedEventSetsById.get(set.setId) ?? set;
-    setActiveMatchSetId(set.setId);
+  const { openMatchDialog } = useMatchDialogActions({
+    selectedEvent,
+    resolvedEventSetsById,
+    pendingResultBySetId,
+    setActiveMatchSetId,
+    setActiveMatchSideDrafts,
+    getSetSlotSide,
+    getSetScoresForDisplay,
+    initializeMatchDraft,
+  });
 
-    const sideDrafts = buildMatchSideDrafts(inputSet, getSetSlotSide);
-    setActiveMatchSideDrafts(sideDrafts);
-
-    const pending = pendingResultBySetId.get(set.setId);
-    initializeMatchDraft({
-      setId: set.setId,
-      forcedDraftState,
-      pendingDraftState: pending ? buildDraftStateFromPending(inputSet, pending) : undefined,
-      snapshotScoreDrafts: getSetScoresForDisplay(set).scores,
-      defaultScoreDrafts: buildScoreDraftsFromSet(inputSet),
-    });
-  }
+  const { processDqRequestFromMessage } = useDqRequestNavigation({
+    event: selectedEvent,
+    mailboxThreadSummaries,
+    resolvedSetsById: resolvedEventSetsById,
+    setSelectedPhaseName,
+    setSelectedPhasePoolKey,
+    setActiveTab,
+    openMatchDialog,
+    onError: setError,
+    onMessage: setMessage,
+  });
 
   function closeMatchDialog() {
     setActiveMatchSetId("");
@@ -1203,16 +1191,7 @@ function App() {
             composeFixedBodyDraft={composeFixedBodyDraft}
             genericMessageBodyDraft={genericMessageBodyDraft}
             onGenericMessageBodyChange={setGenericMessageBodyDraft}
-            onCancelFixedMessage={() => {
-              setComposeFixedBodyDraft(null);
-              setComposeMessageMeta(null);
-              setMailboxMethodDraft("generic");
-              setMailboxSubjectDraft("");
-              setMessageDeliveryMode("broadcast");
-              setMessageDeliveryIpDraft("");
-              setGenericMessageBodyDraft("");
-              setMessage("呼び出しメッセージをキャンセルしました。汎用メッセージ入力に戻りました。");
-            }}
+            onCancelFixedMessage={cancelCallMessageDraft}
             canSendGenericMessage={canSendGenericMessage}
             onPostGenericMessage={() => void postGenericMessage()}
             mailboxFilterSetting={mailboxFilterSetting}

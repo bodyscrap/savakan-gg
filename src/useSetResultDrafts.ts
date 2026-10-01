@@ -17,7 +17,7 @@ export type ResultConfirmationState = {
   directWinnerId: string | null;
 };
 
-type InitializeMatchDraftInput = {
+export type InitializeMatchDraftInput = {
   setId: string;
   forcedDraftState?: SetResultDraftState;
   pendingDraftState?: SetResultDraftState;

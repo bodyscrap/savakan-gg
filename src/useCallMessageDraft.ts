@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppTab } from "./AppShell";
 import type { EventSnapshot } from "./bracketDisplay";
+import type { MailboxDeliveryMode } from "./MessageBox";
 import { isValidIpv4, isValidSenderUserId, normalizeCallPhaseGroupName, normalizeCallPhaseName } from "./messageUtils";
 import type { SetSlot, SetSnapshot } from "./bracketProgression";
 import type { SenderProfile } from "./useSenderProfile";
@@ -13,10 +14,12 @@ type UseCallMessageDraftOptions = {
   senderProfile: SenderProfile;
   communicationDisabled: boolean;
   setCallingEntrantId: (entrantId: string) => void;
-  setComposeMessageMeta: (meta: Record<string, unknown>) => void;
+  setComposeMessageMeta: (meta: Record<string, unknown> | null) => void;
   setMailboxMethodDraft: (method: string) => void;
   setMailboxSubjectDraft: (subject: string) => void;
-  setComposeFixedBodyDraft: (body: string) => void;
+  setMessageDeliveryMode: (mode: MailboxDeliveryMode) => void;
+  setMessageDeliveryIpDraft: (ip: string) => void;
+  setComposeFixedBodyDraft: (body: string | null) => void;
   setGenericMessageBodyDraft: (body: string) => void;
   closeMatchDialog: () => void;
   setActiveTab: (tab: AppTab) => void;
@@ -54,6 +57,8 @@ export function useCallMessageDraft({
   setComposeMessageMeta,
   setMailboxMethodDraft,
   setMailboxSubjectDraft,
+  setMessageDeliveryMode,
+  setMessageDeliveryIpDraft,
   setComposeFixedBodyDraft,
   setGenericMessageBodyDraft,
   closeMatchDialog,
@@ -134,5 +139,16 @@ export function useCallMessageDraft({
     }
   }
 
-  return { sendCallMessageFromMatch };
+  function cancelCallMessageDraft() {
+    setComposeFixedBodyDraft(null);
+    setComposeMessageMeta(null);
+    setMailboxMethodDraft("generic");
+    setMailboxSubjectDraft("");
+    setMessageDeliveryMode("broadcast");
+    setMessageDeliveryIpDraft("");
+    setGenericMessageBodyDraft("");
+    onMessage("呼び出しメッセージをキャンセルしました。汎用メッセージ入力に戻りました。");
+  }
+
+  return { sendCallMessageFromMatch, cancelCallMessageDraft };
 }
