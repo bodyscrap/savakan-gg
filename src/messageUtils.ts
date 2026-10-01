@@ -165,6 +165,10 @@ export function hasSameGenericMessageOrder(left: GenericMessage[], right: Generi
   return true;
 }
 
+export function normalizeSenderUserId(value: string): string {
+  return value.replace(/\D/g, "").slice(0, 8);
+}
+
 export function isValidSenderUserId(value: string): boolean {
   return /^\d{8}$/.test(value.trim());
 }

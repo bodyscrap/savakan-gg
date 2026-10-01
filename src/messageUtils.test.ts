@@ -3,6 +3,7 @@ import {
 	canBroadcastCallListSync,
 	hasSenderIdCollision,
 	isSenderProfileReadyForMessaging,
+	normalizeSenderUserId,
 } from "./messageUtils";
 
 const validProfile = {
@@ -13,6 +14,11 @@ const validProfile = {
 };
 
 describe("sender messaging readiness", () => {
+	it("normalizes sender IDs to at most eight digits", () => {
+		expect(normalizeSenderUserId("12a34567890")).toBe("12345678");
+		expect(normalizeSenderUserId("abc")).toBe("");
+	});
+
 	it("requires a name, valid sender ID, and bind IP", () => {
 		expect(isSenderProfileReadyForMessaging(validProfile)).toBe(true);
 		expect(isSenderProfileReadyForMessaging({ ...validProfile, senderName: "  " })).toBe(false);

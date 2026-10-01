@@ -78,6 +78,24 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
   const [rebuildToken, setRebuildToken] = useState(0);
   const [cycleCount, setCycleCount] = useState(0);
 
+  function changePageRotateSeconds(value: unknown) {
+    setPageRotateSeconds((current) => normalizeCallListRotateSeconds(value, current));
+  }
+
+  function commitPageRotateSeconds(value: unknown) {
+    const normalized = normalizeCallListRotateSeconds(value);
+    setPageRotateSeconds((current) => current === normalized ? current : normalized);
+  }
+
+  function changeColorSeconds(value: unknown) {
+    setColorSeconds((current) => normalizeCallListColorSeconds(value, current));
+  }
+
+  function commitColorSeconds(value: unknown) {
+    const normalized = normalizeCallListColorSeconds(value);
+    setColorSeconds((current) => current === normalized ? current : normalized);
+  }
+
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(CALL_LIST_ROTATE_SECONDS_STORAGE_KEY);
@@ -396,9 +414,11 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
     pageSwitchedAtMs,
     pageProgressPercent,
     pageRotateSeconds,
-    setPageRotateSeconds,
+    changePageRotateSeconds,
+    commitPageRotateSeconds,
     colorSeconds,
-    setColorSeconds,
+    changeColorSeconds,
+    commitColorSeconds,
     colorToRedSeconds,
     resetDisplay,
     advancePage,

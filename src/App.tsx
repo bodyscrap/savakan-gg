@@ -67,7 +67,6 @@ import {
   CALL_LIST_COLOR_SECONDS_MIN,
   CALL_LIST_ROTATE_SECONDS_MAX,
   CALL_LIST_ROTATE_SECONDS_MIN,
-  normalizeCallListColorSeconds,
   normalizeCallListRotateSeconds,
   useCallList,
 } from "./useCallList";
@@ -140,13 +139,15 @@ function App() {
   const [error, setError] = useState("");
   const {
     startggFetchPerPage,
-    setStartggFetchPerPage,
+    changeStartggFetchPerPage,
+    commitStartggFetchPerPage,
     displayBracketPlayersBySide,
     setDisplayBracketPlayersBySide,
     bracketZoomLevel,
     setBracketZoomLevel,
     mobileInputPollingMs,
-    setMobileInputPollingMs,
+    changeMobileInputPollingMs,
+    commitMobileInputPollingMs,
     disableLocalCommunication,
     setDisableLocalCommunication,
   } = useAppPreferences();
@@ -156,7 +157,7 @@ function App() {
     senderNameDraft,
     setSenderNameDraft,
     senderUserIdDraft,
-    setSenderUserIdDraft,
+    changeSenderUserIdDraft,
     normalizedSenderNameDraft,
     normalizedSenderUserIdDraft,
     normalizedBindIpDraft: normalizedSenderBindIpDraft,
@@ -498,9 +499,11 @@ function App() {
     pageSwitchedAtMs: callListPageSwitchedAtMs,
     pageProgressPercent: normalizedCallListPageProgressPercent,
     pageRotateSeconds: callListPageRotateSeconds,
-    setPageRotateSeconds: setCallListPageRotateSeconds,
+    changePageRotateSeconds: changeCallListPageRotateSeconds,
+    commitPageRotateSeconds: commitCallListPageRotateSeconds,
     colorSeconds: callListColorSeconds,
-    setColorSeconds: setCallListColorSeconds,
+    changeColorSeconds: changeCallListColorSeconds,
+    commitColorSeconds: commitCallListColorSeconds,
     colorToRedSeconds: callListColorToRedSeconds,
     resetDisplay: resetCallListDisplay,
     advancePage: advanceCallListPage,
@@ -1216,7 +1219,7 @@ function App() {
             senderNameDraft={senderNameDraft}
             onSenderNameChange={setSenderNameDraft}
             senderUserIdDraft={senderUserIdDraft}
-            onSenderUserIdChange={(value) => setSenderUserIdDraft(value.replace(/\D/g, "").slice(0, 8))}
+            onSenderUserIdChange={changeSenderUserIdDraft}
             networkCandidates={senderNetworkCandidates.map((candidate) => ({
               key: localNetworkCandidateKey(candidate),
               label: `${candidate.interfaceName} / ${candidate.source} / ${candidate.bindIp} / ${candidate.broadcastSubnetMask}`,
@@ -1244,55 +1247,23 @@ function App() {
             onSaveSenderProfile={() => void saveSenderProfile(senderIdCollision)}
             canSaveSenderProfile={canSaveSenderProfile(senderIdCollision)}
             startggFetchPerPage={normalizeStartggFetchPerPage(startggFetchPerPage)}
-            onStartggFetchPerPageChange={(value) => {
-              const next = normalizeStartggFetchPerPage(value, startggFetchPerPage);
-              setStartggFetchPerPage(next);
-            }}
-            onStartggFetchPerPageBlur={(value) => {
-              const normalized = normalizeStartggFetchPerPage(value);
-              if (normalized !== startggFetchPerPage) {
-                setStartggFetchPerPage(normalized);
-              }
-            }}
+            onStartggFetchPerPageChange={changeStartggFetchPerPage}
+            onStartggFetchPerPageBlur={commitStartggFetchPerPage}
             mobileInputPollingMs={normalizeMobileInputPollingMs(mobileInputPollingMs)}
             mobileInputPollingMsMin={MOBILE_INPUT_POLLING_MS_MIN}
             mobileInputPollingMsMax={MOBILE_INPUT_POLLING_MS_MAX}
-            onMobileInputPollingMsChange={(value) => {
-              const next = normalizeMobileInputPollingMs(value, mobileInputPollingMs);
-              setMobileInputPollingMs(next);
-            }}
-            onMobileInputPollingMsBlur={(value) => {
-              const normalized = normalizeMobileInputPollingMs(value);
-              if (normalized !== mobileInputPollingMs) {
-                setMobileInputPollingMs(normalized);
-              }
-            }}
+            onMobileInputPollingMsChange={changeMobileInputPollingMs}
+            onMobileInputPollingMsBlur={commitMobileInputPollingMs}
             callListPageRotateSeconds={callListPageRotateSeconds}
             callListRotateSecondsMin={CALL_LIST_ROTATE_SECONDS_MIN}
             callListRotateSecondsMax={CALL_LIST_ROTATE_SECONDS_MAX}
-            onCallListPageRotateSecondsChange={(value) => {
-              const next = normalizeCallListRotateSeconds(value, callListPageRotateSeconds);
-              setCallListPageRotateSeconds(next);
-            }}
-            onCallListPageRotateSecondsBlur={(value) => {
-              const normalized = normalizeCallListRotateSeconds(value);
-              if (normalized !== callListPageRotateSeconds) {
-                setCallListPageRotateSeconds(normalized);
-              }
-            }}
+            onCallListPageRotateSecondsChange={changeCallListPageRotateSeconds}
+            onCallListPageRotateSecondsBlur={commitCallListPageRotateSeconds}
             callListColorSeconds={callListColorSeconds}
             callListColorSecondsMin={CALL_LIST_COLOR_SECONDS_MIN}
             callListColorSecondsMax={CALL_LIST_COLOR_SECONDS_MAX}
-            onCallListColorSecondsChange={(value) => {
-              const next = normalizeCallListColorSeconds(value, callListColorSeconds);
-              setCallListColorSeconds(next);
-            }}
-            onCallListColorSecondsBlur={(value) => {
-              const normalized = normalizeCallListColorSeconds(value);
-              if (normalized !== callListColorSeconds) {
-                setCallListColorSeconds(normalized);
-              }
-            }}
+            onCallListColorSecondsChange={changeCallListColorSeconds}
+            onCallListColorSecondsBlur={commitCallListColorSeconds}
             callListRotateSecondsDisplay={normalizeCallListRotateSeconds(callListPageRotateSeconds)}
             callListColorToRedSeconds={callListColorToRedSeconds}
             hasCallListMessages={callListDisplayGroups.length > 0 || genericMessages.some((item) => item.parentMessageId === null && item.method === "call_player")}

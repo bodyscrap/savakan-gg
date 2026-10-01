@@ -73,6 +73,24 @@ export function useAppPreferences() {
   const [mobileInputPollingMs, setMobileInputPollingMs] = useState(MOBILE_INPUT_POLLING_MS_DEFAULT);
   const [disableLocalCommunication, setDisableLocalCommunication] = useState(false);
 
+  function changeStartggFetchPerPage(value: unknown) {
+    setStartggFetchPerPage((current) => normalizeStartggFetchPerPage(value, current));
+  }
+
+  function commitStartggFetchPerPage(value: unknown) {
+    const normalized = normalizeStartggFetchPerPage(value);
+    setStartggFetchPerPage((current) => current === normalized ? current : normalized);
+  }
+
+  function changeMobileInputPollingMs(value: unknown) {
+    setMobileInputPollingMs((current) => normalizeMobileInputPollingMs(value, current));
+  }
+
+  function commitMobileInputPollingMs(value: unknown) {
+    const normalized = normalizeMobileInputPollingMs(value);
+    setMobileInputPollingMs((current) => current === normalized ? current : normalized);
+  }
+
   useEffect(() => {
     try {
       const rawValue = window.localStorage.getItem(BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY);
@@ -163,12 +181,16 @@ export function useAppPreferences() {
   return {
     startggFetchPerPage,
     setStartggFetchPerPage,
+    changeStartggFetchPerPage,
+    commitStartggFetchPerPage,
     displayBracketPlayersBySide,
     setDisplayBracketPlayersBySide,
     bracketZoomLevel,
     setBracketZoomLevel,
     mobileInputPollingMs,
     setMobileInputPollingMs,
+    changeMobileInputPollingMs,
+    commitMobileInputPollingMs,
     disableLocalCommunication,
     setDisableLocalCommunication,
   };

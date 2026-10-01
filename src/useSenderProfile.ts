@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { isValidIpv4, isValidSenderUserId } from "./messageUtils";
+import { isValidIpv4, isValidSenderUserId, normalizeSenderUserId } from "./messageUtils";
 import {
   localNetworkCandidateKey,
   type LocalNetworkSettingsCandidate,
@@ -22,7 +22,7 @@ function normalizeSenderProfile(rawValue: unknown): SenderProfile {
 
   const senderName = typeof source.senderName === "string" ? source.senderName.trim() : "";
   const senderUserId = typeof source.senderUserId === "string"
-    ? source.senderUserId.replace(/\D/g, "").slice(0, 8)
+    ? normalizeSenderUserId(source.senderUserId)
     : "";
   const bindIp = typeof source.bindIp === "string" ? source.bindIp.trim() : "0.0.0.0";
   const broadcastSubnetMask = typeof source.broadcastSubnetMask === "string"
@@ -63,7 +63,7 @@ export function useSenderProfile(
     (candidate) => localNetworkCandidateKey(candidate) === selectedNetworkCandidateKey,
   ) ?? null;
   const normalizedSenderNameDraft = senderNameDraft.trim();
-  const normalizedSenderUserIdDraft = senderUserIdDraft.replace(/\D/g, "").slice(0, 8);
+  const normalizedSenderUserIdDraft = normalizeSenderUserId(senderUserIdDraft);
   const normalizedBindIpDraft = senderBindIpDraft.trim();
   const normalizedSubnetMaskDraft = senderBroadcastSubnetMaskDraft.trim();
   const currentSenderId = senderProfile.senderUserId.trim();
@@ -231,6 +231,10 @@ export function useSenderProfile(
       && !senderIdCollision;
   }
 
+  function changeSenderUserIdDraft(value: string) {
+    setSenderUserIdDraft(normalizeSenderUserId(value));
+  }
+
   function fillRandomSenderUserId(usedSenderUserIds: string[]) {
     const usedIds = new Set(usedSenderUserIds);
     const generateSenderUserId = () => {
@@ -322,7 +326,7 @@ export function useSenderProfile(
     senderNameDraft,
     setSenderNameDraft,
     senderUserIdDraft,
-    setSenderUserIdDraft,
+    changeSenderUserIdDraft,
     senderBindIpDraft,
     senderBroadcastSubnetMaskDraft,
     networkCandidates,
