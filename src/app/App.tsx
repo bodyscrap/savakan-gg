@@ -42,6 +42,7 @@ import { useSnapshotEventListRefresh } from "../hooks/useSnapshotEventListRefres
 import { useBracketReport } from "../hooks/useBracketReport";
 import {
   useSetResultDrafts,
+  type ResultConfirmationState,
 } from "../hooks/useSetResultDrafts";
 import { buildMatchDialogPlayers, resolveWorkspaceMatchDraftState } from "../domain/matchDialogDraft";
 import {
@@ -906,14 +907,22 @@ function App() {
     setDirectWinnerId(null);
   }
 
-  async function saveLocalResultForMatch(confirmed: boolean) {
+  async function saveLocalResultForMatch(
+    confirmed: boolean,
+    confirmation?: ResultConfirmationState,
+  ) {
+    const set = confirmation?.match ?? activeMatch;
+    if (!set) {
+      return;
+    }
+
     await persistMatchResult({
       slug: toApiSlug(slug),
       event: selectedEvent,
-      set: activeMatch,
+      set,
       confirmed,
-      directWinnerId,
-      scoreDrafts,
+      directWinnerId: confirmation ? confirmation.directWinnerId : directWinnerId,
+      scoreDrafts: confirmation?.scoreDrafts ?? scoreDrafts,
       sideDrafts: activeMatchSideDrafts,
     });
   }
@@ -1385,8 +1394,11 @@ function App() {
             activeSetId={activeMatch?.setId ?? null}
             onCancelResultConfirmation={clearResultConfirmation}
             onConfirmResult={() => {
+              const confirmation = resultConfirmation;
               clearResultConfirmation();
-              void saveLocalResultForMatch(true);
+              if (confirmation) {
+                void saveLocalResultForMatch(true, confirmation);
+              }
             }}
             restoreOpen={restoreDialogOpen}
             selectedEventName={selectedEvent?.name ?? "選択中のイベント"}

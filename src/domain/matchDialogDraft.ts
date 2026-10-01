@@ -104,16 +104,23 @@ export function resolveExistingMatchDialogDraft(
   forcedDraftState: SetResultDraftState | undefined,
   pendingDraftState: SetResultDraftState | undefined,
   cachedDraftState: SetResultDraftState | undefined,
+  entrantIds: string[],
 ): ExistingMatchDialogDraft | null {
-  if (forcedDraftState) {
+  const currentEntrantIds = new Set(entrantIds);
+  const matchesCurrentEntrants = (draftState: SetResultDraftState | undefined) =>
+    draftState !== undefined
+    && (!draftState.winnerId.trim() || currentEntrantIds.has(draftState.winnerId))
+    && Object.keys(draftState.scoreDrafts).every((entrantId) => currentEntrantIds.has(entrantId));
+
+  if (matchesCurrentEntrants(forcedDraftState)) {
     return { draftState: forcedDraftState, shouldPersist: true };
   }
 
-  if (pendingDraftState) {
+  if (matchesCurrentEntrants(pendingDraftState)) {
     return { draftState: pendingDraftState, shouldPersist: true };
   }
 
-  if (cachedDraftState) {
+  if (matchesCurrentEntrants(cachedDraftState)) {
     return { draftState: cachedDraftState, shouldPersist: false };
   }
 

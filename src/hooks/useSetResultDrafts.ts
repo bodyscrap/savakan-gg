@@ -25,6 +25,7 @@ export type ResultConfirmationState = {
 
 export type InitializeMatchDraftInput = {
   setId: string;
+  entrantIds: string[];
   forcedDraftState?: SetResultDraftState;
   pendingDraftState?: SetResultDraftState;
   snapshotScoreDrafts: SetScoreDraft;
@@ -84,6 +85,7 @@ export function useSetResultDrafts() {
 
   function initializeMatchDraft({
     setId,
+    entrantIds,
     forcedDraftState,
     pendingDraftState,
     snapshotScoreDrafts,
@@ -93,6 +95,7 @@ export function useSetResultDrafts() {
       forcedDraftState,
       pendingDraftState,
       setResultDrafts[setId],
+      entrantIds,
     );
     if (existingDraft) {
       const { draftState } = existingDraft;

@@ -50,11 +50,18 @@ export function useMatchDialogActions({
     setActiveMatchSideDrafts(buildMatchSideDrafts(inputSet, getSetSlotSide));
 
     const pending = pendingResultBySetId.get(set.setId);
+    const entrantIds = inputSet.slots
+      .map((slot) => slot.entrantId)
+      .filter((entrantId): entrantId is string => entrantId !== null);
+    const snapshotScoreDrafts = getSetScoresForDisplay(set).scores;
     initializeMatchDraft({
       setId: set.setId,
+      entrantIds,
       forcedDraftState,
       pendingDraftState: pending ? buildDraftStateFromPending(inputSet, pending) : undefined,
-      snapshotScoreDrafts: getSetScoresForDisplay(set).scores,
+      snapshotScoreDrafts: Object.fromEntries(
+        Object.entries(snapshotScoreDrafts).filter(([entrantId]) => entrantIds.includes(entrantId)),
+      ),
       defaultScoreDrafts: buildScoreDraftsFromSet(inputSet),
     });
   }

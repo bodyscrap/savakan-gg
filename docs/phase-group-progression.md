@@ -228,3 +228,28 @@ edge生成では、書き換え済みの`graph_event`に同じset IDがあれば
 再発時は、まず該当setごとに`winnerId`が2 slotのentrant IDのどちらかと一致するか確認します。次にsourceの`typeId`とwinner/loser progression seed ID、進行先phaseGroup seed ID、slotのseed IDを照合し、重複または欠落がないかを調べます。entrant補正後のstate・winner・scoreも確認し、古い結果が再構築対象に残っていないことを確認してください。表示名やDQ scoreの符号だけから原因を決めず、IDとsource graphを先に追います。
 
 回帰テストは [storage.rs](../src-tauri/src/storage.rs) の `intermediate_grand_final_does_not_create_virtual_reset`、`advances_middle_winner_to_final_phase_group_seed`、`changing_a_progressed_entrant_invalidates_target_result`、`rebuilding_clears_result_when_seed_corrects_slot_entrant`、`rebuilding_discards_winner_not_present_in_set_slots` を参照します。Rust変更後は `cargo test --lib` を実行し、フロントのwinner色・matrix表示を変えた場合は `npm run build` と対象画面での確認も行います。
+
+### 2026-10-01: RR game ratioの誤集計と中盤SEへの進出配置
+
+RRのstandings summaryはstart.ggと一致していましたが、予選Pool1から中盤Single Eliminationへの進出entrantが一部異なり、中盤Round 1の初期配置もstart.ggと一致しない事象を確認しました。修正後は進行中およびstart.gg報告後の結果も一致することを実機で確認しています。
+
+原因はRust側のRR tie-break用game score集計が、勝者のscoreだけを`game_wins`へ、敗者のscoreだけを`game_losses`へ加算していたことです。たとえば2勝で並んだPool1のplayer1とPlayer9では、勝者scoreだけの集計によりPlayer9のgame ratioが過大になり、`originPlacement` 1/2への割当が逆転しました。Frontendのstandingsは各slotのscoreをそのentrant自身のgame wins、相手slotのscoreをgame lossesとして集計するため、両者の順位が一致していませんでした。
+
+修正後は、2 slot双方のscoreがあるsetについて、各entrantのscoreをgame wins、相手entrantのscoreをgame lossesに加算します。DQ score `-1`は従来どおり0として扱います。tie-break ruleの適用順は引き続きsource phaseGroupの`tiebreakOrder`を使い、順位を`progressionsOut.originPlacement`順に対応する`progressionId` seedへ割り当てます。
+
+`seedMap`は`seeds.nodes`の順序をSingle Eliminationのentry point順へ割り当てる情報です。このeventではseedMapが`[1,3,2,4]`で、nodes順をentry point順にすると次の並びになります。
+
+- Pool1: player1、Player12、player13、Player9
+- Pool2: Player11、player6、Player15、player3
+
+今回のsnapshotでは各SE setのslot sourceが対応するseed IDを既に参照していたため、`seedMap`を別途slotへ再適用することではなく、standings順位からprogression seedへ正しいentrantを割り当てることが修正点でした。進出順位、node順、seedMap適用後のentry point順は別々に照合してください。
+
+再発時は、まずRR summaryの順位と`progressionsOut.originPlacement`を照合し、次に進出先seedの`progressionId`とentrant ID、`seeds.nodes`順を確認します。その後、`seedMap`の各値が指すentry pointと、Single Elimination set slotのseed source IDを照合します。summaryが一致していても、progression seedへのentrant割当が誤っていれば中盤配置は一致しません。
+
+回帰テスト`game_ratio_progression_preserves_pool_rank_in_seed_map_entry_order`は2勝で並ぶentrantのgame ratioを含むRR→SE進行を再現し、placement 1/2とseedMap entry point順を検証します。修正後は`cargo test --lib`（60件）と`cargo check`が成功しました。
+
+### 2026-10-01: progression再構築後の確定結果保持
+
+全体progression rebuildでは、derived progression seedを一度クリアしてからcompleted setを再生します。rebuild中にslot rosterが変わったsetは、古いwinnerやscoreを無効化します。従来はrebuild後に現在のrosterと一致するpending結果も再適用されず、確定setが未完了状態へ戻る場合がありました。確定履歴は監査用でwinnerとslot entrant IDのみを持ち、scoreを復元できないため、pending結果を失った後は安全に自動復旧できません。
+
+load時と結果保存時のrebuild後に、対象setの現在rosterとpending結果のwinner/slot score entrant IDが一致する場合だけ、その結果を再適用してprogressionを再構築します。rosterが異なる古い結果は復元しません。確認テスト`pending_confirmation_is_restored_only_for_the_replayed_roster`で、一致rosterの復元と不一致rosterの拒否を検証します。確定済みsetの状態・winner・scoreを保ちつつ、対戦相手が変わった場合に旧結果を引き継がないことが要件です。
