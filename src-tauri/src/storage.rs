@@ -2564,8 +2564,14 @@ fn restore_pending_local_results(
         else {
             continue;
         };
+        let has_reset_markers = results
+            .iter()
+            .any(|result| result.reset_source_set_id.is_some());
         for result in results {
             restore_pending_result_to_event(event, &result);
+        }
+        if has_reset_markers {
+            apply_source_based_tbd_labels(event);
         }
     }
     storage_perf_log(|| {
@@ -2591,6 +2597,21 @@ fn restore_pending_result_to_event(event: &mut EventSnapshot, result: &LocalSetR
     else {
         return;
     };
+
+    if let Some(reset_source_set_id) = result.reset_source_set_id.as_deref() {
+        if set.set_id != reset_source_set_id {
+            for slot in &mut set.slots {
+                slot.entrant_id = None;
+                slot.entrant_name = "TBD".to_owned();
+                slot.seed_id = None;
+                slot.seed_num = None;
+                slot.score = None;
+            }
+        }
+        clear_set_result_state(set);
+        return;
+    }
+
     set.winner_id = result.confirmed.then_some(result.winner_id.clone());
     set.state = if result.confirmed { 3 } else { 2 };
 
@@ -4567,6 +4588,7 @@ mod grand_final_reset_order_tests {
                     score: 1,
                 },
             ],
+            reset_source_set_id: None,
             recorded_at: Utc::now(),
         };
 
@@ -4577,6 +4599,78 @@ mod grand_final_reset_order_tests {
         let mut reset = pending;
         reset.slot_scores.clear();
         assert!(is_pending_result_matched_with_set(&reset, &set));
+    }
+
+    #[test]
+    fn restoring_cascade_reset_preserves_root_entrants_and_clears_dependents() {
+        let root_set = make_set(
+            "root-set",
+            "Winners Round 1",
+            Some("entrant-1"),
+            &["entrant-1", "entrant-2"],
+        );
+        let mut dependent_set = make_set(
+            "dependent-set",
+            "Winners Round 2",
+            Some("entrant-1"),
+            &["entrant-1", "entrant-3"],
+        );
+        dependent_set.entrant1_source = Some(
+            serde_json::from_value(serde_json::json!({
+                "sourceType": "set",
+                "typeId": "root-set",
+                "condition": "winner"
+            }))
+            .unwrap(),
+        );
+        dependent_set.slots[0].score = Some(2.0);
+        dependent_set.slots[1].score = Some(1.0);
+        let mut snapshot = TournamentSnapshot {
+            tournament_id: "tournament".to_owned(),
+            slug: "tournament/example".to_owned(),
+            name: "Tournament".to_owned(),
+            events: vec![EventSnapshot {
+                event_id: "event".to_owned(),
+                name: "Event".to_owned(),
+                phases: Vec::new(),
+                phase_groups: Vec::new(),
+                sets: vec![root_set, dependent_set],
+            }],
+            updated_at: Utc::now(),
+        };
+
+        for set_id in ["root-set", "dependent-set"] {
+            let reset = LocalSetResultMeta {
+                event_id: "event".to_owned(),
+                event_name: "Event".to_owned(),
+                set_id: set_id.to_owned(),
+                winner_id: String::new(),
+                score_csv: String::new(),
+                direct_win: false,
+                confirmed: true,
+                slot_scores: Vec::new(),
+                reset_source_set_id: Some("root-set".to_owned()),
+                recorded_at: Utc::now(),
+            };
+            restore_pending_result_to_event(&mut snapshot.events[0], &reset);
+        }
+        apply_source_based_tbd_labels(&mut snapshot.events[0]);
+        rebuild_progression_from_completed_sets(&mut snapshot);
+
+        let root_set = &snapshot.events[0].sets[0];
+        assert_eq!(root_set.winner_id, None);
+        assert_eq!(root_set.state, 2);
+        assert_eq!(root_set.slots[0].entrant_id.as_deref(), Some("entrant-1"));
+        assert_eq!(root_set.slots[1].entrant_id.as_deref(), Some("entrant-2"));
+        assert!(root_set.slots.iter().all(|slot| slot.score.is_none()));
+
+        let dependent_set = &snapshot.events[0].sets[1];
+        assert_eq!(dependent_set.winner_id, None);
+        assert_eq!(dependent_set.state, 1);
+        assert!(dependent_set
+            .slots
+            .iter()
+            .all(|slot| slot.entrant_id.is_none() && slot.score.is_none()));
     }
 
     #[test]
@@ -7443,6 +7537,7 @@ pub fn reset_local_set_result_with_dependencies(
             confirmed: true,
             direct_win: false,
             slot_scores: Vec::new(),
+            reset_source_set_id: Some(source_set_id.to_owned()),
             recorded_at: Utc::now(),
         });
     }
@@ -8065,6 +8160,7 @@ pub fn upsert_local_set_result(
             direct_win: input.direct_win,
             confirmed: input.confirmed,
             slot_scores,
+            reset_source_set_id: None,
             recorded_at,
         });
     }
@@ -8307,6 +8403,7 @@ pub fn upsert_local_set_scores(
             direct_win: false,
             confirmed: false,
             slot_scores,
+            reset_source_set_id: None,
             recorded_at: Utc::now(),
         });
     }
@@ -9966,6 +10063,7 @@ mod progression_source_tests {
                     score: 0,
                 },
             ],
+            reset_source_set_id: None,
             recorded_at: Utc::now(),
         };
 

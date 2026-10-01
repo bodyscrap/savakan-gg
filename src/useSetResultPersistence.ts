@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EventSnapshot } from "./bracketDisplay";
+import {
+  isCompletedSet,
+  isInactiveGrandFinalReset,
+  type EventSnapshot,
+} from "./bracketDisplay";
 import type { SetSlot, SetSnapshot } from "./bracketProgression";
 import type { SetResultDraftState, SetScoreDraft } from "./useSetResultDrafts";
 
@@ -15,6 +19,11 @@ type SaveSetResultInput = {
   directWinnerId: string | null;
   scoreDrafts: SetScoreDraft;
   sideDrafts: SideDrafts;
+};
+
+type SaveMatchResultInput = Omit<SaveSetResultInput, "event" | "setId" | "set"> & {
+  event: EventSnapshot | null;
+  set: SetSnapshot | null;
 };
 
 type ResetSetResultCascadeResult<TWorkspace> = {
@@ -157,6 +166,29 @@ export function useSetResultPersistence<TWorkspace>({
     }
   }
 
+  async function saveMatchResult(input: SaveMatchResultInput) {
+    const event = input.event;
+    const set = input.set;
+    if (!event) {
+      setError("イベントが選択されていません。");
+      return;
+    }
+    if (!set) {
+      setError("試合が選択されていません。");
+      return;
+    }
+    if (isCompletedSet(set)) {
+      setError("確定済みsetの結果は変更できません。修正する場合は「影響setを取消」からやり直してください。");
+      return;
+    }
+    if (isInactiveGrandFinalReset(set, event)) {
+      setError("Winners側のプレイヤーがGrand Finalに勝利したため、Grand Final Resetは行われません。");
+      return;
+    }
+
+    await saveLocalResult({ ...input, event, set, setId: set.setId });
+  }
+
   async function discardAllLocalDrafts(input: { slug: string; eventId: string }) {
     setBusy(true);
     setError("");
@@ -200,6 +232,31 @@ export function useSetResultPersistence<TWorkspace>({
     }
   }
 
+  async function discardDraftsForEvent(slug: string, event: EventSnapshot | null) {
+    if (!event) {
+      return;
+    }
+
+    await discardAllLocalDrafts({ slug, eventId: event.eventId });
+  }
+
+  async function discardDraftForMatch(
+    slug: string,
+    event: EventSnapshot | null,
+    set: SetSnapshot | null,
+  ) {
+    if (!event) {
+      setError("先にイベントを選択してください。");
+      return;
+    }
+    if (!set) {
+      setError("試合が選択されていません。");
+      return;
+    }
+
+    await discardLocalDraftForSet({ slug, eventId: event.eventId, setId: set.setId });
+  }
+
   async function resetLocalSetResultCascade(input: {
     slug: string;
     eventId: string;
@@ -225,5 +282,42 @@ export function useSetResultPersistence<TWorkspace>({
     }
   }
 
-  return { saveLocalResult, discardAllLocalDrafts, discardLocalDraftForSet, resetLocalSetResultCascade };
+  async function resetMatchResultCascade(input: {
+    slug: string;
+    event: EventSnapshot | null;
+    set: SetSnapshot | null;
+    perPage: number;
+  }) {
+    if (!input.event) {
+      setError("先にイベントを選択してください。");
+      return;
+    }
+    if (!input.set) {
+      setError("試合が選択されていません。");
+      return;
+    }
+
+    const confirmed = window.confirm("このsetと影響するsetの結果をローカルで取り消します。実行しますか？");
+    if (!confirmed) {
+      return;
+    }
+
+    await resetLocalSetResultCascade({
+      slug: input.slug,
+      eventId: input.event.eventId,
+      setId: input.set.setId,
+      perPage: input.perPage,
+    });
+  }
+
+  return {
+    saveLocalResult,
+    saveMatchResult,
+    discardAllLocalDrafts,
+    discardLocalDraftForSet,
+    discardDraftsForEvent,
+    discardDraftForMatch,
+    resetLocalSetResultCascade,
+    resetMatchResultCascade,
+  };
 }

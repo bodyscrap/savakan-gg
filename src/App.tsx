@@ -34,7 +34,6 @@ import { useObsOverlaySetActions } from "./useObsOverlaySetActions";
 import { usePhasePoolSelection } from "./usePhasePoolSelection";
 import { useMatchSideDraftActions } from "./useMatchSideDraftActions";
 import { buildMatchSideDrafts, resolveMatchSideDraftSavePlan } from "./matchSideDrafts";
-import { buildInitialMatchDialogDraft, resolveExistingMatchDialogDraft } from "./matchDialogDraft";
 import { BracketTab } from "./BracketTab";
 import { BracketDialogs } from "./BracketDialogs";
 import { MatchDetailDialog } from "./MatchDetailDialog";
@@ -85,6 +84,7 @@ import {
 import { usePersistSnapshotSelection } from "./usePersistSnapshotSelection";
 import { useSnapshotStartupRestore } from "./useSnapshotStartupRestore";
 import { useBracketSectionView } from "./useBracketSectionView";
+import { useMessageScopes } from "./useMessageScopes";
 import {
   getDisplaySlotsForSet,
   isCompletedSet,
@@ -98,8 +98,6 @@ import {
   isDqRequestMessage,
   isValidIpv4,
   isValidSenderUserId,
-  parsePhasePoolKey,
-  type MessageScope,
 } from "./messageUtils";
 import {
   filterLocalSnapshotEvents,
@@ -140,10 +138,10 @@ function App() {
     setScoreDrafts,
     directWinnerId,
     setDirectWinnerId,
+    initializeMatchDraft,
     resultConfirmation,
     requestResultConfirmation,
     clearResultConfirmation,
-    setResultDrafts,
     interimScoreDraftsBySetId,
     saveSetDraft,
     removeInterimDraft,
@@ -262,10 +260,10 @@ function App() {
     },
   });
   const {
-    saveLocalResult: persistLocalSetResult,
-    discardAllLocalDrafts,
-    discardLocalDraftForSet,
-    resetLocalSetResultCascade,
+    saveMatchResult: persistMatchResult,
+    discardDraftsForEvent,
+    discardDraftForMatch,
+    resetMatchResultCascade,
   } = useSetResultPersistence<TournamentWorkspace>({
     setWorkspace,
     setBusy,
@@ -510,36 +508,12 @@ function App() {
     setEventAliasDraft(selectedEventMeta?.eventAlias?.trim() ?? "");
   }, [selectedEventMeta]);
 
-  const selectedMessageScope = useMemo<MessageScope | null>(() => {
-    if (!snapshot || !selectedEvent) {
-      return null;
-    }
-
-    const parsedPhasePool = parsePhasePoolKey(selectedPhasePoolKey);
-    const selectedPhase = parsedPhasePool?.phaseName ?? selectedPhaseName.trim();
-    const selectedPhaseGroup = parsedPhasePool?.phaseGroupName ?? "";
-
-    return {
-      tournamentId: snapshot.tournamentId,
-      slug: snapshot.slug,
-      eventId: selectedEvent.eventId,
-      phaseName: selectedPhase,
-      phaseGroupName: selectedPhaseGroup,
-    };
-  }, [selectedEvent, selectedPhaseName, selectedPhasePoolKey, snapshot]);
-
-  const selectedMailboxScope = useMemo<MessageScope | null>(() => {
-    if (!selectedMessageScope) {
-      return null;
-    }
-
-    // メッセージボックスは同一イベント内を横断表示する。
-    return {
-      ...selectedMessageScope,
-      phaseName: "",
-      phaseGroupName: "",
-    };
-  }, [selectedMessageScope]);
+  const { selectedMessageScope, selectedMailboxScope } = useMessageScopes({
+    snapshot,
+    selectedEvent,
+    selectedPhaseName,
+    selectedPhasePoolKey,
+  });
 
   const {
     genericMessages,
@@ -1110,29 +1084,13 @@ function App() {
     setActiveMatchSideDrafts(sideDrafts);
 
     const pending = pendingResultBySetId.get(set.setId);
-    const existingDraft = resolveExistingMatchDialogDraft(
+    initializeMatchDraft({
+      setId: set.setId,
       forcedDraftState,
-      pending ? buildDraftStateFromPending(inputSet, pending) : undefined,
-      setResultDrafts[set.setId],
-    );
-    if (existingDraft) {
-      const { draftState } = existingDraft;
-      setDirectWinnerId(draftState.directWin ? draftState.winnerId : null);
-      setScoreDrafts(draftState.scoreDrafts);
-      if (existingDraft.shouldPersist) {
-        saveSetDraft(set.setId, draftState);
-      }
-      return;
-    }
-
-    const snapshotDisplay = getSetScoresForDisplay(set);
-    const initialDraft = buildInitialMatchDialogDraft(
-      snapshotDisplay.scores,
-      buildScoreDraftsFromSet(inputSet),
-    );
-    setDirectWinnerId(null);
-    setScoreDrafts(initialDraft.scoreDrafts);
-    saveSetDraft(set.setId, initialDraft);
+      pendingDraftState: pending ? buildDraftStateFromPending(inputSet, pending) : undefined,
+      snapshotScoreDrafts: getSetScoresForDisplay(set).scores,
+      defaultScoreDrafts: buildScoreDraftsFromSet(inputSet),
+    });
   }
 
   function closeMatchDialog() {
@@ -1143,88 +1101,14 @@ function App() {
   }
 
   async function saveLocalResultForMatch(confirmed: boolean) {
-    if (!selectedEvent) {
-      setError("イベントが選択されていません。");
-      return;
-    }
-
-    if (!activeMatch) {
-      setError("試合が選択されていません。");
-      return;
-    }
-
-    if (isCompletedSet(activeMatch)) {
-      setError("確定済みsetの結果は変更できません。修正する場合は「影響setを取消」からやり直してください。");
-      return;
-    }
-    if (isInactiveGrandFinalReset(activeMatch, selectedEvent)) {
-      setError("Winners側のプレイヤーがGrand Finalに勝利したため、Grand Final Resetは行われません。");
-      return;
-    }
-
-    await persistLocalSetResult({
+    await persistMatchResult({
       slug: toApiSlug(slug),
       event: selectedEvent,
-      setId: activeMatch.setId,
       set: activeMatch,
       confirmed,
       directWinnerId,
       scoreDrafts,
       sideDrafts: activeMatchSideDrafts,
-    });
-  }
-
-  async function discardLocalResultDraftsForBracket() {
-    if (!selectedEvent) {
-      return;
-    }
-
-    await discardAllLocalDrafts({
-      slug: toApiSlug(slug),
-      eventId: selectedEvent.eventId,
-    });
-  }
-
-  async function discardLocalResultDraftForMatch() {
-    if (!selectedEvent) {
-      setError("先にイベントを選択してください。");
-      return;
-    }
-
-    if (!activeMatch) {
-      setError("試合が選択されていません。");
-      return;
-    }
-
-    const targetSetId = activeMatch.setId;
-    await discardLocalDraftForSet({
-      slug: toApiSlug(slug),
-      eventId: selectedEvent.eventId,
-      setId: targetSetId,
-    });
-  }
-
-  async function resetSetResultCascadeForMatch() {
-    if (!selectedEvent) {
-      setError("先にイベントを選択してください。");
-      return;
-    }
-
-    if (!activeMatch) {
-      setError("試合が選択されていません。");
-      return;
-    }
-
-    const confirmed = window.confirm("このsetと影響するsetの結果をローカルで取り消します。実行しますか？");
-    if (!confirmed) {
-      return;
-    }
-
-    await resetLocalSetResultCascade({
-      slug: toApiSlug(slug),
-      eventId: selectedEvent.eventId,
-      setId: activeMatch.setId,
-      perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
     });
   }
 
@@ -1826,8 +1710,13 @@ function App() {
                 }));
               }}
               onCall={(slot, entrantId) => void sendCallMessageFromMatch(slot, entrantId)}
-              onDiscardDraft={() => void discardLocalResultDraftForMatch()}
-              onResetSet={() => void resetSetResultCascadeForMatch()}
+              onDiscardDraft={() => void discardDraftForMatch(toApiSlug(slug), selectedEvent, activeMatch)}
+              onResetSet={() => void resetMatchResultCascade({
+                slug: toApiSlug(slug),
+                event: selectedEvent,
+                set: activeMatch,
+                perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
+              })}
               onSaveDraft={() => void saveLocalResultForMatch(false)}
               onToggleOverlay={() => requestToggleActiveMatchOverlay(activeMatch)}
               onConfirm={() => requestResultConfirmation(activeMatch)}
@@ -1855,7 +1744,7 @@ function App() {
             }}
             onDiscardAllDrafts={() => {
               setRestoreDialogOpen(false);
-              void discardLocalResultDraftsForBracket();
+              void discardDraftsForEvent(toApiSlug(slug), selectedEvent);
             }}
             overlaySwitch={overlaySwitchConfirm && activeMatch && activeObsOverlaySet ? {
               targetSetLabel: overlaySwitchConfirm.targetSetLabel,

@@ -526,6 +526,7 @@ mod tests {
             direct_win: false,
             confirmed: true,
             slot_scores: Vec::new(),
+            reset_source_set_id: None,
             recorded_at: chrono::DateTime::<chrono::Utc>::from_timestamp(recorded_at_seconds, 0)
                 .unwrap(),
         }

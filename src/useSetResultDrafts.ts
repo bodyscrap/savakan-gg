@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { isMatchupReady } from "./bracketDisplay";
 import type { SetSnapshot } from "./bracketProgression";
+import { buildInitialMatchDialogDraft, resolveExistingMatchDialogDraft } from "./matchDialogDraft";
 
 export type SetScoreDraft = Record<string, string>;
 
@@ -14,6 +15,14 @@ export type ResultConfirmationState = {
   match: SetSnapshot;
   scoreDrafts: SetScoreDraft;
   directWinnerId: string | null;
+};
+
+type InitializeMatchDraftInput = {
+  setId: string;
+  forcedDraftState?: SetResultDraftState;
+  pendingDraftState?: SetResultDraftState;
+  snapshotScoreDrafts: SetScoreDraft;
+  defaultScoreDrafts: SetScoreDraft;
 };
 
 export function useSetResultDrafts() {
@@ -37,6 +46,34 @@ export function useSetResultDrafts() {
 
   function clearResultConfirmation() {
     setResultConfirmation(null);
+  }
+
+  function initializeMatchDraft({
+    setId,
+    forcedDraftState,
+    pendingDraftState,
+    snapshotScoreDrafts,
+    defaultScoreDrafts,
+  }: InitializeMatchDraftInput) {
+    const existingDraft = resolveExistingMatchDialogDraft(
+      forcedDraftState,
+      pendingDraftState,
+      setResultDrafts[setId],
+    );
+    if (existingDraft) {
+      const { draftState } = existingDraft;
+      setDirectWinnerId(draftState.directWin ? draftState.winnerId : null);
+      setScoreDrafts(draftState.scoreDrafts);
+      if (existingDraft.shouldPersist) {
+        saveSetDraft(setId, draftState);
+      }
+      return;
+    }
+
+    const initialDraft = buildInitialMatchDialogDraft(snapshotScoreDrafts, defaultScoreDrafts);
+    setDirectWinnerId(null);
+    setScoreDrafts(initialDraft.scoreDrafts);
+    saveSetDraft(setId, initialDraft);
   }
 
   function saveSetDraft(setId: string, draft: SetResultDraftState) {
@@ -87,6 +124,7 @@ export function useSetResultDrafts() {
     resultConfirmation,
     requestResultConfirmation,
     clearResultConfirmation,
+    initializeMatchDraft,
     saveSetDraft,
     removeInterimDraft,
     removeDraftsForSet,

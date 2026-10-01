@@ -69,6 +69,7 @@ export type LocalSetResultMeta = {
   directWin?: boolean;
   confirmed?: boolean;
   slotScores?: Array<{ entrantId: string; score: number }>;
+  resetSourceSetId?: string;
   recordedAt: string;
 };
 

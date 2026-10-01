@@ -237,6 +237,8 @@ pub struct LocalSetResultMeta {
     pub confirmed: bool,
     #[serde(default)]
     pub slot_scores: Vec<LocalSetScoreMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_source_set_id: Option<String>,
     pub recorded_at: DateTime<Utc>,
 }
 
