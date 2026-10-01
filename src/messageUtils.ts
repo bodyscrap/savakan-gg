@@ -33,6 +33,13 @@ export function canBroadcastCallListSync(
     && isValidIpv4(profile.broadcastSubnetMask);
 }
 
+export function formatSenderProfileLabel(profile: SenderMessagingProfile): string {
+  const senderName = profile.senderName.trim() || "未設定";
+  const senderUserId = isValidSenderUserId(profile.senderUserId) ? profile.senderUserId : "未設定";
+  const bindIp = isValidIpv4(profile.bindIp) ? profile.bindIp : "未設定";
+  return `${senderName} / ${senderUserId} / IP: ${bindIp}`;
+}
+
 export function hasSenderIdCollision(
   messages: Array<Pick<GenericMessage, "senderName" | "senderUserId">>,
   senderUserId: string,

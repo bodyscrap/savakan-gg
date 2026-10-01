@@ -384,13 +384,24 @@ export function usePlayerMetaDrafts({
     }
   }
 
+  const selectedEntrantMetaDraft = selectedEvent && selectedEntrant
+    ? getMetaDraft(selectedEvent.eventId, selectedEntrant.entrantId)
+    : null;
+  const selectedEntrantDraftSelectionsBySlot = selectedEntrantMetaDraft
+    ? configuredCategorySlots.map((slot) =>
+      getDraftCategorySelections(selectedEntrantMetaDraft, slot.slotIndex),
+    )
+    : [];
+  const selectedEntrantValidationErrors = selectedEntrantMetaDraft
+    ? buildValidatedSelections(selectedEntrantMetaDraft, configuredCategorySlots).errors
+    : [];
+
   return {
-    getMetaDraft,
     setMetaDraft,
-    getDraftCategorySelections,
+    selectedEntrantDraftSelectionsBySlot,
+    selectedEntrantValidationErrors,
     addDraftCategorySelection,
     removeDraftCategorySelection,
-    buildValidatedSelections,
     clearDirtyDraft,
     savePlayerMeta,
     addSelectedEntrantDraftSelection,

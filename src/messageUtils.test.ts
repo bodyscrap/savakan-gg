@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	canBroadcastCallListSync,
+	formatSenderProfileLabel,
 	hasSenderIdCollision,
 	isSenderProfileReadyForMessaging,
 	normalizeSenderUserId,
@@ -30,6 +31,12 @@ describe("sender messaging readiness", () => {
 		expect(canBroadcastCallListSync(validProfile, false)).toBe(true);
 		expect(canBroadcastCallListSync(validProfile, true)).toBe(false);
 		expect(canBroadcastCallListSync({ ...validProfile, broadcastSubnetMask: "invalid" }, false)).toBe(false);
+	});
+
+	it("formats sender labels with fallbacks for invalid identity and IP values", () => {
+		expect(formatSenderProfileLabel(validProfile)).toBe("Operator / 12345678 / IP: 192.168.1.20");
+		expect(formatSenderProfileLabel({ ...validProfile, senderName: "", senderUserId: "bad", bindIp: "bad" }))
+			.toBe("未設定 / 未設定 / IP: 未設定");
 	});
 
 	it("detects a sender ID used by a different sender name", () => {

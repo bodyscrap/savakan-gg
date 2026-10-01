@@ -419,6 +419,14 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     });
   }
 
+  function toggleTestOverlay() {
+    if (isTestOverlayActive) {
+      void stopTestOverlay();
+    } else {
+      void startTestOverlay();
+    }
+  }
+
   function handlePreviewLoad() {
     const width = overlayPreviewWrapRef.current?.clientWidth ?? 0;
     const height = overlayPreviewWrapRef.current?.clientHeight ?? 0;
@@ -455,6 +463,7 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     toggleObsOverlaySet,
     startTestOverlay,
     stopTestOverlay,
+    toggleTestOverlay,
     handlePreviewLoad,
   };
 }

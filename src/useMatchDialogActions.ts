@@ -1,3 +1,4 @@
+import type { MouseEvent } from "react";
 import type { EventSnapshot } from "./bracketDisplay";
 import { isDisplayableSet, isInactiveGrandFinalReset } from "./bracketDisplay";
 import { buildMatchSideDrafts } from "./matchSideDrafts";
@@ -19,6 +20,10 @@ type UseMatchDialogActionsOptions = {
   getSetSlotSide: (setId: string, entrantId: string | null) => PlaySide | "";
   getSetScoresForDisplay: (set: SetSnapshot) => { scores: SetScoreDraft };
   initializeMatchDraft: (input: InitializeMatchDraftInput) => void;
+  busy: boolean;
+  overlayBusy: boolean;
+  stopOverlay: (fullyStopped: boolean) => Promise<void>;
+  toggleOverlay: (set: SetSnapshot) => Promise<void>;
 };
 
 export function useMatchDialogActions({
@@ -30,6 +35,10 @@ export function useMatchDialogActions({
   getSetSlotSide,
   getSetScoresForDisplay,
   initializeMatchDraft,
+  busy,
+  overlayBusy,
+  stopOverlay,
+  toggleOverlay,
 }: UseMatchDialogActionsOptions) {
   function openMatchDialog(set: SetSnapshot, forcedDraftState?: SetResultDraftState) {
     if (!isDisplayableSet(set, selectedEvent) || isInactiveGrandFinalReset(set, selectedEvent)) {
@@ -50,5 +59,41 @@ export function useMatchDialogActions({
     });
   }
 
-  return { openMatchDialog };
+  function handleRoundRobinMatchClick(set: SetSnapshot, event: MouseEvent<HTMLButtonElement>) {
+    if (event.altKey) {
+      event.preventDefault();
+      if (!busy && !overlayBusy) {
+        void stopOverlay(true);
+      }
+      return;
+    }
+    if (event.ctrlKey) {
+      event.preventDefault();
+      if (!busy && !overlayBusy) {
+        void toggleOverlay(set);
+      }
+      return;
+    }
+    openMatchDialog(set);
+  }
+
+  function handleEliminationSetActivate(set: SetSnapshot, event: MouseEvent<HTMLElement>) {
+    if (event.altKey && event.button === 0) {
+      event.preventDefault();
+      if (!busy && !overlayBusy) {
+        void stopOverlay(true);
+      }
+      return;
+    }
+    if (event.ctrlKey) {
+      event.preventDefault();
+      if (!busy && !overlayBusy) {
+        void toggleOverlay(set);
+      }
+      return;
+    }
+    openMatchDialog(set);
+  }
+
+  return { openMatchDialog, handleRoundRobinMatchClick, handleEliminationSetActivate };
 }

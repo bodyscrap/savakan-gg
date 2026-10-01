@@ -90,11 +90,11 @@ import {
 import {
   getMailboxMethodLabel,
   canBroadcastCallListSync as resolveCanBroadcastCallListSync,
+  formatSenderProfileLabel,
   hasSenderIdCollision,
   isSenderProfileReadyForMessaging as resolveSenderProfileReadiness,
   isDqRequestMessage,
   isValidIpv4,
-  isValidSenderUserId,
 } from "./messageUtils";
 import {
   type SetSnapshot,
@@ -194,8 +194,7 @@ function App() {
     updateObsOverlayShowEventAlias,
     setObsOverlayFullyStopped,
     toggleObsOverlaySet,
-    startTestOverlay,
-    stopTestOverlay,
+    toggleTestOverlay,
     handlePreviewLoad,
   } = useObsOverlay({ activeTab, slug, selectedEventId, setError });
   const {
@@ -648,11 +647,10 @@ function App() {
   } = useSelectedEventEntrants(selectedEvent);
 
   const {
-    getMetaDraft,
-    getDraftCategorySelections,
+    selectedEntrantDraftSelectionsBySlot,
+    selectedEntrantValidationErrors,
     addSelectedEntrantDraftSelection,
     removeSelectedEntrantDraftSelection,
-    buildValidatedSelections,
     saveSelectedEntrantMeta,
   } = usePlayerMetaDrafts({
     selectedEvent,
@@ -726,10 +724,6 @@ function App() {
     onError: setError,
     onMessage: setMessage,
   });
-
-  function resolveActiveThread() {
-    void resolveMailboxThread();
-  }
 
   const {
     applySideDecisionMethodToAllUnconfirmedSets,
@@ -875,7 +869,11 @@ function App() {
     getSetSlotSide,
   });
 
-  const { openMatchDialog } = useMatchDialogActions({
+  const {
+    openMatchDialog,
+    handleRoundRobinMatchClick,
+    handleEliminationSetActivate,
+  } = useMatchDialogActions({
     selectedEvent,
     resolvedEventSetsById,
     pendingResultBySetId,
@@ -884,6 +882,10 @@ function App() {
     getSetSlotSide,
     getSetScoresForDisplay,
     initializeMatchDraft,
+    busy,
+    overlayBusy: obsOverlayBusy,
+    stopOverlay: setObsOverlayFullyStopped,
+    toggleOverlay: toggleActiveMatchOverlay,
   });
 
   const { processDqRequestFromMessage } = useDqRequestNavigation({
@@ -1027,18 +1029,8 @@ function App() {
               selectedEntrantName: selectedTournamentEntrant?.entrantName ?? "",
               configuredCategorySlots,
               selectedCategoryUsageList,
-              draftSelectionsBySlot: selectedEvent && selectedTournamentEntrant
-                ? configuredCategorySlots.map((slot) => getDraftCategorySelections(
-                  getMetaDraft(selectedEvent.eventId, selectedTournamentEntrant.entrantId),
-                  slot.slotIndex,
-                ))
-                : [],
-              validationErrors: selectedEvent && selectedTournamentEntrant
-                ? buildValidatedSelections(
-                  getMetaDraft(selectedEvent.eventId, selectedTournamentEntrant.entrantId),
-                  configuredCategorySlots,
-                ).errors
-                : [],
+              draftSelectionsBySlot: selectedEntrantDraftSelectionsBySlot,
+              validationErrors: selectedEntrantValidationErrors,
               canSavePlayerMeta: !busy && toApiSlug(slug) !== "",
             }}
             actions={{
@@ -1063,7 +1055,7 @@ function App() {
         )}
         {activeTab === "message" && (
           <MessageBox
-            senderLabel={`${senderProfile.senderName.trim() === "" ? "未設定" : senderProfile.senderName} / ${isValidSenderUserId(senderProfile.senderUserId) ? senderProfile.senderUserId : "未設定"} / IP: ${isValidIpv4(senderProfile.bindIp) ? senderProfile.bindIp : "未設定"}`}
+            senderLabel={formatSenderProfileLabel(senderProfile)}
             senderProfileReady={isSenderProfileReadyForMessaging}
             disableLocalCommunication={disableLocalCommunication}
             mailboxServiceStarted={mailboxServiceStarted}
@@ -1092,7 +1084,7 @@ function App() {
             onProcessDqRequest={processDqRequestFromMessage}
             isDqRequestMessage={isDqRequestMessage}
             canResolveActiveThread={canResolveActiveThread}
-            onResolveActiveThread={() => void resolveActiveThread()}
+            onResolveActiveThread={resolveMailboxThread}
             canDeleteActiveThread={canDeleteActiveThread}
             onDeleteActiveThread={deleteActiveThread}
             replyBodyDraft={replyBodyDraft}
@@ -1195,13 +1187,7 @@ function App() {
           onTestBlueNameChange={setTestOverlayBlueName}
           onTestRedWinsChange={setTestOverlayRedWins}
           onTestBlueWinsChange={setTestOverlayBlueWins}
-          onToggleTestOverlay={() => {
-            if (isTestOverlayActive) {
-              void stopTestOverlay();
-            } else {
-              void startTestOverlay();
-            }
-          }}
+          onToggleTestOverlay={toggleTestOverlay}
           onFullyStop={() => void setObsOverlayFullyStopped(true)}
           onPreviewLoad={handlePreviewLoad}
         />
@@ -1344,38 +1330,8 @@ function App() {
               },
             }}
             eliminationSections={eliminationBracketSections}
-            onRoundRobinMatchClick={(set, event) => {
-              if (event.altKey) {
-                event.preventDefault();
-                if (!busy && !obsOverlayBusy) void setObsOverlayFullyStopped(true);
-                return;
-              }
-              if (event.ctrlKey) {
-                event.preventDefault();
-                if (!busy && !obsOverlayBusy) void toggleActiveMatchOverlay(set);
-                return;
-              }
-              openMatchDialog(set);
-            }}
-            onEliminationSetActivate={(set, event) => {
-              if (event.altKey && event.button === 0) {
-                event.preventDefault();
-                if (busy || obsOverlayBusy) {
-                  return;
-                }
-                void setObsOverlayFullyStopped(true);
-                return;
-              }
-              if (event.ctrlKey) {
-                event.preventDefault();
-                if (busy || obsOverlayBusy) {
-                  return;
-                }
-                void toggleActiveMatchOverlay(set);
-                return;
-              }
-              openMatchDialog(set);
-            }}
+            onRoundRobinMatchClick={handleRoundRobinMatchClick}
+            onEliminationSetActivate={handleEliminationSetActivate}
             onOpenSet={openMatchDialog}
           />
 
