@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildEventManagementSettingKey,
   buildCategoryUsageList,
   buildConfiguredCategorySlots,
   resolveMatchSideAssignment,
@@ -8,6 +9,13 @@ import {
   resolveSidesByDecisionMethod,
   resolveSwappedMatchSideAssignment,
 } from "./eventManagement";
+
+describe("event management setting key", () => {
+  it("normalizes tournament prefixes and surrounding slashes", () => {
+    expect(buildEventManagementSettingKey(" tournament/event-name/ ", "event-1"))
+      .toBe("event-name::event-1");
+  });
+});
 
 describe("event side decision", () => {
   it("swaps draft-first sides with saved-side and positional fallbacks", () => {

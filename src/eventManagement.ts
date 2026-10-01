@@ -10,6 +10,15 @@ export type EventManagementSetting = {
   totalMaxCount?: number;
 };
 
+export function buildEventManagementSettingKey(slug: string, eventId: string): string {
+  const trimmed = slug.trim();
+  const withoutPrefix = trimmed.startsWith("tournament/")
+    ? trimmed.slice("tournament/".length)
+    : trimmed;
+  const normalizedSlug = withoutPrefix.replace(/^\/+|\/+$/g, "");
+  return `${normalizedSlug}::${eventId}`;
+}
+
 export type PlaySideAssignment = {
   upperSide: "1P" | "2P";
   lowerSide: "1P" | "2P";

@@ -45,20 +45,19 @@ import { useBracketReport } from "./useBracketReport";
 import {
   useSetResultDrafts,
 } from "./useSetResultDrafts";
+import { resolveWorkspaceMatchDraftState } from "./matchDialogDraft";
 import {
   applyScoreDraftWithOpponentDefault,
-  buildScoreDraftsFromResult,
   buildScoreDraftsFromSet,
   buildSlotScoresForSave,
   isDqScoreValue,
-  isConfirmedSetResult,
-  resolveSetSlotSideLabel,
   resolveWinnerIdFromDrafts,
   stepScoreDraftValue,
 } from "./setResultDrafts";
 import { useSetResultPersistence } from "./useSetResultPersistence";
 import { usePlayerMetaDrafts } from "./usePlayerMetaDrafts";
 import { useEventManagementSettings } from "./useEventManagementSettings";
+import { buildEventManagementSettingKey } from "./eventManagement";
 import { useEventSnapshotMaintenance } from "./useEventSnapshotMaintenance";
 import { useSetSideAssignment } from "./useSetSideAssignment";
 import { useMatchDialogActions } from "./useMatchDialogActions";
@@ -88,7 +87,6 @@ import { useSnapshotSelectionView, useSnapshotTabAutoLoad } from "./useSnapshotS
 import {
   getDisplaySlotsForSet,
   isCompletedSet,
-  isDisplayableSet,
   isMatchupReady,
   type EventSnapshot,
 } from "./bracketDisplay";
@@ -99,22 +97,10 @@ import {
   isValidSenderUserId,
 } from "./messageUtils";
 import {
-  createSetEntrantResolver,
   type SetSnapshot,
 } from "./bracketProgression";
+import { useSelectedEventData } from "./useSelectedEventData";
 import "./App.css";
-
-function normalizeSlugForSettingKey(rawSlug: string): string {
-  const trimmed = rawSlug.trim();
-  const withoutPrefix = trimmed.startsWith("tournament/")
-    ? trimmed.slice("tournament/".length)
-    : trimmed;
-  return withoutPrefix.replace(/^\/+|\/+$/g, "");
-}
-
-function eventSettingKey(slug: string, eventId: string): string {
-  return `${normalizeSlugForSettingKey(slug)}::${eventId}`;
-}
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("home");
@@ -229,25 +215,19 @@ function App() {
     createBusy,
     onWorkspaceUpdated: (result) => {
       clearAllDrafts();
-
-      const refreshedSet = result.snapshot.events
-        .find((event) => event.eventId === selectedEventId)
-        ?.sets.find((set) => set.setId === activeMatchSetId);
-      if (!refreshedSet) {
+      const refreshedDraft = resolveWorkspaceMatchDraftState(
+        result,
+        selectedEventId,
+        activeMatchSetId,
+        getSetSlotSide,
+      );
+      if (!refreshedDraft) {
         return;
       }
 
-      const refreshedPending = result.localMeta.pendingSetResults.find(
-        (item) => item.eventId === selectedEventId && item.setId === activeMatchSetId,
-      );
-      setScoreDrafts(
-        refreshedPending
-          ? buildScoreDraftsFromResult(refreshedSet, refreshedPending)
-          : buildScoreDraftsFromSet(refreshedSet),
-      );
-      setDirectWinnerId(refreshedPending?.directWin ? refreshedPending.winnerId : null);
-      const refreshedSideDrafts = buildMatchSideDrafts(refreshedSet, getSetSlotSide);
-      setActiveMatchSideDrafts(refreshedSideDrafts);
+      setScoreDrafts(refreshedDraft.scoreDrafts);
+      setDirectWinnerId(refreshedDraft.directWinnerId);
+      setActiveMatchSideDrafts(refreshedDraft.sideDrafts);
     },
   });
   const {
@@ -398,46 +378,20 @@ function App() {
     };
   }, []);
 
-  const snapshot = workspace?.snapshot ?? null;
-  const localMeta = workspace?.localMeta ?? null;
-  const setPlaySides = localMeta?.setPlaySides ?? [];
-  const pendingSetResults = localMeta?.pendingSetResults ?? [];
-  const pendingGrandFinalResetResults = localMeta?.pendingGrandFinalResetResults ?? [];
-  const confirmedSetResults = pendingSetResults.filter((result) => isConfirmedSetResult(result));
-  const draftSetResults = pendingSetResults.filter((result) => !isConfirmedSetResult(result));
-  const confirmedGrandFinalResetResults = pendingGrandFinalResetResults.filter((result) => isConfirmedSetResult(result));
-  const draftGrandFinalResetResults = pendingGrandFinalResetResults.filter((result) => !isConfirmedSetResult(result));
-  const confirmedReportableCount = confirmedSetResults.length + confirmedGrandFinalResetResults.length;
-  const draftPendingCount = draftSetResults.length + draftGrandFinalResetResults.length;
-
-  const setPlaySideMap = useMemo(() => {
-    const map = new Map<string, PlaySide>();
-    for (const item of setPlaySides) {
-      map.set(`${item.setId}:${item.entrantId}`, item.playSide);
-    }
-    return map;
-  }, [setPlaySides]);
-
-  const allSets = useMemo(() => {
-    if (!snapshot) {
-      return [] as Array<{ eventName: string; set: SetSnapshot }>;
-    }
-
-    return snapshot.events.flatMap((event) =>
-      event.sets
-        .filter((set) => isDisplayableSet(set, event))
-        .map((set) => ({ eventName: event.name, set })),
-    );
-  }, [snapshot]);
-
-  const selectedEvent = useMemo(() => {
-    if (!snapshot || snapshot.events.length === 0 || selectedEventId === "") {
-      return null;
-    }
-
-    return snapshot.events.find((event) => event.eventId === selectedEventId) ?? null;
-  }, [snapshot, selectedEventId]);
-
+  const {
+    snapshot,
+    pendingSetResults,
+    pendingGrandFinalResetResults,
+    confirmedReportableCount,
+    draftPendingCount,
+    setPlaySideMap,
+    getSetSlotSide,
+    getSetSlotSideLabel,
+    allSets,
+    selectedEvent,
+    resolvedEventSetsById,
+    selectedEventMeta,
+  } = useSelectedEventData(workspace, selectedEventId);
   const mobileInputPortal = useMobileInputPortal({
     slug,
     selectionKey: selectedEventId,
@@ -473,26 +427,6 @@ function App() {
     setMessage,
     clearSnapshotProgress: () => setCreateSnapshotProgress(null),
   });
-
-  const resolvedEventSetsById = useMemo(() => {
-    if (!selectedEvent) {
-      return new Map<string, SetSnapshot>();
-    }
-
-    const resolveSetEntrants = createSetEntrantResolver(
-      selectedEvent.sets,
-      selectedEvent.phaseGroups ?? [],
-    );
-    return new Map(selectedEvent.sets.map((set) => [set.setId, resolveSetEntrants(set)]));
-  }, [selectedEvent]);
-
-  const selectedEventMeta = useMemo(() => {
-    if (!localMeta || !selectedEvent) {
-      return null;
-    }
-
-    return localMeta.events.find((event) => event.eventId === selectedEvent.eventId) ?? null;
-  }, [localMeta, selectedEvent]);
 
   useEffect(() => {
     setEventAliasDraft(selectedEventMeta?.eventAlias?.trim() ?? "");
@@ -642,7 +576,7 @@ function App() {
     if (!snapshot || !selectedEvent) {
       return "";
     }
-    return eventSettingKey(snapshot.slug, selectedEvent.eventId);
+    return buildEventManagementSettingKey(snapshot.slug, selectedEvent.eventId);
   }, [snapshot, selectedEvent]);
 
   const {
@@ -703,7 +637,7 @@ function App() {
     setDeletingSnapshotKey,
     setWorkspace,
     setEventMgmtSettings,
-    eventSettingKey,
+    eventSettingKey: buildEventManagementSettingKey,
     snapshot,
     saveEventAlias,
     refreshRemoteSnapshot,
@@ -959,22 +893,6 @@ function App() {
     setSelectedPhaseName,
     setSelectedPhasePoolKey,
   });
-
-  function getSetSlotSide(setId: string, entrantId: string | null): PlaySide | "" {
-    if (!entrantId) {
-      return "";
-    }
-
-    return setPlaySideMap.get(`${setId}:${entrantId}`) ?? "";
-  }
-
-  function getSetSlotSideLabel(
-    setId: string,
-    entrantId: string | null,
-    options?: { fallbackBySlotIndex?: number; finishedSet?: boolean; matchupReady?: boolean },
-  ): string {
-    return resolveSetSlotSideLabel(entrantId, getSetSlotSide(setId, entrantId), options);
-  }
 
   const {
     swapMatchSides,
