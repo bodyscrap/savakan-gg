@@ -40,6 +40,31 @@ export function formatSenderProfileLabel(profile: SenderMessagingProfile): strin
   return `${senderName} / ${senderUserId} / IP: ${bindIp}`;
 }
 
+export function resolveSenderSettingsStatus(input: {
+  senderIdCollision: boolean;
+  shouldRecommendMailboxClear: boolean;
+  hasSelectedNetworkDevice: boolean;
+  bindIp: string;
+  broadcastSubnetMask: string;
+}): string {
+  if (input.senderIdCollision) {
+    return "既存履歴で同一IDが別名義に使われています。";
+  }
+  if (input.shouldRecommendMailboxClear) {
+    return "履歴メッセージあり: 送信者名/ID変更前にメッセージボックス強制クリアを推奨します。";
+  }
+  if (!input.hasSelectedNetworkDevice) {
+    return "ネットワークデバイスを選択してください。";
+  }
+  if (!isValidIpv4(input.bindIp)) {
+    return "選択デバイスのIPが不正です。";
+  }
+  if (!isValidIpv4(input.broadcastSubnetMask)) {
+    return "選択デバイスのサブネットマスクが不正です。";
+  }
+  return "デバイス選択後、IP/サブネットは自動適用されます。";
+}
+
 export function hasSenderIdCollision(
   messages: Array<Pick<GenericMessage, "senderName" | "senderUserId">>,
   senderUserId: string,

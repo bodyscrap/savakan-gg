@@ -1,15 +1,58 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildMatchDialogPlayers,
   buildInitialMatchDialogDraft,
   resolveExistingMatchDialogDraft,
   resolveWorkspaceMatchDraftState,
 } from "./matchDialogDraft";
 import type { TournamentWorkspace } from "./tournamentWorkspaceRepository";
+import type { SetSnapshot } from "./bracketProgression";
 
 describe("match dialog draft selection", () => {
   const forced = { winnerId: "forced", scoreDrafts: { forced: "W" }, directWin: true };
   const pending = { winnerId: "pending", scoreDrafts: { pending: "2" } };
   const cached = { winnerId: "cached", scoreDrafts: { cached: "1" } };
+
+  it("builds dialog player rows with TBD labels, side drafts, and score drafts", () => {
+    const set = {
+      setId: "set-1",
+      fullRoundText: "Round 1",
+      round: 1,
+      phaseName: "Main",
+      phaseGroupName: "Pool A",
+      phaseOrder: 1,
+      phaseGroupDisplayIdentifier: "A",
+      state: 2,
+      winnerId: null,
+      entrant1Source: null,
+      entrant2Source: null,
+      slots: [
+        { entrantId: "entrant-1", entrantName: "Player 1", seedId: null, seedNum: null, score: null },
+        { entrantId: null, entrantName: "TBD", seedId: null, seedNum: null, score: null },
+      ],
+    } as unknown as SetSnapshot;
+
+    const players = buildMatchDialogPlayers({
+      set,
+      displayBySide: false,
+      sideDrafts: { "entrant-1": "2P" },
+      scoreDrafts: { "entrant-1": "2" },
+      directWinnerId: null,
+      getSavedSide: () => "1P",
+      getSideLabel: (_setId, _entrantId, options) => options.fallbackBySlotIndex === 0 ? "1P" : "-",
+      getTbdSourceLabel: (_set, slotIndex) => slotIndex === 1 ? "winner of A" : null,
+    });
+
+    expect(players.map(({ entrantName, side, scoreValue, otherEntrantId }) => ({
+      entrantName,
+      side,
+      scoreValue,
+      otherEntrantId,
+    }))).toEqual([
+      { entrantName: "Player 1", side: "2P", scoreValue: "2", otherEntrantId: null },
+      { entrantName: "winner of A", side: "", scoreValue: "", otherEntrantId: "entrant-1" },
+    ]);
+  });
 
   it("prioritizes forced, then pending, then cached drafts", () => {
     expect(resolveExistingMatchDialogDraft(forced, pending, cached)).toEqual({

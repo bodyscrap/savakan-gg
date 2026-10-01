@@ -5,6 +5,7 @@ import {
 	hasSenderIdCollision,
 	isSenderProfileReadyForMessaging,
 	normalizeSenderUserId,
+	resolveSenderSettingsStatus,
 } from "./messageUtils";
 
 const validProfile = {
@@ -44,5 +45,28 @@ describe("sender messaging readiness", () => {
 		expect(hasSenderIdCollision(messages, "12345678", "Operator")).toBe(true);
 		expect(hasSenderIdCollision(messages, "12345678", "Other")).toBe(false);
 		expect(hasSenderIdCollision(messages, "invalid", "Operator")).toBe(false);
+	});
+
+	it("prioritizes collision, identity warning, network selection, and IP validation", () => {
+		const valid = {
+			senderIdCollision: false,
+			shouldRecommendMailboxClear: false,
+			hasSelectedNetworkDevice: true,
+			bindIp: "192.168.1.20",
+			broadcastSubnetMask: "255.255.255.0",
+		};
+
+		expect(resolveSenderSettingsStatus({ ...valid, senderIdCollision: true }))
+			.toBe("既存履歴で同一IDが別名義に使われています。");
+		expect(resolveSenderSettingsStatus({ ...valid, senderIdCollision: true, shouldRecommendMailboxClear: true }))
+			.toBe("既存履歴で同一IDが別名義に使われています。");
+		expect(resolveSenderSettingsStatus({ ...valid, shouldRecommendMailboxClear: true }))
+			.toContain("強制クリアを推奨");
+		expect(resolveSenderSettingsStatus({ ...valid, hasSelectedNetworkDevice: false }))
+			.toBe("ネットワークデバイスを選択してください。");
+		expect(resolveSenderSettingsStatus({ ...valid, bindIp: "invalid" }))
+			.toBe("選択デバイスのIPが不正です。");
+		expect(resolveSenderSettingsStatus(valid))
+			.toBe("デバイス選択後、IP/サブネットは自動適用されます。");
 	});
 });

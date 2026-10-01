@@ -44,7 +44,7 @@ import { useBracketReport } from "./useBracketReport";
 import {
   useSetResultDrafts,
 } from "./useSetResultDrafts";
-import { resolveWorkspaceMatchDraftState } from "./matchDialogDraft";
+import { buildMatchDialogPlayers, resolveWorkspaceMatchDraftState } from "./matchDialogDraft";
 import {
   buildScoreDraftsFromSet,
   buildSlotScoresForSave,
@@ -81,7 +81,6 @@ import { useBracketSectionView } from "./useBracketSectionView";
 import { useMessageScopes } from "./useMessageScopes";
 import { useSnapshotSelectionView, useSnapshotTabAutoLoad } from "./useSnapshotSelection";
 import {
-  getDisplaySlotsForSet,
   formatScoreValue,
   isCompletedSet,
   isMatchupReady,
@@ -94,7 +93,7 @@ import {
   hasSenderIdCollision,
   isSenderProfileReadyForMessaging as resolveSenderProfileReadiness,
   isDqRequestMessage,
-  isValidIpv4,
+  resolveSenderSettingsStatus,
 } from "./messageUtils";
 import {
   type SetSnapshot,
@@ -1215,17 +1214,13 @@ function App() {
             networkCandidatesLoading={senderNetworkCandidatesLoading}
             normalizedBindIp={normalizedSenderBindIpDraft}
             normalizedSubnetMask={normalizedBroadcastSubnetMaskDraft}
-            senderSettingsStatus={senderIdCollision
-              ? "既存履歴で同一IDが別名義に使われています。"
-              : shouldRecommendMailboxClearForIdentityChange
-                ? "履歴メッセージあり: 送信者名/ID変更前にメッセージボックス強制クリアを推奨します。"
-                : !hasSelectedSenderNetworkDevice
-                  ? "ネットワークデバイスを選択してください。"
-                  : !isValidIpv4(normalizedSenderBindIpDraft)
-                    ? "選択デバイスのIPが不正です。"
-                    : !isValidIpv4(normalizedBroadcastSubnetMaskDraft)
-                      ? "選択デバイスのサブネットマスクが不正です。"
-                      : "デバイス選択後、IP/サブネットは自動適用されます。"}
+            senderSettingsStatus={resolveSenderSettingsStatus({
+              senderIdCollision,
+              shouldRecommendMailboxClear: shouldRecommendMailboxClearForIdentityChange,
+              hasSelectedNetworkDevice: hasSelectedSenderNetworkDevice,
+              bindIp: normalizedSenderBindIpDraft,
+              broadcastSubnetMask: normalizedBroadcastSubnetMaskDraft,
+            })}
             onRefreshNetworkCandidates={() => void refreshLocalNetworkSettingsCandidates(true)}
             onRandomizeSenderUserId={() => fillRandomSenderUserId(
               genericMessages.map((item) => item.senderUserId),
@@ -1358,35 +1353,15 @@ function App() {
               displayPlayersBySide={displayBracketPlayersBySide}
               onDisplayPlayersBySideChange={setDisplayBracketPlayersBySide}
               randomNotice={matchSideRandomNotice}
-              players={getDisplaySlotsForSet(activeMatch, {
+              players={buildMatchDialogPlayers({
+                set: activeMatch,
                 displayBySide: displayBracketPlayersBySide,
-                matchupReady: isMatchupReady(activeMatch),
                 sideDrafts: activeMatchSideDrafts,
+                scoreDrafts,
+                directWinnerId,
+                getSavedSide: getSetSlotSide,
                 getSideLabel: getSetSlotSideLabel,
-              }).map(({ slot, slotIndex }) => {
-                const entrantId = slot.entrantId;
-                const tbdLabel = resolveTbdSourceLabel(activeMatch, slotIndex, slot);
-                const fallbackSide = getSetSlotSideLabel(activeMatch.setId, entrantId, {
-                  fallbackBySlotIndex: slotIndex,
-                  matchupReady: isMatchupReady(activeMatch),
-                });
-                const otherEntrantId = activeMatch.slots.find(
-                  (item) => item.entrantId !== null && item.entrantId !== entrantId,
-                )?.entrantId ?? null;
-
-                return {
-                  key: `${activeMatch.setId}-dialog-${slotIndex}`,
-                  slot,
-                  entrantId,
-                  entrantName: !entrantId && tbdLabel ? tbdLabel : slot.entrantName,
-                  side: entrantId
-                    ? activeMatchSideDrafts[entrantId] || getSetSlotSide(activeMatch.setId, entrantId) || fallbackSide
-                    : "",
-                  scoreValue: entrantId && directWinnerId
-                    ? (entrantId === directWinnerId ? "W" : "L")
-                    : entrantId ? scoreDrafts[entrantId] ?? "" : "",
-                  otherEntrantId,
-                };
+                getTbdSourceLabel: resolveTbdSourceLabel,
               })}
               callingEntrantId={callingEntrantId}
               isDqDraft={isActiveMatchDqDraft}
