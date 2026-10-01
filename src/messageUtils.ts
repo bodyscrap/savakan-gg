@@ -9,6 +9,39 @@ export type MessageScope = {
   phaseGroupName: string;
 };
 
+export type SenderMessagingProfile = {
+  senderName: string;
+  senderUserId: string;
+  bindIp: string;
+  broadcastSubnetMask: string;
+};
+
+export function isSenderProfileReadyForMessaging(profile: SenderMessagingProfile): boolean {
+  return profile.senderName.trim() !== ""
+    && isValidSenderUserId(profile.senderUserId)
+    && isValidIpv4(profile.bindIp);
+}
+
+export function canBroadcastCallListSync(
+  profile: SenderMessagingProfile,
+  communicationDisabled: boolean,
+): boolean {
+  return profile.senderName.trim() !== ""
+    && !communicationDisabled
+    && isValidSenderUserId(profile.senderUserId)
+    && isValidIpv4(profile.bindIp)
+    && isValidIpv4(profile.broadcastSubnetMask);
+}
+
+export function hasSenderIdCollision(
+  messages: Array<Pick<GenericMessage, "senderName" | "senderUserId">>,
+  senderUserId: string,
+  senderName: string,
+): boolean {
+  return isValidSenderUserId(senderUserId)
+    && messages.some((item) => item.senderUserId === senderUserId && item.senderName !== senderName);
+}
+
 export type CallThreadIdentity = {
   expectedPlayerId: string;
   callEntrantId: string;

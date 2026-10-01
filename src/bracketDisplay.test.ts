@@ -5,6 +5,7 @@ import {
   scaleBracketSectionsForZoom,
   buildTbdSourceLabelBySlotKey,
   formatAlphabetSequence,
+  formatScoreValue,
   getDisplaySlotsForSet,
   normalizeSourceText,
   pickPairSourceIds,
@@ -16,6 +17,11 @@ import type { BracketSectionForView, PhasePoolGroup } from "./bracketDisplay";
 import type { SetSnapshot } from "./bracketProgression";
 
 describe("bracket source labels", () => {
+  it("formats bracket scores without unnecessary decimal places", () => {
+    expect(formatScoreValue(2)).toBe("2");
+    expect(formatScoreValue(1.5)).toBe("1.5");
+  });
+
   it("formats alphabetic set labels beyond Z", () => {
     expect(formatAlphabetSequence(0)).toBe("A");
     expect(formatAlphabetSequence(25)).toBe("Z");

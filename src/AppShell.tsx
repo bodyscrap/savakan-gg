@@ -1,4 +1,29 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { getVersion } from "@tauri-apps/api/app";
+
+export function useAppVersion(): string {
+  const [appVersion, setAppVersion] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+
+    void getVersion()
+      .then((version) => {
+        if (alive) {
+          setAppVersion(version);
+        }
+      })
+      .catch(() => {
+        // Non-Tauri environments do not expose app metadata.
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  return appVersion;
+}
 
 export type AppTab = "home" | "create" | "tournament" | "message" | "call-list" | "bracket" | "item-list" | "users" | "settings" | "overlay";
 

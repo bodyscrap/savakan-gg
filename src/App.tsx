@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { getVersion } from "@tauri-apps/api/app";
+import { useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CreateSnapshot } from "./CreateSnapshot";
 import { DqRequestDialog } from "./DqRequestDialog";
@@ -27,7 +26,7 @@ import { MessageBox } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
 import { EventSelector, type LocalSnapshotEventListItem } from "./EventSelector";
 import { EventSetting } from "./EventSetting";
-import { AppShell, type AppTab } from "./AppShell";
+import { AppShell, type AppTab, useAppVersion } from "./AppShell";
 import { OverlayControl } from "./OverlayControl";
 import { useObsOverlay } from "./useObsOverlay";
 import { useObsOverlaySetActions } from "./useObsOverlaySetActions";
@@ -84,12 +83,16 @@ import { useMessageScopes } from "./useMessageScopes";
 import { useSnapshotSelectionView, useSnapshotTabAutoLoad } from "./useSnapshotSelection";
 import {
   getDisplaySlotsForSet,
+  formatScoreValue,
   isCompletedSet,
   isMatchupReady,
   type EventSnapshot,
 } from "./bracketDisplay";
 import {
   getMailboxMethodLabel,
+  canBroadcastCallListSync as resolveCanBroadcastCallListSync,
+  hasSenderIdCollision,
+  isSenderProfileReadyForMessaging as resolveSenderProfileReadiness,
   isDqRequestMessage,
   isValidIpv4,
   isValidSenderUserId,
@@ -102,7 +105,7 @@ import "./App.css";
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("home");
-  const [appVersion, setAppVersion] = useState("");
+  const appVersion = useAppVersion();
   const [slug, setSlug] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState("");
@@ -360,25 +363,6 @@ function App() {
     handleCreateEventDropdownChange,
     createEventSnapshotBySlug,
   } = tournamentCreation;
-  useEffect(() => {
-    let alive = true;
-
-    (async () => {
-      try {
-        const version = await getVersion();
-        if (alive) {
-          setAppVersion(version);
-        }
-      } catch {
-        // ignore (e.g. non-Tauri environment)
-      }
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, []);
-
   const {
     snapshot,
     pendingSetResults,
@@ -719,23 +703,14 @@ function App() {
   }, [activeTab, bracketReport.progress, busy, createSnapshotProgress]);
 
   const hasSelectedSenderNetworkDevice = selectedSenderNetworkCandidate !== null;
-  const senderIdCollision = useMemo(() => {
-    if (!isValidSenderUserId(normalizedSenderUserIdDraft)) {
-      return false;
-    }
+  const senderIdCollision = useMemo(() => hasSenderIdCollision(
+    genericMessages,
+    normalizedSenderUserIdDraft,
+    normalizedSenderNameDraft,
+  ), [genericMessages, normalizedSenderNameDraft, normalizedSenderUserIdDraft]);
 
-    return genericMessages.some((item) => item.senderUserId === normalizedSenderUserIdDraft && item.senderName !== normalizedSenderNameDraft);
-  }, [genericMessages, normalizedSenderNameDraft, normalizedSenderUserIdDraft]);
-
-  const isSenderProfileReadyForMessaging = senderProfile.senderName.trim() !== ""
-    && isValidSenderUserId(senderProfile.senderUserId)
-    && isValidIpv4(senderProfile.bindIp);
-
-  const canBroadcastCallListSync = senderProfile.senderName.trim() !== ""
-    && !disableLocalCommunication
-    && isValidSenderUserId(senderProfile.senderUserId)
-    && isValidIpv4(senderProfile.bindIp)
-    && isValidIpv4(senderProfile.broadcastSubnetMask);
+  const isSenderProfileReadyForMessaging = resolveSenderProfileReadiness(senderProfile);
+  const canBroadcastCallListSync = resolveCanBroadcastCallListSync(senderProfile, disableLocalCommunication);
 
   const {
     requestUnresolvedCallSyncBroadcast,
@@ -787,10 +762,6 @@ function App() {
     removeItemList(itemListId);
     removeItemListSettings(itemListId);
     setMessage("アイテムリストを削除しました。");
-  }
-
-  function formatScoreValue(value: number): string {
-    return Number.isInteger(value) ? String(value) : value.toFixed(1);
   }
 
   async function syncObsOverlayScoresForSet(

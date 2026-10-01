@@ -11,6 +11,7 @@ import {
   isSameCallTargetIdentity,
   isSameGenericMessageIdentity,
   isValidIpv4List,
+	isSenderProfileReadyForMessaging,
   normalizeGenericMessages,
   normalizeGenericMessage,
   normalizeMailboxFilterSetting,
@@ -345,10 +346,8 @@ export function useMailbox({
     : (normalizedGenericMessageBody === ""
       ? normalizedComposeFixedBody
       : `${normalizedComposeFixedBody}\n\n補足:\n${normalizedGenericMessageBody}`);
-  const isSenderProfileReadyForMessaging = senderProfile.senderName.trim() !== ""
-    && isValidSenderUserId(senderProfile.senderUserId)
-    && isValidIpv4(senderProfile.bindIp);
-  const canSendGenericMessage = isSenderProfileReadyForMessaging
+  const senderProfileReadyForMessaging = isSenderProfileReadyForMessaging(senderProfile);
+  const canSendGenericMessage = senderProfileReadyForMessaging
     && !disableLocalCommunication
     && isValidIpv4(senderProfile.broadcastSubnetMask)
     && normalizedMailboxMethod !== ""
@@ -358,7 +357,7 @@ export function useMailbox({
   const canReplyToThread = !!activeThread
     && !activeThreadResolved
     && !disableLocalCommunication
-    && isSenderProfileReadyForMessaging
+    && senderProfileReadyForMessaging
     && normalizedReplyBody !== "";
   const isOwnActiveThread = !!activeThread
     && activeThread.senderUserId.trim() === senderProfile.senderUserId.trim();
@@ -387,7 +386,7 @@ export function useMailbox({
       onError("ローカル通信を行わない設定のため、メッセージ送信は無効です。設定タブで解除してください。");
       return;
     }
-    if (!isSenderProfileReadyForMessaging) {
+    if (!senderProfileReadyForMessaging) {
       onError("設定タブで送信者名・8桁ユーザーID・自分のIPを保存してから送信してください。");
       return;
     }
@@ -491,7 +490,7 @@ export function useMailbox({
       onError("解決済みスレッドには返信できません。必要な連絡は汎用メッセージで送信してください。");
       return;
     }
-    if (!isSenderProfileReadyForMessaging) {
+    if (!senderProfileReadyForMessaging) {
       onError("設定タブで送信者名・8桁ユーザーID・自分のIPを保存してから返信してください。");
       return;
     }
@@ -600,7 +599,7 @@ export function useMailbox({
       setDqDialogError("DQ申請対象が見つかりません。再度開き直してください。");
       return;
     }
-    if (!isSenderProfileReadyForMessaging) {
+    if (!senderProfileReadyForMessaging) {
       setDqDialogError("設定タブで送信者名・8桁ユーザーID・自分のIPを保存してから申請してください。");
       return;
     }

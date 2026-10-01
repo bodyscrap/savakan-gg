@@ -64,6 +64,10 @@ export type BracketSectionForView = Omit<BracketSection, "columns"> & {
   columns: PositionedRoundColumn[];
 };
 
+export function formatScoreValue(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 export function getBracketVerticalLayoutScale(zoomLevel: number): number {
   if (zoomLevel >= 0.9) {
     return 1;
