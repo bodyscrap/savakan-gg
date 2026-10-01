@@ -341,6 +341,31 @@ export function applyScoreDraftWithOpponentDefault(
   return nextDrafts;
 }
 
+export function resolveDirectWinnerDrafts(
+  currentScoreDrafts: SetScoreDraft,
+  isSelectedWinner: boolean,
+  entrantId: string,
+  otherEntrantId: string,
+): SetScoreDraft {
+  return {
+    ...currentScoreDrafts,
+    [entrantId]: isSelectedWinner ? "" : "W",
+    [otherEntrantId]: isSelectedWinner ? "" : "L",
+  };
+}
+
+export function setDisqualificationDrafts(
+  currentScoreDrafts: SetScoreDraft,
+  entrantId: string,
+  otherEntrantId: string,
+): SetScoreDraft {
+  return {
+    ...currentScoreDrafts,
+    [entrantId]: "-",
+    [otherEntrantId]: "0",
+  };
+}
+
 export function parseScoreCsvText(rawScoreCsv: string): { winnerWins: number; loserWins: number } | null {
   const trimmed = rawScoreCsv.trim();
   if (trimmed === "") {

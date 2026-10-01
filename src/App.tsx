@@ -47,12 +47,10 @@ import {
 } from "./useSetResultDrafts";
 import { resolveWorkspaceMatchDraftState } from "./matchDialogDraft";
 import {
-  applyScoreDraftWithOpponentDefault,
   buildScoreDraftsFromSet,
   buildSlotScoresForSave,
   isDqScoreValue,
   resolveWinnerIdFromDrafts,
-  stepScoreDraftValue,
 } from "./setResultDrafts";
 import { useSetResultPersistence } from "./useSetResultPersistence";
 import { usePlayerMetaDrafts } from "./usePlayerMetaDrafts";
@@ -106,7 +104,6 @@ function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("home");
   const [appVersion, setAppVersion] = useState("");
   const [slug, setSlug] = useState("");
-  const [eventAliasDraft, setEventAliasDraft] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState("");
   const [selectedPhaseName, setSelectedPhaseName] = useState("");
@@ -121,6 +118,10 @@ function App() {
     resultConfirmation,
     requestResultConfirmation,
     clearResultConfirmation,
+    adjustScoreDraft,
+    changeScoreDraft,
+    toggleDirectWinnerDraft,
+    setDisqualificationDraft,
     interimScoreDraftsBySetId,
     saveSetDraft,
     removeInterimDraft,
@@ -391,6 +392,8 @@ function App() {
     selectedEvent,
     resolvedEventSetsById,
     selectedEventMeta,
+    eventAliasDraft,
+    setEventAliasDraft,
   } = useSelectedEventData(workspace, selectedEventId);
   const mobileInputPortal = useMobileInputPortal({
     slug,
@@ -427,10 +430,6 @@ function App() {
     setMessage,
     clearSnapshotProgress: () => setCreateSnapshotProgress(null),
   });
-
-  useEffect(() => {
-    setEventAliasDraft(selectedEventMeta?.eventAlias?.trim() ?? "");
-  }, [selectedEventMeta]);
 
   const { selectedMessageScope, selectedMailboxScope } = useMessageScopes({
     snapshot,
@@ -1504,34 +1503,10 @@ function App() {
               onClose={closeMatchDialog}
               onSwapSides={() => swapMatchSides(activeMatch)}
               onRandomizeSides={() => void randomizeMatchSides(activeMatch)}
-              onScoreAdjust={(entrantId, delta) => {
-                setScoreDrafts((current) =>
-                  applyScoreDraftWithOpponentDefault(
-                    activeMatch,
-                    current,
-                    entrantId,
-                    stepScoreDraftValue(current[entrantId] ?? "", delta),
-                  ));
-              }}
-              onScoreChange={(entrantId, value) => {
-                setScoreDrafts((current) =>
-                  applyScoreDraftWithOpponentDefault(activeMatch, current, entrantId, value));
-              }}
-              onToggleWinner={(entrantId, otherEntrantId) => {
-                setDirectWinnerId((current) => current === entrantId ? null : entrantId);
-                setScoreDrafts((current) => ({
-                  ...current,
-                  [entrantId]: directWinnerId === entrantId ? "" : "W",
-                  [otherEntrantId]: directWinnerId === entrantId ? "" : "L",
-                }));
-              }}
-              onSetDq={(entrantId, otherEntrantId) => {
-                setScoreDrafts((current) => ({
-                  ...current,
-                  [entrantId]: "-",
-                  [otherEntrantId]: "0",
-                }));
-              }}
+              onScoreAdjust={(entrantId, delta) => adjustScoreDraft(activeMatch, entrantId, delta)}
+              onScoreChange={(entrantId, value) => changeScoreDraft(activeMatch, entrantId, value)}
+              onToggleWinner={toggleDirectWinnerDraft}
+              onSetDq={setDisqualificationDraft}
               onCall={(slot, entrantId) => void sendCallMessageFromMatch(slot, entrantId)}
               onDiscardDraft={() => void discardDraftForMatch(toApiSlug(slug), selectedEvent, activeMatch)}
               onResetSet={() => void resetMatchResultCascade({

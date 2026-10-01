@@ -2,6 +2,12 @@ import { useState } from "react";
 import { isMatchupReady } from "./bracketDisplay";
 import type { SetSnapshot } from "./bracketProgression";
 import { buildInitialMatchDialogDraft, resolveExistingMatchDialogDraft } from "./matchDialogDraft";
+import {
+  applyScoreDraftWithOpponentDefault,
+  resolveDirectWinnerDrafts,
+  setDisqualificationDrafts,
+  stepScoreDraftValue,
+} from "./setResultDrafts";
 
 export type SetScoreDraft = Record<string, string>;
 
@@ -46,6 +52,34 @@ export function useSetResultDrafts() {
 
   function clearResultConfirmation() {
     setResultConfirmation(null);
+  }
+
+  function adjustScoreDraft(match: SetSnapshot, entrantId: string, delta: number) {
+    setScoreDrafts((current) => applyScoreDraftWithOpponentDefault(
+      match,
+      current,
+      entrantId,
+      stepScoreDraftValue(current[entrantId] ?? "", delta),
+    ));
+  }
+
+  function changeScoreDraft(match: SetSnapshot, entrantId: string, value: string) {
+    setScoreDrafts((current) => applyScoreDraftWithOpponentDefault(match, current, entrantId, value));
+  }
+
+  function toggleDirectWinnerDraft(entrantId: string, otherEntrantId: string) {
+    const isSelectedWinner = directWinnerId === entrantId;
+    setDirectWinnerId((current) => current === entrantId ? null : entrantId);
+    setScoreDrafts((current) => resolveDirectWinnerDrafts(
+      current,
+      isSelectedWinner,
+      entrantId,
+      otherEntrantId,
+    ));
+  }
+
+  function setDisqualificationDraft(entrantId: string, otherEntrantId: string) {
+    setScoreDrafts((current) => setDisqualificationDrafts(current, entrantId, otherEntrantId));
   }
 
   function initializeMatchDraft({
@@ -124,6 +158,10 @@ export function useSetResultDrafts() {
     resultConfirmation,
     requestResultConfirmation,
     clearResultConfirmation,
+    adjustScoreDraft,
+    changeScoreDraft,
+    toggleDirectWinnerDraft,
+    setDisqualificationDraft,
     initializeMatchDraft,
     saveSetDraft,
     removeInterimDraft,

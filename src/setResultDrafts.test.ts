@@ -3,6 +3,8 @@ import type { LocalSetResultMeta } from "./useTournamentWorkspace";
 import type { SetSnapshot } from "./bracketProgression";
 import {
   applyScoreDraftWithOpponentDefault,
+  resolveDirectWinnerDrafts,
+  setDisqualificationDrafts,
   buildPendingSetResultsById,
   buildDraftStateFromPending,
   buildScoreDraftsFromResult,
@@ -231,5 +233,13 @@ describe("result drafts", () => {
       .toEqual({ red: "2", blue: "0" });
     expect(applyScoreDraftWithOpponentDefault(createSet(), current, "red", "-")).toEqual({ red: "-", blue: "" });
     expect(current).toEqual({ red: "", blue: "" });
+  });
+
+  it("toggles direct winner scores and sets DQ scores without mutating the current draft", () => {
+    const current = { red: "2", blue: "1" };
+    expect(resolveDirectWinnerDrafts(current, false, "red", "blue")).toEqual({ red: "W", blue: "L" });
+    expect(resolveDirectWinnerDrafts(current, true, "red", "blue")).toEqual({ red: "", blue: "" });
+    expect(setDisqualificationDrafts(current, "red", "blue")).toEqual({ red: "-", blue: "0" });
+    expect(current).toEqual({ red: "2", blue: "1" });
   });
 });

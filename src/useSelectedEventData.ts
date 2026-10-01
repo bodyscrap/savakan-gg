@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { isDisplayableSet } from "./bracketDisplay";
 import { createSetEntrantResolver, type SetSnapshot } from "./bracketProgression";
 import { isConfirmedSetResult, resolveSetSlotSideLabel } from "./setResultDrafts";
@@ -8,6 +8,7 @@ export function useSelectedEventData(
   workspace: TournamentWorkspace | null,
   selectedEventId: string,
 ) {
+  const [eventAliasDraft, setEventAliasDraft] = useState("");
   const snapshot = workspace?.snapshot ?? null;
   const localMeta = workspace?.localMeta ?? null;
   const pendingSetResults = localMeta?.pendingSetResults ?? [];
@@ -83,6 +84,10 @@ export function useSelectedEventData(
     return localMeta.events.find((event) => event.eventId === selectedEvent.eventId) ?? null;
   }, [localMeta, selectedEvent]);
 
+  useEffect(() => {
+    setEventAliasDraft(selectedEventMeta?.eventAlias?.trim() ?? "");
+  }, [selectedEventMeta]);
+
   return {
     snapshot,
     pendingSetResults,
@@ -96,5 +101,7 @@ export function useSelectedEventData(
     selectedEvent,
     resolvedEventSetsById,
     selectedEventMeta,
+    eventAliasDraft,
+    setEventAliasDraft,
   };
 }
