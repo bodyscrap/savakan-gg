@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { EventSnapshot } from "./bracketDisplay";
 import {
   filterLocalSnapshotEvents,
@@ -6,7 +6,7 @@ import {
   findSnapshotEventByIdentity,
   resolveSelectedSnapshotName,
 } from "./snapshotDisplay";
-import type { LocalSnapshotEventListItem, TournamentSnapshot } from "./tournamentWorkspaceRepository";
+import type { LocalSnapshotEventListItem, TournamentSnapshot, TournamentWorkspace } from "./tournamentWorkspaceRepository";
 import type { EventLocalMeta } from "./useTournamentWorkspace";
 
 type UseSnapshotSelectionViewOptions = {
@@ -101,4 +101,47 @@ export function useSnapshotSelectionView({
     selectedSummaryName,
     selectedSidebarItem,
   };
+}
+
+type UseSnapshotTabAutoLoadOptions = {
+  activeTab: string;
+  busy: boolean;
+  loadingLocalSnapshotEvents: boolean;
+  selectedSidebarItem: LocalSnapshotEventListItem | null;
+  workspace: TournamentWorkspace | null;
+  selectLocalSnapshotEvent: (item: LocalSnapshotEventListItem) => Promise<unknown>;
+};
+
+export function useSnapshotTabAutoLoad({
+  activeTab,
+  busy,
+  loadingLocalSnapshotEvents,
+  selectedSidebarItem,
+  workspace,
+  selectLocalSnapshotEvent,
+}: UseSnapshotTabAutoLoadOptions) {
+  const inFlightRef = useRef(false);
+
+  useEffect(() => {
+    if (workspace || busy || loadingLocalSnapshotEvents || inFlightRef.current) {
+      return;
+    }
+
+    const requiresSelectedEvent = activeTab === "tournament"
+      || activeTab === "bracket"
+      || activeTab === "message"
+      || activeTab === "users";
+    if (!requiresSelectedEvent || !selectedSidebarItem) {
+      return;
+    }
+
+    inFlightRef.current = true;
+    void (async () => {
+      try {
+        await selectLocalSnapshotEvent(selectedSidebarItem);
+      } finally {
+        inFlightRef.current = false;
+      }
+    })();
+  }, [activeTab, busy, loadingLocalSnapshotEvents, selectedSidebarItem, workspace]);
 }

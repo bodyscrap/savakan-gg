@@ -84,8 +84,7 @@ import { usePersistSnapshotSelection } from "./usePersistSnapshotSelection";
 import { useSnapshotStartupRestore } from "./useSnapshotStartupRestore";
 import { useBracketSectionView } from "./useBracketSectionView";
 import { useMessageScopes } from "./useMessageScopes";
-import { useSnapshotSelectionView } from "./useSnapshotSelectionView";
-import { useSnapshotTabAutoLoad } from "./useSnapshotTabAutoLoad";
+import { useSnapshotSelectionView, useSnapshotTabAutoLoad } from "./useSnapshotSelection";
 import {
   getDisplaySlotsForSet,
   isCompletedSet,
@@ -526,7 +525,7 @@ function App() {
     mailboxServiceStarted,
     setComposeMessageMeta,
     mailboxFilterSetting,
-    setMailboxFilterSetting,
+    updateMailboxFilter,
     mailboxThreadSummaries,
     unreadMessageCount,
     mailboxThreads,
@@ -1195,10 +1194,7 @@ function App() {
             canSendGenericMessage={canSendGenericMessage}
             onPostGenericMessage={() => void postGenericMessage()}
             mailboxFilterSetting={mailboxFilterSetting}
-            onMailboxFilterChange={(key, checked) => {
-              setSelectedThreadId("");
-              setMailboxFilterSetting((current) => ({ ...current, [key]: checked }));
-            }}
+            onMailboxFilterChange={updateMailboxFilter}
             mailboxThreads={mailboxThreads}
             mailboxThreadSummaries={mailboxThreadSummaries}
             activeThread={activeThread}

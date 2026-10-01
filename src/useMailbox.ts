@@ -791,6 +791,11 @@ export function useMailbox({
     });
   }, [activeTab, activeThread, activeThreadMessages, senderProfile.senderUserId]);
 
+  function updateMailboxFilter(key: keyof MailboxFilterSetting, checked: boolean) {
+    setSelectedThreadId("");
+    setMailboxFilterSetting((current) => ({ ...current, [key]: checked }));
+  }
+
   return {
     genericMessages,
     setGenericMessages,
@@ -815,7 +820,7 @@ export function useMailbox({
     composeMessageMeta,
     setComposeMessageMeta,
     mailboxFilterSetting,
-    setMailboxFilterSetting,
+    updateMailboxFilter,
     mailboxReadMessageIds,
     setMailboxReadMessageIds,
     scopedGenericMessages,
