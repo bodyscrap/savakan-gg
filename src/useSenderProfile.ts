@@ -231,6 +231,23 @@ export function useSenderProfile(
       && !senderIdCollision;
   }
 
+  function fillRandomSenderUserId(usedSenderUserIds: string[]) {
+    const usedIds = new Set(usedSenderUserIds);
+    const generateSenderUserId = () => {
+      const randomValues = new Uint32Array(1);
+      window.crypto.getRandomValues(randomValues);
+      const randomValue = 10_000_000 + (randomValues[0] % 90_000_000);
+      return String(randomValue);
+    };
+
+    let nextId = generateSenderUserId();
+    for (let retry = 0; retry < 40 && usedIds.has(nextId); retry += 1) {
+      nextId = generateSenderUserId();
+    }
+
+    setSenderUserIdDraft(nextId);
+  }
+
   async function saveSenderProfile(senderIdCollision: boolean) {
     onError("");
     onMessage("");
@@ -320,6 +337,7 @@ export function useSenderProfile(
     normalizedSubnetMaskDraft,
     shouldRecommendMailboxClearForIdentityChange,
     setIdentityChangedSinceMailboxClear,
+    fillRandomSenderUserId,
     canSaveSenderProfile,
     saveSenderProfile,
   };

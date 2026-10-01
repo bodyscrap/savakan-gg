@@ -26,7 +26,7 @@ import { PlayerListInfo } from "./PlayerListInfo";
 import { MessageBox } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
 import { EventSelector, type LocalSnapshotEventListItem } from "./EventSelector";
-import { EventSetting, type EventSettingCategorySlot } from "./EventSetting";
+import { EventSetting } from "./EventSetting";
 import { AppShell, type AppTab } from "./AppShell";
 import { OverlayControl } from "./OverlayControl";
 import { useObsOverlay } from "./useObsOverlay";
@@ -36,14 +36,17 @@ import { useMatchSideDraftActions } from "./useMatchSideDraftActions";
 import { buildMatchSideDrafts, resolveMatchSideDraftSavePlan } from "./matchSideDrafts";
 import { buildInitialMatchDialogDraft, resolveExistingMatchDialogDraft } from "./matchDialogDraft";
 import { BracketTab } from "./BracketTab";
-import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
-import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDialog";
+import { BracketDialogs } from "./BracketDialogs";
+import { MatchDetailDialog } from "./MatchDetailDialog";
 import { useBracketContentView } from "./useBracketContentView";
 import { useSelectedEventEntrants } from "./useSelectedEventEntrants";
 import { useSnapshotEventListRefresh } from "./useSnapshotEventListRefresh";
 
 import { useBracketReport } from "./useBracketReport";
-import { useSetResultDrafts, type SetResultDraftState } from "./useSetResultDrafts";
+import {
+  useSetResultDrafts,
+  type SetResultDraftState,
+} from "./useSetResultDrafts";
 import {
   applyScoreDraftWithOpponentDefault,
   buildDraftStateFromPending,
@@ -106,7 +109,6 @@ import {
 } from "./snapshotDisplay";
 import {
   createSetEntrantResolver,
-  type SetSlot,
   type SetSnapshot,
 } from "./bracketProgression";
 import "./App.css";
@@ -117,13 +119,6 @@ function normalizeSlugForSettingKey(rawSlug: string): string {
     ? trimmed.slice("tournament/".length)
     : trimmed;
   return withoutPrefix.replace(/^\/+|\/+$/g, "");
-}
-
-function generateRandomSenderUserId(): string {
-  const array = new Uint32Array(1);
-  window.crypto.getRandomValues(array);
-  const value = 10_000_000 + (array[0] % 90_000_000);
-  return String(value);
 }
 
 function eventSettingKey(slug: string, eventId: string): string {
@@ -145,6 +140,9 @@ function App() {
     setScoreDrafts,
     directWinnerId,
     setDirectWinnerId,
+    resultConfirmation,
+    requestResultConfirmation,
+    clearResultConfirmation,
     setResultDrafts,
     interimScoreDraftsBySetId,
     saveSetDraft,
@@ -156,10 +154,7 @@ function App() {
   const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
   const [homeSelectedSnapshotKey, setHomeSelectedSnapshotKey] = useState("");
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
-  const [overlaySwitchConfirm, setOverlaySwitchConfirm] = useState<{ targetSetId: string; targetSetLabel: string } | null>(null);
-  const [resultConfirmation, setResultConfirmation] = useState<ResultConfirmationState | null>(null);
   const [callingEntrantId, setCallingEntrantId] = useState("");
-  const [matchSideRandomNotice, setMatchSideRandomNotice] = useState<MatchSideRandomNotice | null>(null);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -195,6 +190,7 @@ function App() {
     refreshNetworkCandidates: refreshLocalNetworkSettingsCandidates,
     shouldRecommendMailboxClearForIdentityChange,
     setIdentityChangedSinceMailboxClear: setSenderIdentityChangedSinceMailboxClear,
+    fillRandomSenderUserId,
     canSaveSenderProfile,
     saveSenderProfile,
   } = useSenderProfile(setError, setMessage, activeTab);
@@ -821,14 +817,15 @@ function App() {
   const {
     getMetaDraft,
     getDraftCategorySelections,
-    addDraftCategorySelection,
-    removeDraftCategorySelection,
+    addSelectedEntrantDraftSelection,
+    removeSelectedEntrantDraftSelection,
     buildValidatedSelections,
-    savePlayerMeta,
+    saveSelectedEntrantMeta,
   } = usePlayerMetaDrafts({
     selectedEvent,
     selectedEventMeta,
     selectedEventEntrants,
+    selectedEntrant: selectedTournamentEntrant,
     categorySlotListIds,
     categorySlotAllowDuplicates,
     totalItemMinCount,
@@ -918,49 +915,14 @@ function App() {
     onMessage: setMessage,
   });
 
-  function fillRandomSenderUserId() {
-    const usedIds = new Set(genericMessages.map((item) => item.senderUserId));
-    let nextId = generateRandomSenderUserId();
-
-    for (let retry = 0; retry < 40 && usedIds.has(nextId); retry += 1) {
-      nextId = generateRandomSenderUserId();
-    }
-
-    setSenderUserIdDraft(nextId);
-  }
-
-  useEffect(() => {
-    if (dqDialog) {
-      return;
-    }
-
-    stopDqCameraScan();
-  }, [dqDialog]);
-
   function resolveActiveThread() {
     void resolveMailboxThread();
   }
 
-  useEffect(() => {
-    if (!matchSideRandomNotice) {
-      return;
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setMatchSideRandomNotice((current) => {
-        if (!current || current.triggeredAt !== matchSideRandomNotice.triggeredAt) {
-          return current;
-        }
-        return null;
-      });
-    }, 6000);
-
-    return () => {
-      window.clearTimeout(timeoutId);
-    };
-  }, [matchSideRandomNotice]);
-
-  const { applySideDecisionMethodToAllUnconfirmedSets, saveSetPlaySide } = useSetSideAssignment({
+  const {
+    applySideDecisionMethodToAllUnconfirmedSets,
+    saveMatchSideDraftsForResult,
+  } = useSetSideAssignment({
     slug,
     selectedEvent,
     resolvedEventSetsById,
@@ -969,6 +931,16 @@ function App() {
     sideDecisionMethod,
     eventMgmtSettings,
     saveLocalSetPlaySide,
+    resolveMatchSideDraftSavePlan: (set, sideDrafts) => resolveMatchSideDraftSavePlan(
+      set,
+      sideDrafts,
+      getSetSlotSide,
+      (setId, entrantId, slotIndex) => getSetSlotSideLabel(setId, entrantId, {
+        fallbackBySlotIndex: slotIndex,
+        matchupReady: true,
+      }),
+    ),
+    syncOverlayScores: syncObsOverlayScoresForSet,
     setBusy,
     setError,
     setMessage,
@@ -1016,8 +988,11 @@ function App() {
     scoreDrafts,
   });
   const {
+    overlaySwitchConfirm,
+    requestToggleActiveMatchOverlay,
+    cancelOverlaySwitch,
+    confirmOverlaySwitch,
     toggleActiveMatchOverlay,
-    forceSwitchActiveMatchOverlay,
     syncOverlayScoresForSet,
   } = useObsOverlaySetActions({
     selectedEvent,
@@ -1110,6 +1085,17 @@ function App() {
     return resolveSetSlotSideLabel(entrantId, getSetSlotSide(setId, entrantId), options);
   }
 
+  const {
+    swapMatchSides,
+    randomizeMatchSides,
+    randomNotice: matchSideRandomNotice,
+    clearRandomNotice: clearMatchSideRandomNotice,
+  } = useMatchSideDraftActions({
+    activeMatchSideDrafts,
+    setActiveMatchSideDrafts,
+    getSetSlotSide,
+  });
+
   function openMatchDialog(set: SetSnapshot, forcedDraftState?: SetResultDraftState) {
     if (!isDisplayableSet(set, selectedEvent)) {
       return;
@@ -1149,22 +1135,10 @@ function App() {
     saveSetDraft(set.setId, initialDraft);
   }
 
-  function requestResultConfirmation(match: SetSnapshot) {
-    if (!isMatchupReady(match)) {
-      return;
-    }
-
-    setResultConfirmation({
-      match,
-      scoreDrafts: { ...scoreDrafts },
-      directWinnerId,
-    });
-  }
-
   function closeMatchDialog() {
     setActiveMatchSetId("");
     setActiveMatchSideDrafts({});
-    setMatchSideRandomNotice(null);
+    clearMatchSideRandomNotice();
     setDirectWinnerId(null);
   }
 
@@ -1254,77 +1228,12 @@ function App() {
     });
   }
 
-  const { swapMatchSides, randomizeMatchSides } = useMatchSideDraftActions({
-    activeMatchSideDrafts,
-    setActiveMatchSideDrafts,
-    getSetSlotSide,
-    setMatchSideRandomNotice,
-  });
-
   async function saveMatchSidesIfNeeded(
     eventSnapshot: EventSnapshot,
     set: SetSnapshot,
     sideDrafts: Record<string, PlaySide | "">,
   ) {
-    const savePlan = resolveMatchSideDraftSavePlan(
-      set,
-      sideDrafts,
-      getSetSlotSide,
-      (setId, entrantId, slotIndex) => getSetSlotSideLabel(setId, entrantId, {
-        fallbackBySlotIndex: slotIndex,
-        matchupReady: true,
-      }),
-    );
-    if (!savePlan) {
-      return;
-    }
-
-    if (savePlan.sidesChanged) {
-      await saveSetPlaySide(eventSnapshot, set, savePlan.upperEntrantId, savePlan.sideOverrides[savePlan.upperEntrantId], {
-        silent: true,
-        manageBusy: false,
-      });
-
-      const currentScores = set.slots
-        .filter((slot): slot is SetSlot & { entrantId: string } => slot.entrantId !== null)
-        .map((slot) => ({ entrantId: slot.entrantId, score: slot.score ?? 0 }));
-      await syncObsOverlayScoresForSet(set, currentScores, savePlan.sideOverrides);
-    }
-
-    return savePlan.sideOverrides;
-  }
-
-  function addSelectedEntrantDraftSelection(slot: EventSettingCategorySlot, itemName: string) {
-    if (!selectedEvent || !selectedTournamentEntrant) {
-      return;
-    }
-    addDraftCategorySelection(
-      selectedEvent.eventId,
-      selectedTournamentEntrant.entrantId,
-      slot.slotIndex,
-      slot.list,
-      slot.allowDuplicates,
-      slot.maxCount,
-      itemName,
-    );
-  }
-
-  function removeSelectedEntrantDraftSelection(slotIndex: number, selectionIndex: number) {
-    if (!selectedEvent || !selectedTournamentEntrant) {
-      return;
-    }
-    removeDraftCategorySelection(
-      selectedEvent.eventId,
-      selectedTournamentEntrant.entrantId,
-      slotIndex,
-      selectionIndex,
-    );
-  }
-
-  function saveSelectedEntrantMeta() {
-    if (selectedEvent && selectedTournamentEntrant) {
-      void savePlayerMeta(selectedEvent, selectedTournamentEntrant.entrantId, selectedTournamentEntrant.entrantName);
-    }
+    return saveMatchSideDraftsForResult(eventSnapshot, set, sideDrafts);
   }
 
   return (
@@ -1655,7 +1564,9 @@ function App() {
                       ? "選択デバイスのサブネットマスクが不正です。"
                       : "デバイス選択後、IP/サブネットは自動適用されます。"}
             onRefreshNetworkCandidates={() => void refreshLocalNetworkSettingsCandidates(true)}
-            onRandomizeSenderUserId={fillRandomSenderUserId}
+            onRandomizeSenderUserId={() => fillRandomSenderUserId(
+              genericMessages.map((item) => item.senderUserId),
+            )}
             onSaveSenderProfile={() => void saveSenderProfile(senderIdCollision)}
             canSaveSenderProfile={canSaveSenderProfile(senderIdCollision)}
             startggFetchPerPage={normalizeStartggFetchPerPage(startggFetchPerPage)}
@@ -1918,25 +1829,7 @@ function App() {
               onDiscardDraft={() => void discardLocalResultDraftForMatch()}
               onResetSet={() => void resetSetResultCascadeForMatch()}
               onSaveDraft={() => void saveLocalResultForMatch(false)}
-              onToggleOverlay={() => {
-                const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === activeMatch.setId;
-                const otherSetIsActive = Boolean(
-                  obsOverlayState?.active
-                  && obsOverlayState.currentSetId
-                  && obsOverlayState.currentSetId !== activeMatch.setId
-                  && obsOverlayState.currentSetId !== "__test__",
-                );
-
-                if (otherSetIsActive && !isSameActive) {
-                  setOverlaySwitchConfirm({
-                    targetSetId: activeMatch.setId,
-                    targetSetLabel: activeMatch.fullRoundText || `Set ${setDisplayCodeById.get(activeMatch.setId) ?? "-"}`,
-                  });
-                  return;
-                }
-
-                void toggleActiveMatchOverlay(activeMatch);
-              }}
+              onToggleOverlay={() => requestToggleActiveMatchOverlay(activeMatch)}
               onConfirm={() => requestResultConfirmation(activeMatch)}
             />
           )}
@@ -1944,9 +1837,9 @@ function App() {
             busy={busy}
             resultConfirmation={resultConfirmation}
             activeSetId={activeMatch?.setId ?? null}
-            onCancelResultConfirmation={() => setResultConfirmation(null)}
+            onCancelResultConfirmation={clearResultConfirmation}
             onConfirmResult={() => {
-              setResultConfirmation(null);
+              clearResultConfirmation();
               void saveLocalResultForMatch(true);
             }}
             restoreOpen={restoreDialogOpen}
@@ -1972,13 +1865,8 @@ function App() {
                 .map((slot) => slot.entrantName),
             } : null}
             overlayBusy={obsOverlayBusy}
-            onCancelOverlaySwitch={() => setOverlaySwitchConfirm(null)}
-            onConfirmOverlaySwitch={() => {
-              setOverlaySwitchConfirm(null);
-              if (activeMatch) {
-                void forceSwitchActiveMatchOverlay(activeMatch);
-              }
-            }}
+            onCancelOverlaySwitch={cancelOverlaySwitch}
+            onConfirmOverlaySwitch={() => confirmOverlaySwitch(activeMatch)}
             mobileInputOpen={mobileInputPortalOpen}
             mobileInputCandidates={mobileInputPortalCandidates}
             mobileInputBusy={mobileInputPortalBusy}

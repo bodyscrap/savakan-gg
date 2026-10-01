@@ -25,6 +25,7 @@ type UsePlayerMetaDraftsOptions = {
   selectedEvent: EventSnapshot | null;
   selectedEventMeta: EventLocalMeta | null;
   selectedEventEntrants: Entrant[];
+  selectedEntrant: Entrant | null;
   categorySlotListIds: string[];
   categorySlotAllowDuplicates: boolean[];
   totalItemMinCount: number;
@@ -52,6 +53,7 @@ export function usePlayerMetaDrafts({
   selectedEvent,
   selectedEventMeta,
   selectedEventEntrants,
+  selectedEntrant,
   categorySlotListIds,
   categorySlotAllowDuplicates,
   totalItemMinCount,
@@ -349,6 +351,39 @@ export function usePlayerMetaDrafts({
     }
   }
 
+  function addSelectedEntrantDraftSelection(slot: EventSettingCategorySlot, itemName: string) {
+    if (!selectedEvent || !selectedEntrant) {
+      return;
+    }
+    addDraftCategorySelection(
+      selectedEvent.eventId,
+      selectedEntrant.entrantId,
+      slot.slotIndex,
+      slot.list,
+      slot.allowDuplicates,
+      slot.maxCount,
+      itemName,
+    );
+  }
+
+  function removeSelectedEntrantDraftSelection(slotIndex: number, selectionIndex: number) {
+    if (!selectedEvent || !selectedEntrant) {
+      return;
+    }
+    removeDraftCategorySelection(
+      selectedEvent.eventId,
+      selectedEntrant.entrantId,
+      slotIndex,
+      selectionIndex,
+    );
+  }
+
+  function saveSelectedEntrantMeta() {
+    if (selectedEvent && selectedEntrant) {
+      void savePlayerMeta(selectedEvent, selectedEntrant.entrantId, selectedEntrant.entrantName);
+    }
+  }
+
   return {
     getMetaDraft,
     setMetaDraft,
@@ -358,5 +393,8 @@ export function usePlayerMetaDrafts({
     buildValidatedSelections,
     clearDirtyDraft,
     savePlayerMeta,
+    addSelectedEntrantDraftSelection,
+    removeSelectedEntrantDraftSelection,
+    saveSelectedEntrantMeta,
   };
 }

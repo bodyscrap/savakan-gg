@@ -9,9 +9,10 @@ import {
   resolveSidesByDecisionMethod,
   type EventManagementSetting,
 } from "./eventManagement";
-import type { SetSnapshot } from "./bracketProgression";
+import type { SetSlot, SetSnapshot } from "./bracketProgression";
 import { toApiSlug } from "./slugUtils";
 import type { PlaySide } from "./useTournamentWorkspace";
+import type { MatchSideDraftSavePlan } from "./matchSideDrafts";
 
 type SaveSetPlaySideOptions = {
   silent?: boolean;
@@ -34,6 +35,15 @@ type UseSetSideAssignmentOptions = {
     opponentEntrantId: string | null;
     playSide: PlaySide | null;
   }) => Promise<unknown>;
+  resolveMatchSideDraftSavePlan: (
+    set: SetSnapshot,
+    sideDrafts: Record<string, PlaySide | "">,
+  ) => MatchSideDraftSavePlan | null;
+  syncOverlayScores: (
+    set: SetSnapshot,
+    slotScores: Array<{ entrantId: string; score: number }>,
+    sideOverrides?: Record<string, PlaySide | "">,
+  ) => Promise<void>;
   setBusy: (busy: boolean) => void;
   setError: (error: string) => void;
   setMessage: (message: string) => void;
@@ -48,6 +58,8 @@ export function useSetSideAssignment({
   sideDecisionMethod,
   eventMgmtSettings,
   saveLocalSetPlaySide,
+  resolveMatchSideDraftSavePlan,
+  syncOverlayScores,
   setBusy,
   setError,
   setMessage,
@@ -100,6 +112,34 @@ export function useSetSideAssignment({
         setBusy(false);
       }
     }
+  }
+
+  async function saveMatchSideDraftsForResult(
+    eventSnapshot: EventSnapshot,
+    set: SetSnapshot,
+    sideDrafts: Record<string, PlaySide | "">,
+  ) {
+    const savePlan = resolveMatchSideDraftSavePlan(set, sideDrafts);
+    if (!savePlan) {
+      return;
+    }
+
+    if (savePlan.sidesChanged) {
+      await saveSetPlaySide(
+        eventSnapshot,
+        set,
+        savePlan.upperEntrantId,
+        savePlan.sideOverrides[savePlan.upperEntrantId],
+        { silent: true, manageBusy: false },
+      );
+
+      const currentScores = set.slots
+        .filter((slot): slot is SetSlot & { entrantId: string } => slot.entrantId !== null)
+        .map((slot) => ({ entrantId: slot.entrantId, score: slot.score ?? 0 }));
+      await syncOverlayScores(set, currentScores, savePlan.sideOverrides);
+    }
+
+    return savePlan.sideOverrides;
   }
 
   const saveSetPlaySideRef = useRef(saveSetPlaySide);
@@ -272,5 +312,5 @@ export function useSetSideAssignment({
     }
   }
 
-  return { applySideDecisionMethodToAllUnconfirmedSets, saveSetPlaySide };
+  return { applySideDecisionMethodToAllUnconfirmedSets, saveSetPlaySide, saveMatchSideDraftsForResult };
 }

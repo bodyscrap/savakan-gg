@@ -92,6 +92,20 @@ export function useMailbox({
   const [dqSubmitting, setDqSubmitting] = useState(false);
 
   useEffect(() => {
+    if (dqDialog) {
+      return;
+    }
+
+    onStopDqCameraScan();
+  }, [dqDialog]);
+
+  useEffect(() => {
+    return () => {
+      onStopDqCameraScan();
+    };
+  }, []);
+
+  useEffect(() => {
     try {
       const rawFilter = window.localStorage.getItem(MAILBOX_FILTER_STORAGE_KEY);
       if (rawFilter) {

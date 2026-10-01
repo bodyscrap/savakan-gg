@@ -1,12 +1,5 @@
-import type { SetSnapshot } from "./bracketProgression";
 import type { BatchConflictDialogState } from "./useBracketReport";
-import type { SetScoreDraft } from "./useSetResultDrafts";
-
-export type ResultConfirmationState = {
-  match: SetSnapshot;
-  scoreDrafts: SetScoreDraft;
-  directWinnerId: string | null;
-};
+import type { ResultConfirmationState } from "./useSetResultDrafts";
 
 type OverlaySwitchView = {
   targetSetLabel: string;

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { isMatchupReady } from "./bracketDisplay";
+import type { SetSnapshot } from "./bracketProgression";
 
 export type SetScoreDraft = Record<string, string>;
 
@@ -8,11 +10,34 @@ export type SetResultDraftState = {
   directWin?: boolean;
 };
 
+export type ResultConfirmationState = {
+  match: SetSnapshot;
+  scoreDrafts: SetScoreDraft;
+  directWinnerId: string | null;
+};
+
 export function useSetResultDrafts() {
   const [scoreDrafts, setScoreDrafts] = useState<SetScoreDraft>({});
   const [directWinnerId, setDirectWinnerId] = useState<string | null>(null);
   const [setResultDrafts, setSetResultDrafts] = useState<Record<string, SetResultDraftState>>({});
   const [interimScoreDraftsBySetId, setInterimScoreDraftsBySetId] = useState<Record<string, SetScoreDraft>>({});
+  const [resultConfirmation, setResultConfirmation] = useState<ResultConfirmationState | null>(null);
+
+  function requestResultConfirmation(match: SetSnapshot) {
+    if (!isMatchupReady(match)) {
+      return;
+    }
+
+    setResultConfirmation({
+      match,
+      scoreDrafts: { ...scoreDrafts },
+      directWinnerId,
+    });
+  }
+
+  function clearResultConfirmation() {
+    setResultConfirmation(null);
+  }
 
   function saveSetDraft(setId: string, draft: SetResultDraftState) {
     setSetResultDrafts((current) => ({ ...current, [setId]: draft }));
@@ -59,6 +84,9 @@ export function useSetResultDrafts() {
     setDirectWinnerId,
     setResultDrafts,
     interimScoreDraftsBySetId,
+    resultConfirmation,
+    requestResultConfirmation,
+    clearResultConfirmation,
     saveSetDraft,
     removeInterimDraft,
     removeDraftsForSet,

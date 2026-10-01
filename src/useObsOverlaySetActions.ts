@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { isDisplayableSet, type EventSnapshot } from "./bracketDisplay";
 import type { SetSnapshot } from "./bracketProgression";
 import {
@@ -27,6 +28,11 @@ export function useObsOverlaySetActions({
   refreshObsOverlayState,
   toggleObsOverlaySet,
 }: UseObsOverlaySetActionsOptions) {
+  const [overlaySwitchConfirm, setOverlaySwitchConfirm] = useState<{
+    targetSetId: string;
+    targetSetLabel: string;
+  } | null>(null);
+
   async function toggleActiveMatchOverlay(set: SetSnapshot) {
     if (!isDisplayableSet(set, selectedEvent)) {
       return;
@@ -69,6 +75,37 @@ export function useObsOverlaySetActions({
     }
 
     await toggleActiveMatchOverlay(set);
+  }
+
+  function requestToggleActiveMatchOverlay(set: SetSnapshot) {
+    const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === set.setId;
+    const otherSetIsActive = Boolean(
+      obsOverlayState?.active
+      && obsOverlayState.currentSetId
+      && obsOverlayState.currentSetId !== set.setId
+      && obsOverlayState.currentSetId !== "__test__",
+    );
+
+    if (otherSetIsActive && !isSameActive) {
+      setOverlaySwitchConfirm({
+        targetSetId: set.setId,
+        targetSetLabel: set.fullRoundText || `Set ${setDisplayCodeById.get(set.setId) ?? "-"}`,
+      });
+      return;
+    }
+
+    void toggleActiveMatchOverlay(set);
+  }
+
+  function cancelOverlaySwitch() {
+    setOverlaySwitchConfirm(null);
+  }
+
+  function confirmOverlaySwitch(set: SetSnapshot | null) {
+    setOverlaySwitchConfirm(null);
+    if (set) {
+      void forceSwitchActiveMatchOverlay(set);
+    }
   }
 
   async function syncOverlayScoresForSet(
@@ -120,8 +157,11 @@ export function useObsOverlaySetActions({
   }
 
   return {
+    overlaySwitchConfirm,
+    requestToggleActiveMatchOverlay,
+    cancelOverlaySwitch,
+    confirmOverlaySwitch,
     toggleActiveMatchOverlay,
-    forceSwitchActiveMatchOverlay,
     syncOverlayScoresForSet,
   };
 }

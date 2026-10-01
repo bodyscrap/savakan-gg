@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { isMatchupReady } from "./bracketDisplay";
 import type { MatchSideRandomNotice } from "./MatchDetailDialog";
 import {
@@ -12,15 +12,38 @@ type UseMatchSideDraftActionsOptions = {
   activeMatchSideDrafts: Record<string, PlaySide | "">;
   setActiveMatchSideDrafts: Dispatch<SetStateAction<Record<string, PlaySide | "">>>;
   getSetSlotSide: (setId: string, entrantId: string) => PlaySide | "";
-  setMatchSideRandomNotice: Dispatch<SetStateAction<MatchSideRandomNotice | null>>;
 };
 
 export function useMatchSideDraftActions({
   activeMatchSideDrafts,
   setActiveMatchSideDrafts,
   getSetSlotSide,
-  setMatchSideRandomNotice,
 }: UseMatchSideDraftActionsOptions) {
+  const [randomNotice, setRandomNotice] = useState<MatchSideRandomNotice | null>(null);
+
+  useEffect(() => {
+    if (!randomNotice) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setRandomNotice((current) => {
+        if (!current || current.triggeredAt !== randomNotice.triggeredAt) {
+          return current;
+        }
+        return null;
+      });
+    }, 6000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [randomNotice]);
+
+  function clearRandomNotice() {
+    setRandomNotice(null);
+  }
+
   function swapMatchSides(setSnapshot: SetSnapshot) {
     if (!isMatchupReady(setSnapshot)) {
       return;
@@ -81,7 +104,7 @@ export function useMatchSideDraftActions({
       [lowerId]: lowerSide,
     }));
 
-    setMatchSideRandomNotice({
+    setRandomNotice({
       setId: setSnapshot.setId,
       upperEntrantName: upper.entrantName,
       lowerEntrantName: lower.entrantName,
@@ -92,5 +115,5 @@ export function useMatchSideDraftActions({
     });
   }
 
-  return { swapMatchSides, randomizeMatchSides };
+  return { swapMatchSides, randomizeMatchSides, randomNotice, clearRandomNotice };
 }
