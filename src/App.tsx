@@ -85,6 +85,8 @@ import { usePersistSnapshotSelection } from "./usePersistSnapshotSelection";
 import { useSnapshotStartupRestore } from "./useSnapshotStartupRestore";
 import { useBracketSectionView } from "./useBracketSectionView";
 import { useMessageScopes } from "./useMessageScopes";
+import { useSnapshotSelectionView } from "./useSnapshotSelectionView";
+import { useSnapshotTabAutoLoad } from "./useSnapshotTabAutoLoad";
 import {
   getDisplaySlotsForSet,
   isCompletedSet,
@@ -99,12 +101,6 @@ import {
   isValidIpv4,
   isValidSenderUserId,
 } from "./messageUtils";
-import {
-  filterLocalSnapshotEvents,
-  findSelectedLocalSnapshotEvent,
-  findSnapshotEventByIdentity,
-  resolveSelectedSnapshotName,
-} from "./snapshotDisplay";
 import {
   createSetEntrantResolver,
   type SetSnapshot,
@@ -149,8 +145,6 @@ function App() {
     clearAllDrafts,
   } = useSetResultDrafts();
   const [activeMatchSideDrafts, setActiveMatchSideDrafts] = useState<Record<string, PlaySide | "">>({});
-  const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
-  const [homeSelectedSnapshotKey, setHomeSelectedSnapshotKey] = useState("");
   const [deletingSnapshotKey, setDeletingSnapshotKey] = useState("");
   const [callingEntrantId, setCallingEntrantId] = useState("");
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
@@ -345,7 +339,6 @@ function App() {
     setSelectedPhasePoolKey,
     setError,
   });
-  const tabSelectionAutoLoadInFlightRef = useRef(false);
   const {
     cameraActive: dqCameraActive,
     videoRef: dqCameraVideoRef,
@@ -603,6 +596,25 @@ function App() {
     senderUserId: senderProfile.senderUserId,
   });
 
+  const {
+    homeSnapshotSearchInput,
+    setHomeSnapshotSearchInput,
+    setHomeSelectedSnapshotKey,
+    homeFilteredSnapshotEvents,
+    homeSelectedSnapshotItem,
+    selectedSummaryName,
+    selectedSidebarItem,
+  } = useSnapshotSelectionView({
+    localSnapshotEvents,
+    snapshot,
+    selectedEvent,
+    selectedEventMeta,
+    selectedEventId,
+    setSelectedEventId,
+    startupSavedSlugRef,
+    startupSavedEventIdRef,
+  });
+
   const { resetLastPersistedSnapshotSelection } = usePersistSnapshotSelection({
     snapshot,
     selectedEvent,
@@ -706,81 +718,14 @@ function App() {
   });
   selectLocalSnapshotEventRef.current = selectLocalSnapshotEvent;
 
-  const selectedSummaryName = useMemo(() => {
-    const startupSelectedSlug = startupSavedSlugRef.current.trim();
-    const startupSelectedEventId = startupSavedEventIdRef.current.trim();
-    const currentSelectedSlug = snapshot?.slug?.trim() || startupSelectedSlug;
-    const currentSelectedEventId = selectedEventId.trim() || startupSelectedEventId;
-    return resolveSelectedSnapshotName(localSnapshotEvents, {
-      eventAlias: selectedEventMeta?.eventAlias,
-      eventName: selectedEvent?.name,
-      slug: currentSelectedSlug,
-      eventId: currentSelectedEventId,
-      fallbackName: snapshot?.name ?? "未選択",
-    });
-  }, [localSnapshotEvents, selectedEventMeta, selectedEvent, selectedEventId, snapshot]);
-
-  const selectedSidebarItem = useMemo(() => {
-    const startupSelectedSlug = startupSavedSlugRef.current.trim();
-    const startupSelectedEventId = startupSavedEventIdRef.current.trim();
-    const currentSelectedSlug = snapshot?.slug?.trim() || startupSelectedSlug;
-    const currentSelectedEventId = selectedEvent?.eventId?.trim() || selectedEventId.trim() || startupSelectedEventId;
-
-    if (currentSelectedSlug === "" || currentSelectedEventId === "") {
-      return null;
-    }
-
-    return findSnapshotEventByIdentity(localSnapshotEvents, currentSelectedSlug, currentSelectedEventId);
-  }, [localSnapshotEvents, selectedEvent, selectedEventId, snapshot]);
-
-  const homeFilteredSnapshotEvents = useMemo(() => {
-    return filterLocalSnapshotEvents(localSnapshotEvents, homeSnapshotSearchInput);
-  }, [homeSnapshotSearchInput, localSnapshotEvents]);
-
-  const homeSelectedSnapshotItem = useMemo(() => {
-    return findSelectedLocalSnapshotEvent(homeFilteredSnapshotEvents, homeSelectedSnapshotKey);
-  }, [homeFilteredSnapshotEvents, homeSelectedSnapshotKey]);
-
-  useEffect(() => {
-    if (localSnapshotEvents.length === 0) {
-      if (homeSelectedSnapshotKey !== "") {
-        setHomeSelectedSnapshotKey("");
-      }
-      return;
-    }
-
-    if (homeSelectedSnapshotKey !== "" && !findSelectedLocalSnapshotEvent(localSnapshotEvents, homeSelectedSnapshotKey)) {
-      setHomeSelectedSnapshotKey("");
-    }
-
-  }, [homeSelectedSnapshotKey, localSnapshotEvents]);
-
-  useEffect(() => {
-    if (workspace || busy || loadingLocalSnapshotEvents || tabSelectionAutoLoadInFlightRef.current) {
-      return;
-    }
-
-    const requiresSelectedEvent = activeTab === "tournament"
-      || activeTab === "bracket"
-      || activeTab === "message"
-      || activeTab === "users";
-    if (!requiresSelectedEvent) {
-      return;
-    }
-
-    if (!selectedSidebarItem) {
-      return;
-    }
-
-    tabSelectionAutoLoadInFlightRef.current = true;
-    void (async () => {
-      try {
-        await selectLocalSnapshotEvent(selectedSidebarItem);
-      } finally {
-        tabSelectionAutoLoadInFlightRef.current = false;
-      }
-    })();
-  }, [activeTab, busy, loadingLocalSnapshotEvents, selectedSidebarItem, workspace]);
+  useSnapshotTabAutoLoad({
+    activeTab,
+    busy,
+    loadingLocalSnapshotEvents,
+    selectedSidebarItem,
+    workspace,
+    selectLocalSnapshotEvent,
+  });
 
   const {
     entrants: selectedEventEntrants,
@@ -1027,21 +972,6 @@ function App() {
     setSelectedPhaseName,
     setSelectedPhasePoolKey,
   });
-
-  useEffect(() => {
-    if (!snapshot || snapshot.events.length === 0) {
-      return;
-    }
-
-    if (selectedEventId === "") {
-      return;
-    }
-
-    const exists = snapshot.events.some((event) => event.eventId === selectedEventId);
-    if (!exists) {
-      setSelectedEventId("");
-    }
-  }, [snapshot, selectedEventId]);
 
   function getSetSlotSide(setId: string, entrantId: string | null): PlaySide | "" {
     if (!entrantId) {
