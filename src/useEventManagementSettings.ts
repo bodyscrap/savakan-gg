@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   clampNonNegativeInteger,
@@ -6,10 +6,17 @@ import {
   normalizeEventManagementSetting,
   normalizeSelectionCountArrays,
   removeItemListFromEventManagementSettings,
+  buildCategoryUsageList,
+  buildConfiguredCategorySlots,
   type EventManagementSetting,
 } from "./eventManagement";
 import type { EventSnapshot } from "./bracketDisplay";
-import { MAX_CATEGORY_SLOTS, normalizeItemListConfig, type ItemListConfig } from "./itemList";
+import {
+  MAX_CATEGORY_SLOTS,
+  normalizeItemListConfig,
+  resolveEventItemList,
+  type ItemListConfig,
+} from "./itemList";
 import type { EventLocalMeta, EventManagementMeta } from "./useTournamentWorkspace";
 
 const EVENT_MGMT_STORAGE_KEY = "savakan-gg.event-mgmt.v1";
@@ -76,7 +83,6 @@ type UseEventManagementSettingsOptions = {
   selectedEvent: EventSnapshot | null;
   slug: string;
   itemLists: ItemListConfig[];
-  selectedEventItemListSnapshots: ItemListConfig[];
   saveEventManagementMeta: (input: {
     slug: string;
     eventId: string;
@@ -94,7 +100,6 @@ export function useEventManagementSettings({
   selectedEvent,
   slug,
   itemLists,
-  selectedEventItemListSnapshots,
   saveEventManagementMeta,
   setBusy,
   setError,
@@ -112,6 +117,23 @@ export function useEventManagementSettings({
   const [totalItemMaxCount, setTotalItemMaxCount] = useState(3);
   const eventSettingHydratedKeyRef = useRef("");
   const suppressEventSettingAutosaveRef = useRef(false);
+  const selectedEventItemListSnapshots = useMemo(() => {
+    const snapshots = selectedEventMeta?.eventManagement?.itemListSnapshots;
+    return snapshots
+      ? snapshots.slice(0, MAX_CATEGORY_SLOTS).map(normalizeItemListConfig)
+      : [];
+  }, [selectedEventMeta]);
+  const configuredCategorySlots = useMemo(
+    () => buildConfiguredCategorySlots(
+      appliedEventMgmtSettings[selectedEventSettingKey],
+      (listId) => resolveEventItemList(listId, selectedEventItemListSnapshots, itemLists),
+    ),
+    [appliedEventMgmtSettings, itemLists, selectedEventItemListSnapshots, selectedEventSettingKey],
+  );
+  const selectedCategoryUsageList = useMemo(
+    () => buildCategoryUsageList(configuredCategorySlots, selectedEventMeta?.entrants ?? []),
+    [configuredCategorySlots, selectedEventMeta],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -441,6 +463,9 @@ export function useEventManagementSettings({
   return {
     eventMgmtSettings,
     appliedEventMgmtSettings,
+    selectedEventItemListSnapshots,
+    configuredCategorySlots,
+    selectedCategoryUsageList,
     eventMgmtSettingsReady,
     sideDecisionMethod,
     setSideDecisionMethod,

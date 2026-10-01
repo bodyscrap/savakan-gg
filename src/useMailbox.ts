@@ -41,6 +41,7 @@ type UseMailboxOptions = {
   onError: (error: string) => void;
   onMessage: (message: string) => void;
   onStopDqCameraScan: () => void;
+  onForceClearComplete: () => void;
 };
 
 export type DqRequestDialogState = {
@@ -65,6 +66,7 @@ export function useMailbox({
   onError,
   onMessage,
   onStopDqCameraScan,
+  onForceClearComplete,
 }: UseMailboxOptions) {
   const [genericMessages, setGenericMessages] = useState<GenericMessage[]>([]);
   const [genericMessagesReady, setGenericMessagesReady] = useState(false);
@@ -709,6 +711,37 @@ export function useMailbox({
     onMessage("スレッドを削除しました。");
   }
 
+  function forceClearMessages() {
+    if (genericMessages.length === 0) {
+      onError("");
+      onMessage("削除対象のメッセージはありません。");
+      return;
+    }
+
+    const firstConfirmed = window.confirm(
+      `危険: メッセージボックス内の全メッセージ ${genericMessages.length} 件を強制削除します。\nこの操作は元に戻せません。続行しますか？`,
+    );
+    if (!firstConfirmed) {
+      return;
+    }
+
+    const guardWord = window.prompt("最終確認: 強制削除を実行するには DELETE と入力してください。", "");
+    if ((guardWord ?? "").trim() !== "DELETE") {
+      onError("確認文字列が一致しなかったため、メッセージボックスの強制クリアを中止しました。");
+      return;
+    }
+
+    onError("");
+    onMessage("");
+    setGenericMessages([]);
+    setMailboxReadMessageIds([]);
+    setSelectedThreadId("");
+    setReplyBodyDraft("");
+    resetDqRequestDialog();
+    onForceClearComplete();
+    onMessage(`メッセージボックスを強制クリアしました（${genericMessages.length} 件削除）。`);
+  }
+
   useEffect(() => {
     if (mailboxThreads.length === 0) {
       setSelectedThreadId((current) => (current === "" ? current : ""));
@@ -793,6 +826,7 @@ export function useMailbox({
     submitDqRequest,
     resolveActiveThread,
     deleteActiveThread,
+    forceClearMessages,
     dqDialog,
     dqPlayerIdDraft,
     setDqPlayerIdDraft,

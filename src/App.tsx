@@ -25,25 +25,12 @@ import { StatusBoard, StatusBoardHero } from "./StatusBoard";
 import { PlayerListInfo } from "./PlayerListInfo";
 import { MessageBox } from "./MessageBox";
 import { ItemListEditor } from "./ItemListEditor";
-import {
-  buildCategoryUsageList,
-  buildConfiguredCategorySlots,
-} from "./eventManagement";
-import {
-  MAX_CATEGORY_SLOTS,
-  normalizeItemListConfig,
-  resolveEventItemList,
-  type ItemListConfig,
-} from "./itemList";
 import { EventSelector, type LocalSnapshotEventListItem } from "./EventSelector";
 import { EventSetting, type EventSettingCategorySlot } from "./EventSetting";
 import { AppShell, type AppTab } from "./AppShell";
 import { OverlayControl } from "./OverlayControl";
-import {
-  buildOverlaySetRoundText,
-  resolveOverlaySidesForSet,
-  useObsOverlay,
-} from "./useObsOverlay";
+import { useObsOverlay } from "./useObsOverlay";
+import { useObsOverlaySetActions } from "./useObsOverlaySetActions";
 import { usePhasePoolSelection } from "./usePhasePoolSelection";
 import { useMatchSideDraftActions } from "./useMatchSideDraftActions";
 import { buildMatchSideDrafts, resolveMatchSideDraftSavePlan } from "./matchSideDrafts";
@@ -53,6 +40,7 @@ import { BracketDialogs, type ResultConfirmationState } from "./BracketDialogs";
 import { MatchDetailDialog, type MatchSideRandomNotice } from "./MatchDetailDialog";
 import { useBracketContentView } from "./useBracketContentView";
 import { useSelectedEventEntrants } from "./useSelectedEventEntrants";
+import { useSnapshotEventListRefresh } from "./useSnapshotEventListRefresh";
 
 import { useBracketReport } from "./useBracketReport";
 import { useSetResultDrafts, type SetResultDraftState } from "./useSetResultDrafts";
@@ -91,9 +79,6 @@ import {
   type PlaySide,
   type TournamentWorkspace,
 } from "./useTournamentWorkspace";
-import {
-  saveLastSnapshotSelection,
-} from "./tournamentWorkspaceRepository";
 import { usePersistSnapshotSelection } from "./usePersistSnapshotSelection";
 import { useSnapshotStartupRestore } from "./useSnapshotStartupRestore";
 import { useBracketSectionView } from "./useBracketSectionView";
@@ -118,7 +103,6 @@ import {
   findSelectedLocalSnapshotEvent,
   findSnapshotEventByIdentity,
   resolveSelectedSnapshotName,
-  sameSnapshotEventKey,
 } from "./snapshotDisplay";
 import {
   createSetEntrantResolver,
@@ -341,6 +325,10 @@ function App() {
     saveItemList,
     removeItemList,
   } = useItemLists({ onError: setError, onMessage: setMessage });
+  const refreshLocalSnapshotEventsRef = useRef<() => Promise<void>>(async () => undefined);
+  async function refreshLocalSnapshotEvents() {
+    await refreshLocalSnapshotEventsRef.current();
+  }
   const selectLocalSnapshotEventRef = useRef<
     (item: LocalSnapshotEventListItem) => Promise<unknown>
   >(async () => undefined);
@@ -425,14 +413,6 @@ function App() {
       alive = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (activeTab !== "home") {
-      return;
-    }
-
-    void refreshLocalSnapshotEvents();
-  }, [activeTab]);
 
   const snapshot = workspace?.snapshot ?? null;
   const localMeta = workspace?.localMeta ?? null;
@@ -567,7 +547,6 @@ function App() {
 
   const {
     genericMessages,
-    setGenericMessages,
     mailboxMethodDraft,
     setMailboxMethodDraft,
     mailboxSubjectDraft,
@@ -587,7 +566,6 @@ function App() {
     setComposeMessageMeta,
     mailboxFilterSetting,
     setMailboxFilterSetting,
-    setMailboxReadMessageIds,
     mailboxThreadSummaries,
     unreadMessageCount,
     mailboxThreads,
@@ -604,9 +582,9 @@ function App() {
     replyToThread,
     openDqRequestDialog,
     closeDqRequestDialog,
-    resetDqRequestDialog,
     submitDqRequest,
     deleteActiveThread,
+    forceClearMessages: forceClearMailboxMessages,
     dqDialog,
     dqPlayerIdDraft,
     setDqPlayerIdDraft,
@@ -624,6 +602,10 @@ function App() {
     onError: setError,
     onMessage: setMessage,
     onStopDqCameraScan: stopDqCameraScan,
+    onForceClearComplete: () => {
+      resetCallListDisplay({ clearOwnOnly: true });
+      setSenderIdentityChangedSinceMailboxClear(false);
+    },
   });
 
   const {
@@ -651,20 +633,6 @@ function App() {
     senderUserId: senderProfile.senderUserId,
   });
 
-  const selectedEventItemListSnapshots = useMemo(() => {
-    if (!selectedEventMeta?.eventManagement?.itemListSnapshots) {
-      return [] as ItemListConfig[];
-    }
-
-    return selectedEventMeta.eventManagement.itemListSnapshots
-      .slice(0, MAX_CATEGORY_SLOTS)
-      .map((item) => normalizeItemListConfig(item));
-  }, [selectedEventMeta]);
-
-  function resolveItemListForSelectedEvent(listId: string): ItemListConfig | null {
-    return resolveEventItemList(listId, selectedEventItemListSnapshots, itemLists);
-  }
-
   const { resetLastPersistedSnapshotSelection } = usePersistSnapshotSelection({
     snapshot,
     selectedEvent,
@@ -674,6 +642,22 @@ function App() {
     setLocalSnapshotEvents,
     setError,
   });
+  const { refreshLocalSnapshotEvents: refreshSnapshotEventList } = useSnapshotEventListRefresh({
+    activeTab,
+    fetchLocalSnapshotEvents,
+    startupSavedSlugRef,
+    startupSavedEventIdRef,
+    clearStartupSelection,
+    markSnapshotEventsLoaded,
+    resetLastPersistedSnapshotSelection,
+    setWorkspace,
+    setSelectedEventId,
+    setSelectedPhaseName,
+    setSelectedPhasePoolKey,
+    setHomeSelectedSnapshotKey,
+    setError,
+  });
+  refreshLocalSnapshotEventsRef.current = refreshSnapshotEventList;
 
   const selectedEventSettingKey = useMemo(() => {
     if (!snapshot || !selectedEvent) {
@@ -684,9 +668,11 @@ function App() {
 
   const {
     eventMgmtSettings,
-    appliedEventMgmtSettings,
     sideDecisionMethod,
     setSideDecisionMethod,
+    selectedEventItemListSnapshots,
+    configuredCategorySlots,
+    selectedCategoryUsageList,
     categorySlotListIds,
     categorySlotMinCounts,
     categorySlotMaxCounts,
@@ -708,7 +694,6 @@ function App() {
     selectedEvent,
     slug,
     itemLists,
-    selectedEventItemListSnapshots,
     saveEventManagementMeta,
     setBusy,
     setError,
@@ -750,18 +735,6 @@ function App() {
     closeMatchDialog,
   });
   selectLocalSnapshotEventRef.current = selectLocalSnapshotEvent;
-
-  const configuredCategorySlots = useMemo(() => {
-    return buildConfiguredCategorySlots(
-      appliedEventMgmtSettings[selectedEventSettingKey],
-      resolveItemListForSelectedEvent,
-    );
-  }, [
-    appliedEventMgmtSettings,
-    itemLists,
-    selectedEventSettingKey,
-    selectedEventItemListSnapshots,
-  ]);
 
   const selectedSummaryName = useMemo(() => {
     const startupSelectedSlug = startupSavedSlugRef.current.trim();
@@ -839,10 +812,6 @@ function App() {
     })();
   }, [activeTab, busy, loadingLocalSnapshotEvents, selectedSidebarItem, workspace]);
 
-  const selectedCategoryUsageList = useMemo(
-    () => buildCategoryUsageList(configuredCategorySlots, selectedEventMeta?.entrants ?? []),
-    [configuredCategorySlots, selectedEventMeta],
-  );
   const {
     entrants: selectedEventEntrants,
     selectedEntrant: selectedTournamentEntrant,
@@ -972,39 +941,6 @@ function App() {
     void resolveMailboxThread();
   }
 
-  function forceClearMailboxMessages() {
-    if (genericMessages.length === 0) {
-      setError("");
-      setMessage("削除対象のメッセージはありません。");
-      return;
-    }
-
-    const firstConfirmed = window.confirm(
-      `危険: メッセージボックス内の全メッセージ ${genericMessages.length} 件を強制削除します。\nこの操作は元に戻せません。続行しますか？`,
-    );
-    if (!firstConfirmed) {
-      return;
-    }
-
-    const guardWord = window.prompt("最終確認: 強制削除を実行するには DELETE と入力してください。", "");
-    if ((guardWord ?? "").trim() !== "DELETE") {
-      setError("確認文字列が一致しなかったため、メッセージボックスの強制クリアを中止しました。");
-      return;
-    }
-
-    setError("");
-    setMessage("");
-    setGenericMessages([]);
-    setMailboxReadMessageIds([]);
-    setSelectedThreadId("");
-    setReplyBodyDraft("");
-    resetDqRequestDialog();
-    resetCallListDisplay({ clearOwnOnly: true });
-    setSenderIdentityChangedSinceMailboxClear(false);
-
-    setMessage(`メッセージボックスを強制クリアしました（${genericMessages.length} 件削除）。`);
-  }
-
   useEffect(() => {
     if (!matchSideRandomNotice) {
       return;
@@ -1048,104 +984,12 @@ function App() {
     return Number.isInteger(value) ? String(value) : value.toFixed(1);
   }
 
-  async function toggleActiveMatchOverlay(set: SetSnapshot) {
-    if (!isDisplayableSet(set, selectedEvent)) {
-      return;
-    }
-    const isSameActive = obsOverlayState?.active && obsOverlayState.currentSetId === set.setId;
-    const displayCode = setDisplayCodeById.get(set.setId);
-    const overlaySides = resolveOverlaySidesForSet(set, {
-      getSavedSide: getSetSlotSide,
-    });
-
-    await toggleObsOverlaySet({
-      enabled: !isSameActive,
-      setId: set.setId,
-      eventName: selectedEvent?.name ?? "",
-      eventAlias: selectedEventMeta?.eventAlias?.trim() ?? "",
-      roundText: buildOverlaySetRoundText(set, displayCode),
-      redPlayerName: overlaySides.redPlayerName,
-      bluePlayerName: overlaySides.bluePlayerName,
-      redSetWins: overlaySides.redSetWins,
-      blueSetWins: overlaySides.blueSetWins,
-      fontScale: obsOverlayState?.fontScale ?? 1,
-    });
-  }
-
-  async function forceSwitchActiveMatchOverlay(set: SetSnapshot) {
-    const currentSetId = obsOverlayState?.active ? obsOverlayState.currentSetId : null;
-    if (
-      currentSetId
-      && currentSetId !== "__test__"
-      && currentSetId !== set.setId
-    ) {
-      await toggleObsOverlaySet({
-        enabled: false,
-        setId: currentSetId,
-        eventName: "",
-        eventAlias: "",
-        roundText: "",
-        redPlayerName: "",
-        bluePlayerName: "",
-        redSetWins: 0,
-        blueSetWins: 0,
-        fontScale: obsOverlayState?.fontScale ?? 1,
-      });
-    }
-
-    await toggleActiveMatchOverlay(set);
-  }
-
   async function syncObsOverlayScoresForSet(
     set: SetSnapshot,
     slotScores: Array<{ entrantId: string; score: number }>,
     sideOverrides?: Record<string, PlaySide | "">,
   ) {
-    if (set.setId === "__test__") {
-      return;
-    }
-    if (!isDisplayableSet(set, selectedEvent)) {
-      return;
-    }
-
-    let currentOverlayState = obsOverlayState;
-    if (!currentOverlayState?.active || currentOverlayState.currentSetId !== set.setId) {
-      try {
-        const latest = await refreshObsOverlayState();
-        currentOverlayState = latest;
-      } catch {
-        return;
-      }
-    }
-
-    if (!currentOverlayState?.active || currentOverlayState.currentSetId !== set.setId || currentOverlayState.currentSetId === "__test__") {
-      return;
-    }
-
-    const scoreByEntrantId = new Map<string, number>();
-    for (const item of slotScores) {
-      scoreByEntrantId.set(item.entrantId, item.score);
-    }
-
-    const displayCode = setDisplayCodeById.get(set.setId);
-    const overlaySides = resolveOverlaySidesForSet(set, {
-      scoreByEntrantId,
-      sideOverrides,
-      getSavedSide: getSetSlotSide,
-    });
-
-    await toggleObsOverlaySet({
-      enabled: true,
-      setId: set.setId,
-      eventName: selectedEvent?.name ?? "",
-      eventAlias: selectedEventMeta?.eventAlias?.trim() ?? "",
-      roundText: buildOverlaySetRoundText(set, displayCode),
-      redPlayerName: overlaySides.redPlayerName,
-      bluePlayerName: overlaySides.bluePlayerName,
-      redSetWins: overlaySides.redSetWins,
-      blueSetWins: overlaySides.blueSetWins,
-      fontScale: currentOverlayState.fontScale,
-    });
+    await syncOverlayScoresForSet(set, slotScores, sideOverrides);
   }
 
   const {
@@ -1170,6 +1014,19 @@ function App() {
     bracketZoomLevel,
     obsOverlayState,
     scoreDrafts,
+  });
+  const {
+    toggleActiveMatchOverlay,
+    forceSwitchActiveMatchOverlay,
+    syncOverlayScoresForSet,
+  } = useObsOverlaySetActions({
+    selectedEvent,
+    eventAlias: selectedEventMeta?.eventAlias?.trim() ?? "",
+    obsOverlayState,
+    setDisplayCodeById,
+    getSavedSide: getSetSlotSide,
+    refreshObsOverlayState,
+    toggleObsOverlaySet,
   });
 
   const { sendCallMessageFromMatch } = useCallMessageDraft({
@@ -1236,45 +1093,6 @@ function App() {
       setSelectedEventId("");
     }
   }, [snapshot, selectedEventId]);
-
-  async function refreshLocalSnapshotEvents() {
-    try {
-      const items = await fetchLocalSnapshotEvents();
-
-      const savedSlug = startupSavedSlugRef.current.trim();
-      const savedEventId = startupSavedEventIdRef.current.trim();
-      const savedSelectionStillExists = savedSlug === "" || savedEventId === ""
-        || items.some((item) => sameSnapshotEventKey(savedSlug, savedEventId, item.slug, item.eventId));
-      if (!savedSelectionStillExists) {
-        setWorkspace(null);
-        setSelectedEventId("");
-        setSelectedPhaseName("");
-        setSelectedPhasePoolKey("");
-        clearStartupSelection();
-        resetLastPersistedSnapshotSelection();
-        await saveLastSnapshotSelection({
-          slug: "",
-          eventId: "",
-          phaseName: null,
-          phaseGroupName: null,
-        });
-      }
-
-      if (items.length === 0) {
-        setWorkspace(null);
-        setSelectedEventId("");
-        setSelectedPhaseName("");
-        setSelectedPhasePoolKey("");
-        setHomeSelectedSnapshotKey("");
-        clearStartupSelection();
-        resetLastPersistedSnapshotSelection();
-      }
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      markSnapshotEventsLoaded();
-    }
-  }
 
   function getSetSlotSide(setId: string, entrantId: string | null): PlaySide | "" {
     if (!entrantId) {
