@@ -107,7 +107,9 @@ export function resolveExistingMatchDialogDraft(
   entrantIds: string[],
 ): ExistingMatchDialogDraft | null {
   const currentEntrantIds = new Set(entrantIds);
-  const matchesCurrentEntrants = (draftState: SetResultDraftState | undefined) =>
+  const matchesCurrentEntrants = (
+    draftState: SetResultDraftState | undefined,
+  ): draftState is SetResultDraftState =>
     draftState !== undefined
     && (!draftState.winnerId.trim() || currentEntrantIds.has(draftState.winnerId))
     && Object.keys(draftState.scoreDrafts).every((entrantId) => currentEntrantIds.has(entrantId));
