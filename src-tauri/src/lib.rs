@@ -167,6 +167,7 @@ fn obs_overlay_state() -> &'static Mutex<ObsOverlayRuntimeState> {
     OBS_OVERLAY_STATE.get_or_init(|| {
         Mutex::new(ObsOverlayRuntimeState {
             active_set: None,
+            event_alias: String::new(),
             preview_font_scale: 1.0,
             name_fit_mode: "truncate".to_owned(),
             show_set_info: true,
@@ -900,6 +901,7 @@ struct ObsOverlayActiveSet {
 #[derive(Debug, Clone)]
 struct ObsOverlayRuntimeState {
     active_set: Option<ObsOverlayActiveSet>,
+    event_alias: String,
     preview_font_scale: f64,
     name_fit_mode: String,
     show_set_info: bool,
@@ -958,7 +960,7 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
         fully_stopped: guard.fully_stopped,
         current_set_id: None,
         event_name: None,
-        event_alias: None,
+        event_alias: Some(guard.event_alias.clone()),
         round_text: None,
         red_player_name: String::new(),
         blue_player_name: String::new(),
@@ -1178,9 +1180,10 @@ fn build_overlay_html() -> &'static str {
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        body.hide-event-alias .event-alias {
-            visibility: hidden;
-            opacity: 0;
+        body.full-stop .event-alias,
+        body.hide-event-alias .event-alias,
+        .event-alias:empty {
+            display: none;
         }
     </style>
 </head>
@@ -1405,7 +1408,7 @@ fn build_overlay_html() -> &'static str {
                 document.getElementById('blueCount').textContent = blueWins;
                                 fitSetInfoToPlate(document.getElementById('setMain'), setMain);
                 fitSetInfoToPlate(document.getElementById('setSub'), setSub);
-                document.getElementById('eventAlias').textContent = isActive ? String(state.eventAlias || '').trim() : '';
+                document.getElementById('eventAlias').textContent = String(state.eventAlias || '').trim();
       } catch (_err) {
         // ignore and retry.
       }
@@ -2062,6 +2065,8 @@ fn mobile_input_html() -> &'static str {
         const randomActionTime = document.getElementById('randomActionTime');
         let selectedSet = null;
         let overlayState = null;
+        let mobileEventAlias = '';
+        let eventInfoPromise = Promise.resolve();
         let displayOnePOnTop = true;
         let mobileSideDrafts = {};
         let directWinnerId = null;
@@ -2069,6 +2074,7 @@ fn mobile_input_html() -> &'static str {
 
         function updateHeaderInfo(info) {
             const eventAlias = (info && info.eventAlias && info.eventAlias.trim()) || 'スマホ結果入力依頼';
+            mobileEventAlias = eventAlias;
             const tournamentName = (info && info.tournamentName && info.tournamentName.trim()) || '-';
             const eventName = (info && info.eventName && info.eventName.trim()) || '-';
             if (pageTitle) {
@@ -2697,7 +2703,7 @@ fn mobile_input_html() -> &'static str {
             return slots.find((slot) => String(slot.playSide || '').trim() === playSide) || null;
         }
 
-        function buildOverlayPayloadFromDetail(detail) {
+        function buildOverlayPayloadFromDetail(detail, eventAlias = mobileEventAlias) {
             const onePSlot = getDetailSlotByPlaySide(detail, '1P') || (Array.isArray(detail?.slots) ? detail.slots[0] || null : null);
             const twoPSlot = getDetailSlotByPlaySide(detail, '2P') || (Array.isArray(detail?.slots) ? detail.slots[1] || null : null);
             const setLabel = getDisplaySetLabel(detail);
@@ -2707,6 +2713,7 @@ fn mobile_input_html() -> &'static str {
                 slug,
                 eventId,
                 setId: detail?.setId || '',
+                eventAlias,
                 eventName: detail?.phaseName || '',
                 roundText: overlayRoundText,
                 redPlayerName: onePSlot?.entrantName || 'RED',
@@ -2799,6 +2806,7 @@ fn mobile_input_html() -> &'static str {
                 return;
             }
 
+            await eventInfoPromise;
             const payload = buildOverlayPayloadFromDetail(selectedSet);
             const active = Boolean(overlayState && overlayState.active);
             const currentSetId = overlayState && overlayState.currentSetId ? String(overlayState.currentSetId) : '';
@@ -2848,7 +2856,7 @@ fn mobile_input_html() -> &'static str {
                 return;
             }
 
-            const payload = buildOverlayPayloadFromDetail(selectedSet);
+            const payload = buildOverlayPayloadFromDetail(selectedSet, overlayState.eventAlias ?? '');
             const response = await fetch('/mobile/api/overlay-toggle?slug=' + encodeURIComponent(slug) + '&eventId=' + encodeURIComponent(eventId) + '&token=' + encodeURIComponent(token), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -3085,7 +3093,7 @@ fn mobile_input_html() -> &'static str {
         if (matchupReadyOnlyCheckbox) {
             matchupReadyOnlyCheckbox.addEventListener('change', () => { void fetchSets(); });
         }
-        void fetchEventInfo();
+        eventInfoPromise = fetchEventInfo();
         closeDetailBtn.addEventListener('click', () => {
             showSearchView();
         });
@@ -4784,6 +4792,7 @@ fn apply_obs_overlay_toggle(
             blue_set_wins: input.blue_set_wins,
             font_scale: next_scale,
         });
+        guard.event_alias = input.event_alias.trim().to_owned();
         guard.fully_stopped = false;
         guard.preview_font_scale = next_scale;
     } else if let Some(active) = &guard.active_set {
