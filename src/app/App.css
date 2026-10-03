@@ -202,6 +202,7 @@ body {
 
 .content {
   padding: 1.25rem;
+  padding-bottom: 9rem;
   display: grid;
   gap: 0.9rem;
   align-content: start;
@@ -211,7 +212,8 @@ body {
 
 .content.call-list-mode {
   align-content: stretch;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: calc(100vh - 4rem);
   overflow: hidden;
 }
 
@@ -421,15 +423,6 @@ button:disabled {
   font-size: 0.9rem;
 }
 
-.message-stack {
-  display: grid;
-  gap: 0.5rem;
-}
-
-.message.empty {
-  visibility: hidden;
-}
-
 .message.success {
   background: var(--success-bg);
   border-color: var(--success-line);
@@ -440,6 +433,49 @@ button:disabled {
   background: var(--danger-bg);
   border-color: var(--danger-line);
   color: var(--danger-ink);
+}
+
+.status-bar {
+  position: fixed;
+  z-index: 90;
+  left: 248px;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  gap: 0.4rem;
+  max-height: 35vh;
+  overflow-y: auto;
+  padding: 0.55rem 1rem;
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 -2px 8px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.status-bar .message {
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.status-progress {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.status-progress-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.status-bar-idle {
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .meta {
@@ -2131,8 +2167,12 @@ li {
   }
 
   .content.call-list-mode {
-    max-height: 100vh;
+    max-height: calc(100vh - 4rem);
     overflow: hidden;
+  }
+
+  .status-bar {
+    left: 0;
   }
 
   .tab-nav {
@@ -2159,6 +2199,7 @@ li {
 @media (max-width: 640px) {
   .content {
     padding: 0.8rem;
+    padding-bottom: 9rem;
   }
 
   .hero-call-list-toolbar {

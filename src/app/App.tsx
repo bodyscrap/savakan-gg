@@ -24,7 +24,7 @@ import { MessageBox } from "../components/MessageBox";
 import { ItemListEditor } from "../components/ItemListEditor";
 import { EventSelector, type LocalSnapshotEventListItem } from "../components/EventSelector";
 import { EventSetting } from "../components/EventSetting";
-import { AppShell, type AppTab, useAppVersion } from "../components/AppShell";
+import { AppShell, type AppStatusProgress, type AppTab, useAppVersion } from "../components/AppShell";
 import { OverlayControl } from "../components/OverlayControl";
 import { isOverlayActiveForSet, useObsOverlay } from "../hooks/useObsOverlay";
 import { useObsOverlaySetActions } from "../hooks/useObsOverlaySetActions";
@@ -692,9 +692,9 @@ function App() {
 
   const shouldShowBracketSnapshotRefreshProgress = useMemo(() => {
     const isReportSnapshotRefresh = bracketReport.progress?.phase === "refreshingSnapshot";
-    const isManualBracketRefresh = activeTab === "bracket" && busy && createSnapshotProgress !== null;
+    const isManualBracketRefresh = busy && !createBusy && createSnapshotProgress !== null;
     return (isReportSnapshotRefresh || isManualBracketRefresh) && createSnapshotProgress !== null;
-  }, [activeTab, bracketReport.progress, busy, createSnapshotProgress]);
+  }, [bracketReport.progress, busy, createBusy, createSnapshotProgress]);
 
   const hasSelectedSenderNetworkDevice = selectedSenderNetworkCandidate !== null;
   const senderIdCollision = useMemo(() => hasSenderIdCollision(
@@ -931,6 +931,39 @@ function App() {
     return saveMatchSideDraftsForResult(eventSnapshot, set, sideDrafts);
   }
 
+  const statusProgresses: AppStatusProgress[] = [];
+  if (createBusy) {
+    statusProgresses.push({
+      id: "snapshot-creation",
+      label: createSnapshotProgressLabel || "処理中...",
+      percent: createSnapshotProgressPercent,
+      valueLabel: createSnapshotProgress && createSnapshotProgress.totalSets !== null
+        ? `${Math.round(createSnapshotProgressPercent)}%`
+        : undefined,
+      ariaLabel: "スナップショット作成の進捗",
+    });
+  }
+  if (bracketReport.progress) {
+    statusProgresses.push({
+      id: "bracket-report",
+      label: bracketReport.progressLabel,
+      percent: bracketReport.progressPercent,
+      valueLabel: `${Math.round(bracketReport.progressPercent)}%`,
+      ariaLabel: "結果報告の進捗",
+    });
+  }
+  if (shouldShowBracketSnapshotRefreshProgress && createSnapshotProgress) {
+    statusProgresses.push({
+      id: "bracket-snapshot-refresh",
+      label: `報告後スナップショット更新: ${createSnapshotProgressLabel}`,
+      percent: createSnapshotProgressPercent,
+      valueLabel: createSnapshotProgress.totalSets !== null
+        ? `${Math.round(createSnapshotProgressPercent)}%`
+        : undefined,
+      ariaLabel: "報告後スナップショット更新の進捗",
+    });
+  }
+
   return (
     <AppShell
       appVersion={appVersion}
@@ -957,6 +990,7 @@ function App() {
       ) : null}
       message={message}
       error={error}
+      statusProgresses={statusProgresses}
     >
 
         {activeTab === "create" && (
@@ -981,9 +1015,6 @@ function App() {
               onEventAliasChange={setCreateEventAlias}
               canCreateSnapshot={token.trim() !== "" && toApiSlug(slug) !== "" && createSelectedEventId !== "" && toEventApiSlug(slug, createPreview?.events.find((event) => event.eventId === createSelectedEventId)?.eventSlug ?? "") !== ""}
               onCreateSnapshot={() => void createEventSnapshotBySlug()}
-              createSnapshotProgress={createSnapshotProgress}
-              createSnapshotProgressPercent={createSnapshotProgressPercent}
-              createSnapshotProgressLabel={createSnapshotProgressLabel}
             />
             <EventSelector
               items={localSnapshotEvents}
@@ -1006,7 +1037,6 @@ function App() {
           <EventSetting
             event={{
               hasSelectedEvent: Boolean(selectedEvent),
-              eventAlias: selectedEventMeta?.eventAlias ?? "",
               tournamentName: snapshot?.name ?? "-",
               eventName: selectedEvent?.name ?? "",
               busy,
@@ -1273,14 +1303,6 @@ function App() {
           <BracketTab
             draftPendingCount={draftPendingCount}
             confirmedReportableCount={confirmedReportableCount}
-            reportProgressActive={Boolean(busy || bracketReport.progress)}
-            reportProgressHasProgress={Boolean(bracketReport.progress)}
-            reportProgressPercent={bracketReport.progressPercent}
-            reportProgressLabel={bracketReport.progressLabel}
-            showSnapshotRefreshProgress={shouldShowBracketSnapshotRefreshProgress}
-            snapshotProgressPercent={createSnapshotProgressPercent}
-            snapshotProgressLabel={createSnapshotProgressLabel}
-            snapshotProgressHasTotal={createSnapshotProgress?.totalSets !== null}
             hasSnapshot={Boolean(snapshot)}
             tournamentName={snapshot?.name ?? "-"}
             eventAlias={selectedEventMeta?.eventAlias ?? ""}

@@ -44,9 +44,6 @@ type CreateSnapshotProps = {
   onEventAliasChange: (value: string) => void;
   canCreateSnapshot: boolean;
   onCreateSnapshot: () => void;
-  createSnapshotProgress: EventSnapshotProgress | null;
-  createSnapshotProgressPercent: number;
-  createSnapshotProgressLabel: string;
 };
 
 function createPreviewEventSearchLabel(event: TournamentEventPreviewItem): string {
@@ -73,9 +70,6 @@ export function CreateSnapshot({
   onEventAliasChange,
   canCreateSnapshot,
   onCreateSnapshot,
-  createSnapshotProgress,
-  createSnapshotProgressPercent,
-  createSnapshotProgressLabel,
 }: CreateSnapshotProps) {
   const selectedEventName = createPreview?.events.find((event) => event.eventId === createSelectedEventId)?.eventName ?? "-";
 
@@ -191,28 +185,6 @@ export function CreateSnapshot({
             スナップショット作成
           </button>
         </div>
-        {(createBusy || createSnapshotProgress) && (
-          <div className="create-snapshot-progress" role="status" aria-live="polite">
-            <div
-              className="create-snapshot-progress-track"
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(createSnapshotProgressPercent)}
-            >
-              <div
-                className="create-snapshot-progress-fill"
-                style={{ width: `${createSnapshotProgressPercent}%` }}
-              />
-            </div>
-            <p className="create-snapshot-progress-meta">
-              {createSnapshotProgressLabel}
-              {createSnapshotProgress && createSnapshotProgress.totalSets !== null
-                ? ` (${Math.round(createSnapshotProgressPercent)}%)`
-                : ""}
-            </p>
-          </div>
-        )}
       </section>
     </div>
   );

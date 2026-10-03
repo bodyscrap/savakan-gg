@@ -31,14 +31,6 @@ type RoundRobinView = {
 type BracketTabProps = {
   draftPendingCount: number;
   confirmedReportableCount: number;
-  reportProgressActive: boolean;
-  reportProgressHasProgress: boolean;
-  reportProgressPercent: number;
-  reportProgressLabel: string;
-  showSnapshotRefreshProgress: boolean;
-  snapshotProgressPercent: number;
-  snapshotProgressLabel: string;
-  snapshotProgressHasTotal: boolean;
   hasSnapshot: boolean;
   tournamentName: string;
   eventAlias: string;
@@ -69,14 +61,6 @@ type BracketTabProps = {
 export function BracketTab({
   draftPendingCount,
   confirmedReportableCount,
-  reportProgressActive,
-  reportProgressHasProgress,
-  reportProgressPercent,
-  reportProgressLabel,
-  showSnapshotRefreshProgress,
-  snapshotProgressPercent,
-  snapshotProgressLabel,
-  snapshotProgressHasTotal,
   hasSnapshot,
   tournamentName,
   eventAlias,
@@ -113,48 +97,6 @@ export function BracketTab({
             下書き: {draftPendingCount} / 確定済み: {confirmedReportableCount}   黄枠のsetは、現在のスナップショットから変更があります。
           </p>
         </div>
-        {reportProgressActive && (
-          <div className="create-snapshot-progress" role="status" aria-live="polite" style={{ marginTop: "0.7rem" }}>
-            <div
-              className="create-snapshot-progress-track"
-              role="progressbar"
-              aria-label="結果報告の進捗"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(reportProgressPercent)}
-            >
-              <div
-                className="create-snapshot-progress-fill"
-                style={{ width: `${reportProgressPercent}%` }}
-              />
-            </div>
-            <p className="create-snapshot-progress-meta">
-              {reportProgressLabel}
-              {reportProgressHasProgress ? ` (${Math.round(reportProgressPercent)}%)` : ""}
-            </p>
-          </div>
-        )}
-        {showSnapshotRefreshProgress && (
-          <div className="create-snapshot-progress" role="status" aria-live="polite" style={{ marginTop: "0.45rem" }}>
-            <div
-              className="create-snapshot-progress-track"
-              role="progressbar"
-              aria-label="報告後スナップショット更新の進捗"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(snapshotProgressPercent)}
-            >
-              <div
-                className="create-snapshot-progress-fill"
-                style={{ width: `${snapshotProgressPercent}%` }}
-              />
-            </div>
-            <p className="create-snapshot-progress-meta">
-              {`報告後スナップショット更新: ${snapshotProgressLabel}`}
-              {snapshotProgressHasTotal ? ` (${Math.round(snapshotProgressPercent)}%)` : ""}
-            </p>
-          </div>
-        )}
       </section>
 
       {hasSnapshot && (

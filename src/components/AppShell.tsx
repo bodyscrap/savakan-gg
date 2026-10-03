@@ -53,6 +53,14 @@ type SidebarSummary = {
   tournamentName?: string;
 } | null;
 
+export type AppStatusProgress = {
+  id: string;
+  label: string;
+  percent: number;
+  valueLabel?: string;
+  ariaLabel: string;
+};
+
 type AppShellProps = {
   appVersion: string;
   activeTab: AppTab;
@@ -63,6 +71,7 @@ type AppShellProps = {
   headerContent?: ReactNode;
   message: string;
   error: string;
+  statusProgresses: AppStatusProgress[];
   children: ReactNode;
 };
 
@@ -76,6 +85,7 @@ export function AppShell({
   headerContent,
   message,
   error,
+  statusProgresses,
   children,
 }: AppShellProps) {
   const activeTabLabel = APP_TABS.find((tab) => tab.id === activeTab)?.label ?? "大会管理";
@@ -146,13 +156,37 @@ export function AppShell({
           )}
         </section>
 
-        <section className="message-stack" aria-live="polite">
-          <p className={`message success ${message === "" ? "empty" : ""}`}>{message === "" ? " " : message}</p>
-          <p className={`message error ${error === "" ? "empty" : ""}`}>{error === "" ? " " : error}</p>
-        </section>
-
         {children}
       </main>
+
+      <section className="status-bar" aria-label="処理状況" role="status" aria-live="polite">
+        {message !== "" && <p className="message success">{message}</p>}
+        {error !== "" && <p className="message error">{error}</p>}
+        {statusProgresses.map((progress) => (
+          <div className="status-progress" key={progress.id}>
+            <div className="status-progress-label">
+              <span>{progress.label}</span>
+              {progress.valueLabel && <span>{progress.valueLabel}</span>}
+            </div>
+            <div
+              className="create-snapshot-progress-track"
+              role="progressbar"
+              aria-label={progress.ariaLabel}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(progress.percent)}
+            >
+              <div
+                className="create-snapshot-progress-fill"
+                style={{ width: `${progress.percent}%` }}
+              />
+            </div>
+          </div>
+        ))}
+        {message === "" && error === "" && statusProgresses.length === 0 && (
+          <span className="status-bar-idle">待機中</span>
+        )}
+      </section>
     </div>
   );
 }

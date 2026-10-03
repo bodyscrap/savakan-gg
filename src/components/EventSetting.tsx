@@ -25,7 +25,6 @@ export type SideDecisionMethod = "upper_1p" | "upper_2p" | "random";
 export type EventSettingProps = {
   event: {
     hasSelectedEvent: boolean;
-    eventAlias: string;
     tournamentName: string;
     eventName: string;
     busy: boolean;
@@ -76,7 +75,6 @@ export type EventSettingProps = {
 export function EventSetting({ event, rules, playerMeta, actions }: EventSettingProps) {
   const {
     hasSelectedEvent,
-    eventAlias,
     tournamentName,
     eventName,
     busy,
@@ -130,8 +128,20 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
         <>
           <div className="stats-grid">
             <article className="stat-card">
-              <p className="meta">エイリアス名</p>
-              <h3>{eventAlias.trim() ? eventAlias : "未設定"}</h3>
+              <label
+                className="meta"
+                style={{ display: "grid", gap: "0.3rem" }}
+              >
+                エイリアス名
+                <input
+                  id="event-alias-draft"
+                  type="text"
+                  value={eventAliasDraft}
+                  onChange={(e) => onEventAliasDraftChange(e.currentTarget.value)}
+                  placeholder="大会一覧に表示する表示名"
+                  autoComplete="off"
+                />
+              </label>
             </article>
             <article className="stat-card">
               <p className="meta">tournament名 (start.gg)</p>
@@ -143,29 +153,16 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
             </article>
           </div>
 
-          <div className="panel-toolbar compact">
+          <div className="panel-toolbar compact" style={{ justifyContent: "flex-start" }}>
+            <button type="button" className="ghost" disabled={busy} onClick={onSaveEventAlias}>
+              エイリアス名を変更
+            </button>
             <button type="button" className="ghost" disabled={busy || !canUpdateSnapshot} onClick={onUpdateSnapshot}>
               スナップショットを更新
             </button>
           </div>
 
           <div className="tournament-settings" style={{ marginTop: "0.9rem" }}>
-            <div className="setting-row">
-              <p className="setting-row-title">エイリアス名</p>
-              <div className="setting-row-fields single" style={{ gridTemplateColumns: "minmax(220px, 420px) auto" }}>
-                <input
-                  type="text"
-                  value={eventAliasDraft}
-                  onChange={(e) => onEventAliasDraftChange(e.currentTarget.value)}
-                  placeholder="大会一覧に表示する表示名"
-                  autoComplete="off"
-                />
-                <button type="button" className="ghost" disabled={busy} onClick={onSaveEventAlias}>
-                  エイリアスを変更
-                </button>
-              </div>
-            </div>
-
             <div className="setting-row">
               <p className="setting-row-title">1P/2P決定方法</p>
               <div className="setting-row-fields single" style={{ gridTemplateColumns: "minmax(220px, 340px) auto" }}>
@@ -277,7 +274,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
 
             <div className="setting-row save">
               <button type="button" className="ghost" onClick={onSaveEventManagementSetting}>
-                大会設定を保存
+                設定の適用&保存
               </button>
             </div>
           </div>
