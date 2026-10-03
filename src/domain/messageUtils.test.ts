@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildCallTargetId,
 	canBroadcastCallListSync,
+	extractCallTargetIdentityFromMeta,
 	formatSenderProfileLabel,
 	hasSenderIdCollision,
+	isSameCallTargetIdentity,
 	isSenderProfileReadyForMessaging,
 	normalizeSenderUserId,
 	resolveSenderSettingsStatus,
@@ -14,6 +17,52 @@ const validProfile = {
 	bindIp: "192.168.1.20",
 	broadcastSubnetMask: "255.255.255.0",
 };
+
+describe("call target identity", () => {
+	it("uses event, set, and normalized player ID as the complete call ID", () => {
+		const identity = extractCallTargetIdentityFromMeta({
+			scopeEventId: "event-1",
+			scopeTournamentId: "tournament-1",
+			scopePhaseName: "Phase 1",
+			scopePhaseGroupName: "Pool A",
+			setId: "set-1",
+			playerId: " pg-player ",
+			callEntrantId: "entrant-1",
+		});
+
+		expect(identity).toEqual({
+			eventId: "event-1",
+			setId: "set-1",
+			playerId: "PG-PLAYER",
+		});
+		if (!identity) {
+			throw new Error("Expected a call target identity");
+		}
+		expect(buildCallTargetId(" event-1 ", " set-1 ", "pg-player")).toBe("event-1::set-1::PG-PLAYER");
+		expect(isSameCallTargetIdentity(identity, {
+			eventId: "event-1",
+			setId: "set-1",
+			playerId: "PG-PLAYER",
+		})).toBe(true);
+	});
+
+	it("does not match calls for another event, set, or player", () => {
+		const identity = {
+			eventId: "event-1",
+			setId: "set-1",
+			playerId: "PG-PLAYER",
+		};
+
+		expect(isSameCallTargetIdentity(identity, { ...identity, eventId: "event-2" })).toBe(false);
+		expect(isSameCallTargetIdentity(identity, { ...identity, setId: "set-2" })).toBe(false);
+		expect(isSameCallTargetIdentity(identity, { ...identity, playerId: "PG-OTHER" })).toBe(false);
+		expect(extractCallTargetIdentityFromMeta({
+			eventId: "event-1",
+			setId: "set-1",
+			callEntrantId: "entrant-1",
+		})).toBeNull();
+	});
+});
 
 describe("sender messaging readiness", () => {
 	it("normalizes sender IDs to at most eight digits", () => {

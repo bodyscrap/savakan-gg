@@ -29,6 +29,7 @@ export type MailboxThreadSummary = {
 
 type MessageBoxProps = {
   senderLabel: string;
+  senderUserId: string;
   senderProfileReady: boolean;
   disableLocalCommunication: boolean;
   mailboxServiceStarted: boolean;
@@ -70,6 +71,7 @@ type MessageBoxProps = {
 
 export function MessageBox({
   senderLabel,
+  senderUserId,
   senderProfileReady,
   disableLocalCommunication,
   mailboxServiceStarted,
@@ -108,6 +110,12 @@ export function MessageBox({
   canOpenDqDialog,
   onOpenDqDialog,
 }: MessageBoxProps) {
+  const normalizedSenderUserId = senderUserId.trim();
+  const isResolutionOwner = (thread: GenericMessage | null) => (
+    normalizedSenderUserId !== ""
+    && thread?.senderUserId.trim() === normalizedSenderUserId
+  );
+
   return (
     <>
       <section className="panel">
@@ -208,6 +216,9 @@ export function MessageBox({
             </label>
           </div>
         </div>
+        <p className="meta">
+          「自分起点・解決担当」の表示があるスレッドは、自分が開始し、解決処理を担当するスレッドです。
+        </p>
         <div className="mailbox-layout">
           <section className="mailbox-thread-list">
             <h3>スレッド ({mailboxThreads.length})</h3>
@@ -219,11 +230,12 @@ export function MessageBox({
                   const summary = mailboxThreadSummaries.find((item) => item.root.threadId === thread.threadId);
                   const unreadCount = summary?.unreadCount ?? 0;
                   const resolved = summary?.resolved ?? false;
+                  const ownsResolutionResponsibility = isResolutionOwner(thread);
 
                   return (
                     <article
                       key={thread.threadId}
-                      className={`event-list-item mailbox-thread-item ${activeThread?.threadId === thread.threadId ? "selected" : ""}`}
+                      className={`event-list-item mailbox-thread-item ${ownsResolutionResponsibility ? "mailbox-thread-item--resolution-owner" : ""} ${activeThread?.threadId === thread.threadId ? "selected" : ""}`}
                       role="button"
                       tabIndex={0}
                       onClick={() => onSelectThread(thread.threadId)}
@@ -236,7 +248,12 @@ export function MessageBox({
                     >
                       <div className="event-list-head">
                         <div>
-                          <h4>{thread.subject}</h4>
+                          <div className="mailbox-thread-heading">
+                            <h4>{thread.subject}</h4>
+                            {ownsResolutionResponsibility && (
+                              <span className="mailbox-resolution-owner-badge">自分起点・解決担当</span>
+                            )}
+                          </div>
                           <p className="meta">属性: {getMailboxMethodLabel(thread.method)}</p>
                         </div>
                         <p className="meta">{new Date(thread.createdAt).toLocaleString()}</p>
@@ -258,13 +275,23 @@ export function MessageBox({
               <p className="meta">左のスレッドを選択してください。</p>
             ) : (
               <>
-                <h3>{activeThread.subject}</h3>
+                <div className="mailbox-thread-heading">
+                  <h3>{activeThread.subject}</h3>
+                  {isResolutionOwner(activeThread) && (
+                    <span className="mailbox-resolution-owner-badge">自分起点・解決担当</span>
+                  )}
+                </div>
                 <p className="meta">属性: {getMailboxMethodLabel(activeThread.method)} / threadId: {activeThread.threadId}</p>
                 <p className="meta">状態: {activeThreadResolved ? "解決済み" : "未解決"}</p>
 
                 <div className="mailbox-message-list">
-                  {activeThreadMessages.map((item) => (
-                    <article key={item.messageId} className={`event-list-item mailbox-message ${item.parentMessageId ? "reply" : "root"}`}>
+                  {activeThreadMessages.map((item) => {
+                    const isResolutionOwnerRoot = isResolutionOwner(activeThread) && item.parentMessageId === null;
+                    return (
+                    <article
+                      key={item.messageId}
+                      className={`event-list-item mailbox-message ${item.parentMessageId ? "reply" : "root"} ${isResolutionOwnerRoot ? "mailbox-message--resolution-owner" : ""}`}
+                    >
                       <div className="event-list-head">
                         <div>
                           <h4>{item.senderName}</h4>
@@ -276,6 +303,9 @@ export function MessageBox({
                       <p className="meta">
                         type: {item.messageType === "resolve" ? "解決" : item.messageType === "dq_request" ? "DQ申請" : "通常"}
                       </p>
+                      {isResolutionOwnerRoot && (
+                        <span className="mailbox-resolution-owner-badge">自分起点・解決担当</span>
+                      )}
                       {isDqRequestMessage(item) && (
                         <div style={{ marginTop: "0.45rem", display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
                           <button type="button" className="ghost tiny" onClick={() => onProcessDqRequest(item)} disabled={disableLocalCommunication}>
@@ -285,7 +315,8 @@ export function MessageBox({
                       )}
                       <p className="message-body">{item.body}</p>
                     </article>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 <div className="panel-toolbar compact" style={{ marginTop: "0.6rem" }}>

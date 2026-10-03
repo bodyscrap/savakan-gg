@@ -1062,12 +1062,9 @@ pub fn save_generic_messages(app: &AppHandle, messages: &[GenericMessage]) -> Re
 
 #[derive(Debug, Clone)]
 struct CallMessageIdentity {
-    tournament_id: String,
     event_id: String,
-    phase_name: String,
-    phase_group_name: String,
     set_id: String,
-    entrant_id: String,
+    player_id: String,
 }
 
 fn message_meta_string(meta: &serde_json::Value, key: &str) -> String {
@@ -1081,15 +1078,7 @@ fn call_message_identity(message: &GenericMessage) -> Option<CallMessageIdentity
     let meta = message.message_meta.as_ref()?;
 
     let set_id = message_meta_string(meta, "setId");
-    let entrant_id = message_meta_string(meta, "callEntrantId");
-    let tournament_id = {
-        let scoped = message_meta_string(meta, "scopeTournamentId");
-        if !scoped.is_empty() {
-            scoped
-        } else {
-            message_meta_string(meta, "tournamentId")
-        }
-    };
+    let player_id = message_meta_string(meta, "playerId").to_ascii_uppercase();
     let event_id = {
         let scoped = message_meta_string(meta, "scopeEventId");
         if !scoped.is_empty() {
@@ -1098,55 +1087,22 @@ fn call_message_identity(message: &GenericMessage) -> Option<CallMessageIdentity
             message_meta_string(meta, "eventId")
         }
     };
-    let phase_name = {
-        let scoped = message_meta_string(meta, "scopePhaseName");
-        let legacy = if scoped.is_empty() {
-            message_meta_string(meta, "phaseName")
-        } else {
-            scoped
-        };
-        if legacy.is_empty() {
-            "Phase 未設定".to_owned()
-        } else {
-            legacy
-        }
-    };
-    let phase_group_name = {
-        let scoped = message_meta_string(meta, "scopePhaseGroupName");
-        let legacy = if scoped.is_empty() {
-            message_meta_string(meta, "phaseGroupName")
-        } else {
-            scoped
-        };
-        if legacy.is_empty() {
-            "Pool 未設定".to_owned()
-        } else {
-            legacy
-        }
-    };
 
-    if tournament_id.is_empty() || event_id.is_empty() || set_id.is_empty() || entrant_id.is_empty()
-    {
+    if event_id.is_empty() || set_id.is_empty() || player_id.is_empty() {
         return None;
     }
 
     Some(CallMessageIdentity {
-        tournament_id,
         event_id,
-        phase_name,
-        phase_group_name,
         set_id,
-        entrant_id,
+        player_id,
     })
 }
 
 fn call_identity_matches(left: &CallMessageIdentity, right: &CallMessageIdentity) -> bool {
-    left.tournament_id == right.tournament_id
-        && left.event_id == right.event_id
-        && left.phase_name == right.phase_name
-        && left.phase_group_name == right.phase_group_name
+    left.event_id == right.event_id
         && left.set_id == right.set_id
-        && left.entrant_id == right.entrant_id
+        && left.player_id == right.player_id
 }
 
 fn build_forced_resolve_message(root: &GenericMessage) -> GenericMessage {
@@ -1177,18 +1133,50 @@ fn is_same_message_identity(left: &GenericMessage, right: &GenericMessage) -> bo
     left.message_id == right.message_id
 }
 
+fn collect_duplicate_unresolved_call_roots(
+    messages: &[GenericMessage],
+    identity: &CallMessageIdentity,
+) -> Vec<GenericMessage> {
+    messages
+        .iter()
+        .filter(|item| {
+            item.parent_message_id.is_none()
+                && item.method == "call_player"
+                && call_message_identity(item)
+                    .map(|item_identity| call_identity_matches(&item_identity, identity))
+                    .unwrap_or(false)
+        })
+        .filter(|root| {
+            !messages.iter().any(|item| {
+                item.thread_id == root.thread_id && item.message_type == "resolve"
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Result<(), String> {
     let mut messages = load_generic_messages(app)?.unwrap_or_default();
 
     if message.message_type == "resolve" && message.method == "call_player" {
-        let known_call_thread = messages.iter().any(|item| {
+        let root = messages.iter().find(|item| {
             item.thread_id == message.thread_id
                 && item.parent_message_id.is_none()
                 && item.method == "call_player"
         });
 
-        if !known_call_thread {
+        let Some(root) = root else {
             // 未知の呼び出しスレッドに対する解決メッセージは取り込まない。
+            return Ok(());
+        };
+
+        let Some(root_identity) = call_message_identity(root) else {
+            return Ok(());
+        };
+        let Some(resolve_identity) = call_message_identity(message) else {
+            return Ok(());
+        };
+        if !call_identity_matches(&root_identity, &resolve_identity) {
             return Ok(());
         }
     }
@@ -1198,28 +1186,10 @@ pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Resu
         && message.method == "call_player"
     {
         if let Some(call_identity) = call_message_identity(message) {
-            let matching_roots = messages
-                .iter()
-                .filter(|item| {
-                    item.parent_message_id.is_none()
-                        && item.method == "call_player"
-                        && call_message_identity(item)
-                            .map(|item_identity| {
-                                call_identity_matches(&item_identity, &call_identity)
-                            })
-                            .unwrap_or(false)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
+            let matching_roots = collect_duplicate_unresolved_call_roots(&messages, &call_identity);
 
             for root in matching_roots {
-                let thread_has_resolve = messages
-                    .iter()
-                    .any(|item| item.thread_id == root.thread_id && item.message_type == "resolve");
-
-                if !thread_has_resolve {
-                    messages.push(build_forced_resolve_message(&root));
-                }
+                messages.push(build_forced_resolve_message(&root));
             }
         }
     }
@@ -1235,6 +1205,84 @@ pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Resu
 
     messages.sort_by(|left, right| right.created_at.cmp(&left.created_at));
     save_generic_messages(app, &messages)
+}
+
+#[cfg(test)]
+mod call_message_identity_tests {
+    use super::{collect_duplicate_unresolved_call_roots, CallMessageIdentity};
+    use crate::models::GenericMessage;
+    use serde_json::json;
+
+    fn call_root(
+        message_id: &str,
+        thread_id: &str,
+        event_id: &str,
+        set_id: &str,
+        player_id: &str,
+    ) -> GenericMessage {
+        GenericMessage {
+            message_id: message_id.to_owned(),
+            thread_id: thread_id.to_owned(),
+            parent_message_id: None,
+            message_type: "normal".to_owned(),
+            message_meta: Some(json!({
+                "eventId": event_id,
+                "setId": set_id,
+                "playerId": player_id,
+            })),
+            method: "call_player".to_owned(),
+            subject: "Call".to_owned(),
+            sender_name: "Sender".to_owned(),
+            sender_user_id: "12345678".to_owned(),
+            sender_ip: "192.168.1.10".to_owned(),
+            body: "Call".to_owned(),
+            created_at: "2026-10-03T00:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn duplicate_recall_closes_only_unresolved_roots_with_the_same_event_set_and_player() {
+        let roots = vec![
+            call_root("same-1", "same-thread-1", "event-1", "set-1", "PG-PLAYER"),
+            call_root("same-2", "same-thread-2", "event-1", "set-1", "pg-player"),
+            call_root("other-event", "event-thread", "event-2", "set-1", "PG-PLAYER"),
+            call_root("other-set", "set-thread", "event-1", "set-2", "PG-PLAYER"),
+            call_root("other-player", "player-thread", "event-1", "set-1", "PG-OTHER"),
+            call_root("already-resolved", "resolved-thread", "event-1", "set-1", "PG-PLAYER"),
+        ];
+        let mut messages = roots;
+        messages.push(GenericMessage {
+            message_id: "resolved".to_owned(),
+            thread_id: "resolved-thread".to_owned(),
+            parent_message_id: Some("already-resolved".to_owned()),
+            message_type: "resolve".to_owned(),
+            message_meta: None,
+            method: "call_player".to_owned(),
+            subject: "Resolved".to_owned(),
+            sender_name: "Sender".to_owned(),
+            sender_user_id: "12345678".to_owned(),
+            sender_ip: "192.168.1.10".to_owned(),
+            body: "Resolved".to_owned(),
+            created_at: "2026-10-03T00:00:01Z".to_owned(),
+        });
+
+        let duplicate_roots = collect_duplicate_unresolved_call_roots(
+            &messages,
+            &CallMessageIdentity {
+                event_id: "event-1".to_owned(),
+                set_id: "set-1".to_owned(),
+                player_id: "PG-PLAYER".to_owned(),
+            },
+        );
+
+        assert_eq!(
+            duplicate_roots
+                .iter()
+                .map(|root| root.message_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["same-1", "same-2"],
+        );
+    }
 }
 
 pub fn load_generic_messages(app: &AppHandle) -> Result<Option<Vec<GenericMessage>>, String> {
@@ -1556,15 +1604,110 @@ fn save_event_graph_snapshot(
     Ok(())
 }
 
+type ProgressionCandidatesBySeed<'a> =
+    HashMap<&'a str, Vec<(&'a crate::models::SetSnapshot, &'static str)>>;
+type ProgressionCandidatesByGroupAndSeed<'a> =
+    HashMap<String, HashMap<String, Vec<(&'a crate::models::SetSnapshot, &'static str)>>>;
+type ProgressionCandidatesByGroupSeedAndRound<'a> = HashMap<
+    String,
+    HashMap<String, HashMap<i64, (&'a crate::models::SetSnapshot, &'static str)>>,
+>;
+type WinnersToLosersRoundMap = HashMap<String, HashMap<i64, HashSet<i64>>>;
+
 fn build_bracket_graph(
     snapshot: &TournamentSnapshot,
     event: &EventSnapshot,
 ) -> BracketGraphSnapshot {
+    let started_at = Instant::now();
     let phase_group_key = graph_phase_group_key;
+
+    let phase_group_has_set_ids = event
+        .phase_groups
+        .iter()
+        .any(|phase_group| !phase_group.set_ids.is_empty());
+    let phase_group_set_ids = event
+        .phase_groups
+        .iter()
+        .flat_map(|phase_group| phase_group.set_ids.iter().map(String::as_str))
+        .collect::<HashSet<_>>();
+    let intermediate_set_ids = event
+        .sets
+        .iter()
+        .filter(|set| {
+            if phase_group_has_set_ids {
+                !phase_group_set_ids.contains(set.set_id.as_str())
+            } else {
+                set.is_intermediate
+            }
+        })
+        .map(|set| set.set_id.as_str())
+        .collect::<HashSet<_>>();
+    let mut event_set_by_id = HashMap::new();
+    let mut group_key_by_set_id = HashMap::new();
+    let mut phase_group_sets_by_key_and_round =
+        HashMap::<String, HashMap<i64, Vec<&crate::models::SetSnapshot>>>::new();
+    let mut progression_candidates_by_seed = ProgressionCandidatesBySeed::new();
+    let mut progression_candidates_by_group_and_seed =
+        ProgressionCandidatesByGroupAndSeed::new();
+    let mut progression_candidates_by_group_seed_and_round =
+        ProgressionCandidatesByGroupSeedAndRound::new();
+    for set in &event.sets {
+        let group_key = phase_group_key(set);
+        event_set_by_id.entry(set.set_id.as_str()).or_insert(set);
+        group_key_by_set_id
+            .entry(set.set_id.as_str())
+            .or_insert_with(|| group_key.clone());
+        if let Some(round) = bracket_round(set) {
+            phase_group_sets_by_key_and_round
+                .entry(group_key.clone())
+                .or_default()
+                .entry(round)
+                .or_default()
+                .push(set);
+        }
+
+        let group_candidates = progression_candidates_by_group_and_seed
+            .entry(group_key.clone())
+            .or_default();
+        for (seed_id, relation) in [
+            (set.winner_progression_seed_id.as_deref(), "winner"),
+            (set.loser_progression_seed_id.as_deref(), "loser"),
+        ] {
+            let Some(seed_id) = seed_id else {
+                continue;
+            };
+            progression_candidates_by_seed
+                .entry(seed_id)
+                .or_default()
+                .push((set, relation));
+            group_candidates
+                .entry(seed_id.to_owned())
+                .or_default()
+                .push((set, relation));
+            if relation == "winner" {
+                if let Some(round) = bracket_round(set) {
+                    progression_candidates_by_group_seed_and_round
+                        .entry(group_key.clone())
+                        .or_default()
+                        .entry(seed_id.to_owned())
+                        .or_default()
+                        .entry(round)
+                        .or_insert((set, relation));
+                }
+            }
+        }
+    }
+    let winners_to_losers_rounds_by_group = build_winners_to_losers_round_map(
+        event,
+        &event_set_by_id,
+        &intermediate_set_ids,
+        &progression_candidates_by_seed,
+        &phase_group_sets_by_key_and_round,
+    );
 
     let mut graph_event = event.clone();
     for set in &mut graph_event.sets {
-        set.is_intermediate = crate::models::is_intermediate_set(&graph_event.phase_groups, set);
+        set.is_intermediate = intermediate_set_ids.contains(set.set_id.as_str());
     }
     graph_event.sets.retain(|set| !set.is_intermediate);
     let mut seen_phase_group_ids = HashSet::new();
@@ -1607,29 +1750,53 @@ fn build_bracket_graph(
             &target_for_source_resolution,
             event,
             &set_name_by_id,
+            &progression_candidates_by_group_and_seed,
+            &progression_candidates_by_group_seed_and_round,
+            &progression_candidates_by_seed,
+            &winners_to_losers_rounds_by_group,
         );
         rewrite_progression_source(
             &mut set.entrant2_source,
             &target_for_source_resolution,
             event,
             &set_name_by_id,
+            &progression_candidates_by_group_and_seed,
+            &progression_candidates_by_group_seed_and_round,
+            &progression_candidates_by_seed,
+            &winners_to_losers_rounds_by_group,
         );
-        rewrite_intermediate_source(&mut set.entrant1_source, event, &set_name_by_id);
-        rewrite_intermediate_source(&mut set.entrant2_source, event, &set_name_by_id);
+        rewrite_intermediate_source(
+            &mut set.entrant1_source,
+            &target_for_source_resolution,
+            &set_name_by_id,
+            &event_set_by_id,
+            &intermediate_set_ids,
+            &progression_candidates_by_seed,
+            &winners_to_losers_rounds_by_group,
+        );
+        rewrite_intermediate_source(
+            &mut set.entrant2_source,
+            &target_for_source_resolution,
+            &set_name_by_id,
+            &event_set_by_id,
+            &intermediate_set_ids,
+            &progression_candidates_by_seed,
+            &winners_to_losers_rounds_by_group,
+        );
     }
 
+    let mut graph_event_set_by_id = HashMap::new();
+    for set in &graph_event.sets {
+        graph_event_set_by_id
+            .entry(set.set_id.as_str())
+            .or_insert(set);
+    }
     let mut raw_edges = Vec::new();
     for target in &event.sets {
         let target_phase_group_key = phase_group_key(target);
-        let phase_group_sets = event
-            .sets
-            .iter()
-            .filter(|candidate| phase_group_key(candidate) == target_phase_group_key)
-            .collect::<Vec<_>>();
-        let edge_target = graph_event
-            .sets
-            .iter()
-            .find(|graph_set| graph_set.set_id == target.set_id)
+        let edge_target = graph_event_set_by_id
+            .get(target.set_id.as_str())
+            .copied()
             .unwrap_or(target);
 
         for (target_slot_index, source) in [
@@ -1647,40 +1814,25 @@ fn build_bracket_graph(
             };
             let progression_source_id = source.type_id.as_deref().unwrap_or(source_set_id);
 
-            let progression_candidate = phase_group_sets
-                .iter()
-                .find_map(|candidate| {
-                    if candidate.winner_progression_seed_id.as_deref()
-                        == Some(progression_source_id)
-                    {
-                        return Some((*candidate, "winner"));
-                    }
-                    if candidate.loser_progression_seed_id.as_deref() == Some(progression_source_id)
-                    {
-                        return Some((*candidate, "loser"));
-                    }
-                    None
-                })
-                .or_else(|| {
-                    event.sets.iter().find_map(|candidate| {
-                        if !is_prior_phase_set(event, candidate, target) {
-                            return None;
-                        }
-                        if candidate.winner_progression_seed_id.as_deref()
-                            == Some(progression_source_id)
-                        {
-                            return Some((candidate, "winner"));
-                        }
-                        if candidate.loser_progression_seed_id.as_deref()
-                            == Some(progression_source_id)
-                        {
-                            return Some((candidate, "loser"));
-                        }
-                        None
-                    })
-                });
+            let progression_candidate = progression_candidate_for_target(
+                event,
+                target,
+                progression_source_id,
+                &progression_candidates_by_group_and_seed,
+                &progression_candidates_by_group_seed_and_round,
+                &progression_candidates_by_seed,
+                &winners_to_losers_rounds_by_group,
+            );
 
             if let Some((candidate, relation)) = progression_candidate {
+                if !is_allowed_round_transition(
+                    candidate,
+                    target,
+                    relation,
+                    &winners_to_losers_rounds_by_group,
+                ) {
+                    continue;
+                }
                 let progression_id = match relation {
                     "winner" => candidate.winner_progression_id.clone(),
                     "loser" => candidate.loser_progression_id.clone(),
@@ -1696,8 +1848,26 @@ fn build_bracket_graph(
                 continue;
             }
 
-            if let Some(resolved_edges) = resolve_hidden_source_edges(event, source_set_id) {
+            if let Some(resolved_edges) = resolve_hidden_source_edges(
+                source_set_id,
+                &event_set_by_id,
+                &intermediate_set_ids,
+                &progression_candidates_by_seed,
+            ) {
                 for (from_set_id, relation) in resolved_edges {
+                    if event_set_by_id
+                        .get(from_set_id.as_str())
+                        .is_some_and(|candidate| {
+                            !is_allowed_round_transition(
+                                candidate,
+                                target,
+                                &relation,
+                                &winners_to_losers_rounds_by_group,
+                            )
+                        })
+                    {
+                        continue;
+                    }
                     raw_edges.push(BracketGraphEdge {
                         from_set_id,
                         to_set_id: target.set_id.clone(),
@@ -1709,16 +1879,26 @@ fn build_bracket_graph(
                 continue;
             }
 
-            if let Some(candidate) = phase_group_sets
-                .iter()
-                .find(|candidate| candidate.set_id == source_set_id)
-            {
+            if let Some(candidate) = event_set_by_id.get(source_set_id).filter(|candidate| {
+                group_key_by_set_id
+                    .get(candidate.set_id.as_str())
+                    .is_some_and(|group_key| group_key == &target_phase_group_key)
+            }) {
                 if let Some(relation) = source.condition.as_deref() {
+                    let relation = relation.to_ascii_lowercase();
+                    if !is_allowed_round_transition(
+                        candidate,
+                        target,
+                        &relation,
+                        &winners_to_losers_rounds_by_group,
+                    ) {
+                        continue;
+                    }
                     raw_edges.push(BracketGraphEdge {
                         from_set_id: candidate.set_id.clone(),
                         to_set_id: target.set_id.clone(),
                         target_slot_index,
-                        relation: relation.to_ascii_lowercase(),
+                        relation,
                         progression_id: None,
                     });
                 }
@@ -1726,48 +1906,50 @@ fn build_bracket_graph(
         }
     }
 
-    let phase_group_keys = event
-        .sets
+    let mut raw_edge_target_slots = raw_edges
         .iter()
-        .map(phase_group_key)
+        .map(|edge: &BracketGraphEdge| (edge.to_set_id.clone(), edge.target_slot_index))
         .collect::<HashSet<_>>();
-    for phase_group_key_value in phase_group_keys {
-        let group_sets = event
-            .sets
+    for group_rounds in phase_group_sets_by_key_and_round.values() {
+        let Some(first_losers_round) = group_rounds
             .iter()
-            .filter(|set| phase_group_key(set) == phase_group_key_value)
-            .collect::<Vec<_>>();
-        let Some(first_losers_round) = group_sets
-            .iter()
-            .filter(|set| is_losers_set(set))
-            .filter_map(|set| set.round.map(|round| round.abs()))
-            .min()
+            .filter(|(round, sets)| {
+                **round < 0 && sets.iter().any(|set| is_losers_set(set))
+            })
+            .map(|(round, _)| *round)
+            .max()
         else {
             continue;
         };
-        let Some(first_winners_round) = group_sets
+        let Some(first_winners_round) = group_rounds
             .iter()
-            .filter(|set| !is_losers_set(set) && !is_grand_final_set(set))
-            .filter_map(|set| set.round.map(|round| round.abs()))
+            .filter(|(round, sets)| {
+                **round > 0
+                    &&
+                sets.iter()
+                    .any(|set| !is_losers_set(set) && !is_grand_final_set(set))
+            })
+            .map(|(round, _)| *round)
             .min()
         else {
             continue;
         };
 
-        let mut winners_first_ids = group_sets
-            .iter()
+        let mut winners_first_ids = group_rounds
+            .get(&first_winners_round)
+            .into_iter()
+            .flatten()
             .filter(|set| {
                 !is_losers_set(set)
                     && !is_grand_final_set(set)
-                    && set.round.map(|round| round.abs()) == Some(first_winners_round)
             })
             .map(|set| set.set_id.clone())
             .collect::<Vec<_>>();
-        let mut losers_first_ids = group_sets
-            .iter()
-            .filter(|set| {
-                is_losers_set(set) && set.round.map(|round| round.abs()) == Some(first_losers_round)
-            })
+        let mut losers_first_ids = group_rounds
+            .get(&first_losers_round)
+            .into_iter()
+            .flatten()
+            .filter(|set| is_losers_set(set))
             .map(|set| set.set_id.clone())
             .collect::<Vec<_>>();
         winners_first_ids.sort();
@@ -1777,9 +1959,7 @@ fn build_bracket_graph(
             let source_ids =
                 pick_pair_source_ids(&winners_first_ids, losers_first_ids.len(), target_index);
             for (target_slot_index, source_set_id) in source_ids.into_iter().enumerate() {
-                if raw_edges.iter().any(|edge| {
-                    edge.to_set_id == *target_set_id && edge.target_slot_index == target_slot_index
-                }) {
+                if raw_edge_target_slots.contains(&(target_set_id.clone(), target_slot_index)) {
                     continue;
                 }
                 raw_edges.push(BracketGraphEdge {
@@ -1789,19 +1969,34 @@ fn build_bracket_graph(
                     relation: "loser".to_owned(),
                     progression_id: None,
                 });
+                raw_edge_target_slots.insert((target_set_id.clone(), target_slot_index));
             }
         }
     }
 
+    let mut incoming_raw_edge_indexes = HashMap::<&str, Vec<usize>>::new();
+    for (edge_index, edge) in raw_edges.iter().enumerate() {
+        incoming_raw_edge_indexes
+            .entry(edge.to_set_id.as_str())
+            .or_default()
+            .push(edge_index);
+    }
+    let hidden_pipe_source_slot_indexes_by_set_id = event
+        .sets
+        .iter()
+        .filter(|set| intermediate_set_ids.contains(set.set_id.as_str()))
+        .map(|set| {
+            (
+                set.set_id.as_str(),
+                hidden_pipe_source_slot_indexes(set),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
     let mut edges = Vec::new();
     let mut seen_edges = HashSet::new();
     for raw_edge in &raw_edges {
-        if event
-            .sets
-            .iter()
-            .find(|set| set.set_id == raw_edge.to_set_id)
-            .is_some_and(|set| crate::models::is_intermediate_set(&event.phase_groups, set))
-        {
+        if intermediate_set_ids.contains(raw_edge.to_set_id.as_str()) {
             continue;
         }
 
@@ -1813,23 +2008,21 @@ fn build_bracket_graph(
                 continue;
             }
 
-            let source_set = event.sets.iter().find(|set| set.set_id == source_set_id);
-            if source_set
-                .is_some_and(|set| crate::models::is_intermediate_set(&event.phase_groups, set))
-            {
-                for incoming in raw_edges
-                    .iter()
-                    .filter(|edge| edge.to_set_id == source_set_id)
-                    .filter(|edge| {
-                        source_set
-                            .and_then(|set| {
-                                hidden_pipe_source_slot_indexes(&event.phase_groups, set)
-                            })
-                            .is_none_or(|slot_indexes| {
-                                slot_indexes.contains(&edge.target_slot_index)
-                            })
-                    })
+            if intermediate_set_ids.contains(source_set_id.as_str()) {
+                let slot_indexes = hidden_pipe_source_slot_indexes_by_set_id
+                    .get(source_set_id.as_str())
+                    .and_then(Option::as_ref);
+                for incoming_index in incoming_raw_edge_indexes
+                    .get(source_set_id.as_str())
+                    .into_iter()
+                    .flatten()
                 {
+                    let incoming = &raw_edges[*incoming_index];
+                    if slot_indexes.is_some_and(|slot_indexes| {
+                        !slot_indexes.contains(&incoming.target_slot_index)
+                    }) {
+                        continue;
+                    }
                     pending_sources.push((incoming.from_set_id.clone(), incoming.relation.clone()));
                 }
                 continue;
@@ -1874,6 +2067,17 @@ fn build_bracket_graph(
         })
         .collect();
 
+    storage_perf_log(|| {
+        format!(
+            "build_bracket_graph event={} sets={} raw_edges={} edges={} elapsed_us={}",
+            event.event_id,
+            event.sets.len(),
+            raw_edges.len(),
+            edges.len(),
+            started_at.elapsed().as_micros()
+        )
+    });
+
     BracketGraphSnapshot {
         schema_version: 1,
         tournament_id: snapshot.tournament_id.clone(),
@@ -1884,6 +2088,166 @@ fn build_bracket_graph(
         edges,
         updated_at: snapshot.updated_at,
     }
+}
+
+fn build_winners_to_losers_round_map(
+    event: &EventSnapshot,
+    sets_by_id: &HashMap<&str, &crate::models::SetSnapshot>,
+    intermediate_set_ids: &HashSet<&str>,
+    progression_candidates_by_seed: &ProgressionCandidatesBySeed<'_>,
+    phase_group_sets_by_key_and_round: &HashMap<
+        String,
+        HashMap<i64, Vec<&crate::models::SetSnapshot>>,
+    >,
+) -> WinnersToLosersRoundMap {
+    let mut winners_to_losers_rounds = WinnersToLosersRoundMap::new();
+    for target in &event.sets {
+        if !is_losers_set(target) || is_round_transition_exception(target) {
+            continue;
+        }
+        if target.round.and_then(i64::checked_abs).is_none() {
+            continue;
+        }
+
+        for source in [
+            target.entrant1_source.as_ref(),
+            target.entrant2_source.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(source_set_id) = resolved_source_set_id(source) {
+                if let Some(resolved_edges) = resolve_hidden_source_edges(
+                    source_set_id,
+                    sets_by_id,
+                    intermediate_set_ids,
+                    progression_candidates_by_seed,
+                ) {
+                    for (from_set_id, relation) in resolved_edges {
+                        if let Some(source_set) = sets_by_id.get(from_set_id.as_str()) {
+                            record_winners_to_losers_round_mapping(
+                                &mut winners_to_losers_rounds,
+                                source_set,
+                                target,
+                                &relation,
+                            );
+                        }
+                    }
+                } else if let Some(relation) = source_kind_from_api_source(source) {
+                    if let Some(source_set) = sets_by_id.get(source_set_id) {
+                        record_winners_to_losers_round_mapping(
+                            &mut winners_to_losers_rounds,
+                            source_set,
+                            target,
+                            relation,
+                        );
+                    }
+                }
+            }
+
+            if source.source_type.as_deref() == Some("seed") {
+                if let Some(seed_id) = source.type_id.as_deref() {
+                    let candidates = progression_candidates_by_seed
+                        .get(seed_id)
+                        .into_iter()
+                        .flatten()
+                        .filter(|(source_set, relation)| {
+                            *relation == "loser"
+                                && !is_losers_set(source_set)
+                                && graph_phase_group_key(source_set)
+                                    == graph_phase_group_key(target)
+                                && !is_round_transition_exception(source_set)
+                        })
+                        .collect::<Vec<_>>();
+                    let source_rounds = candidates
+                        .iter()
+                        .filter_map(|(source_set, _)| {
+                            source_set.round.and_then(i64::checked_abs)
+                        })
+                        .collect::<HashSet<_>>();
+                    if source_rounds.len() == 1 {
+                        if let Some((source_set, relation)) = candidates.first() {
+                        record_winners_to_losers_round_mapping(
+                            &mut winners_to_losers_rounds,
+                            source_set,
+                            target,
+                            relation,
+                        );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (group_key, rounds) in phase_group_sets_by_key_and_round {
+        let first_losers_round = rounds
+            .iter()
+            .filter(|(round, sets)| {
+                **round < 0
+                    &&
+                sets.iter().any(|set| {
+                    is_losers_set(set) && !is_round_transition_exception(set)
+                })
+            })
+            .map(|(round, _)| *round)
+            .max();
+        let first_winners_round = rounds
+            .iter()
+            .filter(|(round, sets)| {
+                **round > 0
+                    &&
+                sets.iter().any(|set| {
+                    !is_losers_set(set)
+                        && !is_grand_final_set(set)
+                        && !is_round_transition_exception(set)
+                })
+            })
+            .map(|(round, _)| *round)
+            .min();
+        if let (Some(winners_round), Some(losers_round)) =
+            (first_winners_round, first_losers_round)
+        {
+            winners_to_losers_rounds
+                .entry(group_key.clone())
+                .or_default()
+                .entry(winners_round)
+                .or_insert_with(|| HashSet::from([losers_round]));
+        }
+    }
+
+    winners_to_losers_rounds
+}
+
+fn record_winners_to_losers_round_mapping(
+    mappings: &mut WinnersToLosersRoundMap,
+    source: &crate::models::SetSnapshot,
+    target: &crate::models::SetSnapshot,
+    relation: &str,
+) {
+    if relation != "loser"
+        || is_losers_set(source)
+        || !is_losers_set(target)
+        || is_round_transition_exception(source)
+        || is_round_transition_exception(target)
+        || graph_phase_group_key(source) != graph_phase_group_key(target)
+    {
+        return;
+    }
+    let (Some(source_round), Some(target_round)) = (bracket_round(source), bracket_round(target))
+    else {
+        return;
+    };
+    if source_round <= 0 || target_round >= 0 {
+        return;
+    }
+
+    mappings
+        .entry(graph_phase_group_key(source))
+        .or_default()
+        .entry(source_round)
+        .or_default()
+        .insert(target_round);
 }
 
 fn save_pristine_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(), String> {
@@ -2393,15 +2757,20 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
         });
         return Ok(snapshot);
     }
-    let (mut snapshot, has_pending_results) = load_snapshot_without_progression_rebuild(app, slug)?;
-    rebuild_progression_from_completed_sets(&mut snapshot);
-    if has_pending_results && restore_pending_local_results(app, slug, &mut snapshot, true)? {
+    let (mut snapshot, needs_progression_rebuild) =
+        load_snapshot_without_progression_rebuild(app, slug)?;
+    if needs_progression_rebuild {
+        rebuild_progression_from_completed_sets(&mut snapshot);
+    }
+    if needs_progression_rebuild
+        && restore_pending_local_results(app, slug, &mut snapshot, true)?
+    {
         rebuild_progression_from_completed_sets(&mut snapshot);
     }
     cache_progression_snapshot(&snapshot, true, true);
     storage_perf_log(|| {
         format!(
-            "load_snapshot slug={} events={} sets={} progression_rebuilt=true cache=miss elapsed_us={}",
+            "load_snapshot slug={} events={} sets={} progression_rebuilt={} cache=miss elapsed_us={}",
             normalize_slug_for_storage(slug),
             snapshot.events.len(),
             snapshot
@@ -2409,6 +2778,7 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
                 .iter()
                 .map(|event| event.sets.len())
                 .sum::<usize>(),
+            needs_progression_rebuild,
             started_at.elapsed().as_micros()
         )
     });
@@ -2560,6 +2930,7 @@ fn load_event_snapshot(
     slug: &str,
     event_id: &str,
 ) -> Result<TournamentSnapshot, String> {
+    let mut loaded_from_graph = false;
     let mut snapshot = if let Some(snapshot) =
         load_event_snapshot_from_files(app, slug, event_id, false)?
     {
@@ -2567,6 +2938,7 @@ fn load_event_snapshot(
     } else if let Some(snapshot) =
         load_event_graph_snapshot_from_files(app, slug, event_id)?
     {
+        loaded_from_graph = true;
         snapshot
     } else {
         return Err(format!(
@@ -2575,9 +2947,19 @@ fn load_event_snapshot(
     };
 
     let has_pending_results = restore_pending_local_results(app, slug, &mut snapshot, false)?;
-    rebuild_progression_from_completed_sets(&mut snapshot);
+    let needs_progression_rebuild = loaded_from_graph || has_pending_results;
+    if needs_progression_rebuild {
+        rebuild_progression_from_completed_sets(&mut snapshot);
+    }
     if has_pending_results && restore_pending_local_results(app, slug, &mut snapshot, true)? {
         rebuild_progression_from_completed_sets(&mut snapshot);
+    } else if !needs_progression_rebuild {
+        storage_perf_log(|| {
+            format!(
+                "rebuild_progression skipped event={} reason=stored_set_state",
+                event_id
+            )
+        });
     }
     Ok(snapshot)
 }
@@ -3092,6 +3474,43 @@ fn build_progression_targets_by_source(
         .enumerate()
         .map(|(index, set)| (set.set_id.as_str(), index))
         .collect::<HashMap<_, _>>();
+    let mut phase_groups_by_id =
+        HashMap::<&str, Vec<(usize, &crate::models::PhaseGroupSnapshot)>>::new();
+    let mut phase_groups_by_fallback_key =
+        HashMap::<(Option<i64>, String), Vec<(usize, &crate::models::PhaseGroupSnapshot)>>::new();
+    for (group_index, group) in event.phase_groups.iter().enumerate() {
+        phase_groups_by_id
+            .entry(group.phase_group_id.as_str())
+            .or_default()
+            .push((group_index, group));
+        phase_groups_by_fallback_key
+            .entry((
+                group.phase_order,
+                normalize_group_key(group.display_identifier.as_ref()),
+            ))
+            .or_default()
+            .push((group_index, group));
+    }
+    let mut dependent_slots_by_seed_id = HashMap::<&str, Vec<(usize, usize)>>::new();
+    for (dependent_set_index, dependent_set) in event.sets.iter().enumerate() {
+        for dependent_slot_index in 0..dependent_set.slots.len() {
+            let source = match dependent_slot_index {
+                0 => dependent_set.entrant1_source.as_ref(),
+                1 => dependent_set.entrant2_source.as_ref(),
+                _ => None,
+            };
+            if let Some(source) = source.filter(|source| {
+                source.source_type.as_deref() == Some("seed")
+            }) {
+                if let Some(seed_id) = source.type_id.as_deref() {
+                    dependent_slots_by_seed_id
+                        .entry(seed_id)
+                        .or_default()
+                        .push((dependent_set_index, dependent_slot_index));
+                }
+            }
+        }
+    }
     let mut targets_by_source = HashMap::<String, Vec<ProgressionTarget>>::new();
 
     for edge in graph.edges {
@@ -3123,19 +3542,20 @@ fn build_progression_targets_by_source(
             .get(edge.target_slot_index)
             .and_then(|slot| slot.seed_id.as_deref());
         let seed_targets = if is_progression {
-            let matching_groups = event
-                .phase_groups
-                .iter()
-                .enumerate()
-                .filter(|(_, group)| {
-                    if let Some(phase_group_id) = target.phase_group_id.as_deref() {
-                        return group.phase_group_id == phase_group_id;
-                    }
-                    group.phase_order == target.phase_order
-                        && normalize_group_key(group.display_identifier.as_ref())
-                            == normalize_group_key(target.phase_group_display_identifier.as_ref())
-                })
-                .collect::<Vec<_>>();
+            let matching_groups = if let Some(phase_group_id) = target.phase_group_id.as_deref() {
+                phase_groups_by_id
+                    .get(phase_group_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+            } else {
+                phase_groups_by_fallback_key
+                    .get(&(
+                        target.phase_order,
+                        normalize_group_key(target.phase_group_display_identifier.as_ref()),
+                    ))
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+            };
             let seed_id_targets = matching_groups
                 .iter()
                 .flat_map(|&(group_index, group)| {
@@ -3191,23 +3611,10 @@ fn build_progression_targets_by_source(
                 .into_iter()
                 .map(|(group_index, seed_index, seed)| {
                     let seed_id = seed.seed_id.clone();
-                    let mut dependent_slots = Vec::new();
-                    for (dependent_set_index, dependent_set) in event.sets.iter().enumerate() {
-                        for dependent_slot_index in 0..dependent_set.slots.len() {
-                            let source = match dependent_slot_index {
-                                0 => dependent_set.entrant1_source.as_ref(),
-                                1 => dependent_set.entrant2_source.as_ref(),
-                                _ => None,
-                            };
-                            if source.is_some_and(|source| {
-                                source.source_type.as_deref() == Some("seed")
-                                    && source.type_id.as_deref() == Some(seed_id.as_str())
-                            }) {
-                                dependent_slots
-                                    .push((dependent_set_index, dependent_slot_index));
-                            }
-                        }
-                    }
+                    let dependent_slots = dependent_slots_by_seed_id
+                        .get(seed_id.as_str())
+                        .cloned()
+                        .unwrap_or_default();
                     ProgressionSeedTarget {
                         group_index,
                         seed_index,
@@ -4144,6 +4551,15 @@ fn is_losers_set(set: &crate::models::SetSnapshot) -> bool {
     lowered.contains("losers") || lowered.contains("loser") || lowered.contains("敗者")
 }
 
+fn bracket_round(set: &crate::models::SetSnapshot) -> Option<i64> {
+    let round = set.round?.checked_abs()?;
+    if is_losers_set(set) {
+        round.checked_neg()
+    } else {
+        Some(round)
+    }
+}
+
 fn is_grand_final_set(set: &crate::models::SetSnapshot) -> bool {
     let lowered = set.full_round_text.trim().to_lowercase();
     if lowered.contains("grand final")
@@ -4213,13 +4629,8 @@ fn is_slot_empty(slot: &crate::models::SetSlotSnapshot) -> bool {
 }
 
 fn hidden_pipe_source_slot_indexes(
-    phase_groups: &[crate::models::PhaseGroupSnapshot],
     set: &crate::models::SetSnapshot,
 ) -> Option<Vec<usize>> {
-    if !crate::models::is_intermediate_set(phase_groups, set) {
-        return None;
-    }
-
     let sources = [set.entrant1_source.as_ref(), set.entrant2_source.as_ref()];
     let meaningful_slots = sources
         .into_iter()
@@ -4241,18 +4652,28 @@ fn hidden_pipe_source_slot_indexes(
 }
 
 fn resolve_hidden_source_edges(
-    event: &EventSnapshot,
     source_set_id: &str,
+    sets_by_id: &HashMap<&str, &crate::models::SetSnapshot>,
+    intermediate_set_ids: &HashSet<&str>,
+    progression_candidates_by_seed: &ProgressionCandidatesBySeed<'_>,
 ) -> Option<Vec<(String, String)>> {
-    resolve_hidden_source_edges_with_visited(event, source_set_id, &mut HashSet::new())
+    resolve_hidden_source_edges_with_visited(
+        source_set_id,
+        sets_by_id,
+        intermediate_set_ids,
+        progression_candidates_by_seed,
+        &mut HashSet::new(),
+    )
 }
 
 fn resolve_hidden_source_edges_with_visited(
-    event: &EventSnapshot,
     source_set_id: &str,
+    sets_by_id: &HashMap<&str, &crate::models::SetSnapshot>,
+    intermediate_set_ids: &HashSet<&str>,
+    progression_candidates_by_seed: &ProgressionCandidatesBySeed<'_>,
     visited: &mut HashSet<String>,
 ) -> Option<Vec<(String, String)>> {
-    let source_set = event.sets.iter().find(|set| set.set_id == source_set_id)?;
+    let source_set = sets_by_id.get(source_set_id).copied()?;
     let condition_sources = [
         source_set.entrant1_source.as_ref(),
         source_set.entrant2_source.as_ref(),
@@ -4264,9 +4685,7 @@ fn resolve_hidden_source_edges_with_visited(
     })
     .collect::<Vec<_>>();
 
-    if !crate::models::is_intermediate_set(&event.phase_groups, source_set)
-        && condition_sources.len() != 1
-    {
+    if !intermediate_set_ids.contains(source_set_id) && condition_sources.len() != 1 {
         return None;
     }
     if !visited.insert(source_set_id.to_owned()) {
@@ -4278,13 +4697,15 @@ fn resolve_hidden_source_edges_with_visited(
         let condition = source_kind_from_api_source(source).unwrap_or_default();
         let type_id = resolved_source_set_id(source).unwrap_or_default();
 
-        if let Some(nested) = resolve_hidden_source_edges_with_visited(event, type_id, visited) {
+        if let Some(nested) = resolve_hidden_source_edges_with_visited(
+            type_id,
+            sets_by_id,
+            intermediate_set_ids,
+            progression_candidates_by_seed,
+            visited,
+        ) {
             resolved.extend(nested);
-        } else if event
-            .sets
-            .iter()
-            .any(|candidate| candidate.set_id == type_id)
-        {
+        } else if sets_by_id.contains_key(type_id) {
             resolved.push((type_id.to_owned(), condition.to_owned()));
         }
     }
@@ -4301,30 +4722,17 @@ fn resolve_hidden_source_edges_with_visited(
             let Some(source_id) = source.type_id.as_deref() else {
                 continue;
             };
-            let Some((candidate, relation)) = progression_candidate_for_seed(event, source_id)
+            let Some((candidate, relation)) = progression_candidates_by_seed
+                .get(source_id)
+                .and_then(|candidates| candidates.first())
             else {
                 continue;
             };
-            resolved.push((candidate.set_id.clone(), relation.to_owned()));
+            resolved.push((candidate.set_id.clone(), (*relation).to_owned()));
         }
     }
 
     Some(resolved)
-}
-
-fn progression_candidate_for_seed<'a>(
-    event: &'a EventSnapshot,
-    source_id: &str,
-) -> Option<(&'a crate::models::SetSnapshot, &'static str)> {
-    event.sets.iter().find_map(|candidate| {
-        if candidate.winner_progression_seed_id.as_deref() == Some(source_id) {
-            return Some((candidate, "winner"));
-        }
-        if candidate.loser_progression_seed_id.as_deref() == Some(source_id) {
-            return Some((candidate, "loser"));
-        }
-        None
-    })
 }
 
 fn resolved_source_set_id(source: &crate::models::SetEntrantSourceSnapshot) -> Option<&str> {
@@ -4337,8 +4745,12 @@ fn resolved_source_set_id(source: &crate::models::SetEntrantSourceSnapshot) -> O
 
 fn rewrite_intermediate_source(
     source: &mut Option<crate::models::SetEntrantSourceSnapshot>,
-    event: &EventSnapshot,
+    target: &crate::models::SetSnapshot,
     set_name_by_id: &HashMap<String, String>,
+    sets_by_id: &HashMap<&str, &crate::models::SetSnapshot>,
+    intermediate_set_ids: &HashSet<&str>,
+    progression_candidates_by_seed: &ProgressionCandidatesBySeed<'_>,
+    winners_to_losers_rounds_by_group: &WinnersToLosersRoundMap,
 ) {
     let Some(source_value) = source.as_mut() else {
         return;
@@ -4346,7 +4758,12 @@ fn rewrite_intermediate_source(
     let Some(source_set_id) = resolved_source_set_id(source_value) else {
         return;
     };
-    let Some(resolved) = resolve_hidden_source_edges(event, source_set_id) else {
+    let Some(resolved) = resolve_hidden_source_edges(
+        source_set_id,
+        sets_by_id,
+        intermediate_set_ids,
+        progression_candidates_by_seed,
+    ) else {
         return;
     };
     if resolved.len() != 1 {
@@ -4354,16 +4771,25 @@ fn rewrite_intermediate_source(
     }
 
     let (resolved_set_id, relation) = &resolved[0];
+    let Some(resolved_set) = sets_by_id.get(resolved_set_id.as_str()) else {
+        return;
+    };
+    if !is_allowed_round_transition(
+        resolved_set,
+        target,
+        relation,
+        winners_to_losers_rounds_by_group,
+    ) {
+        return;
+    }
     let Some(set_name) = set_name_by_id.get(resolved_set_id) else {
         return;
     };
 
     source_value.resolved_set_id = Some(resolved_set_id.clone());
     source_value.condition = Some(relation.clone());
-    source_value.placeholder_name = event
-        .sets
-        .iter()
-        .find(|candidate| candidate.set_id == *resolved_set_id)
+    source_value.placeholder_name = sets_by_id
+        .get(resolved_set_id.as_str())
         .and_then(|candidate| match relation.as_str() {
             "winner" => candidate.winner_progression_seed_placeholder_name.clone(),
             "loser" => candidate.loser_progression_seed_placeholder_name.clone(),
@@ -4372,11 +4798,108 @@ fn rewrite_intermediate_source(
     source_value.condition_string = Some(format!("{relation} of {set_name}"));
 }
 
+fn progression_candidate_for_target<'a>(
+    event: &EventSnapshot,
+    target: &crate::models::SetSnapshot,
+    source_id: &str,
+    progression_candidates_by_group_and_seed: &ProgressionCandidatesByGroupAndSeed<'a>,
+    progression_candidates_by_group_seed_and_round: &ProgressionCandidatesByGroupSeedAndRound<'a>,
+    progression_candidates_by_seed: &ProgressionCandidatesBySeed<'a>,
+    winners_to_losers_rounds_by_group: &WinnersToLosersRoundMap,
+) -> Option<(&'a crate::models::SetSnapshot, &'static str)> {
+    let target_phase_group_key = graph_phase_group_key(target);
+    let same_group_candidates = progression_candidates_by_group_and_seed
+        .get(&target_phase_group_key)
+        .and_then(|candidates| candidates.get(source_id));
+    let first_same_group_candidate = same_group_candidates
+        .and_then(|candidates| candidates.first())
+        .copied();
+    if is_round_transition_exception(target)
+        || first_same_group_candidate
+            .is_some_and(|(candidate, _)| is_round_transition_exception(candidate))
+    {
+        return first_same_group_candidate.or_else(|| {
+            progression_candidates_by_seed
+                .get(source_id)
+                .and_then(|candidates| {
+                    candidates
+                        .iter()
+                        .find(|(candidate, _)| is_prior_phase_set(event, candidate, target))
+                })
+                .copied()
+        });
+    }
+
+    if let Some(round) = bracket_round(target) {
+        let expected_source_round = if round > 1 {
+            round.checked_sub(1)
+        } else if round < -1 {
+            round.checked_add(1)
+        } else {
+            None
+        };
+        if let Some(previous_round) = expected_source_round {
+            if let Some(candidate) = progression_candidates_by_group_seed_and_round
+                .get(&target_phase_group_key)
+                .and_then(|candidates| candidates.get(source_id))
+                .and_then(|candidates| candidates.get(&previous_round))
+            {
+                return Some(*candidate);
+            }
+        }
+
+        if let Some(candidates) = same_group_candidates {
+            if let Some(candidate) = candidates
+                .iter()
+                .find(|(candidate, relation)| {
+                    is_losers_set(candidate) != is_losers_set(target)
+                        && winners_to_losers_round_match(
+                            candidate,
+                            target,
+                            relation,
+                            winners_to_losers_rounds_by_group,
+                        ) == Some(true)
+                })
+            {
+                return Some(*candidate);
+            }
+            if let Some(candidate) = candidates.iter().find(|(candidate, relation)| {
+                is_losers_set(candidate) != is_losers_set(target)
+                    && winners_to_losers_round_match(
+                        candidate,
+                        target,
+                        relation,
+                        winners_to_losers_rounds_by_group,
+                    )
+                    .is_none()
+            }) {
+                return Some(*candidate);
+            }
+            return None;
+        }
+    } else if let Some(candidate) = first_same_group_candidate {
+        return Some(candidate);
+    }
+
+    progression_candidates_by_seed
+        .get(source_id)
+        .and_then(|candidates| {
+            candidates
+                .iter()
+                .find(|(candidate, _)| is_prior_phase_set(event, candidate, target))
+        })
+        .copied()
+}
+
 fn rewrite_progression_source(
     source: &mut Option<crate::models::SetEntrantSourceSnapshot>,
     target: &crate::models::SetSnapshot,
     event: &EventSnapshot,
     set_name_by_id: &HashMap<String, String>,
+    progression_candidates_by_group_and_seed: &ProgressionCandidatesByGroupAndSeed<'_>,
+    progression_candidates_by_group_seed_and_round: &ProgressionCandidatesByGroupSeedAndRound<'_>,
+    progression_candidates_by_seed: &ProgressionCandidatesBySeed<'_>,
+    winners_to_losers_rounds_by_group: &WinnersToLosersRoundMap,
 ) {
     let Some(source_value) = source.as_mut() else {
         return;
@@ -4391,34 +4914,15 @@ fn rewrite_progression_source(
         return;
     };
 
-    let target_phase_group_key = graph_phase_group_key(target);
-    let candidate = event
-        .sets
-        .iter()
-        .filter(|candidate| graph_phase_group_key(candidate) == target_phase_group_key)
-        .find_map(|candidate| {
-            if candidate.winner_progression_seed_id.as_deref() == Some(source_id) {
-                return Some((candidate, "winner"));
-            }
-            if candidate.loser_progression_seed_id.as_deref() == Some(source_id) {
-                return Some((candidate, "loser"));
-            }
-            None
-        })
-        .or_else(|| {
-            event.sets.iter().find_map(|candidate| {
-                if !is_prior_phase_set(event, candidate, target) {
-                    return None;
-                }
-                if candidate.winner_progression_seed_id.as_deref() == Some(source_id) {
-                    return Some((candidate, "winner"));
-                }
-                if candidate.loser_progression_seed_id.as_deref() == Some(source_id) {
-                    return Some((candidate, "loser"));
-                }
-                None
-            })
-        });
+    let candidate = progression_candidate_for_target(
+        event,
+        target,
+        source_id,
+        progression_candidates_by_group_and_seed,
+        progression_candidates_by_group_seed_and_round,
+        progression_candidates_by_seed,
+        winners_to_losers_rounds_by_group,
+    );
 
     let Some((candidate, relation)) = candidate else {
         return;
@@ -4523,6 +5027,131 @@ fn normalize_source_text(kind: &str, set_code: &str) -> String {
 
 fn is_grand_final_reset_set(set: &crate::models::SetSnapshot) -> bool {
     is_grand_final_set(set) && set.full_round_text.to_lowercase().contains("reset")
+}
+
+fn is_round_transition_exception(set: &crate::models::SetSnapshot) -> bool {
+    if is_grand_final_reset_set(set) {
+        return true;
+    }
+
+    let round_text = set.full_round_text.trim().to_lowercase();
+    [
+        "3rd place",
+        "third place",
+        "5th place",
+        "fifth place",
+        "3位決定戦",
+        "5位決定戦",
+    ]
+    .iter()
+    .any(|label| round_text.contains(label))
+}
+
+fn is_allowed_same_side_round_transition(
+    source: &crate::models::SetSnapshot,
+    target: &crate::models::SetSnapshot,
+    relation: &str,
+) -> bool {
+    if is_round_transition_exception(source)
+        || is_round_transition_exception(target)
+        || graph_phase_group_key(source) != graph_phase_group_key(target)
+        || !relation.eq_ignore_ascii_case("winner")
+        || is_losers_set(source) != is_losers_set(target)
+    {
+        return true;
+    }
+
+    let (Some(source_round), Some(target_round)) = (bracket_round(source), bracket_round(target))
+    else {
+        return true;
+    };
+
+    if source_round > 0 {
+        source_round.checked_add(1) == Some(target_round)
+    } else if source_round < 0 {
+        source_round.checked_sub(1) == Some(target_round)
+    } else {
+        true
+    }
+}
+
+fn winners_to_losers_round_match(
+    source: &crate::models::SetSnapshot,
+    target: &crate::models::SetSnapshot,
+    relation: &str,
+    winners_to_losers_rounds_by_group: &WinnersToLosersRoundMap,
+) -> Option<bool> {
+    if is_round_transition_exception(source)
+        || is_round_transition_exception(target)
+        || !relation.eq_ignore_ascii_case("loser")
+        || is_losers_set(source)
+        || !is_losers_set(target)
+        || graph_phase_group_key(source) != graph_phase_group_key(target)
+    {
+        return None;
+    }
+
+    let (Some(source_round), Some(target_round)) = (bracket_round(source), bracket_round(target))
+    else {
+        return None;
+    };
+    if source_round <= 0 || target_round >= 0 {
+        return None;
+    }
+
+    let destination_rounds = winners_to_losers_rounds_by_group
+        .get(&graph_phase_group_key(source))?;
+    if let Some(destination_rounds) = destination_rounds.get(&source_round) {
+        if destination_rounds.len() == 1 {
+            return Some(destination_rounds.contains(&target_round));
+        }
+    }
+
+    let nearest_lower_source_round = destination_rounds
+        .iter()
+        .filter_map(|(&round, destinations)| {
+            if round < source_round && destinations.len() == 1 {
+                Some((round, *destinations.iter().next()?))
+            } else {
+                None
+            }
+        })
+        .max_by_key(|(round, _)| *round);
+    let nearest_higher_source_round = destination_rounds
+        .iter()
+        .filter_map(|(&round, destinations)| {
+            if round > source_round && destinations.len() == 1 {
+                Some((round, *destinations.iter().next()?))
+            } else {
+                None
+            }
+        })
+        .min_by_key(|(round, _)| *round);
+    if nearest_lower_source_round.is_none() && nearest_higher_source_round.is_none() {
+        return None;
+    }
+
+    let is_below_lower_destination = nearest_lower_source_round
+        .is_none_or(|(_, destination_round)| target_round < destination_round);
+    let is_above_higher_destination = nearest_higher_source_round
+        .is_none_or(|(_, destination_round)| target_round > destination_round);
+    Some(is_below_lower_destination && is_above_higher_destination)
+}
+
+fn is_allowed_round_transition(
+    source: &crate::models::SetSnapshot,
+    target: &crate::models::SetSnapshot,
+    relation: &str,
+    winners_to_losers_rounds_by_group: &WinnersToLosersRoundMap,
+) -> bool {
+    is_allowed_same_side_round_transition(source, target, relation)
+        && winners_to_losers_round_match(
+            source,
+            target,
+            relation,
+            winners_to_losers_rounds_by_group,
+        )
+        .unwrap_or(true)
 }
 
 const VIRTUAL_GF_RESET_SET_ID_PREFIX: &str = "virtual_gf_reset_";
@@ -9530,11 +10159,11 @@ mod progression_source_tests {
         collect_affected_reset_targets, hydrate_progression_entrant_to_seed_slots,
         rebuild_progression_from_completed_sets, restore_missing_slot_entrants,
         restore_matching_pending_results_for_event, restore_pending_result_to_event,
-        ProgressionTarget,
+        winners_to_losers_round_match, ProgressionTarget, WinnersToLosersRoundMap,
     };
     use crate::models::{
         EventSnapshot, LocalSetResultMeta, LocalSetScoreMeta, PhaseGroupSeedSnapshot,
-        TournamentSnapshot,
+        SetSnapshot, TournamentSnapshot,
     };
     use chrono::Utc;
 
@@ -10252,6 +10881,263 @@ mod progression_source_tests {
             .iter()
             .filter_map(|slot| slot.entrant_id.as_deref())
             .any(|entrant_id| entrant_id == "entrant-b" || entrant_id == "entrant-d"));
+    }
+
+    #[test]
+    fn progression_candidates_use_the_previous_same_side_round() {
+        let event: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Event",
+            "phaseGroups": [{
+                "phaseGroupId": "bracket",
+                "phaseOrder": 1,
+                "setIds": [
+                    "w-round-1", "w-round-2", "w-target", "w-gap-target",
+                    "w-direct-gap-target",
+                    "l-round-1", "l-round-2", "l-round-2-seed-target", "l-target",
+                    "gf-reset", "third-place", "fifth-place"
+                ]
+            }],
+            "sets": [
+                {
+                    "setId": "w-round-1",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Winners Round 1",
+                    "round": 1,
+                    "state": 1,
+                    "winnerProgressionSeedId": "w-seed",
+                    "loserProgressionSeedId": "w-drop-seed",
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "w-round-2",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Winners Round 2",
+                    "round": 2,
+                    "state": 1,
+                    "winnerProgressionSeedId": "w-seed",
+                    "loserProgressionSeedId": "w-drop-seed",
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "w-target",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Winners Final",
+                    "round": 3,
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "w-seed" },
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "w-gap-target",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Winners Semi-Final",
+                    "round": 4,
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "w-seed" },
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "w-direct-gap-target",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Winners Semi-Final",
+                    "round": 4,
+                    "state": 1,
+                    "entrant1Source": {
+                        "sourceType": "set",
+                        "typeId": "w-round-1",
+                        "condition": "winner"
+                    },
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "gf-reset",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Grand Final Reset",
+                    "round": 5,
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "w-seed" },
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "third-place",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "3rd Place Match",
+                    "round": 4,
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "w-seed" },
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "l-round-1",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Losers Round 1",
+                    "round": -1,
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "w-drop-seed" },
+                    "winnerProgressionSeedId": "l-seed",
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "l-round-2",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Losers Round 2",
+                    "round": -2,
+                    "state": 1,
+                    "winnerProgressionSeedId": "l-seed",
+                    "entrant1Source": {
+                        "sourceType": "set",
+                        "typeId": "w-round-2",
+                        "condition": "loser"
+                    },
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "l-round-2-seed-target",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Losers Round 2",
+                    "round": -2,
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "w-drop-seed" },
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "l-target",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "Losers Round 3",
+                    "round": -3,
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "l-seed" },
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                },
+                {
+                    "setId": "fifth-place",
+                    "phaseGroupId": "bracket",
+                    "phaseOrder": 1,
+                    "phaseName": "Finals",
+                    "phaseGroupDisplayIdentifier": "1",
+                    "fullRoundText": "5th Place Match",
+                    "round": -5,
+                    "state": 1,
+                    "entrant1Source": { "sourceType": "seed", "typeId": "l-seed" },
+                    "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+                }
+            ]
+        }))
+        .expect("round progression test event should deserialize");
+        let snapshot = TournamentSnapshot {
+            tournament_id: "tournament".to_owned(),
+            slug: "tournament".to_owned(),
+            name: "Tournament".to_owned(),
+            events: vec![event.clone()],
+            updated_at: Utc::now(),
+        };
+
+        let graph = build_bracket_graph(&snapshot, &event);
+        for (target_set_id, expected_source_set_id, expected_relation) in [
+            ("w-target", "w-round-2", "winner"),
+            ("l-target", "l-round-2", "winner"),
+            ("l-round-1", "w-round-1", "loser"),
+            ("l-round-2", "w-round-2", "loser"),
+            ("l-round-2-seed-target", "w-round-2", "loser"),
+            ("gf-reset", "w-round-1", "winner"),
+            ("third-place", "w-round-1", "winner"),
+            ("fifth-place", "l-round-1", "winner"),
+        ] {
+            assert!(graph.edges.iter().any(|edge| {
+                edge.to_set_id == target_set_id
+                    && edge.from_set_id == expected_source_set_id
+                    && edge.relation == expected_relation
+            }), "missing edge {expected_source_set_id} -> {target_set_id} ({expected_relation})");
+        }
+        assert!(!graph
+            .edges
+            .iter()
+            .any(|edge| {
+                edge.to_set_id == "w-gap-target"
+                    || edge.to_set_id == "w-direct-gap-target"
+            }));
+    }
+
+    #[test]
+    fn winners_to_losers_rounds_follow_monotonic_progression() {
+        let source: SetSnapshot = serde_json::from_value(serde_json::json!({
+            "setId": "w-round-2",
+            "phaseOrder": 1,
+            "phaseGroupDisplayIdentifier": "1",
+            "fullRoundText": "Winners Round 2",
+            "round": 2,
+            "state": 1,
+            "slots": []
+        }))
+        .expect("source set should deserialize");
+        let round_map: WinnersToLosersRoundMap = [(
+            "1::1".to_owned(),
+            [
+                (1, std::collections::HashSet::from([-1])),
+                (4, std::collections::HashSet::from([-4])),
+            ]
+            .into_iter()
+            .collect(),
+        )]
+        .into_iter()
+        .collect();
+
+        for (round, expected) in [
+            (-1_i64, false),
+            (-2_i64, true),
+            (-3_i64, true),
+            (-4_i64, false),
+        ] {
+            let target: SetSnapshot = serde_json::from_value(serde_json::json!({
+                "setId": format!("l-round-{}", round.abs()),
+                "phaseOrder": 1,
+                "phaseGroupDisplayIdentifier": "1",
+                "fullRoundText": format!("Losers Round {}", round.abs()),
+                "round": round,
+                "state": 1,
+                "slots": []
+            }))
+            .expect("target set should deserialize");
+            assert_eq!(
+                winners_to_losers_round_match(&source, &target, "loser", &round_map),
+                Some(expected),
+                "unexpected mapping for Losers round {round}"
+            );
+        }
     }
 
     #[test]

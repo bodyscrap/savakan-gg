@@ -167,6 +167,7 @@ fn obs_overlay_state() -> &'static Mutex<ObsOverlayRuntimeState> {
     OBS_OVERLAY_STATE.get_or_init(|| {
         Mutex::new(ObsOverlayRuntimeState {
             active_set: None,
+            event_alias: String::new(),
             preview_font_scale: 1.0,
             name_fit_mode: "truncate".to_owned(),
             show_set_info: true,
@@ -900,6 +901,7 @@ struct ObsOverlayActiveSet {
 #[derive(Debug, Clone)]
 struct ObsOverlayRuntimeState {
     active_set: Option<ObsOverlayActiveSet>,
+    event_alias: String,
     preview_font_scale: f64,
     name_fit_mode: String,
     show_set_info: bool,
@@ -958,7 +960,7 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
         fully_stopped: guard.fully_stopped,
         current_set_id: None,
         event_name: None,
-        event_alias: None,
+        event_alias: Some(guard.event_alias.clone()),
         round_text: None,
         red_player_name: String::new(),
         blue_player_name: String::new(),
@@ -1178,9 +1180,10 @@ fn build_overlay_html() -> &'static str {
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        body.hide-event-alias .event-alias {
-            visibility: hidden;
-            opacity: 0;
+        body.full-stop .event-alias,
+        body.hide-event-alias .event-alias,
+        .event-alias:empty {
+            display: none;
         }
     </style>
 </head>
@@ -1405,7 +1408,7 @@ fn build_overlay_html() -> &'static str {
                 document.getElementById('blueCount').textContent = blueWins;
                                 fitSetInfoToPlate(document.getElementById('setMain'), setMain);
                 fitSetInfoToPlate(document.getElementById('setSub'), setSub);
-                document.getElementById('eventAlias').textContent = isActive ? String(state.eventAlias || '').trim() : '';
+                document.getElementById('eventAlias').textContent = String(state.eventAlias || '').trim();
       } catch (_err) {
         // ignore and retry.
       }
@@ -2062,6 +2065,8 @@ fn mobile_input_html() -> &'static str {
         const randomActionTime = document.getElementById('randomActionTime');
         let selectedSet = null;
         let overlayState = null;
+        let mobileEventAlias = '';
+        let eventInfoPromise = Promise.resolve();
         let displayOnePOnTop = true;
         let mobileSideDrafts = {};
         let directWinnerId = null;
@@ -2069,6 +2074,7 @@ fn mobile_input_html() -> &'static str {
 
         function updateHeaderInfo(info) {
             const eventAlias = (info && info.eventAlias && info.eventAlias.trim()) || 'スマホ結果入力依頼';
+            mobileEventAlias = eventAlias;
             const tournamentName = (info && info.tournamentName && info.tournamentName.trim()) || '-';
             const eventName = (info && info.eventName && info.eventName.trim()) || '-';
             if (pageTitle) {
@@ -2697,7 +2703,7 @@ fn mobile_input_html() -> &'static str {
             return slots.find((slot) => String(slot.playSide || '').trim() === playSide) || null;
         }
 
-        function buildOverlayPayloadFromDetail(detail) {
+        function buildOverlayPayloadFromDetail(detail, eventAlias = mobileEventAlias) {
             const onePSlot = getDetailSlotByPlaySide(detail, '1P') || (Array.isArray(detail?.slots) ? detail.slots[0] || null : null);
             const twoPSlot = getDetailSlotByPlaySide(detail, '2P') || (Array.isArray(detail?.slots) ? detail.slots[1] || null : null);
             const setLabel = getDisplaySetLabel(detail);
@@ -2707,6 +2713,7 @@ fn mobile_input_html() -> &'static str {
                 slug,
                 eventId,
                 setId: detail?.setId || '',
+                eventAlias,
                 eventName: detail?.phaseName || '',
                 roundText: overlayRoundText,
                 redPlayerName: onePSlot?.entrantName || 'RED',
@@ -2799,6 +2806,7 @@ fn mobile_input_html() -> &'static str {
                 return;
             }
 
+            await eventInfoPromise;
             const payload = buildOverlayPayloadFromDetail(selectedSet);
             const active = Boolean(overlayState && overlayState.active);
             const currentSetId = overlayState && overlayState.currentSetId ? String(overlayState.currentSetId) : '';
@@ -2848,7 +2856,7 @@ fn mobile_input_html() -> &'static str {
                 return;
             }
 
-            const payload = buildOverlayPayloadFromDetail(selectedSet);
+            const payload = buildOverlayPayloadFromDetail(selectedSet, overlayState.eventAlias ?? '');
             const response = await fetch('/mobile/api/overlay-toggle?slug=' + encodeURIComponent(slug) + '&eventId=' + encodeURIComponent(eventId) + '&token=' + encodeURIComponent(token), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -3085,7 +3093,7 @@ fn mobile_input_html() -> &'static str {
         if (matchupReadyOnlyCheckbox) {
             matchupReadyOnlyCheckbox.addEventListener('change', () => { void fetchSets(); });
         }
-        void fetchEventInfo();
+        eventInfoPromise = fetchEventInfo();
         closeDetailBtn.addEventListener('click', () => {
             showSearchView();
         });
@@ -4802,6 +4810,7 @@ fn apply_obs_overlay_toggle(
             blue_set_wins: input.blue_set_wins,
             font_scale: next_scale,
         });
+        guard.event_alias = input.event_alias.trim().to_owned();
         guard.fully_stopped = false;
         guard.preview_font_scale = next_scale;
     } else if let Some(active) = &guard.active_set {
@@ -5284,27 +5293,17 @@ fn parse_call_sync_status_targets(meta: Option<&serde_json::Value>) -> Vec<CallS
 
             let thread_id = get_str("threadId")?;
             let sender_user_id = get_str("senderUserId")?;
-            let tournament_id = get_str("scopeTournamentId").or_else(|| get_str("tournamentId"))?;
             let event_id = get_str("scopeEventId").or_else(|| get_str("eventId"))?;
-            let phase_name = get_str("scopePhaseName")
-                .or_else(|| get_str("phaseName"))
-                .unwrap_or_else(|| "Phase 未設定".to_owned());
-            let phase_group_name = get_str("scopePhaseGroupName")
-                .or_else(|| get_str("phaseGroupName"))
-                .unwrap_or_else(|| "Pool 未設定".to_owned());
             let set_id = get_str("setId")?;
-            let call_entrant_id = get_str("callEntrantId")?;
+            let player_id = get_str("playerId")?.to_ascii_uppercase();
 
             Some(CallSyncStatusTarget {
                 thread_id,
                 sender_user_id,
                 identity: CallTargetIdentity {
-                    tournament_id,
                     event_id,
-                    phase_name,
-                    phase_group_name,
                     set_id,
-                    call_entrant_id,
+                    player_id,
                 },
             })
         })
@@ -5575,6 +5574,7 @@ fn validate_resolve_permission(
     app: &tauri::AppHandle,
     sender_user_id: &str,
     thread_id: &str,
+    resolve_meta: Option<&serde_json::Value>,
 ) -> Result<(), String> {
     let messages = storage::load_generic_messages(app)?.unwrap_or_default();
     let root = messages
@@ -5584,6 +5584,16 @@ fn validate_resolve_permission(
 
     if root.sender_user_id.trim() != sender_user_id.trim() {
         return Err("スレッド作成者のみが解決メッセージを送信できます。".to_owned());
+    }
+
+    if root.method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER) {
+        let root_identity = extract_call_target_identity(root.message_meta.as_ref())
+            .ok_or_else(|| "呼び出しID情報がないため、この呼び出しを解決できません。".to_owned())?;
+        let resolve_identity = extract_call_target_identity(resolve_meta)
+            .ok_or_else(|| "解決メッセージに呼び出しIDがありません。".to_owned())?;
+        if !call_target_identity_matches(&root_identity, &resolve_identity) {
+            return Err("解決対象の呼び出しIDが一致しません。".to_owned());
+        }
     }
 
     let already_resolved = messages
@@ -5618,44 +5628,107 @@ fn validate_thread_open_for_reply(app: &tauri::AppHandle, thread_id: &str) -> Re
 
 #[derive(Debug, Clone)]
 struct CallTargetIdentity {
-    tournament_id: String,
     event_id: String,
-    phase_name: String,
-    phase_group_name: String,
     set_id: String,
-    call_entrant_id: String,
+    player_id: String,
 }
 
 fn extract_call_target_identity(meta: Option<&serde_json::Value>) -> Option<CallTargetIdentity> {
-    let tournament_id =
-        meta_string(meta, "scopeTournamentId").or_else(|| meta_string(meta, "tournamentId"))?;
     let event_id = meta_string(meta, "scopeEventId").or_else(|| meta_string(meta, "eventId"))?;
-    let phase_name = meta_string(meta, "scopePhaseName")
-        .or_else(|| meta_string(meta, "phaseName"))
-        .unwrap_or_else(|| "Phase 未設定".to_owned());
-    let phase_group_name = meta_string(meta, "scopePhaseGroupName")
-        .or_else(|| meta_string(meta, "phaseGroupName"))
-        .unwrap_or_else(|| "Pool 未設定".to_owned());
     let set_id = meta_string(meta, "setId")?;
-    let call_entrant_id = meta_string(meta, "callEntrantId")?;
+    let player_id = meta_string(meta, "playerId")?.to_ascii_uppercase();
 
     Some(CallTargetIdentity {
-        tournament_id,
         event_id,
-        phase_name,
-        phase_group_name,
         set_id,
-        call_entrant_id,
+        player_id,
     })
 }
 
 fn call_target_identity_matches(left: &CallTargetIdentity, right: &CallTargetIdentity) -> bool {
-    left.tournament_id == right.tournament_id
-        && left.event_id == right.event_id
-        && left.phase_name == right.phase_name
-        && left.phase_group_name == right.phase_group_name
+    left.event_id == right.event_id
         && left.set_id == right.set_id
-        && left.call_entrant_id == right.call_entrant_id
+        && left.player_id == right.player_id
+}
+
+#[cfg(test)]
+mod call_target_identity_tests {
+    use super::{
+        call_target_identity_matches, extract_call_target_identity, parse_call_sync_status_targets,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn call_identity_uses_only_event_set_and_player() {
+        let left_meta = json!({
+            "scopeEventId": "event-1",
+            "scopeTournamentId": "tournament-1",
+            "scopePhaseName": "Phase 1",
+            "scopePhaseGroupName": "Pool A",
+            "setId": "set-1",
+            "playerId": "pg-player",
+            "callEntrantId": "entrant-1",
+        });
+        let same_call_meta = json!({
+            "eventId": "event-1",
+            "tournamentId": "tournament-2",
+            "phaseName": "Phase 2",
+            "phaseGroupName": "Pool B",
+            "setId": "set-1",
+            "playerId": "PG-PLAYER",
+            "callEntrantId": "entrant-2",
+        });
+        let left = extract_call_target_identity(Some(&left_meta)).unwrap();
+        let same_call = extract_call_target_identity(Some(&same_call_meta)).unwrap();
+
+        assert!(call_target_identity_matches(&left, &same_call));
+        assert!(!call_target_identity_matches(
+            &left,
+            &extract_call_target_identity(Some(&json!({
+                "eventId": "event-2",
+                "setId": "set-1",
+                "playerId": "PG-PLAYER",
+            })))
+            .unwrap(),
+        ));
+        assert!(!call_target_identity_matches(
+            &left,
+            &extract_call_target_identity(Some(&json!({
+                "eventId": "event-1",
+                "setId": "set-2",
+                "playerId": "PG-PLAYER",
+            })))
+            .unwrap(),
+        ));
+        assert!(!call_target_identity_matches(
+            &left,
+            &extract_call_target_identity(Some(&json!({
+                "eventId": "event-1",
+                "setId": "set-1",
+                "playerId": "PG-OTHER",
+            })))
+            .unwrap(),
+        ));
+    }
+
+    #[test]
+    fn call_sync_targets_use_the_same_composite_identity() {
+        let meta = json!({
+            "targets": [{
+                "threadId": "thread-1",
+                "senderUserId": "12345678",
+                "eventId": "event-1",
+                "setId": "set-1",
+                "playerId": "PG-PLAYER",
+            }]
+        });
+
+        let targets = parse_call_sync_status_targets(Some(&meta));
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].identity.event_id, "event-1");
+        assert_eq!(targets[0].identity.set_id, "set-1");
+        assert_eq!(targets[0].identity.player_id, "PG-PLAYER");
+    }
 }
 
 fn build_auto_resolve_message(profile: &SenderProfile, root: &GenericMessage) -> GenericMessage {
@@ -5795,7 +5868,12 @@ fn send_mailbox_message(
     }
 
     if message.message_type == "resolve" {
-        validate_resolve_permission(&app, &input.profile.sender_user_id, &message.thread_id)?;
+        validate_resolve_permission(
+            &app,
+            &input.profile.sender_user_id,
+            &message.thread_id,
+            message.message_meta.as_ref(),
+        )?;
     } else if message.message_type == "dq_request" {
         validate_dq_request_permission(&app, &message.thread_id, input.message_meta.as_ref())?;
     }
