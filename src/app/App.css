@@ -518,9 +518,45 @@ button:disabled {
   cursor: pointer;
 }
 
+.mailbox-thread-item.mailbox-thread-item--resolution-owner {
+  border-color: #d97706;
+  background: #fffbeb;
+}
+
 .mailbox-thread-item.selected {
   border-color: #60a5fa;
   background: #eff6ff;
+}
+
+.mailbox-thread-item.mailbox-thread-item--resolution-owner.selected {
+  border-color: #b45309;
+  background: #fef3c7;
+}
+
+.mailbox-thread-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.mailbox-thread-heading h3,
+.mailbox-thread-heading h4 {
+  margin: 0;
+}
+
+.mailbox-resolution-owner-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.18rem 0.48rem;
+  border: 1px solid #d97706;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.3;
 }
 
 .mailbox-message-list {
@@ -536,6 +572,15 @@ button:disabled {
 
 .mailbox-message.root {
   border-left: 4px solid #1d4ed8;
+}
+
+.mailbox-message.mailbox-message--resolution-owner {
+  border-color: #d97706;
+  background: #fffbeb;
+}
+
+.mailbox-message.root.mailbox-message--resolution-owner {
+  border-left-color: #b45309;
 }
 
 .call-list-event-grid {

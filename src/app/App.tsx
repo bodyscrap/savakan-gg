@@ -1087,6 +1087,7 @@ function App() {
         {activeTab === "message" && (
           <MessageBox
             senderLabel={formatSenderProfileLabel(senderProfile)}
+            senderUserId={senderProfile.senderUserId}
             senderProfileReady={isSenderProfileReadyForMessaging}
             disableLocalCommunication={disableLocalCommunication}
             mailboxServiceStarted={mailboxServiceStarted}
