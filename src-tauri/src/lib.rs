@@ -203,10 +203,20 @@ struct MobileSetListItem {
     phase_name: Option<String>,
     phase_group_name: Option<String>,
     is_intermediate: bool,
+    matchup_ready: bool,
     state: i64,
     winner_id: Option<String>,
     entrant_names: Vec<String>,
     entrant_ids: Vec<Option<String>>,
+}
+
+fn mobile_set_has_matchup(slots: &[models::SetSlotSnapshot]) -> bool {
+    slots.len() >= 2
+        && slots.iter().take(2).all(|slot| {
+            slot.entrant_id
+                .as_deref()
+                .is_some_and(|entrant_id| !entrant_id.trim().is_empty())
+        })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -531,6 +541,40 @@ mod tests {
             recorded_at: chrono::DateTime::<chrono::Utc>::from_timestamp(recorded_at_seconds, 0)
                 .unwrap(),
         }
+    }
+
+    fn make_slot(entrant_id: Option<&str>, entrant_name: &str) -> models::SetSlotSnapshot {
+        models::SetSlotSnapshot {
+            entrant_id: entrant_id.map(str::to_owned),
+            entrant_name: entrant_name.to_owned(),
+            seed_id: None,
+            seed_num: None,
+            seed_placeholder_name: None,
+            seed_origin_phase_group_id: None,
+            seed_origin_phase_group_display_identifier: None,
+            seed_origin_phase_order: None,
+            seed_origin_placement: None,
+            seed_origin_order: None,
+            score: None,
+        }
+    }
+
+    #[test]
+    fn mobile_set_matchup_readiness_uses_entrant_ids_not_display_names() {
+        let slots = vec![
+            make_slot(Some("entrant-a"), "Winner of Round 1 Set 1"),
+            make_slot(Some("entrant-b"), "TBD"),
+        ];
+
+        assert!(mobile_set_has_matchup(&slots));
+        assert!(!mobile_set_has_matchup(&[
+            make_slot(Some("entrant-a"), "Player A"),
+            make_slot(None, "Player B"),
+        ]));
+        assert!(!mobile_set_has_matchup(&[
+            make_slot(Some("entrant-a"), "Player A"),
+            make_slot(Some("  "), "Player B"),
+        ]));
     }
 
     #[test]
@@ -2303,36 +2347,8 @@ fn mobile_input_html() -> &'static str {
             return Number(detail?.state || 0) === 3;
         }
 
-        function isResolvedEntrantName(name) {
-            const raw = String(name || '').trim();
-            if (!raw) {
-                return false;
-            }
-
-            const normalized = raw.toUpperCase();
-            if (normalized === 'TBD' || normalized === 'TBA' || normalized === 'UNKNOWN') {
-                return false;
-            }
-
-            // 未確定スロットの代表的な表示を除外する。
-            const unresolvedLabel = raw.toLowerCase();
-            if (unresolvedLabel.startsWith('winner of ') || unresolvedLabel.startsWith('loser of ')) {
-                return false;
-            }
-            if (raw.startsWith('勝者') || raw.startsWith('敗者')) {
-                return false;
-            }
-
-            return true;
-        }
-
         function isListItemMatchupReady(set) {
-            const names = Array.isArray(set?.entrantNames) ? set.entrantNames : [];
-            const entrantIds = Array.isArray(set?.entrantIds) ? set.entrantIds : [];
-            return names.length >= 2
-                && entrantIds.length >= 2
-                && entrantIds.slice(0, 2).every((entrantId) => Boolean(String(entrantId || '').trim()))
-                && names.slice(0, 2).every((name) => isResolvedEntrantName(name));
+            return Boolean(set?.matchupReady);
         }
 
         function isListItemInputtable(set) {
@@ -3978,6 +3994,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 phase_name: set.phase_name.clone(),
                 phase_group_name: set.phase_group_name.clone(),
                 is_intermediate: crate::models::is_intermediate_set(&event.phase_groups, set),
+                matchup_ready: mobile_set_has_matchup(&set.slots),
                 state: if confirmed_pending_set_ids.contains(set.set_id.as_str()) {
                     3
                 } else {
