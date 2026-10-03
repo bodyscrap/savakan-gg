@@ -14,7 +14,6 @@ import {
   MOBILE_INPUT_POLLING_MS_MIN,
   normalizeBracketZoomLevel,
   normalizeMobileInputPollingMs,
-  normalizeStartggFetchPerPage,
   useAppPreferences,
 } from "../hooks/useAppPreferences";
 import { toApiSlug, toEventApiSlug } from "../domain/slugUtils";
@@ -101,8 +100,10 @@ import {
 import { useSelectedEventData } from "../hooks/useSelectedEventData";
 import "./App.css";
 
+const STARTGG_FETCH_PER_PAGE = 50;
+
 function App() {
-  const [activeTab, setActiveTab] = useState<AppTab>("home");
+  const [activeTab, setActiveTab] = useState<AppTab>("create");
   const appVersion = useAppVersion();
   const [slug, setSlug] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
@@ -137,9 +138,6 @@ function App() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const {
-    startggFetchPerPage,
-    changeStartggFetchPerPage,
-    commitStartggFetchPerPage,
     displayBracketPlayersBySide,
     setDisplayBracketPlayersBySide,
     bracketZoomLevel,
@@ -328,7 +326,7 @@ function App() {
   } = useDqCameraScan();
   const tournamentCreation = useTournamentCreation({
     slug,
-    perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
+    perPage: STARTGG_FETCH_PER_PAGE,
     setCreateBusy,
     setBusy,
     setError,
@@ -337,7 +335,7 @@ function App() {
       setWorkspace(null);
       markStartupAutoRestoreDone();
       await refreshLocalSnapshotEvents();
-      setActiveTab("home");
+      setActiveTab("create");
     },
   });
   const {
@@ -348,8 +346,6 @@ function App() {
     createSelectedEventId,
     createEventSearchInput,
     setCreateEventSearchInput,
-    createEventSlugInput,
-    setCreateEventSlugInput,
     createEventAlias,
     setCreateEventAlias,
     createSnapshotProgress,
@@ -404,7 +400,7 @@ function App() {
   const bracketReport = useBracketReport<TournamentWorkspace>({
     slug: toApiSlug(slug),
     eventId: selectedEvent?.eventId ?? null,
-    perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
+    perPage: STARTGG_FETCH_PER_PAGE,
     reportableCount: confirmedReportableCount,
     setWorkspace,
     closeMatchDialog,
@@ -606,7 +602,7 @@ function App() {
     selectedEventId,
     selectedEvent,
     eventAliasDraft,
-    perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
+    perPage: STARTGG_FETCH_PER_PAGE,
     setBusy,
     setError,
     setMessage,
@@ -963,50 +959,47 @@ function App() {
       error={error}
     >
 
-        {activeTab === "home" && (
-          <EventSelector
-            items={localSnapshotEvents}
-            filteredItems={homeFilteredSnapshotEvents}
-            loading={loadingLocalSnapshotEvents}
-            searchInput={homeSnapshotSearchInput}
-            onSearchInputChange={setHomeSnapshotSearchInput}
-            selectedItem={homeSelectedSnapshotItem}
-            onSelectedKeyChange={setHomeSelectedSnapshotKey}
-            deletingKey={deletingSnapshotKey}
-            busy={busy}
-            onRefresh={() => void refreshLocalSnapshotEvents()}
-            onSelectEvent={(item) => void selectLocalSnapshotEvent(item)}
-            onDeleteEvent={(item) => void deleteLocalSnapshotEvent(item)}
-          />
-        )}
-
         {activeTab === "create" && (
-          <CreateSnapshot
-            token={token}
-            onTokenChange={setToken}
-            slug={slug}
-            onSlugChange={setSlug}
-            createBusy={createBusy}
-            canLoadPreview={toApiSlug(slug) !== "" && token.trim() !== ""}
-            onSaveToken={saveToken}
-            onLoadPreview={loadCreatePreview}
-            createPreview={createPreview}
-            createPreviewLoadFailed={createPreviewLoadFailed}
-            createEventSearchInput={createEventSearchInput}
-            onEventSearchInputChange={setCreateEventSearchInput}
-            createFilteredEvents={createFilteredEvents}
-            createSelectedEventId={createSelectedEventId}
-            onEventDropdownChange={handleCreateEventDropdownChange}
-            createEventAlias={createEventAlias}
-            onEventAliasChange={setCreateEventAlias}
-            createEventSlugInput={createEventSlugInput}
-            onEventSlugInputChange={setCreateEventSlugInput}
-            canCreateSnapshot={token.trim() !== "" && toApiSlug(slug) !== "" && toEventApiSlug(slug, createEventSlugInput) !== ""}
-            onCreateSnapshot={() => void createEventSnapshotBySlug()}
-            createSnapshotProgress={createSnapshotProgress}
-            createSnapshotProgressPercent={createSnapshotProgressPercent}
-            createSnapshotProgressLabel={createSnapshotProgressLabel}
-          />
+          <>
+            <CreateSnapshot
+              token={token}
+              onTokenChange={setToken}
+              slug={slug}
+              onSlugChange={setSlug}
+              createBusy={createBusy}
+              canLoadPreview={toApiSlug(slug) !== "" && token.trim() !== ""}
+              onSaveToken={saveToken}
+              onLoadPreview={loadCreatePreview}
+              createPreview={createPreview}
+              createPreviewLoadFailed={createPreviewLoadFailed}
+              createEventSearchInput={createEventSearchInput}
+              onEventSearchInputChange={setCreateEventSearchInput}
+              createFilteredEvents={createFilteredEvents}
+              createSelectedEventId={createSelectedEventId}
+              onEventDropdownChange={handleCreateEventDropdownChange}
+              createEventAlias={createEventAlias}
+              onEventAliasChange={setCreateEventAlias}
+              canCreateSnapshot={token.trim() !== "" && toApiSlug(slug) !== "" && createSelectedEventId !== "" && toEventApiSlug(slug, createPreview?.events.find((event) => event.eventId === createSelectedEventId)?.eventSlug ?? "") !== ""}
+              onCreateSnapshot={() => void createEventSnapshotBySlug()}
+              createSnapshotProgress={createSnapshotProgress}
+              createSnapshotProgressPercent={createSnapshotProgressPercent}
+              createSnapshotProgressLabel={createSnapshotProgressLabel}
+            />
+            <EventSelector
+              items={localSnapshotEvents}
+              filteredItems={homeFilteredSnapshotEvents}
+              loading={loadingLocalSnapshotEvents}
+              searchInput={homeSnapshotSearchInput}
+              onSearchInputChange={setHomeSnapshotSearchInput}
+              selectedItem={homeSelectedSnapshotItem}
+              onSelectedKeyChange={setHomeSelectedSnapshotKey}
+              deletingKey={deletingSnapshotKey}
+              busy={busy}
+              onRefresh={() => void refreshLocalSnapshotEvents()}
+              onSelectEvent={(item) => void selectLocalSnapshotEvent(item)}
+              onDeleteEvent={(item) => void deleteLocalSnapshotEvent(item)}
+            />
+          </>
         )}
 
         {activeTab === "tournament" && (
@@ -1233,9 +1226,6 @@ function App() {
             )}
             onSaveSenderProfile={() => void saveSenderProfile(senderIdCollision)}
             canSaveSenderProfile={canSaveSenderProfile(senderIdCollision)}
-            startggFetchPerPage={normalizeStartggFetchPerPage(startggFetchPerPage)}
-            onStartggFetchPerPageChange={changeStartggFetchPerPage}
-            onStartggFetchPerPageBlur={commitStartggFetchPerPage}
             mobileInputPollingMs={normalizeMobileInputPollingMs(mobileInputPollingMs)}
             mobileInputPollingMsMin={MOBILE_INPUT_POLLING_MS_MIN}
             mobileInputPollingMsMax={MOBILE_INPUT_POLLING_MS_MAX}
@@ -1381,7 +1371,7 @@ function App() {
                 slug: toApiSlug(slug),
                 event: selectedEvent,
                 set: activeMatch,
-                perPage: normalizeStartggFetchPerPage(startggFetchPerPage),
+                perPage: STARTGG_FETCH_PER_PAGE,
               })}
               onSaveDraft={() => void saveLocalResultForMatch(false)}
               onToggleOverlay={() => requestToggleActiveMatchOverlay(activeMatch)}

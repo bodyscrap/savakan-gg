@@ -5,14 +5,15 @@ export function localSnapshotItemKey(item: LocalSnapshotEventListItem): string {
   return `${item.slug}:${item.eventId}`;
 }
 
+export function formatDefaultSnapshotName(tournamentName: string, eventName: string): string {
+  return [tournamentName.trim(), eventName.trim()].filter(Boolean).join(" / ");
+}
+
 export function localSnapshotAliasLabel(item: LocalSnapshotEventListItem): string {
   if (item.eventAlias && item.eventAlias.trim() !== "") {
     return item.eventAlias.trim();
   }
-  if (item.eventName && item.eventName.trim() !== "") {
-    return item.eventName.trim();
-  }
-  return item.eventId;
+  return formatDefaultSnapshotName(item.tournamentName, item.eventName) || item.eventId;
 }
 
 function normalizeSnapshotSlug(rawSlug: string): string {
@@ -45,6 +46,7 @@ export function resolveSelectedSnapshotName(
   items: LocalSnapshotEventListItem[],
   options: {
     eventAlias?: string | null;
+    tournamentName?: string | null;
     eventName?: string | null;
     slug: string;
     eventId: string;
@@ -55,22 +57,20 @@ export function resolveSelectedSnapshotName(
   if (alias) {
     return alias;
   }
-  if (options.eventName) {
-    return options.eventName;
-  }
 
+  let matched: LocalSnapshotEventListItem | null = null;
   if (options.slug !== "" && options.eventId !== "") {
-    const matched = findSnapshotEventByIdentity(items, options.slug, options.eventId);
+    matched = findSnapshotEventByIdentity(items, options.slug, options.eventId);
     const matchedAlias = matched?.eventAlias?.trim();
     if (matchedAlias) {
       return matchedAlias;
     }
-    if (matched?.eventName) {
-      return matched.eventName;
-    }
   }
 
-  return options.fallbackName;
+  return formatDefaultSnapshotName(
+    options.tournamentName?.trim() || matched?.tournamentName || "",
+    options.eventName?.trim() || matched?.eventName || "",
+  ) || options.fallbackName;
 }
 
 export function filterLocalSnapshotEvents(

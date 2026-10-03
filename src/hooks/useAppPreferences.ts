@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-export const STARTGG_FETCH_PER_PAGE_DEFAULT = 50;
 export const MOBILE_INPUT_POLLING_MS_MIN = 500;
 export const MOBILE_INPUT_POLLING_MS_MAX = 10000;
 export const MOBILE_INPUT_POLLING_MS_DEFAULT = 1500;
@@ -8,26 +7,8 @@ export const BRACKET_ZOOM_LEVELS = [1, 0.7, 0.5] as const;
 
 const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-display.v1";
 const BRACKET_ZOOM_LEVEL_STORAGE_KEY = "savakan-gg.bracket-zoom-level.v1";
-const STARTGG_FETCH_PER_PAGE_STORAGE_KEY = "savakan-gg.startgg-fetch-per-page.v1";
 const MOBILE_INPUT_POLLING_MS_STORAGE_KEY = "savakan-gg.mobile-input-polling-ms.v1";
 const LOCAL_COMMUNICATION_DISABLED_STORAGE_KEY = "savakan-gg.local-communication-disabled.v1";
-
-export function normalizeStartggFetchPerPage(
-  rawValue: unknown,
-  fallback = STARTGG_FETCH_PER_PAGE_DEFAULT,
-): number {
-  const numeric = Number(rawValue);
-  if (!Number.isFinite(numeric)) {
-    return fallback;
-  }
-
-  const rounded = Math.trunc(numeric);
-  if (rounded < 1) {
-    return 1;
-  }
-
-  return rounded;
-}
 
 export function normalizeMobileInputPollingMs(
   rawValue: unknown,
@@ -67,20 +48,10 @@ export function normalizeBracketZoomLevel(value: unknown): number {
 }
 
 export function useAppPreferences() {
-  const [startggFetchPerPage, setStartggFetchPerPage] = useState(STARTGG_FETCH_PER_PAGE_DEFAULT);
   const [displayBracketPlayersBySide, setDisplayBracketPlayersBySide] = useState(true);
   const [bracketZoomLevel, setBracketZoomLevel] = useState<number>(Number(BRACKET_ZOOM_LEVELS[0]));
   const [mobileInputPollingMs, setMobileInputPollingMs] = useState(MOBILE_INPUT_POLLING_MS_DEFAULT);
   const [disableLocalCommunication, setDisableLocalCommunication] = useState(false);
-
-  function changeStartggFetchPerPage(value: unknown) {
-    setStartggFetchPerPage((current) => normalizeStartggFetchPerPage(value, current));
-  }
-
-  function commitStartggFetchPerPage(value: unknown) {
-    const normalized = normalizeStartggFetchPerPage(value);
-    setStartggFetchPerPage((current) => current === normalized ? current : normalized);
-  }
 
   function changeMobileInputPollingMs(value: unknown) {
     setMobileInputPollingMs((current) => normalizeMobileInputPollingMs(value, current));
@@ -102,14 +73,6 @@ export function useAppPreferences() {
       const rawValue = window.localStorage.getItem(BRACKET_ZOOM_LEVEL_STORAGE_KEY);
       if (rawValue !== null) {
         setBracketZoomLevel(normalizeBracketZoomLevel(rawValue));
-      }
-    } catch {
-    }
-
-    try {
-      const rawValue = window.localStorage.getItem(STARTGG_FETCH_PER_PAGE_STORAGE_KEY);
-      if (rawValue !== null) {
-        setStartggFetchPerPage(normalizeStartggFetchPerPage(rawValue));
       }
     } catch {
     }
@@ -151,16 +114,6 @@ export function useAppPreferences() {
   useEffect(() => {
     try {
       window.localStorage.setItem(
-        STARTGG_FETCH_PER_PAGE_STORAGE_KEY,
-        String(normalizeStartggFetchPerPage(startggFetchPerPage)),
-      );
-    } catch {
-    }
-  }, [startggFetchPerPage]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
         LOCAL_COMMUNICATION_DISABLED_STORAGE_KEY,
         disableLocalCommunication ? "true" : "false",
       );
@@ -179,10 +132,6 @@ export function useAppPreferences() {
   }, [mobileInputPollingMs]);
 
   return {
-    startggFetchPerPage,
-    setStartggFetchPerPage,
-    changeStartggFetchPerPage,
-    commitStartggFetchPerPage,
     displayBracketPlayersBySide,
     setDisplayBracketPlayersBySide,
     bracketZoomLevel,

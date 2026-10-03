@@ -107,7 +107,27 @@ body {
   padding: 0.65rem;
 }
 
+.sidebar-summary-button {
+  width: calc(100% - 1rem);
+  color: var(--sidebar-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.sidebar-summary-button:hover {
+  border-color: #60a5fa;
+  background: rgba(31, 41, 55, 0.9);
+}
+
+.sidebar-summary-button:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
 .summary-name {
+  display: block;
   margin: 0.25rem 0;
   font-size: 0.88rem;
   color: #f9fafb;
@@ -953,9 +973,20 @@ button:disabled {
 
 .home-selector-grid {
   margin-top: 0.7rem;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
   gap: 0.6rem;
+}
+
+.home-selector-grid > label {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.home-selector-grid > button {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .home-detail-card {

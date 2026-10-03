@@ -9,10 +9,11 @@ import {
 import {
   filterCreatePreviewEvents,
   findCreatePreviewEvent,
+  formatDefaultSnapshotName,
   resolveCreatePreviewSelection,
 } from "../domain/snapshotDisplay";
 import { listLocalSnapshotEvents, persistEventSnapshot, saveLastSlug } from "../domain/tournamentWorkspaceRepository";
-import { toApiSlug, toEventApiSlug, toEventSlugInput } from "../domain/slugUtils";
+import { toApiSlug, toEventApiSlug } from "../domain/slugUtils";
 
 const EVENT_SNAPSHOT_PROGRESS_EVENT = "event_snapshot_progress";
 
@@ -40,7 +41,6 @@ export function useTournamentCreation({
   const [createPreviewLoadFailed, setCreatePreviewLoadFailed] = useState(false);
   const [createSelectedEventId, setCreateSelectedEventId] = useState("");
   const [createEventSearchInput, setCreateEventSearchInput] = useState("");
-  const [createEventSlugInput, setCreateEventSlugInput] = useState("");
   const [createEventAlias, setCreateEventAlias] = useState("");
   const [createSnapshotProgress, setCreateSnapshotProgress] = useState<EventSnapshotProgress | null>(null);
 
@@ -89,7 +89,7 @@ export function useTournamentCreation({
       return;
     }
     setCreateSelectedEventId(selected?.eventId ?? "");
-    setCreateEventSlugInput(toEventSlugInput(selected?.eventSlug ?? ""));
+    setCreateEventAlias(selected ? formatDefaultSnapshotName(createPreview.name, selected.eventName) : "");
   }, [createPreview, createSelectedEventId]);
 
   async function saveStartggToken() {
@@ -111,12 +111,9 @@ export function useTournamentCreation({
     }
   }
 
-  function applyCreateEventSelection(event: TournamentEventPreviewItem | null, resetAlias = false) {
+  function applyCreateEventSelection(event: TournamentEventPreviewItem | null, tournamentName: string) {
     setCreateSelectedEventId(event?.eventId ?? "");
-    setCreateEventSlugInput(toEventSlugInput(event?.eventSlug ?? ""));
-    if (resetAlias) {
-      setCreateEventAlias("");
-    }
+    setCreateEventAlias(event ? formatDefaultSnapshotName(tournamentName, event.eventName) : "");
   }
 
   async function loadCreatePreview(event?: FormEvent<HTMLFormElement>) {
@@ -138,8 +135,8 @@ export function useTournamentCreation({
       await saveStartggToken();
       const preview = await invoke<TournamentPreview>("preview_tournament", { slug: apiSlug });
       setCreatePreview(preview);
-      applyCreateEventSelection(resolveCreatePreviewSelection(preview.events, previousSelectedEventId));
-      setMessage("tournamentのイベント一覧を取得しました。");
+      applyCreateEventSelection(resolveCreatePreviewSelection(preview.events, previousSelectedEventId), preview.name);
+      setMessage("tournamentのevent一覧を取得しました。");
     } catch (error) {
       setCreatePreviewLoadFailed(true);
       setError(String(error));
@@ -156,7 +153,7 @@ export function useTournamentCreation({
     if (!selected || selected.eventId === createSelectedEventId) {
       return;
     }
-    applyCreateEventSelection(selected, true);
+    applyCreateEventSelection(selected, createPreview.name);
   }
 
   const createFilteredEvents = useMemo(
@@ -166,9 +163,10 @@ export function useTournamentCreation({
 
   async function createEventSnapshotBySlug() {
     const tournamentSlug = toApiSlug(slug);
-    const eventSlug = toEventApiSlug(slug, createEventSlugInput);
+    const selectedEvent = findCreatePreviewEvent(createPreview?.events ?? [], createSelectedEventId);
+    const eventSlug = selectedEvent ? toEventApiSlug(slug, selectedEvent.eventSlug ?? "") : "";
     if (tournamentSlug === "" || eventSlug === "") {
-      setError("大会IDとevent ID(またはevent slug)を入力してください。");
+      setError("大会IDを入力し、event一覧からeventを選択してください。");
       return;
     }
     if (createSelectedEventId !== "") {
@@ -286,8 +284,6 @@ export function useTournamentCreation({
     createSelectedEventId,
     createEventSearchInput,
     setCreateEventSearchInput,
-    createEventSlugInput,
-    setCreateEventSlugInput,
     createEventAlias,
     setCreateEventAlias,
     createSnapshotProgress,

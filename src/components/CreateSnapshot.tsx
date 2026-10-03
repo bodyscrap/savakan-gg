@@ -42,8 +42,6 @@ type CreateSnapshotProps = {
   onEventDropdownChange: (eventId: string) => void;
   createEventAlias: string;
   onEventAliasChange: (value: string) => void;
-  createEventSlugInput: string;
-  onEventSlugInputChange: (value: string) => void;
   canCreateSnapshot: boolean;
   onCreateSnapshot: () => void;
   createSnapshotProgress: EventSnapshotProgress | null;
@@ -73,8 +71,6 @@ export function CreateSnapshot({
   onEventDropdownChange,
   createEventAlias,
   onEventAliasChange,
-  createEventSlugInput,
-  onEventSlugInputChange,
   canCreateSnapshot,
   onCreateSnapshot,
   createSnapshotProgress,
@@ -86,7 +82,7 @@ export function CreateSnapshot({
   return (
     <div className="create-layout">
       <section className="panel create-layout-half">
-        <h2>1.APIキーの設定</h2>
+        <h2>1.APIトークンの設定</h2>
 
         <form
           className="form"
@@ -102,7 +98,7 @@ export function CreateSnapshot({
             style={{ flex: "1 1 18rem" }}
           />
           <button type="submit" disabled={createBusy || token.trim() === ""}>
-            APIキーを保存
+            APIトークンを保存
           </button>
         </form>
       </section>
@@ -121,17 +117,17 @@ export function CreateSnapshot({
             style={{ flex: "1 1 18rem" }}
           />
           <button type="submit" disabled={createBusy || !canLoadPreview}>
-            イベント一覧取得
+            event一覧取得
           </button>
         </form>
       </section>
 
       <section className="panel create-layout-full">
-        <h2>3. tournament内のevent一覧示</h2>
+        <h2>3. tournament内のevent一覧</h2>
         {createPreviewLoadFailed ? (
-          <p className="meta">イベント一覧の取得に失敗しました</p>
+          <p className="meta">event一覧の取得に失敗しました</p>
         ) : !createPreview ? (
-          <p className="meta">先に tournament を選択してイベント一覧を取得してください。</p>
+          <p className="meta">先に tournament を選択してevent一覧を取得してください。</p>
         ) : createPreview.events.length === 0 ? (
           <p className="meta">この tournament にはイベントがありません。</p>
         ) : (
@@ -141,7 +137,10 @@ export function CreateSnapshot({
             </p>
             <div className="form" style={{ marginTop: "0.7rem" }}>
               <label htmlFor="create-event-search-input" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">event検索</span>
+                <span style={{ display: "flex", alignItems: "baseline", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <span className="meta">イベント検索</span>
+                  <span className="meta">候補: {createFilteredEvents.length}件 / 全{createPreview.events.length}件</span>
+                </span>
                 <input
                   id="create-event-search-input"
                   type="search"
@@ -152,7 +151,7 @@ export function CreateSnapshot({
                 />
               </label>
               <label htmlFor="create-event-select" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">event選択</span>
+                <span className="meta">event選択(選択: {selectedEventName})</span>
                 <select
                   id="create-event-select"
                   value={createFilteredEvents.some((event) => event.eventId === createSelectedEventId) ? createSelectedEventId : ""}
@@ -169,35 +168,27 @@ export function CreateSnapshot({
                 </select>
               </label>
             </div>
-            <p className="meta" style={{ marginTop: "0.4rem" }}>
-              候補: {createFilteredEvents.length}件 / 全{createPreview.events.length}件
-            </p>
-            <p className="meta" style={{ marginTop: "0.2rem" }}>
-              選択中: {selectedEventName}
-            </p>
           </>
         )}
       </section>
 
       <section className="panel create-layout-full">
-        <h2>4. eventのスナップショット作成</h2>
-        <div className="form">
-          <input
-            value={createEventAlias}
-            onChange={(e) => onEventAliasChange(e.currentTarget.value)}
-            placeholder="アプリ内表示用のevent alias"
-          />
-        </div>
-        <p className="meta">選択中 event: {selectedEventName}</p>
-
-        <div className="form" style={{ marginTop: "0.8rem" }}>
-          <input
-            value={createEventSlugInput}
-            onChange={(e) => onEventSlugInputChange(e.currentTarget.value)}
-            placeholder="event名 (slug部分 / 例: ultimate-singles)"
-          />
+        <h2>4. 選択eventのスナップショット作成</h2>
+        <div className="form" style={{ display: "flex", alignItems: "end", flexWrap: "wrap", marginTop: "0.8rem" }}>
+          <label htmlFor="create-event-alias" style={{ display: "grid", gap: "0.3rem", flex: "1 1 18rem" }}>
+            <span style={{ display: "flex", justifyContent: "space-between", gap: "0.6rem", flexWrap: "wrap" }}>
+              <span className="meta">エイリアス名</span>
+              <span className="meta">選択中 event: {selectedEventName}</span>
+            </span>
+            <input
+              id="create-event-alias"
+              value={createEventAlias}
+              onChange={(e) => onEventAliasChange(e.currentTarget.value)}
+              placeholder="アプリ内表示用のevent alias"
+            />
+          </label>
           <button type="button" disabled={createBusy || !canCreateSnapshot} onClick={onCreateSnapshot}>
-            ローカルスナップショットの作成
+            スナップショット作成
           </button>
         </div>
         {(createBusy || createSnapshotProgress) && (
@@ -222,9 +213,6 @@ export function CreateSnapshot({
             </p>
           </div>
         )}
-        <p className="meta">
-          event一覧が取得できない場合は、上記で tournament + event を直接指定して作成できます。
-        </p>
       </section>
     </div>
   );

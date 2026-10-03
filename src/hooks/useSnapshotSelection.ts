@@ -40,6 +40,7 @@ export function useSnapshotSelectionView({
     const currentSelectedEventId = selectedEventId.trim() || startupSelectedEventId;
     return resolveSelectedSnapshotName(localSnapshotEvents, {
       eventAlias: selectedEventMeta?.eventAlias,
+      tournamentName: snapshot?.name,
       eventName: selectedEvent?.name,
       slug: currentSelectedSlug,
       eventId: currentSelectedEventId,

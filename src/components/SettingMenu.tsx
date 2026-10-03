@@ -21,9 +21,6 @@ type SettingsScreenProps = {
   onRandomizeSenderUserId: () => void;
   onSaveSenderProfile: () => void;
   canSaveSenderProfile: boolean;
-  startggFetchPerPage: number;
-  onStartggFetchPerPageChange: (value: string) => void;
-  onStartggFetchPerPageBlur: (value: string) => void;
   mobileInputPollingMs: number;
   mobileInputPollingMsMin: number;
   mobileInputPollingMsMax: number;
@@ -65,9 +62,6 @@ export function SettingsScreen({
   onRandomizeSenderUserId,
   onSaveSenderProfile,
   canSaveSenderProfile,
-  startggFetchPerPage,
-  onStartggFetchPerPageChange,
-  onStartggFetchPerPageBlur,
   mobileInputPollingMs,
   mobileInputPollingMsMin,
   mobileInputPollingMsMax,
@@ -173,28 +167,6 @@ export function SettingsScreen({
             </button>
           </div>
         </div>
-      </section>
-
-      <section className="panel">
-        <h2>start.gg取得設定</h2>
-        <p className="meta">イベント取得・更新時の1ページあたり件数です。通常は既定値のままで問題ありません。</p>
-
-        <div className="form" style={{ marginTop: "0.6rem" }}>
-          <label htmlFor="startgg-fetch-per-page-input" style={{ display: "grid", gap: "0.3rem" }}>
-            <span className="meta">1ページ件数 (1以上 / 既定値: 50)</span>
-            <input
-              id="startgg-fetch-per-page-input"
-              type="number"
-              min={1}
-              step={1}
-              value={startggFetchPerPage}
-              onChange={(e) => onStartggFetchPerPageChange(e.currentTarget.value)}
-              onBlur={(e) => onStartggFetchPerPageBlur(e.currentTarget.value)}
-            />
-          </label>
-        </div>
-
-        <p className="meta">現在値: {startggFetchPerPage} 件</p>
       </section>
 
       <section className="panel">

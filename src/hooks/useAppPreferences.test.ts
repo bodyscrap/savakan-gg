@@ -2,16 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeBracketZoomLevel,
   normalizeMobileInputPollingMs,
-  normalizeStartggFetchPerPage,
 } from "./useAppPreferences";
 
 describe("application preference normalization", () => {
-  it("clamps start.gg page size to a positive integer", () => {
-    expect(normalizeStartggFetchPerPage("12.8")).toBe(12);
-    expect(normalizeStartggFetchPerPage("0")).toBe(1);
-    expect(normalizeStartggFetchPerPage("invalid", 40)).toBe(40);
-  });
-
   it("clamps mobile polling interval to its supported range", () => {
     expect(normalizeMobileInputPollingMs("100")).toBe(500);
     expect(normalizeMobileInputPollingMs("1250.9")).toBe(1250);

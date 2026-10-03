@@ -25,7 +25,7 @@ export function useAppVersion(): string {
   return appVersion;
 }
 
-export type AppTab = "home" | "create" | "tournament" | "message" | "call-list" | "bracket" | "item-list" | "users" | "settings" | "overlay";
+export type AppTab = "create" | "tournament" | "message" | "call-list" | "bracket" | "item-list" | "users" | "settings" | "overlay";
 
 type AppTabDefinition = {
   id: AppTab;
@@ -35,9 +35,8 @@ type AppTabDefinition = {
 };
 
 const APP_TABS: AppTabDefinition[] = [
-  { id: "create", label: "新規作成", icon: "➕", implemented: true },
-  { id: "home", label: "大会一覧", icon: "🏠", implemented: true },
-  { id: "tournament", label: "大会管理", icon: "⚙", implemented: true },
+  { id: "create", label: "スナップショット", icon: "➕", implemented: true },
+  { id: "tournament", label: "スナップショット&メタデータ設定", icon: "⚙", implemented: true },
   { id: "bracket", label: "ブラケット", icon: "🏆", implemented: true },
   { id: "overlay", label: "オーバーレイ", icon: "📺", implemented: true },
   { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
@@ -89,28 +88,28 @@ export function AppShell({
             <h1>savakan-gg</h1>
             {appVersion !== "" ? <span className="app-version">v{appVersion}</span> : null}
           </div>
-          <p>大会運営コンソール</p>
         </div>
 
-        <div className="sidebar-summary">
-          <p className="meta">選択中の大会</p>
-          {sidebarSummary ? (
-            <>
-              <p className="summary-name">{sidebarSummary.name}</p>
-              <p className="summary-meta">slug: {sidebarSummary.slug}</p>
-              {sidebarSummary.eventCount !== undefined ? (
-                <p className="summary-meta">events: {sidebarSummary.eventCount}</p>
-              ) : sidebarSummary.tournamentName !== undefined ? (
-                <p className="summary-meta">tournament: {sidebarSummary.tournamentName}</p>
-              ) : null}
-            </>
-          ) : (
+        {sidebarSummary ? (
+          <button
+            type="button"
+            className="sidebar-summary sidebar-summary-button"
+            title="選択中のスナップショットを管理"
+            aria-label={`選択中のスナップショットを管理: ${sidebarSummary.name}`}
+            onClick={() => onTabSelect("tournament")}
+          >
+            <span className="meta">選択中のスナップショット</span>
+            <span className="summary-name">{sidebarSummary.name}</span>
+          </button>
+        ) : (
+          <div className="sidebar-summary">
+            <p className="meta">選択中のスナップショット</p>
             <p className="summary-meta">未選択</p>
-          )}
-        </div>
+          </div>
+        )}
 
         <nav className="tab-nav" role="tablist" aria-label="メインタブ">
-          {APP_TABS.map((tab) => (
+          {APP_TABS.filter((tab) => tab.id !== "tournament").map((tab) => (
             <button
               key={tab.id}
               type="button"
@@ -143,12 +142,7 @@ export function AppShell({
           {activeTab === "call-list" ? (
             headerContent
           ) : (
-            <>
-              <h2>{activeTab === "create" ? "新規作成" : activeTabLabel}</h2>
-              {activeTab !== "create" && (
-                <p className="description">start.ggのローカルスナップショットをベースにした大会データ単位で管理</p>
-              )}
-            </>
+            <h2>{activeTabLabel}</h2>
           )}
         </section>
 

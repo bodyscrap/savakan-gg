@@ -107,11 +107,10 @@ export function BracketTab({
     <>
       <section className="panel">
         <h2>使用方法</h2>
-        <p className="meta">試合setのカードをクリックすると詳細ダイアログが開き、各種入力が可能です。</p>
-        <p className="meta">カードを Ctrl+クリックで配信画面のON/OFF(最大1set)。Alt+左クリックで完全停止します。</p>
+        <p className="meta">set(試合)をクリックすると詳細画面がオープン。setを Ctrl+クリックで配信画面のON/OFF、Alt+左クリックで配信を完全停止します。</p>
         <div className="panel-toolbar compact">
           <p className="meta">
-            下書き: {draftPendingCount} / 確定済み: {confirmedReportableCount}
+            下書き: {draftPendingCount} / 確定済み: {confirmedReportableCount}   黄枠のsetは、現在のスナップショットから変更があります。
           </p>
         </div>
         {reportProgressActive && (
@@ -156,15 +155,12 @@ export function BracketTab({
             </p>
           </div>
         )}
-        <p className="meta">カード枠が黄色の試合は、現在のスナップショットからローカル変更があります。</p>
       </section>
 
       {hasSnapshot && (
         <section className="panel">
           <h2>{eventAlias.trim() !== "" ? eventAlias : "未設定"}</h2>
-          <p className="meta">start.ggのtournament名: {tournamentName}</p>
-          <p className="meta">start.ggのevent名: {eventName}</p>
-
+          <p className="meta">tournament名: {tournamentName}, event名: {eventName}</p>
           <div className="event-toolbar">
             <div className="bracket-scope-controls" aria-label="ブラケット表示範囲">
               <label className="bracket-scope-field" htmlFor="phase-select">

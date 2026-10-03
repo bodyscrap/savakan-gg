@@ -77,7 +77,7 @@ export function useSnapshotEventListRefresh({
   }
 
   useEffect(() => {
-    if (activeTab === "home") {
+    if (activeTab === "create") {
       void refreshLocalSnapshotEvents();
     }
   }, [activeTab]);

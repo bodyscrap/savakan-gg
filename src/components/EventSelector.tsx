@@ -34,25 +34,26 @@ export function EventSelector({
   onDeleteEvent,
 }: EventSelectorProps) {
   const selectedItemKey = selectedItem ? localSnapshotItemKey(selectedItem) : "";
+  const refreshButton = (
+    <button type="button" className="ghost" disabled={loading} onClick={onRefresh}>
+      {loading ? "更新中..." : "一覧を更新"}
+    </button>
+  );
 
   return (
     <section className="panel">
-      <div className="panel-toolbar compact">
-        <p className="meta">件数: {filteredItems.length} / 全{items.length}</p>
-        <button type="button" className="ghost" disabled={loading} onClick={onRefresh}>
-          {loading ? "更新中..." : "一覧を更新"}
-        </button>
-      </div>
+      <h2>5.スナップショットの選択</h2>
+      {(loading || items.length === 0) && <div className="panel-toolbar compact">{refreshButton}</div>}
 
       {loading ? (
-        <p className="meta">ローカルイベント一覧を読み込んでいます...</p>
+        <p className="meta">ローカルevent一覧を読み込んでいます...</p>
       ) : items.length === 0 ? (
         <p className="meta">保存済みイベントがありません。大会管理タブから start.gg 同期を実行してください。</p>
       ) : (
         <>
           <div className="home-selector-grid">
             <label htmlFor="home-snapshot-search-input" style={{ display: "grid", gap: "0.3rem" }}>
-              <span className="meta">大会検索</span>
+              <span className="meta">スナップショット検索</span>
               <input
                 id="home-snapshot-search-input"
                 type="search"
@@ -63,14 +64,14 @@ export function EventSelector({
               />
             </label>
             <label htmlFor="home-snapshot-select" style={{ display: "grid", gap: "0.3rem" }}>
-              <span className="meta">大会選択</span>
+              <span className="meta">スナップショット選択</span>
               <select
                 id="home-snapshot-select"
                 value={selectedItemKey}
                 onChange={(e) => onSelectedKeyChange(e.currentTarget.value)}
               >
                 <option value="" disabled>
-                  {filteredItems.length === 0 ? "一致する大会がありません" : "大会を選択"}
+                  {filteredItems.length === 0 ? "一致するスナップショットがありません" : "スナップショットを選択"}
                 </option>
                 {filteredItems.map((item) => (
                   <option key={localSnapshotItemKey(item)} value={localSnapshotItemKey(item)}>
@@ -79,6 +80,7 @@ export function EventSelector({
                 ))}
               </select>
             </label>
+            {refreshButton}
           </div>
 
           {selectedItem ? (() => {
@@ -101,9 +103,7 @@ export function EventSelector({
                     <h3>{localSnapshotAliasLabel(selectedItem)}</h3>
                     <span className="meta">{new Date(selectedItem.updatedAt).toLocaleString()}</span>
                   </div>
-                  <p className="meta">start.ggのtournament名: {selectedItem.tournamentName}</p>
-                  <p className="meta">start.ggのevent名: {selectedItem.eventName}</p>
-                  <p className="meta">前回選択Phase/Pool: {selectedPhasePoolLabel}</p>
+                  <p className="meta">tournament名: {selectedItem.tournamentName}, event名: {selectedItem.eventName}, 前回選択Phase/Pool: {selectedPhasePoolLabel}</p>
                 </article>
                 <div className="home-detail-actions">
                   <button type="button" className="ghost" disabled={busy || isDeleting} onClick={() => onSelectEvent(selectedItem)}>
