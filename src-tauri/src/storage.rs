@@ -1060,12 +1060,9 @@ pub fn save_generic_messages(app: &AppHandle, messages: &[GenericMessage]) -> Re
 
 #[derive(Debug, Clone)]
 struct CallMessageIdentity {
-    tournament_id: String,
     event_id: String,
-    phase_name: String,
-    phase_group_name: String,
     set_id: String,
-    entrant_id: String,
+    player_id: String,
 }
 
 fn message_meta_string(meta: &serde_json::Value, key: &str) -> String {
@@ -1079,15 +1076,7 @@ fn call_message_identity(message: &GenericMessage) -> Option<CallMessageIdentity
     let meta = message.message_meta.as_ref()?;
 
     let set_id = message_meta_string(meta, "setId");
-    let entrant_id = message_meta_string(meta, "callEntrantId");
-    let tournament_id = {
-        let scoped = message_meta_string(meta, "scopeTournamentId");
-        if !scoped.is_empty() {
-            scoped
-        } else {
-            message_meta_string(meta, "tournamentId")
-        }
-    };
+    let player_id = message_meta_string(meta, "playerId").to_ascii_uppercase();
     let event_id = {
         let scoped = message_meta_string(meta, "scopeEventId");
         if !scoped.is_empty() {
@@ -1096,55 +1085,22 @@ fn call_message_identity(message: &GenericMessage) -> Option<CallMessageIdentity
             message_meta_string(meta, "eventId")
         }
     };
-    let phase_name = {
-        let scoped = message_meta_string(meta, "scopePhaseName");
-        let legacy = if scoped.is_empty() {
-            message_meta_string(meta, "phaseName")
-        } else {
-            scoped
-        };
-        if legacy.is_empty() {
-            "Phase 未設定".to_owned()
-        } else {
-            legacy
-        }
-    };
-    let phase_group_name = {
-        let scoped = message_meta_string(meta, "scopePhaseGroupName");
-        let legacy = if scoped.is_empty() {
-            message_meta_string(meta, "phaseGroupName")
-        } else {
-            scoped
-        };
-        if legacy.is_empty() {
-            "Pool 未設定".to_owned()
-        } else {
-            legacy
-        }
-    };
 
-    if tournament_id.is_empty() || event_id.is_empty() || set_id.is_empty() || entrant_id.is_empty()
-    {
+    if event_id.is_empty() || set_id.is_empty() || player_id.is_empty() {
         return None;
     }
 
     Some(CallMessageIdentity {
-        tournament_id,
         event_id,
-        phase_name,
-        phase_group_name,
         set_id,
-        entrant_id,
+        player_id,
     })
 }
 
 fn call_identity_matches(left: &CallMessageIdentity, right: &CallMessageIdentity) -> bool {
-    left.tournament_id == right.tournament_id
-        && left.event_id == right.event_id
-        && left.phase_name == right.phase_name
-        && left.phase_group_name == right.phase_group_name
+    left.event_id == right.event_id
         && left.set_id == right.set_id
-        && left.entrant_id == right.entrant_id
+        && left.player_id == right.player_id
 }
 
 fn build_forced_resolve_message(root: &GenericMessage) -> GenericMessage {
@@ -1175,18 +1131,50 @@ fn is_same_message_identity(left: &GenericMessage, right: &GenericMessage) -> bo
     left.message_id == right.message_id
 }
 
+fn collect_duplicate_unresolved_call_roots(
+    messages: &[GenericMessage],
+    identity: &CallMessageIdentity,
+) -> Vec<GenericMessage> {
+    messages
+        .iter()
+        .filter(|item| {
+            item.parent_message_id.is_none()
+                && item.method == "call_player"
+                && call_message_identity(item)
+                    .map(|item_identity| call_identity_matches(&item_identity, identity))
+                    .unwrap_or(false)
+        })
+        .filter(|root| {
+            !messages.iter().any(|item| {
+                item.thread_id == root.thread_id && item.message_type == "resolve"
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Result<(), String> {
     let mut messages = load_generic_messages(app)?.unwrap_or_default();
 
     if message.message_type == "resolve" && message.method == "call_player" {
-        let known_call_thread = messages.iter().any(|item| {
+        let root = messages.iter().find(|item| {
             item.thread_id == message.thread_id
                 && item.parent_message_id.is_none()
                 && item.method == "call_player"
         });
 
-        if !known_call_thread {
+        let Some(root) = root else {
             // 未知の呼び出しスレッドに対する解決メッセージは取り込まない。
+            return Ok(());
+        };
+
+        let Some(root_identity) = call_message_identity(root) else {
+            return Ok(());
+        };
+        let Some(resolve_identity) = call_message_identity(message) else {
+            return Ok(());
+        };
+        if !call_identity_matches(&root_identity, &resolve_identity) {
             return Ok(());
         }
     }
@@ -1196,28 +1184,10 @@ pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Resu
         && message.method == "call_player"
     {
         if let Some(call_identity) = call_message_identity(message) {
-            let matching_roots = messages
-                .iter()
-                .filter(|item| {
-                    item.parent_message_id.is_none()
-                        && item.method == "call_player"
-                        && call_message_identity(item)
-                            .map(|item_identity| {
-                                call_identity_matches(&item_identity, &call_identity)
-                            })
-                            .unwrap_or(false)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
+            let matching_roots = collect_duplicate_unresolved_call_roots(&messages, &call_identity);
 
             for root in matching_roots {
-                let thread_has_resolve = messages
-                    .iter()
-                    .any(|item| item.thread_id == root.thread_id && item.message_type == "resolve");
-
-                if !thread_has_resolve {
-                    messages.push(build_forced_resolve_message(&root));
-                }
+                messages.push(build_forced_resolve_message(&root));
             }
         }
     }
@@ -1233,6 +1203,84 @@ pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Resu
 
     messages.sort_by(|left, right| right.created_at.cmp(&left.created_at));
     save_generic_messages(app, &messages)
+}
+
+#[cfg(test)]
+mod call_message_identity_tests {
+    use super::{collect_duplicate_unresolved_call_roots, CallMessageIdentity};
+    use crate::models::GenericMessage;
+    use serde_json::json;
+
+    fn call_root(
+        message_id: &str,
+        thread_id: &str,
+        event_id: &str,
+        set_id: &str,
+        player_id: &str,
+    ) -> GenericMessage {
+        GenericMessage {
+            message_id: message_id.to_owned(),
+            thread_id: thread_id.to_owned(),
+            parent_message_id: None,
+            message_type: "normal".to_owned(),
+            message_meta: Some(json!({
+                "eventId": event_id,
+                "setId": set_id,
+                "playerId": player_id,
+            })),
+            method: "call_player".to_owned(),
+            subject: "Call".to_owned(),
+            sender_name: "Sender".to_owned(),
+            sender_user_id: "12345678".to_owned(),
+            sender_ip: "192.168.1.10".to_owned(),
+            body: "Call".to_owned(),
+            created_at: "2026-10-03T00:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn duplicate_recall_closes_only_unresolved_roots_with_the_same_event_set_and_player() {
+        let roots = vec![
+            call_root("same-1", "same-thread-1", "event-1", "set-1", "PG-PLAYER"),
+            call_root("same-2", "same-thread-2", "event-1", "set-1", "pg-player"),
+            call_root("other-event", "event-thread", "event-2", "set-1", "PG-PLAYER"),
+            call_root("other-set", "set-thread", "event-1", "set-2", "PG-PLAYER"),
+            call_root("other-player", "player-thread", "event-1", "set-1", "PG-OTHER"),
+            call_root("already-resolved", "resolved-thread", "event-1", "set-1", "PG-PLAYER"),
+        ];
+        let mut messages = roots;
+        messages.push(GenericMessage {
+            message_id: "resolved".to_owned(),
+            thread_id: "resolved-thread".to_owned(),
+            parent_message_id: Some("already-resolved".to_owned()),
+            message_type: "resolve".to_owned(),
+            message_meta: None,
+            method: "call_player".to_owned(),
+            subject: "Resolved".to_owned(),
+            sender_name: "Sender".to_owned(),
+            sender_user_id: "12345678".to_owned(),
+            sender_ip: "192.168.1.10".to_owned(),
+            body: "Resolved".to_owned(),
+            created_at: "2026-10-03T00:00:01Z".to_owned(),
+        });
+
+        let duplicate_roots = collect_duplicate_unresolved_call_roots(
+            &messages,
+            &CallMessageIdentity {
+                event_id: "event-1".to_owned(),
+                set_id: "set-1".to_owned(),
+                player_id: "PG-PLAYER".to_owned(),
+            },
+        );
+
+        assert_eq!(
+            duplicate_roots
+                .iter()
+                .map(|root| root.message_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["same-1", "same-2"],
+        );
+    }
 }
 
 pub fn load_generic_messages(app: &AppHandle) -> Result<Option<Vec<GenericMessage>>, String> {

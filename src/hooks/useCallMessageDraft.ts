@@ -2,7 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AppTab } from "../components/AppShell";
 import type { EventSnapshot } from "../domain/bracketDisplay";
 import type { MailboxDeliveryMode } from "../components/MessageBox";
-import { isValidIpv4, isValidSenderUserId, normalizeCallPhaseGroupName, normalizeCallPhaseName } from "../domain/messageUtils";
+import {
+  buildCallTargetId,
+  isValidIpv4,
+  isValidSenderUserId,
+  normalizeCallPhaseGroupName,
+  normalizeCallPhaseName,
+} from "../domain/messageUtils";
 import type { SetSlot, SetSnapshot } from "../domain/bracketProgression";
 import type { SenderProfile } from "./useSenderProfile";
 
@@ -112,7 +118,7 @@ export function useCallMessageDraft({
       ].join("\n");
 
       setComposeMessageMeta({
-        callId: `${tournament.tournamentId}:${event.eventId}:${phaseName}:${phaseGroupName}:${targetSetId}:${entrantId}`,
+        callId: buildCallTargetId(event.eventId, targetSetId, playerId),
         playerId,
         callEntrantId: entrantId,
         callEntrantName: slot.entrantName,

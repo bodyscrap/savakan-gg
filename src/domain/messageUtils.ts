@@ -82,23 +82,17 @@ export type CallThreadIdentity = {
 };
 
 export type CallTargetIdentity = {
-  tournamentId: string;
   eventId: string;
-  phaseName: string;
-  phaseGroupName: string;
   setId: string;
-  callEntrantId: string;
+  playerId: string;
 };
 
 export type CallSyncStatusTarget = {
   threadId: string;
   senderUserId: string;
-  tournamentId: string;
   eventId: string;
-  phaseName: string;
-  phaseGroupName: string;
   setId: string;
-  callEntrantId: string;
+  playerId: string;
 };
 
 export function normalizeGenericMessage(rawValue: unknown): GenericMessage | null {
@@ -417,21 +411,23 @@ export function buildCallListDedupKey(rootMessage: GenericMessage): string {
     return rootMessage.threadId;
   }
 
-  return `${targetIdentity.tournamentId}::${targetIdentity.eventId}::${targetIdentity.phaseName}::${targetIdentity.phaseGroupName}::${targetIdentity.setId}::${targetIdentity.callEntrantId}`;
+  return buildCallTargetId(targetIdentity.eventId, targetIdentity.setId, targetIdentity.playerId);
+}
+
+export function buildCallTargetId(eventId: string, setId: string, playerId: string): string {
+  return `${eventId.trim()}::${setId.trim()}::${normalizePlayerId(playerId)}`;
 }
 
 export function extractCallTargetIdentityFromMeta(meta: Record<string, unknown> | null): CallTargetIdentity | null {
-  const callEntrantId = extractMetaString(meta, "callEntrantId");
-  const setId = extractMetaString(meta, "setId");
   const eventId = extractMetaString(meta, "scopeEventId") || extractMetaString(meta, "eventId");
-  const tournamentId = extractMetaString(meta, "scopeTournamentId") || extractMetaString(meta, "tournamentId");
-  const { phaseName, phaseGroupName } = extractCallPhasePoolMeta(meta);
+  const setId = extractMetaString(meta, "setId");
+  const playerId = normalizePlayerId(extractMetaString(meta, "playerId"));
 
-  if (tournamentId === "" || eventId === "" || callEntrantId === "" || setId === "") {
+  if (eventId === "" || setId === "" || playerId === "") {
     return null;
   }
 
-  return { tournamentId, eventId, phaseName, phaseGroupName, setId, callEntrantId };
+  return { eventId, setId, playerId };
 }
 
 export function buildCallSyncStatusTargets(
@@ -457,7 +453,7 @@ export function buildCallSyncStatusTargets(
         continue;
       }
 
-      const dedupKey = `${root.senderUserId}::${identity.tournamentId}::${identity.eventId}::${identity.phaseName}::${identity.phaseGroupName}::${identity.setId}::${identity.callEntrantId}`;
+      const dedupKey = `${root.senderUserId}::${buildCallTargetId(identity.eventId, identity.setId, identity.playerId)}`;
       if (dedupMap.has(dedupKey)) {
         continue;
       }
@@ -474,12 +470,9 @@ export function buildCallSyncStatusTargets(
 }
 
 export function isSameCallTargetIdentity(left: CallTargetIdentity, right: CallTargetIdentity): boolean {
-  return left.tournamentId === right.tournamentId
-    && left.eventId === right.eventId
-    && left.phaseName === right.phaseName
-    && left.phaseGroupName === right.phaseGroupName
+  return left.eventId === right.eventId
     && left.setId === right.setId
-    && left.callEntrantId === right.callEntrantId;
+    && left.playerId === right.playerId;
 }
 
 export function compareCallListEventGroup(left: CallListEventGroup, right: CallListEventGroup): number {

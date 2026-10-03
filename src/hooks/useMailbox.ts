@@ -678,7 +678,7 @@ export function useMailbox({
           method: activeThread.method,
           subject: `Resolved: ${activeThread.subject}`,
           body: "解決",
-          messageMeta: buildScopedMessageMeta(null, scope),
+          messageMeta: activeThread.messageMeta,
           deliveryTargetMode: "broadcast",
           deliveryTargetIp: null,
           threadId: activeThread.threadId,
