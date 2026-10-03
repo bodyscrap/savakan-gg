@@ -3501,18 +3501,27 @@ fn hydrate_mobile_detail_with_local_meta(
     event_id: &str,
     set_id: &str,
 ) -> MobileSetDetailItem {
-    let entrant_name_by_id = workspace
+    let event_meta = workspace
         .local_meta
         .events
         .iter()
-        .find(|event| event.event_id == event_id)
-        .map(|event| {
+        .find(|event| event.event_id == event_id);
+    let entrant_name_by_id = event_meta
+        .map(|event| event.entrants.iter()
+            .map(|entrant| (entrant.entrant_id.clone(), entrant.entrant_name.clone()))
+            .collect::<HashMap<String, String>>())
+        .unwrap_or_default();
+    let alias_name_by_id = event_meta
+        .filter(|event| {
             event
-                .entrants
-                .iter()
-                .map(|entrant| (entrant.entrant_id.clone(), entrant.entrant_name.clone()))
-                .collect::<HashMap<String, String>>()
+                .event_management
+                .as_ref()
+                .is_some_and(|setting| setting.use_alias_name)
         })
+        .map(|event| event.entrants.iter()
+            .filter(|entrant| !entrant.alias_name.trim().is_empty())
+            .map(|entrant| (entrant.entrant_id.clone(), entrant.alias_name.trim().to_owned()))
+            .collect::<HashMap<String, String>>())
         .unwrap_or_default();
     let entrant_id_by_name = entrant_name_by_id
         .iter()
@@ -3628,6 +3637,15 @@ fn hydrate_mobile_detail_with_local_meta(
     }
     if detail.full_round_text.trim().is_empty() {
         detail.full_round_text = format!("Set {}", detail.set_code);
+    }
+    for slot in &mut detail.slots {
+        if let Some(alias_name) = slot
+            .entrant_id
+            .as_ref()
+            .and_then(|entrant_id| alias_name_by_id.get(entrant_id))
+        {
+            slot.entrant_name = alias_name.clone();
+        }
     }
 
     detail

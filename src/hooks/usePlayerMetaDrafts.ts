@@ -7,6 +7,7 @@ import { toApiSlug } from "../domain/slugUtils";
 import type { EventLocalMeta, PlaySide } from "./useTournamentWorkspace";
 
 type PlayerMetaDraft = {
+  aliasName: string;
   playSide: PlaySide | "";
   categorySelections: string[][];
 };
@@ -40,6 +41,7 @@ type UsePlayerMetaDraftsOptions = {
     eventName: string;
     entrantId: string;
     entrantName: string;
+    aliasName: string;
     playSide: null;
     characterNames: string[];
     notes: null;
@@ -135,6 +137,7 @@ export function usePlayerMetaDrafts({
         const existingMeta = findEntrantMeta(selectedEvent.eventId, entrant.entrantId);
         if (!current[key] || !dirtyMetaDraftKeysRef.current.has(key)) {
           next[key] = {
+            aliasName: existingMeta?.aliasName ?? "",
             playSide: existingMeta?.playSide ?? "",
             categorySelections: buildInitialCategorySelections(existingMeta?.characterNames ?? []),
           };
@@ -156,6 +159,7 @@ export function usePlayerMetaDrafts({
     const key = getMetaDraftKey(eventId, entrantId);
     const existingMeta = findEntrantMeta(eventId, entrantId);
     return metaDrafts[key] ?? {
+      aliasName: existingMeta?.aliasName ?? "",
       playSide: existingMeta?.playSide ?? "",
       categorySelections: buildInitialCategorySelections(existingMeta?.characterNames ?? []),
     };
@@ -167,6 +171,7 @@ export function usePlayerMetaDrafts({
     dirtyMetaDraftKeysRef.current.add(key);
     setMetaDrafts((current) => {
       const baseDraft = current[key] ?? {
+        aliasName: existingMeta?.aliasName ?? "",
         playSide: existingMeta?.playSide ?? "",
         categorySelections: emptyCategorySelections(),
       };
@@ -256,6 +261,13 @@ export function usePlayerMetaDrafts({
     );
   }
 
+  function setSelectedEntrantAliasName(aliasName: string) {
+    if (!selectedEvent || !selectedEntrant) {
+      return;
+    }
+    setMetaDraft(selectedEvent.eventId, selectedEntrant.entrantId, { aliasName });
+  }
+
   function buildValidatedSelections(
     draft: PlayerMetaDraft,
     slots: EventSettingCategorySlot[],
@@ -332,6 +344,7 @@ export function usePlayerMetaDrafts({
         eventName: eventSnapshot.name,
         entrantId,
         entrantName,
+        aliasName: draft.aliasName,
         playSide: null,
         characterNames: validated.flattened,
         notes: null,
@@ -392,6 +405,7 @@ export function usePlayerMetaDrafts({
       getDraftCategorySelections(selectedEntrantMetaDraft, slot.slotIndex),
     )
     : [];
+  const selectedEntrantAliasName = selectedEntrantMetaDraft?.aliasName ?? "";
   const selectedEntrantValidationErrors = selectedEntrantMetaDraft
     ? buildValidatedSelections(selectedEntrantMetaDraft, configuredCategorySlots).errors
     : [];
@@ -399,6 +413,8 @@ export function usePlayerMetaDrafts({
   return {
     setMetaDraft,
     selectedEntrantDraftSelectionsBySlot,
+    selectedEntrantAliasName,
+    setSelectedEntrantAliasName,
     selectedEntrantValidationErrors,
     addDraftCategorySelection,
     removeDraftCategorySelection,

@@ -19,6 +19,7 @@ export type PlaySide = "1P" | "2P";
 
 export type EventManagementMeta = {
   sideDecisionMethod: "upper_1p" | "upper_2p" | "random";
+  useAliasName?: boolean;
   itemListSnapshots: ItemListConfig[];
   categoryMinCounts?: number[];
   categoryMaxCounts?: number[];
@@ -38,6 +39,7 @@ export type TournamentSnapshot = {
 export type EventEntrantMeta = {
   entrantId: string;
   entrantName: string;
+  aliasName?: string;
   playSide: PlaySide | null;
   characterNames: string[];
   authCode: string;
@@ -128,6 +130,7 @@ export type SaveLocalPlayerMetaInput = {
   eventName: string;
   entrantId: string;
   entrantName: string;
+  aliasName: string;
   playSide: PlaySide | null;
   characterNames: string[];
   notes: string | null;

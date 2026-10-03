@@ -29,7 +29,7 @@ type UseEventSnapshotMaintenanceOptions = {
   snapshot: Pick<TournamentWorkspace["snapshot"], "slug"> | null;
   saveEventAlias: (slug: string, eventId: string, alias: string | null) => Promise<unknown>;
   refreshRemoteSnapshot: (slug: string, eventId: string, perPage: number) => Promise<unknown>;
-  restoreWorkspaceGraph: (slug: string, eventId: string) => Promise<unknown>;
+  restoreWorkspaceGraph: (slug: string, eventId: string) => Promise<TournamentWorkspace>;
   refreshLocalSnapshotEvents: () => Promise<void>;
   loadWorkspace: (slug: string, eventId: string) => Promise<unknown>;
   clearAllDrafts: () => void;
@@ -219,12 +219,12 @@ export function useEventSnapshotMaintenance({
     }
   }
 
-  async function restoreGraphFromSnapshot() {
+  async function restoreGraphFromSnapshot(): Promise<TournamentWorkspace | null> {
     const normalizedSlug = toApiSlug(slug);
     const eventId = selectedEvent?.eventId ?? selectedEventId;
     if (normalizedSlug === "" || eventId === "") {
       setError("先にイベントを選択してください。");
-      return;
+      return null;
     }
 
     setRestoreDialogOpen(false);
@@ -233,12 +233,14 @@ export function useEventSnapshotMaintenance({
     setMessage("");
 
     try {
-      await restoreWorkspaceGraph(normalizedSlug, eventId);
+      const restoredWorkspace = await restoreWorkspaceGraph(normalizedSlug, eventId);
       clearAllDrafts();
       closeMatchDialog();
       setMessage("最後に取得したスナップショット時点に復元しました。対象eventの未報告結果は破棄されました。");
+      return restoredWorkspace;
     } catch (err) {
       setError(String(err));
+      return null;
     } finally {
       setBusy(false);
     }

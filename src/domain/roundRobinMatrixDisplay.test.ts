@@ -78,6 +78,8 @@ describe("buildRoundRobinMatrixRows", () => {
       interimScoreDraftsBySetId: {},
       obsOverlayState: null,
       setDisplayCodeById: new Map([["set-a-b", "A1"]]),
+      entrantMeta: [],
+      useAliasName: false,
     });
 
     expect(rows).toHaveLength(2);
@@ -100,6 +102,26 @@ describe("buildRoundRobinMatrixRows", () => {
       kind: "match",
       match: { className: expect.stringContaining("round-robin-match-loss") },
     });
+  });
+
+  it("uses enabled player aliases for matrix labels without changing board data", () => {
+    const boardData = makeBoardData();
+    const rows = buildRoundRobinMatrixRows({
+      boardData,
+      pendingResultBySetId: new Map(),
+      interimScoreDraftsBySetId: {},
+      obsOverlayState: null,
+      setDisplayCodeById: new Map([["set-a-b", "A1"]]),
+      entrantMeta: [{ entrantId: "a", aliasName: "Alias Alpha" }],
+      useAliasName: true,
+    });
+
+    expect(rows[0].entrantName).toBe("Alias Alpha");
+    expect(rows[0].cells[1]).toMatchObject({
+      kind: "match",
+      match: { title: expect.stringContaining("Alias Alpha vs Bravo") },
+    });
+    expect(boardData.entrantNames.get("a")).toBe("Alpha");
   });
 });
 

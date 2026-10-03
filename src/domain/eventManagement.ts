@@ -2,6 +2,7 @@ import { MAX_CATEGORY_SLOTS, type ItemListConfig } from "./itemList";
 
 export type EventManagementSetting = {
   sideDecisionMethod: "upper_1p" | "upper_2p" | "random";
+  useAliasName?: boolean;
   itemListIds: string[];
   categoryMinCounts?: number[];
   categoryMaxCounts?: number[];
@@ -265,6 +266,7 @@ export function normalizeEventManagementSetting(rawValue: unknown): EventManagem
 
   return {
     sideDecisionMethod,
+    useAliasName: Boolean(source.useAliasName),
     itemListIds: ids,
     categoryMinCounts,
     categoryMaxCounts,

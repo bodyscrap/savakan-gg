@@ -60,6 +60,8 @@ describe("overlay display formatting", () => {
     })).toEqual({
       redPlayerName: "Player B",
       bluePlayerName: "Player A",
+      redEntrantId: "player-b",
+      blueEntrantId: "player-a",
       redSetWins: 0,
       blueSetWins: 1,
     });

@@ -6,7 +6,7 @@ import {
   buildPendingSetResultsById,
   getSetScoresForDisplay as buildSetScoresForDisplay,
 } from "../domain/setResultDrafts";
-import type { EventSnapshot } from "../domain/bracketDisplay";
+import { resolveEntrantDisplayName, type EventSnapshot } from "../domain/bracketDisplay";
 import type { SetSlot, SetSnapshot } from "../domain/bracketProgression";
 import type { RoundRobinMatrixRowView } from "../components/RoundRobinMatrix";
 import type { LocalGrandFinalResetResultMeta, LocalSetResultMeta } from "../domain/tournamentWorkspaceRepository";
@@ -27,6 +27,8 @@ type UseBracketContentViewOptions = {
   pendingGrandFinalResetResults: LocalGrandFinalResetResultMeta[];
   interimScoreDraftsBySetId: Record<string, SetScoreDraft>;
   obsOverlayState: ObsOverlayState | null;
+  aliasNamesByEntrantId: Record<string, string>;
+  useAliasName: boolean;
   setDisplayCodeById: Map<string, string>;
   getTbdSourceLabel: (set: SetSnapshot, slotIndex: number, slot: SetSlot) => string | null;
   getSideLabel: (
@@ -47,6 +49,8 @@ export function useBracketContentView({
   pendingGrandFinalResetResults,
   interimScoreDraftsBySetId,
   obsOverlayState,
+  aliasNamesByEntrantId,
+  useAliasName,
   setDisplayCodeById,
   getTbdSourceLabel,
   getSideLabel,
@@ -68,6 +72,14 @@ export function useBracketContentView({
     [interimScoreDraftsBySetId, pendingResultBySetId, selectedEvent, selectedPhasePoolGroup],
   );
 
+  const entrantMeta = useMemo(
+    () => Object.entries(aliasNamesByEntrantId).map(([entrantId, aliasName]) => ({
+      entrantId,
+      aliasName,
+    })),
+    [aliasNamesByEntrantId],
+  );
+
   const roundRobinMatrixRows = useMemo<RoundRobinMatrixRowView[]>(
     () => buildRoundRobinMatrixRows({
       boardData: roundRobinBoardData,
@@ -75,8 +87,43 @@ export function useBracketContentView({
       interimScoreDraftsBySetId,
       obsOverlayState,
       setDisplayCodeById,
+      entrantMeta,
+      useAliasName,
     }),
-    [interimScoreDraftsBySetId, obsOverlayState, pendingResultBySetId, roundRobinBoardData, setDisplayCodeById],
+    [
+      entrantMeta,
+      interimScoreDraftsBySetId,
+      obsOverlayState,
+      pendingResultBySetId,
+      roundRobinBoardData,
+      setDisplayCodeById,
+      useAliasName,
+    ],
+  );
+
+  const roundRobinEntrantNames = useMemo(
+    () => roundRobinBoardData.entrants.map((entrantId) => {
+      const entrantName = roundRobinBoardData.entrantNames.get(entrantId) ?? "";
+      const resolvedEntrantId = roundRobinBoardData.entrantIdsByColumnKey.get(entrantId) ?? entrantId;
+      return resolveEntrantDisplayName(
+        entrantName,
+        aliasNamesByEntrantId[resolvedEntrantId],
+        useAliasName,
+      );
+    }),
+    [aliasNamesByEntrantId, roundRobinBoardData, useAliasName],
+  );
+
+  const roundRobinStandings = useMemo(
+    () => roundRobinBoardData.standings.map((standing) => ({
+      ...standing,
+      entrantName: resolveEntrantDisplayName(
+        standing.entrantName,
+        aliasNamesByEntrantId[standing.entrantId],
+        useAliasName,
+      ),
+    })),
+    [aliasNamesByEntrantId, roundRobinBoardData.standings, useAliasName],
   );
 
   function getSetScoresForDisplay(set: SetSnapshot): ScoreDisplay {
@@ -93,6 +140,8 @@ export function useBracketContentView({
     pendingResultBySetId,
     interimScoreDraftsBySetId,
     activeOverlay: obsOverlayState,
+    entrantMeta,
+    useAliasName,
     setDisplayCodeById,
     getTbdSourceLabel,
     getSideLabel,
@@ -104,6 +153,8 @@ export function useBracketContentView({
   return {
     pendingResultBySetId,
     roundRobinBoardData,
+    roundRobinEntrantNames,
+    roundRobinStandings,
     roundRobinMatrixRows,
     eliminationBracketSections,
     getSetScoresForDisplay,

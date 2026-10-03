@@ -1,5 +1,5 @@
 import type { PositionedRoundColumn } from "./bracketLayout";
-import { isCompletedSet, isMatchupReady } from "./bracketDisplay";
+import { isCompletedSet, isMatchupReady, resolveEntrantDisplayName } from "./bracketDisplay";
 import type { SetSlot, SetSnapshot } from "./bracketProgression";
 import type { EliminationBracketSectionView } from "../components/EliminationBracket";
 import {
@@ -22,6 +22,8 @@ export function buildEliminationBracketSections(input: {
   pendingResultBySetId: Map<string, LocalSetResultMeta>;
   interimScoreDraftsBySetId: Record<string, SetScoreDraft>;
   activeOverlay: { active: boolean; currentSetId: string | null } | null;
+  entrantMeta: Array<{ entrantId: string; aliasName?: string }>;
+  useAliasName: boolean;
   setDisplayCodeById: Map<string, string>;
   getTbdSourceLabel: (set: SetSnapshot, slotIndex: number, slot: SetSlot) => string | null;
   getSideLabel: (
@@ -37,6 +39,9 @@ export function buildEliminationBracketSections(input: {
   formatScoreValue: (value: number) => string;
   isDqScoreValue: (value: number | null) => boolean;
 }): EliminationBracketSectionView[] {
+  const aliasNameByEntrantId = new Map(
+    input.entrantMeta.map((meta) => [meta.entrantId, meta.aliasName ?? ""]),
+  );
   return input.sections.map((section) => ({
     key: section.key,
     title: section.title,
@@ -84,7 +89,13 @@ export function buildEliminationBracketSections(input: {
           slots: displaySet.slots.map((slot, index) => {
             const entrantId = slot.entrantId;
             const tbdSourceLabel = input.getTbdSourceLabel(set, index, slot);
-            const entrantName = !entrantId && tbdSourceLabel ? tbdSourceLabel : slot.entrantName;
+            const entrantName = !entrantId && tbdSourceLabel
+              ? tbdSourceLabel
+              : resolveEntrantDisplayName(
+                slot.entrantName,
+                entrantId ? aliasNameByEntrantId.get(entrantId) : undefined,
+                input.useAliasName,
+              );
             const isWinner = entrantId && winnerId ? entrantId === winnerId : false;
             const sideLabel = input.getSideLabel(set.setId, entrantId, {
               fallbackBySlotIndex: index,

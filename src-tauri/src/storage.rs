@@ -497,6 +497,7 @@ fn normalize_event_management_meta(setting: EventManagementMeta) -> EventManagem
     EventManagementMeta {
         side_decision_method,
         item_list_snapshots,
+        use_alias_name: setting.use_alias_name,
         category_min_counts,
         category_max_counts,
         category_allow_duplicates,
@@ -803,6 +804,7 @@ fn merge_snapshot_into_meta(
             event_meta.entrants.push(EventEntrantMeta {
                 entrant_id: entrant_id.clone(),
                 entrant_name: slot.entrant_name.clone(),
+                alias_name: String::new(),
                 play_side: None,
                 character_names: Vec::new(),
                 auth_code: derive_auth_code(&snapshot.slug, &event.event_id, entrant_id),
@@ -9333,6 +9335,7 @@ pub fn upsert_local_player_meta(
         .find(|entrant| entrant.entrant_id == input.entrant_id)
     {
         existing.entrant_name = input.entrant_name.clone();
+        existing.alias_name = input.alias_name.clone();
         existing.play_side = input.play_side;
         existing.character_names = character_names;
         existing.notes = input.notes;
@@ -9343,6 +9346,7 @@ pub fn upsert_local_player_meta(
         event_meta.entrants.push(EventEntrantMeta {
             entrant_id: input.entrant_id,
             entrant_name: input.entrant_name,
+            alias_name: input.alias_name,
             play_side: input.play_side,
             character_names,
             auth_code,

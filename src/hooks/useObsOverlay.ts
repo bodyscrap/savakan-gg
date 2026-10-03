@@ -84,7 +84,14 @@ export function resolveOverlaySidesForSet(
     sideOverrides?: Record<string, OverlayPlaySide>;
     getSavedSide: (setId: string, entrantId: string) => OverlayPlaySide;
   },
-): { redPlayerName: string; bluePlayerName: string; redSetWins: number; blueSetWins: number } {
+): {
+  redPlayerName: string;
+  bluePlayerName: string;
+  redEntrantId: string | null;
+  blueEntrantId: string | null;
+  redSetWins: number;
+  blueSetWins: number;
+} {
   const slots = set.slots.slice(0, 2);
   const slot0 = slots[0] ?? null;
   const slot1 = slots[1] ?? null;
@@ -133,6 +140,8 @@ export function resolveOverlaySidesForSet(
   return {
     redPlayerName: onePSlot?.entrantName?.trim() || "RED",
     bluePlayerName: twoPSlot?.entrantName?.trim() || "BLUE",
+    redEntrantId: onePSlot?.entrantId ?? null,
+    blueEntrantId: twoPSlot?.entrantId ?? null,
     redSetWins: scoreToOverlayGameWins(getScore(onePSlot)),
     blueSetWins: scoreToOverlayGameWins(getScore(twoPSlot)),
   };
@@ -374,7 +383,7 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     }
   }
 
-  async function toggleObsOverlaySet(input: ObsOverlaySetInput) {
+  async function toggleObsOverlaySet(input: ObsOverlaySetInput): Promise<boolean> {
     setObsOverlayBusy(true);
     try {
       applyOverlayState(await invoke<ObsOverlayState>("toggle_obs_overlay_set", {
@@ -386,8 +395,10 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
         },
       }));
       setError("");
+      return true;
     } catch (error) {
       setError(String(error));
+      return false;
     } finally {
       setObsOverlayBusy(false);
     }

@@ -1,5 +1,5 @@
 import type { LocalSetResultMeta } from "../hooks/useTournamentWorkspace";
-import type { PhaseGroupSnapshot } from "./bracketDisplay";
+import { resolveEntrantDisplayName, type PhaseGroupSnapshot } from "./bracketDisplay";
 import type {
   RoundRobinStanding,
   RoundRobinTieBreakRule,
@@ -823,6 +823,8 @@ type BuildRoundRobinMatrixRowsInput = {
   interimScoreDraftsBySetId: Record<string, SetScoreDraft>;
   obsOverlayState: Pick<ObsOverlayState, "active" | "currentSetId"> | null;
   setDisplayCodeById: Map<string, string>;
+  entrantMeta: Array<{ entrantId: string; aliasName?: string }>;
+  useAliasName: boolean;
 };
 
 export function buildRoundRobinMatrixRows({
@@ -831,7 +833,22 @@ export function buildRoundRobinMatrixRows({
   interimScoreDraftsBySetId,
   obsOverlayState,
   setDisplayCodeById,
+  entrantMeta,
+  useAliasName,
 }: BuildRoundRobinMatrixRowsInput): RoundRobinMatrixRowView[] {
+  const aliasNameByEntrantId = new Map(
+    entrantMeta.map((meta) => [meta.entrantId, meta.aliasName ?? ""]),
+  );
+  const getDisplayName = (columnKey: string): string => {
+    const entrantName = boardData.entrantNames.get(columnKey) ?? "";
+    const entrantId = boardData.entrantIdsByColumnKey.get(columnKey) ?? columnKey;
+    return resolveEntrantDisplayName(
+      entrantName,
+      aliasNameByEntrantId.get(entrantId),
+      useAliasName,
+    );
+  };
+
   return boardData.entrants.map((rowEntrantId) => {
     const rowSeedId = rowEntrantId.startsWith("seed:")
       ? rowEntrantId.slice("seed:".length)
@@ -930,7 +947,7 @@ export function buildRoundRobinMatrixRows({
         match: {
           set,
           className: `round-robin-match ${outcomeClass} ${changeClass} ${resultStatusClass} ${isLiveOverlaySet ? "set-card-live" : ""}`,
-          title: `${roundLabel} / ${setLabel}: ${boardData.entrantNames.get(rowEntrantId) || "-"} vs ${boardData.entrantNames.get(columnEntrantId) || "-"}`,
+          title: `${roundLabel} / ${setLabel}: ${getDisplayName(rowEntrantId) || "-"} vs ${getDisplayName(columnEntrantId) || "-"}`,
           roundLabel,
           setLabel,
           resultStatus,
@@ -944,7 +961,7 @@ export function buildRoundRobinMatrixRows({
 
     return {
       key: rowEntrantId,
-      entrantName: boardData.entrantNames.get(rowEntrantId) || "-",
+      entrantName: getDisplayName(rowEntrantId) || "-",
       cells,
       setSummary: standing ? `${standing.wins}-${standing.losses}` : "-",
       gameSummary: standing ? `${standing.gameWins}-${standing.gameLosses}` : "-",

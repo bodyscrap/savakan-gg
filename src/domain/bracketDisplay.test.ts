@@ -10,6 +10,7 @@ import {
   normalizeSourceText,
   pickPairSourceIds,
   resolveSelectedPhasePoolGroup,
+  resolveEntrantDisplayName,
   resolveTbdSourceLabel,
   selectPhaseScopedPoolGroups,
 } from "./bracketDisplay";
@@ -17,6 +18,14 @@ import type { BracketSectionForView, PhasePoolGroup } from "./bracketDisplay";
 import type { SetSnapshot } from "./bracketProgression";
 
 describe("bracket source labels", () => {
+  it("uses a non-empty alias only when alias display is enabled", () => {
+    expect(resolveEntrantDisplayName("Player", "Alias", true)).toBe("Alias");
+    expect(resolveEntrantDisplayName("Player", "Alias", false)).toBe("Player");
+    expect(resolveEntrantDisplayName("Player", "", true)).toBe("Player");
+    expect(resolveEntrantDisplayName("Player", "  ", true)).toBe("Player");
+    expect(resolveEntrantDisplayName("Player", " Alias ", true)).toBe("Alias");
+  });
+
   it("formats bracket scores without unnecessary decimal places", () => {
     expect(formatScoreValue(2)).toBe("2");
     expect(formatScoreValue(1.5)).toBe("1.5");

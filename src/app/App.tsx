@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CreateSnapshot } from "../components/CreateSnapshot";
 import { DqRequestDialog } from "../components/DqRequestDialog";
@@ -101,6 +101,7 @@ import { useSelectedEventData } from "../hooks/useSelectedEventData";
 import "./App.css";
 
 const STARTGG_FETCH_PER_PAGE = 50;
+const EMPTY_PLAYER_ALIAS_MAP: Record<string, string> = {};
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("create");
@@ -137,6 +138,11 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [playerDisplayAliasSnapshot, setPlayerDisplayAliasSnapshot] = useState<{
+    eventId: string;
+    enabled: boolean;
+    aliasesByEntrantId: Record<string, string>;
+  } | null>(null);
   const {
     displayBracketPlayersBySide,
     setDisplayBracketPlayersBySide,
@@ -559,6 +565,7 @@ function App() {
 
   const {
     eventMgmtSettings,
+    eventMgmtSettingsReady,
     sideDecisionMethod,
     setSideDecisionMethod,
     selectedEventItemListSnapshots,
@@ -570,6 +577,8 @@ function App() {
     categorySlotAllowDuplicates,
     totalItemMinCount,
     totalItemMaxCount,
+    useAliasName,
+    setUseAliasName,
     setEventMgmtSettings,
     setCategoryListSlot,
     handleCategorySlotMinChange,
@@ -640,10 +649,12 @@ function App() {
     entrants: selectedEventEntrants,
     selectedEntrant: selectedTournamentEntrant,
     setSelectedEntrantId: setSelectedTournamentEntrantId,
-  } = useSelectedEventEntrants(selectedEvent);
+  } = useSelectedEventEntrants(selectedEvent, selectedEventMeta?.entrants);
 
   const {
     selectedEntrantDraftSelectionsBySlot,
+    selectedEntrantAliasName,
+    setSelectedEntrantAliasName,
     selectedEntrantValidationErrors,
     addSelectedEntrantDraftSelection,
     removeSelectedEntrantDraftSelection,
@@ -785,6 +796,10 @@ function App() {
     obsOverlayState,
     scoreDrafts,
   });
+  const currentPlayerDisplayAliasSnapshot = selectedEvent
+    && playerDisplayAliasSnapshot?.eventId === selectedEvent.eventId
+    ? playerDisplayAliasSnapshot
+    : null;
   const {
     overlaySwitchConfirm,
     requestToggleActiveMatchOverlay,
@@ -792,8 +807,12 @@ function App() {
     confirmOverlaySwitch,
     toggleActiveMatchOverlay,
     syncOverlayScoresForSet,
+    refreshActivePlayerDisplay,
   } = useObsOverlaySetActions({
     selectedEvent,
+    resolvedEventSetsById,
+    aliasNamesByEntrantId: currentPlayerDisplayAliasSnapshot?.aliasesByEntrantId ?? EMPTY_PLAYER_ALIAS_MAP,
+    useAliasName: currentPlayerDisplayAliasSnapshot?.enabled ?? false,
     eventAlias: selectedEventMeta?.eventAlias?.trim() ?? "",
     obsOverlayState,
     setDisplayCodeById,
@@ -801,6 +820,90 @@ function App() {
     refreshObsOverlayState,
     toggleObsOverlaySet,
   });
+
+  async function applyPlayerDisplaySnapshot(
+    eventId: string,
+    entrants: Array<{ entrantId: string; aliasName?: string }>,
+    shouldUseAliasNames: boolean,
+    showStatus: boolean,
+  ) {
+    const aliasesByEntrantId = Object.fromEntries(
+      entrants.map((entrant) => [
+        entrant.entrantId,
+        entrant.aliasName ?? "",
+      ]),
+    );
+    setPlayerDisplayAliasSnapshot({
+      eventId,
+      enabled: shouldUseAliasNames,
+      aliasesByEntrantId,
+    });
+    const overlayUpdated = await refreshActivePlayerDisplay(aliasesByEntrantId, shouldUseAliasNames);
+    if (showStatus && overlayUpdated) {
+      setError("");
+      setMessage("プレイヤー表示を更新しました。");
+    }
+  }
+
+  async function refreshPlayerDisplay() {
+    if (!selectedEvent) {
+      return;
+    }
+    setError("");
+    setMessage("");
+    try {
+      await applyPlayerDisplaySnapshot(
+        selectedEvent.eventId,
+        selectedEventMeta?.entrants ?? [],
+        useAliasName,
+        true,
+      );
+    } catch (refreshError) {
+      setError(String(refreshError));
+    }
+  }
+
+  useEffect(() => {
+    if (!eventMgmtSettingsReady || !selectedEvent) {
+      return;
+    }
+    const aliasesByEntrant = selectedEventMeta?.eventId === selectedEvent.eventId
+      ? selectedEventMeta.entrants
+      : [];
+    void applyPlayerDisplaySnapshot(
+      selectedEvent.eventId,
+      aliasesByEntrant,
+      useAliasName,
+      false,
+    ).catch((refreshError: unknown) => setError(String(refreshError)));
+  }, [eventMgmtSettingsReady, selectedEvent?.eventId, useAliasName]);
+
+  async function restoreGraphAndRefreshDisplay() {
+    const restoredWorkspace = await restoreGraphFromSnapshot();
+    if (!restoredWorkspace) {
+      return;
+    }
+    const restoredEventMeta = restoredWorkspace.localMeta.events.find(
+      (event) => event.eventId === selectedEventId,
+    );
+    if (!restoredEventMeta) {
+      return;
+    }
+    const restoredUseAliasName = restoredEventMeta.eventManagement?.useAliasName ?? useAliasName;
+    if (restoredUseAliasName !== useAliasName) {
+      setUseAliasName(restoredUseAliasName);
+    }
+    try {
+      await applyPlayerDisplaySnapshot(
+        selectedEventId,
+        restoredEventMeta.entrants,
+        restoredUseAliasName,
+        false,
+      );
+    } catch (refreshError) {
+      setError(String(refreshError));
+    }
+  }
 
   const { sendCallMessageFromMatch, cancelCallMessageDraft } = useCallMessageDraft({
     tournament: snapshot ? { tournamentId: snapshot.tournamentId, name: snapshot.name } : null,
@@ -826,6 +929,8 @@ function App() {
   const {
     pendingResultBySetId,
     roundRobinBoardData,
+    roundRobinEntrantNames,
+    roundRobinStandings,
     roundRobinMatrixRows,
     eliminationBracketSections,
     getSetScoresForDisplay,
@@ -838,6 +943,8 @@ function App() {
     pendingGrandFinalResetResults,
     interimScoreDraftsBySetId,
     obsOverlayState,
+    aliasNamesByEntrantId: currentPlayerDisplayAliasSnapshot?.aliasesByEntrantId ?? EMPTY_PLAYER_ALIAS_MAP,
+    useAliasName: currentPlayerDisplayAliasSnapshot?.enabled ?? false,
     setDisplayCodeById,
     getTbdSourceLabel: resolveTbdSourceLabel,
     getSideLabel: getSetSlotSideLabel,
@@ -1052,12 +1159,14 @@ function App() {
               categorySlotAllowDuplicates,
               totalItemMinCount,
               totalItemMaxCount,
+              useAliasName,
             }}
             playerMeta={{
               selectedEventEntrants,
               selectedEventMetaEntrantCount: selectedEventMeta?.entrants.length ?? 0,
               selectedEntrantId: selectedTournamentEntrant?.entrantId ?? "",
               selectedEntrantName: selectedTournamentEntrant?.entrantName ?? "",
+              selectedEntrantAliasName,
               configuredCategorySlots,
               selectedCategoryUsageList,
               draftSelectionsBySlot: selectedEntrantDraftSelectionsBySlot,
@@ -1076,11 +1185,14 @@ function App() {
               onCategoryAllowDuplicatesChange: handleCategorySlotAllowDuplicatesChange,
               onTotalItemMinChange: handleTotalItemMinChange,
               onTotalItemMaxChange: handleTotalItemMaxChange,
+              onUseAliasNameChange: setUseAliasName,
+              onRefreshPlayerDisplay: () => void refreshPlayerDisplay(),
               onSaveEventManagementSetting: saveEventManagementSetting,
               onSelectEntrant: setSelectedTournamentEntrantId,
               onAddDraftSelection: addSelectedEntrantDraftSelection,
               onRemoveDraftSelection: removeSelectedEntrantDraftSelection,
               onSavePlayerMeta: saveSelectedEntrantMeta,
+              onEntrantAliasNameChange: setSelectedEntrantAliasName,
             }}
           />
         )}
@@ -1326,11 +1438,9 @@ function App() {
             canReport={!busy && toApiSlug(slug) !== "" && confirmedReportableCount > 0}
             onReport={() => void bracketReport.startReport()}
             roundRobin={{
-              entrantNames: roundRobinBoardData.entrants.map((entrantId) =>
-                roundRobinBoardData.entrantNames.get(entrantId) ?? "",
-              ),
+              entrantNames: roundRobinEntrantNames,
               rows: roundRobinMatrixRows,
-              standings: roundRobinBoardData.standings,
+              standings: roundRobinStandings,
               tieBreakRules: roundRobinBoardData.tieBreakRules,
               qualifyingCount: roundRobinBoardData.qualifyingCount,
               diagnostics: {
@@ -1376,6 +1486,8 @@ function App() {
                 getSavedSide: getSetSlotSide,
                 getSideLabel: getSetSlotSideLabel,
                 getTbdSourceLabel: resolveTbdSourceLabel,
+                aliasNamesByEntrantId: currentPlayerDisplayAliasSnapshot?.aliasesByEntrantId,
+                useAliasName: currentPlayerDisplayAliasSnapshot?.enabled,
               })}
               callingEntrantId={callingEntrantId}
               isDqDraft={isActiveMatchDqDraft}
@@ -1418,7 +1530,7 @@ function App() {
             canUpdateSnapshot={!busy && toApiSlug(slug) !== ""}
             canDiscardAllDrafts={!busy && toApiSlug(slug) !== "" && Boolean(selectedEvent)}
             onCloseRestore={() => setRestoreDialogOpen(false)}
-            onRestoreFromSnapshot={() => void restoreGraphFromSnapshot()}
+            onRestoreFromSnapshot={() => void restoreGraphAndRefreshDisplay()}
             onUpdateSnapshot={() => {
               setRestoreDialogOpen(false);
               void updateSnapshot();

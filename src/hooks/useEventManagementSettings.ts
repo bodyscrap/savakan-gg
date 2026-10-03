@@ -74,6 +74,7 @@ export function resolveCommittedEventManagementSetting(
     categoryAllowDuplicates: eventManagement.categoryAllowDuplicates,
     totalMinCount: eventManagement.totalMinCount,
     totalMaxCount: eventManagement.totalMaxCount,
+    useAliasName: eventManagement.useAliasName,
   });
 }
 
@@ -115,6 +116,7 @@ export function useEventManagementSettings({
   const [categorySlotAllowDuplicates, setCategorySlotAllowDuplicates] = useState<boolean[]>([false, false, false]);
   const [totalItemMinCount, setTotalItemMinCount] = useState(0);
   const [totalItemMaxCount, setTotalItemMaxCount] = useState(3);
+  const [useAliasName, setUseAliasName] = useState(false);
   const eventSettingHydratedKeyRef = useRef("");
   const suppressEventSettingAutosaveRef = useRef(false);
   const selectedEventItemListSnapshots = useMemo(() => {
@@ -222,6 +224,7 @@ export function useEventManagementSettings({
       setCategorySlotAllowDuplicates([false, false, false]);
       setTotalItemMinCount(0);
       setTotalItemMaxCount(3);
+      setUseAliasName(false);
       return;
     }
 
@@ -250,6 +253,7 @@ export function useEventManagementSettings({
     setCategorySlotAllowDuplicates(normalizeAllowDuplicatesArray(setting.categoryAllowDuplicates));
     setTotalItemMinCount(clampNonNegativeInteger(Number(setting.totalMinCount ?? 0), 0));
     setTotalItemMaxCount(clampNonNegativeInteger(Number(setting.totalMaxCount ?? 3), 3));
+    setUseAliasName(Boolean(setting.useAliasName));
   }, [eventMgmtSettingsReady, selectedEventSettingKey]);
 
   useEffect(() => {
@@ -287,6 +291,7 @@ export function useEventManagementSettings({
       categoryAllowDuplicates: normalizedAllowDuplicates,
       totalMinCount,
       totalMaxCount,
+      useAliasName,
     });
     setEventMgmtSettings((current) => sameSetting(current[selectedEventSettingKey], nextSetting)
       ? current
@@ -300,6 +305,7 @@ export function useEventManagementSettings({
     sideDecisionMethod,
     totalItemMaxCount,
     totalItemMinCount,
+    useAliasName,
   ]);
 
   function setCategoryListSlot(slotIndex: number, itemListId: string) {
@@ -419,6 +425,7 @@ export function useEventManagementSettings({
       categoryAllowDuplicates: normalizedAllowDuplicates,
       totalMinCount,
       totalMaxCount,
+      useAliasName,
     });
 
     setBusy(true);
@@ -448,6 +455,7 @@ export function useEventManagementSettings({
           categoryAllowDuplicates: normalizedAllowDuplicates,
           totalMinCount,
           totalMaxCount,
+          useAliasName,
         },
       });
       setEventMgmtSettings((current) => ({ ...current, [selectedEventSettingKey]: nextSetting }));
@@ -481,6 +489,8 @@ export function useEventManagementSettings({
     setTotalItemMinCount,
     totalItemMaxCount,
     setTotalItemMaxCount,
+    useAliasName,
+    setUseAliasName,
     setEventMgmtSettings,
     setCategoryListSlot,
     handleCategorySlotMinChange,

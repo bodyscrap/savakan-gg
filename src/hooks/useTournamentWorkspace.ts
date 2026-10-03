@@ -119,6 +119,7 @@ export function useTournamentWorkspace({
     eventName: string;
     entrantId: string;
     entrantName: string;
+    aliasName: string;
     playSide: PlaySide | null;
     characterNames: string[];
     notes: string | null;

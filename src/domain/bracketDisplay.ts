@@ -68,6 +68,15 @@ export function formatScoreValue(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
+export function resolveEntrantDisplayName(
+  entrantName: string,
+  aliasName: string | null | undefined,
+  useAliasName: boolean,
+): string {
+  const normalizedAlias = aliasName?.trim() ?? "";
+  return useAliasName && normalizedAlias !== "" ? normalizedAlias : entrantName;
+}
+
 export function getBracketVerticalLayoutScale(zoomLevel: number): number {
   if (zoomLevel >= 0.9) {
     return 1;

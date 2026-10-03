@@ -3,6 +3,7 @@ import type { ItemListConfig } from "../domain/itemList";
 export type EventSettingEntrant = {
   entrantId: string;
   entrantName: string;
+  aliasName: string;
 };
 
 export type EventSettingCategorySlot = {
@@ -40,12 +41,14 @@ export type EventSettingProps = {
     categorySlotAllowDuplicates: boolean[];
     totalItemMinCount: number;
     totalItemMaxCount: number;
+    useAliasName: boolean;
   };
   playerMeta: {
     selectedEventEntrants: EventSettingEntrant[];
     selectedEventMetaEntrantCount: number;
     selectedEntrantId: string;
     selectedEntrantName: string;
+    selectedEntrantAliasName: string;
     configuredCategorySlots: EventSettingCategorySlot[];
     selectedCategoryUsageList: EventSettingCategoryUsage[];
     draftSelectionsBySlot: string[][];
@@ -64,11 +67,14 @@ export type EventSettingProps = {
     onCategoryAllowDuplicatesChange: (slotIndex: number, allowed: boolean) => void;
     onTotalItemMinChange: (value: string) => void;
     onTotalItemMaxChange: (value: string) => void;
+    onUseAliasNameChange: (enabled: boolean) => void;
+    onRefreshPlayerDisplay: () => void;
     onSaveEventManagementSetting: () => void;
     onSelectEntrant: (entrantId: string) => void;
     onAddDraftSelection: (slot: EventSettingCategorySlot, itemName: string) => void;
     onRemoveDraftSelection: (slotIndex: number, selectionIndex: number) => void;
     onSavePlayerMeta: () => void;
+    onEntrantAliasNameChange: (value: string) => void;
   };
 };
 
@@ -90,12 +96,14 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
     categorySlotAllowDuplicates,
     totalItemMinCount,
     totalItemMaxCount,
+    useAliasName,
   } = rules;
   const {
     selectedEventEntrants,
     selectedEventMetaEntrantCount,
     selectedEntrantId,
     selectedEntrantName,
+    selectedEntrantAliasName,
     configuredCategorySlots,
     selectedCategoryUsageList,
     draftSelectionsBySlot,
@@ -114,11 +122,14 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
     onCategoryAllowDuplicatesChange,
     onTotalItemMinChange,
     onTotalItemMaxChange,
+    onUseAliasNameChange,
+    onRefreshPlayerDisplay,
     onSaveEventManagementSetting,
     onSelectEntrant,
     onAddDraftSelection,
     onRemoveDraftSelection,
     onSavePlayerMeta,
+    onEntrantAliasNameChange,
   } = actions;
   return (
     <section className="panel">
@@ -272,6 +283,24 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
               </div>
             </div>
 
+            <div className="setting-row">
+              <p className="setting-row-title">プレイヤー表示</p>
+              <div className="setting-row-fields player-display">
+                <label className="setting-checkbox" htmlFor="use-player-alias-name">
+                  <input
+                    id="use-player-alias-name"
+                    type="checkbox"
+                    checked={useAliasName}
+                    onChange={(e) => onUseAliasNameChange(e.currentTarget.checked)}
+                  />
+                  ブラケット表示にエイリアス名を使う
+                </label>
+                <button type="button" className="ghost" disabled={busy} onClick={onRefreshPlayerDisplay}>
+                  プレイヤー表示を更新
+                </button>
+              </div>
+            </div>
+
             <div className="setting-row save">
               <button type="button" className="ghost" onClick={onSaveEventManagementSetting}>
                 設定の適用&保存
@@ -307,6 +336,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                           }}
                         >
                           <h4>{entrant.entrantName}</h4>
+                          {entrant.aliasName.trim() !== "" && <p className="meta">{entrant.aliasName}</p>}
                         </article>
                       );
                     })}
@@ -374,11 +404,21 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                 ) : (
                   <>
                     <p className="meta">{selectedEntrantName}</p>
-                    {configuredCategorySlots.length === 0 ? (
-                      <p className="meta">先に上部でカテゴリ(最大3つ)を選択してください。</p>
-                    ) : (
-                      <div className="entrant-meta-editor">
-                        {configuredCategorySlots.map((slot) => {
+                    <div className="entrant-meta-editor">
+                      <label className="meta" style={{ display: "grid", gap: "0.3rem" }}>
+                        エイリアス名
+                        <input
+                          type="text"
+                          value={selectedEntrantAliasName}
+                          onChange={(e) => onEntrantAliasNameChange(e.currentTarget.value)}
+                          placeholder="プレイヤーの表示名"
+                          autoComplete="off"
+                        />
+                      </label>
+                      {configuredCategorySlots.length === 0 ? (
+                        <p className="meta">先に上部でカテゴリ(最大3つ)を選択してください。</p>
+                      ) : (
+                        configuredCategorySlots.map((slot) => {
                           const currentSelections = draftSelectionsBySlot[slot.slotIndex] ?? [];
                           const canAddMore = currentSelections.length < slot.maxCount;
                           const selectableItems = slot.allowDuplicates
@@ -421,9 +461,9 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                               )}
                             </div>
                           );
-                        })}
-                      </div>
-                    )}
+                        })
+                      )}
+                    </div>
 
                     {validationErrors.length > 0 && (
                       <p className="meta error-text" style={{ marginTop: "0.45rem" }}>

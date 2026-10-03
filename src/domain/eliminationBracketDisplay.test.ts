@@ -38,6 +38,8 @@ describe("buildEliminationBracketSections", () => {
       pendingResultBySetId: new Map(),
       interimScoreDraftsBySetId: { "set-1": { a: "2" } },
       activeOverlay: { active: true, currentSetId: "set-1" },
+      entrantMeta: [{ entrantId: "a", aliasName: "Alias Alpha" }],
+      useAliasName: true,
       setDisplayCodeById: new Map([["set-1", "A1"]]),
       getTbdSourceLabel: (_set, index) => index === 1 ? "Loser of A1" : null,
       getSideLabel: (_setId, _entrantId, options) => options.fallbackBySlotIndex === 0 ? "1P" : "2P",
@@ -57,7 +59,7 @@ describe("buildEliminationBracketSections", () => {
           resultStatusLabel: "途中",
           isLiveOverlaySet: true,
           slots: [
-            { sideLabel: "1P", entrantName: "Alpha", gameWins: "2", scoreClass: "win" },
+            { sideLabel: "1P", entrantName: "Alias Alpha", gameWins: "2", scoreClass: "win" },
             { sideLabel: "2P", entrantName: "Loser of A1" },
           ],
         }],

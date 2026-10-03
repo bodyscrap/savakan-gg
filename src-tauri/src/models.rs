@@ -76,6 +76,8 @@ pub struct EventManagementMeta {
     pub side_decision_method: String,
     pub item_list_snapshots: Vec<ItemListConfig>,
     #[serde(default)]
+    pub use_alias_name: bool,
+    #[serde(default)]
     pub category_min_counts: Vec<u32>,
     #[serde(default)]
     pub category_max_counts: Vec<u32>,
@@ -147,6 +149,8 @@ pub struct SaveEventManagementMetaInput {
 pub struct EventEntrantMeta {
     pub entrant_id: String,
     pub entrant_name: String,
+    #[serde(default)]
+    pub alias_name: String,
     pub play_side: Option<PlaySide>,
     pub character_names: Vec<String>,
     pub auth_code: String,
@@ -169,6 +173,8 @@ pub struct LocalPlayerMetaInput {
     pub event_name: String,
     pub entrant_id: String,
     pub entrant_name: String,
+    #[serde(default)]
+    pub alias_name: String,
     pub play_side: Option<PlaySide>,
     pub character_names: Vec<String>,
     pub notes: Option<String>,

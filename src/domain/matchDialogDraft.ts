@@ -1,7 +1,7 @@
 import type { SetResultDraftState, SetScoreDraft } from "../hooks/useSetResultDrafts";
 import { buildMatchSideDrafts } from "./matchSideDrafts";
 import { buildScoreDraftsFromResult, buildScoreDraftsFromSet } from "./setResultDrafts";
-import { getDisplaySlotsForSet, isMatchupReady } from "./bracketDisplay";
+import { getDisplaySlotsForSet, isMatchupReady, resolveEntrantDisplayName } from "./bracketDisplay";
 import type { MatchDialogPlayerView } from "../components/MatchDetailDialog";
 import type { PlaySide, TournamentWorkspace } from "./tournamentWorkspaceRepository";
 import type { SetSnapshot, SetSlot } from "./bracketProgression";
@@ -30,6 +30,8 @@ type BuildMatchDialogPlayersOptions = {
     options: { fallbackBySlotIndex: number; matchupReady?: boolean },
   ) => string;
   getTbdSourceLabel: (set: SetSnapshot, slotIndex: number, slot: SetSlot) => string | null;
+  aliasNamesByEntrantId?: Record<string, string>;
+  useAliasName?: boolean;
 };
 
 export function buildMatchDialogPlayers({
@@ -41,6 +43,8 @@ export function buildMatchDialogPlayers({
   getSavedSide,
   getSideLabel,
   getTbdSourceLabel,
+  aliasNamesByEntrantId = {},
+  useAliasName = false,
 }: BuildMatchDialogPlayersOptions): MatchDialogPlayerView[] {
   const matchupReady = isMatchupReady(set);
 
@@ -64,7 +68,13 @@ export function buildMatchDialogPlayers({
       key: `${set.setId}-dialog-${slotIndex}`,
       slot,
       entrantId,
-      entrantName: !entrantId && tbdLabel ? tbdLabel : slot.entrantName,
+      entrantName: !entrantId && tbdLabel
+        ? tbdLabel
+        : resolveEntrantDisplayName(
+          slot.entrantName,
+          entrantId ? aliasNamesByEntrantId[entrantId] : undefined,
+          useAliasName,
+        ),
       side: entrantId
         ? sideDrafts[entrantId] || getSavedSide(set.setId, entrantId) || fallbackSide
         : "",

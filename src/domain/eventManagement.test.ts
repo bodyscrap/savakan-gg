@@ -3,6 +3,7 @@ import {
   buildEventManagementSettingKey,
   buildCategoryUsageList,
   buildConfiguredCategorySlots,
+  normalizeEventManagementSetting,
   resolveMatchSideAssignment,
   resolveRandomMatchSideAssignment,
   resolveSideDecisionMethod,
@@ -14,6 +15,13 @@ describe("event management setting key", () => {
   it("normalizes tournament prefixes and surrounding slashes", () => {
     expect(buildEventManagementSettingKey(" tournament/event-name/ ", "event-1"))
       .toBe("event-name::event-1");
+  });
+
+  it("defaults player alias display to disabled", () => {
+    expect(normalizeEventManagementSetting({
+      sideDecisionMethod: "upper_1p",
+      itemListIds: [],
+    }).useAliasName).toBe(false);
   });
 });
 

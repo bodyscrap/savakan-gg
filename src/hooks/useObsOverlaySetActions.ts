@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { isDisplayableSet, type EventSnapshot } from "../domain/bracketDisplay";
+import { isDisplayableSet, resolveEntrantDisplayName, type EventSnapshot } from "../domain/bracketDisplay";
 import type { SetSnapshot } from "../domain/bracketProgression";
 import {
   buildOverlaySetRoundText,
@@ -11,16 +11,22 @@ import type { PlaySide } from "./useTournamentWorkspace";
 
 type UseObsOverlaySetActionsOptions = {
   selectedEvent: EventSnapshot | null;
+  resolvedEventSetsById: Map<string, SetSnapshot>;
+  aliasNamesByEntrantId: Record<string, string>;
+  useAliasName: boolean;
   eventAlias: string;
   obsOverlayState: ObsOverlayState | null;
   setDisplayCodeById: Map<string, string>;
   getSavedSide: (setId: string, entrantId: string | null) => PlaySide | "";
   refreshObsOverlayState: () => Promise<ObsOverlayState>;
-  toggleObsOverlaySet: (input: ObsOverlaySetInput) => Promise<void>;
+  toggleObsOverlaySet: (input: ObsOverlaySetInput) => Promise<boolean | void>;
 };
 
 export function useObsOverlaySetActions({
   selectedEvent,
+  resolvedEventSetsById,
+  aliasNamesByEntrantId,
+  useAliasName,
   eventAlias,
   obsOverlayState,
   setDisplayCodeById,
@@ -49,8 +55,16 @@ export function useObsOverlaySetActions({
       eventName: selectedEvent?.name ?? "",
       eventAlias,
       roundText: buildOverlaySetRoundText(set, displayCode),
-      redPlayerName: overlaySides.redPlayerName,
-      bluePlayerName: overlaySides.bluePlayerName,
+      redPlayerName: resolveEntrantDisplayName(
+        overlaySides.redPlayerName,
+        overlaySides.redEntrantId ? aliasNamesByEntrantId[overlaySides.redEntrantId] : undefined,
+        useAliasName,
+      ),
+      bluePlayerName: resolveEntrantDisplayName(
+        overlaySides.bluePlayerName,
+        overlaySides.blueEntrantId ? aliasNamesByEntrantId[overlaySides.blueEntrantId] : undefined,
+        useAliasName,
+      ),
       redSetWins: overlaySides.redSetWins,
       blueSetWins: overlaySides.blueSetWins,
       fontScale: obsOverlayState?.fontScale ?? 1,
@@ -148,12 +162,61 @@ export function useObsOverlaySetActions({
       eventName: selectedEvent?.name ?? "",
       eventAlias,
       roundText: buildOverlaySetRoundText(set, displayCode),
-      redPlayerName: overlaySides.redPlayerName,
-      bluePlayerName: overlaySides.bluePlayerName,
+      redPlayerName: resolveEntrantDisplayName(
+        overlaySides.redPlayerName,
+        overlaySides.redEntrantId ? aliasNamesByEntrantId[overlaySides.redEntrantId] : undefined,
+        useAliasName,
+      ),
+      bluePlayerName: resolveEntrantDisplayName(
+        overlaySides.bluePlayerName,
+        overlaySides.blueEntrantId ? aliasNamesByEntrantId[overlaySides.blueEntrantId] : undefined,
+        useAliasName,
+      ),
       redSetWins: overlaySides.redSetWins,
       blueSetWins: overlaySides.blueSetWins,
       fontScale: currentOverlayState.fontScale,
     });
+  }
+
+  async function refreshActivePlayerDisplay(
+    aliasNamesByEntrantId: Record<string, string>,
+    useAliasName: boolean,
+  ): Promise<boolean> {
+    const currentOverlayState = await refreshObsOverlayState();
+    const activeSetId = currentOverlayState.currentSetId;
+    if (!currentOverlayState.active || !activeSetId || activeSetId === "__test__") {
+      return true;
+    }
+
+    const set = resolvedEventSetsById.get(activeSetId);
+    if (!set || !isDisplayableSet(set, selectedEvent)) {
+      return true;
+    }
+
+    const overlaySides = resolveOverlaySidesForSet(set, {
+      getSavedSide: (setId, entrantId) => getSavedSide(setId, entrantId),
+    });
+
+    return (await toggleObsOverlaySet({
+      enabled: true,
+      setId: set.setId,
+      eventName: selectedEvent?.name ?? "",
+      eventAlias,
+      roundText: buildOverlaySetRoundText(set, setDisplayCodeById.get(set.setId)),
+      redPlayerName: resolveEntrantDisplayName(
+        overlaySides.redPlayerName,
+        overlaySides.redEntrantId ? aliasNamesByEntrantId[overlaySides.redEntrantId] : undefined,
+        useAliasName,
+      ),
+      bluePlayerName: resolveEntrantDisplayName(
+        overlaySides.bluePlayerName,
+        overlaySides.blueEntrantId ? aliasNamesByEntrantId[overlaySides.blueEntrantId] : undefined,
+        useAliasName,
+      ),
+      redSetWins: currentOverlayState.redSetWins,
+      blueSetWins: currentOverlayState.blueSetWins,
+      fontScale: currentOverlayState.fontScale,
+    })) !== false;
   }
 
   return {
@@ -163,5 +226,6 @@ export function useObsOverlaySetActions({
     confirmOverlaySwitch,
     toggleActiveMatchOverlay,
     syncOverlayScoresForSet,
+    refreshActivePlayerDisplay,
   };
 }

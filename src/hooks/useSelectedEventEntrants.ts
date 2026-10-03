@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import type { EventSnapshot } from "../domain/bracketDisplay";
 import { collectEventEntrants, sortEventEntrants } from "../domain/bracketProgression";
+import type { EventEntrantMeta } from "../domain/tournamentWorkspaceRepository";
 
-export function useSelectedEventEntrants(selectedEvent: EventSnapshot | null) {
+const EMPTY_ENTRANT_META: EventEntrantMeta[] = [];
+
+export function useSelectedEventEntrants(
+  selectedEvent: EventSnapshot | null,
+  entrantMeta?: EventEntrantMeta[],
+) {
   const [selectedEntrantId, setSelectedEntrantId] = useState("");
+  const selectedEntrantMeta = entrantMeta ?? EMPTY_ENTRANT_META;
 
   const entrants = useMemo(() => {
     if (!selectedEvent) {
@@ -25,8 +32,14 @@ export function useSelectedEventEntrants(selectedEvent: EventSnapshot | null) {
     );
     console.groupEnd();
 
-    return sortEventEntrants(resolvedEntrants);
-  }, [selectedEvent]);
+    const aliasNameByEntrantId = new Map(
+      selectedEntrantMeta.map((meta) => [meta.entrantId, meta.aliasName ?? ""]),
+    );
+    return sortEventEntrants(resolvedEntrants).map((entrant) => ({
+      ...entrant,
+      aliasName: aliasNameByEntrantId.get(entrant.entrantId) ?? "",
+    }));
+  }, [selectedEntrantMeta, selectedEvent]);
 
   const selectedEntrant = useMemo(() => {
     if (selectedEntrantId === "") {

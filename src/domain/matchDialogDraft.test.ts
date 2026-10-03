@@ -54,6 +54,33 @@ describe("match dialog draft selection", () => {
     ]);
   });
 
+  it("uses the applied player alias in the dialog while preserving the original slot", () => {
+    const set = {
+      setId: "set-alias",
+      slots: [
+        { entrantId: "entrant-1", entrantName: "Player 1", score: null },
+        { entrantId: "entrant-2", entrantName: "Player 2", score: null },
+      ],
+    } as unknown as SetSnapshot;
+
+    const players = buildMatchDialogPlayers({
+      set,
+      displayBySide: false,
+      sideDrafts: {},
+      scoreDrafts: {},
+      directWinnerId: null,
+      getSavedSide: () => "",
+      getSideLabel: () => "",
+      getTbdSourceLabel: () => null,
+      aliasNamesByEntrantId: { "entrant-1": "Alias 1" },
+      useAliasName: true,
+    });
+
+    expect(players[0].entrantName).toBe("Alias 1");
+    expect(players[0].slot.entrantName).toBe("Player 1");
+    expect(players[1].entrantName).toBe("Player 2");
+  });
+
   it("prioritizes forced, then pending, then cached drafts", () => {
     expect(resolveExistingMatchDialogDraft(forced, pending, cached, ["forced", "pending", "cached"])).toEqual({
       draftState: forced,
