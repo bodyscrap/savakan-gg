@@ -583,12 +583,14 @@ fn score_edit_enabled_for_phase_group(
     })
 }
 
-fn external_score_report_sender_is_authorized(
+fn external_score_report_is_applicable(
     event_meta: &EventLocalMeta,
     phase_group_id: &str,
     sender_user_id: &str,
+    set_is_confirmed: bool,
 ) -> bool {
-    !score_edit_enabled_for_phase_group(Some(event_meta), phase_group_id)
+    !set_is_confirmed
+        && !score_edit_enabled_for_phase_group(Some(event_meta), phase_group_id)
         && event_meta.external_editors.iter().any(|editor| {
             editor.phase_group_id == phase_group_id && editor.sender_user_id == sender_user_id
         })
@@ -643,24 +645,33 @@ mod score_edit_lock_tests {
         }))
         .expect("event metadata should deserialize");
 
-        assert!(external_score_report_sender_is_authorized(
+        assert!(external_score_report_is_applicable(
             &event_meta,
             "pool-a",
-            "12345678"
+            "12345678",
+            false
         ));
-        assert!(!external_score_report_sender_is_authorized(
+        assert!(!external_score_report_is_applicable(
             &event_meta,
             "pool-a",
-            "87654321"
+            "87654321",
+            false
+        ));
+        assert!(!external_score_report_is_applicable(
+            &event_meta,
+            "pool-a",
+            "12345678",
+            true
         ));
         let mut unlocked_meta = event_meta;
         unlocked_meta
             .score_edit_enabled_phase_group_ids
             .push("pool-a".to_owned());
-        assert!(!external_score_report_sender_is_authorized(
+        assert!(!external_score_report_is_applicable(
             &unlocked_meta,
             "pool-a",
-            "12345678"
+            "12345678",
+            false
         ));
     }
 
@@ -8371,6 +8382,20 @@ fn upsert_local_set_result_inner(
         );
     }
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
+    let existing_set_state = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == input.event_id)
+        .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
+        .map(|set| {
+            (
+                set.state >= 3 && set.winner_id.is_some(),
+                is_round_robin_set(&snapshot, &input.event_id, set),
+            )
+        })
+        .ok_or_else(|| {
+            "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned()
+        })?;
     if let Some(sender_user_id) = external_report_authorization {
         let phase_group_id = snapshot
             .events
@@ -8387,9 +8412,17 @@ fn upsert_local_set_result_inner(
             .iter()
             .find(|event| event.event_id == input.event_id)
             .ok_or_else(|| "外部報告の対象イベントメタが見つかりません。".to_owned())?;
-        if !external_score_report_sender_is_authorized(event_meta, &phase_group_id, &sender_user_id)
-        {
-            return Err("外部報告の送信者または対象プールのロック状態が一致しません。".to_owned());
+        if !external_score_report_is_applicable(
+            event_meta,
+            &phase_group_id,
+            &sender_user_id,
+            existing_set_state.0,
+        ) {
+            return Err(if existing_set_state.0 {
+                "対象setはすでに確定済みのため外部報告を適用できません。".to_owned()
+            } else {
+                "外部報告の送信者または対象プールのロック状態が一致しません。".to_owned()
+            });
         }
     } else {
         ensure_set_score_edit_enabled(&local_meta, &snapshot, &input.event_id, &input.set_id)?;
@@ -8406,21 +8439,6 @@ fn upsert_local_set_result_inner(
                 .then(|| event.name.clone())
         })
         .unwrap_or_else(|| "Unnamed event".to_owned());
-    let existing_set_state = snapshot
-        .events
-        .iter()
-        .find(|event| event.event_id == input.event_id)
-        .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
-        .map(|set| {
-            (
-                set.state >= 3 && set.winner_id.is_some(),
-                is_round_robin_set(&snapshot, &input.event_id, set),
-            )
-        })
-        .ok_or_else(|| {
-            "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned()
-        })?;
-
     let (applied_event_id, should_advance, slot_entrant_ids) = {
         let known_entrant_names = snapshot
             .events

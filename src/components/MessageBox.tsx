@@ -65,8 +65,6 @@ type MessageBoxProps = {
   canReplyToExternalEditRequest: (message: GenericMessage) => boolean;
   onRejectExternalEditRequest: (message: GenericMessage) => void;
   getExternalScoreReport: (message: GenericMessage) => ExternalScoreReport | null;
-  canApplyExternalScoreReport: (message: GenericMessage) => boolean;
-  onApplyExternalScoreReport: (message: GenericMessage) => void;
   canResolveActiveThread: boolean;
   onResolveActiveThread: () => void;
   canDeleteActiveThread: boolean;
@@ -115,8 +113,6 @@ export function MessageBox({
   canReplyToExternalEditRequest,
   onRejectExternalEditRequest,
   getExternalScoreReport,
-  canApplyExternalScoreReport,
-  onApplyExternalScoreReport,
   canResolveActiveThread,
   onResolveActiveThread,
   canDeleteActiveThread,
@@ -373,19 +369,7 @@ export function MessageBox({
                             {externalScoreReport.phaseGroupName && ` / Pool ${externalScoreReport.phaseGroupName}`}
                             {" / Set "}{externalScoreReport.setId}
                           </p>
-                          <button
-                            type="button"
-                            className="ghost tiny"
-                            disabled={!canApplyExternalScoreReport(item)}
-                            onClick={() => onApplyExternalScoreReport(item)}
-                          >
-                            外部報告を反映
-                          </button>
-                          {!canApplyExternalScoreReport(item) && (
-                            <p className="meta">
-                              対象イベントのsnapshotを選択し、プールがロック中で、登録済み外部編集者と送信者が一致している必要があります。
-                            </p>
-                          )}
+                          <p className="meta">外部報告は受信時に自動で適用されます。</p>
                         </div>
                       )}
                       <p className="message-body">{item.body}</p>

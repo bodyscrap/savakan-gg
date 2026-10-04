@@ -145,6 +145,7 @@ function App() {
   const externalScoreReportSenderRef = useRef<
     ((report: ConfirmedExternalScoreReport) => Promise<boolean>) | null
   >(null);
+  const handledExternalScoreReportsRef = useRef(new Set<string>());
   const [playerDisplayAliasSnapshot, setPlayerDisplayAliasSnapshot] = useState<{
     eventId: string;
     enabled: boolean;
@@ -441,6 +442,7 @@ function App() {
 
   const {
     genericMessages,
+    genericMessagesReady,
     mailboxMethodDraft,
     setMailboxMethodDraft,
     mailboxSubjectDraft,
@@ -478,6 +480,7 @@ function App() {
     sendExternalScoreReport,
     replyToThread,
     replyToExternalEditRequest,
+    replyToExternalScoreReport,
     openDqRequestDialog,
     closeDqRequestDialog,
     submitDqRequest,
@@ -905,69 +908,143 @@ function App() {
     return phaseGroupExists && matchingSet;
   }
 
-  function canApplyExternalScoreReport(message: Parameters<typeof getExternalScoreReport>[0]) {
+  function getExternalScoreReportRejectionReason(message: Parameters<typeof getExternalScoreReport>[0]) {
     const report = getExternalScoreReport(message);
+    if (!report || !snapshot || !selectedEvent) {
+      return "対象のスナップショットまたはイベントを選択できません。";
+    }
     if (
-      !report
-      || busy
-      || disableLocalCommunication
-      || !snapshot
-      || !selectedEvent
-      || selectedEventMeta?.eventId !== selectedEvent.eventId
+      selectedEventMeta?.eventId !== selectedEvent.eventId
       || report.tournamentId !== snapshot.tournamentId
       || report.eventId !== selectedEvent.eventId
-      || message.senderName === ""
+      || message.senderName.trim() === ""
     ) {
-      return false;
+      return "対象イベントまたは送信者情報が一致しません。";
     }
     const set = selectedEventSetsById.get(report.setId);
     if (!set?.phaseGroupId) {
-      return false;
+      return "対象setまたはプールをsnapshot内で特定できません。";
+    }
+    if (isCompletedSet(set)) {
+      return "対象setはすでに確定済みです。";
     }
     const scoreEditLocked = !(selectedEventMeta.scoreEditEnabledPhaseGroupIds ?? [])
       .includes(set.phaseGroupId);
+    if (!scoreEditLocked) {
+      return "対象プールのスコア編集がロックされていません。";
+    }
     const authorizedEditor = (selectedEventMeta.externalEditors ?? []).some(
       (editor) => editor.phaseGroupId === set.phaseGroupId
         && editor.senderUserId === message.senderUserId,
     );
+    if (!authorizedEditor) {
+      return "送信者は対象プールの承認済み外部編集者ではありません。";
+    }
     const setEntrantIds = set.slots
       .map((slot) => slot.entrantId)
       .filter((entrantId): entrantId is string => entrantId !== null)
       .sort();
     const reportEntrantIds = report.slotScores.map((score) => score.entrantId).sort();
-    return scoreEditLocked
-      && authorizedEditor
-      && setEntrantIds.length === 2
-      && setEntrantIds.every((entrantId, index) => entrantId === reportEntrantIds[index])
-      && report.slotScores.some((score) => score.entrantId === report.winnerId);
+    if (
+      setEntrantIds.length !== 2
+      || setEntrantIds.length !== reportEntrantIds.length
+      || !setEntrantIds.every((entrantId, index) => entrantId === reportEntrantIds[index])
+      || !report.slotScores.some((score) => score.entrantId === report.winnerId)
+    ) {
+      return "報告内容と対象setの参加者または勝者が一致しません。";
+    }
+    return null;
   }
 
-  function applyExternalScoreReport(message: Parameters<typeof getExternalScoreReport>[0]) {
-    const report = getExternalScoreReport(message);
-    if (!report || !canApplyExternalScoreReport(message) || !snapshot || !selectedEvent) {
-      setError("外部報告の送信者、対象snapshot、スコアロック状態を確認できません。");
+  useEffect(() => {
+    if (
+      !genericMessagesReady
+      || busy
+      || disableLocalCommunication
+      || !senderProfileReady
+    ) {
       return;
     }
-    const set = selectedEventSetsById.get(report.setId);
-    if (!set) {
-      setError("外部報告の対象setが選択中snapshotに見つかりません。");
+
+    const repliedToMessageIds = new Set(
+      genericMessages
+        .filter((item) => item.senderUserId === senderProfile.senderUserId)
+        .map((item) => item.parentMessageId)
+        .filter((messageId): messageId is string => messageId !== null),
+    );
+    const pendingReports = genericMessages.filter((item) =>
+      getExternalScoreReport(item) !== null
+      && item.senderUserId !== senderProfile.senderUserId
+      && !repliedToMessageIds.has(item.messageId)
+      && !handledExternalScoreReportsRef.current.has(item.messageId),
+    );
+    if (pendingReports.length === 0) {
       return;
     }
-    void persistIncomingExternalScoreReport({
-      set,
-      senderName: message.senderName,
-      senderUserId: message.senderUserId,
-      result: {
-        slug: snapshot.slug,
-        eventId: selectedEvent.eventId,
-        setId: set.setId,
-        winnerId: report.winnerId,
-        confirmed: true,
-        directWin: report.directWin,
-        slotScores: report.slotScores,
-      },
-    });
-  }
+
+    let cancelled = false;
+    void (async () => {
+      for (const item of pendingReports) {
+        if (cancelled) {
+          return;
+        }
+        handledExternalScoreReportsRef.current.add(item.messageId);
+        const report = getExternalScoreReport(item);
+        if (!report) {
+          continue;
+        }
+
+        let rejectionReason = getExternalScoreReportRejectionReason(item);
+        if (!rejectionReason && snapshot && selectedEvent) {
+          const set = selectedEventSetsById.get(report.setId);
+          if (!set) {
+            rejectionReason = "対象setをsnapshot内で特定できません。";
+          } else {
+            const applyError = await persistIncomingExternalScoreReport({
+              set,
+              senderName: item.senderName,
+              senderUserId: item.senderUserId,
+              result: {
+                slug: snapshot.slug,
+                eventId: selectedEvent.eventId,
+                setId: set.setId,
+                winnerId: report.winnerId,
+                confirmed: true,
+                directWin: report.directWin,
+                slotScores: report.slotScores,
+              },
+            });
+            if (applyError) {
+              rejectionReason = "受信側で結果を適用できませんでした。対象setが確定済みか、ロック・承認者・snapshotとの整合性に問題があります。";
+            }
+          }
+        }
+
+        await replyToExternalScoreReport(
+          item,
+          rejectionReason === null,
+          rejectionReason ? `理由: ${rejectionReason}` : "",
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    busy,
+    disableLocalCommunication,
+    genericMessages,
+    genericMessagesReady,
+    persistIncomingExternalScoreReport,
+    replyToExternalScoreReport,
+    selectedEvent,
+    selectedEventMeta,
+    selectedEventSetsById,
+    senderProfile.senderUserId,
+    senderProfileReady,
+    snapshot,
+  ]);
 
   async function acceptExternalEditRequest(message: Parameters<typeof getExternalEditRequest>[0]) {
     const request = getExternalEditRequest(message);
@@ -1527,8 +1604,6 @@ function App() {
             canReplyToExternalEditRequest={canReplyToExternalEditRequest}
             onRejectExternalEditRequest={rejectExternalEditRequest}
             getExternalScoreReport={getExternalScoreReport}
-            canApplyExternalScoreReport={canApplyExternalScoreReport}
-            onApplyExternalScoreReport={applyExternalScoreReport}
             canResolveActiveThread={canResolveActiveThread}
             onResolveActiveThread={resolveMailboxThread}
             canDeleteActiveThread={canDeleteActiveThread}

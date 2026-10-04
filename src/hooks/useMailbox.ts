@@ -712,6 +712,49 @@ export function useMailbox({
     }
   }
 
+  async function replyToExternalScoreReport(
+    message: GenericMessage,
+    accepted: boolean,
+    rejectionReason = "",
+  ): Promise<boolean> {
+    if (
+      disableLocalCommunication
+      || !senderProfileReadyForMessaging
+      || !isValidIpv4(message.senderIp.trim())
+      || message.senderUserId === senderProfile.senderUserId
+    ) {
+      onError("外部報告への自動返信に必要な送信者情報または返信先がありません。");
+      return false;
+    }
+
+    try {
+      const sent = await invoke<GenericMessage>("send_mailbox_message", {
+        input: {
+          profile: senderProfile,
+          messageType: "normal",
+          method: message.method,
+          subject: `Re: ${message.subject}`,
+          body: accepted
+            ? "外部報告を受理し、結果をブラケットに自動適用しました。"
+            : `外部報告を拒否しました。${rejectionReason}`,
+          messageMeta: buildScopedMessageMeta(null, scope),
+          deliveryTargetMode: "direct",
+          deliveryTargetIp: message.senderIp.trim(),
+          threadId: message.threadId,
+          parentMessageId: message.messageId,
+        },
+      });
+      addMailboxMessage(sent);
+      onMessage(accepted
+        ? "外部報告を適用し、送信者へ自動返信しました。"
+        : "適用できない外部報告を拒否し、送信者へ自動返信しました。");
+      return true;
+    } catch (error) {
+      onError(String(error));
+      return false;
+    }
+  }
+
   function openDqRequestDialog() {
     onError("");
     onMessage("");
@@ -1039,6 +1082,7 @@ export function useMailbox({
     sendExternalScoreReport,
     replyToThread,
     replyToExternalEditRequest,
+    replyToExternalScoreReport,
     openDqRequestDialog,
     closeDqRequestDialog,
     resetDqRequestDialog,

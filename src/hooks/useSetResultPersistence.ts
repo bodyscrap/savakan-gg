@@ -230,7 +230,7 @@ export function useSetResultPersistence<TWorkspace>({
 
   async function applyIncomingExternalScoreReport(input: ApplyExternalScoreReportInput & {
     set: SetSnapshot;
-  }) {
+  }): Promise<string | null> {
     setBusy(true);
     setError("");
     setMessage("");
@@ -257,8 +257,10 @@ export function useSetResultPersistence<TWorkspace>({
           ? "外部報告の結果を反映しましたが、オーバーレイ同期に失敗しました。"
           : "外部報告の結果をローカルsnapshotに反映しました。",
       );
+      return null;
     } catch (error) {
       setError(String(error));
+      return String(error);
     } finally {
       setBusy(false);
     }
