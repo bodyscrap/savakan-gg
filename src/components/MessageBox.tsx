@@ -1,4 +1,4 @@
-import type { ExternalEditRequest } from "../domain/messageUtils";
+import type { ExternalEditRequest, ExternalScoreReport } from "../domain/messageUtils";
 
 export type GenericMessage = {
   messageId: string;
@@ -64,6 +64,9 @@ type MessageBoxProps = {
   onAcceptExternalEditRequest: (message: GenericMessage) => void;
   canReplyToExternalEditRequest: (message: GenericMessage) => boolean;
   onRejectExternalEditRequest: (message: GenericMessage) => void;
+  getExternalScoreReport: (message: GenericMessage) => ExternalScoreReport | null;
+  canApplyExternalScoreReport: (message: GenericMessage) => boolean;
+  onApplyExternalScoreReport: (message: GenericMessage) => void;
   canResolveActiveThread: boolean;
   onResolveActiveThread: () => void;
   canDeleteActiveThread: boolean;
@@ -111,6 +114,9 @@ export function MessageBox({
   onAcceptExternalEditRequest,
   canReplyToExternalEditRequest,
   onRejectExternalEditRequest,
+  getExternalScoreReport,
+  canApplyExternalScoreReport,
+  onApplyExternalScoreReport,
   canResolveActiveThread,
   onResolveActiveThread,
   canDeleteActiveThread,
@@ -303,6 +309,7 @@ export function MessageBox({
                   {activeThreadMessages.map((item) => {
                     const isResolutionOwnerRoot = isResolutionOwner(activeThread) && item.parentMessageId === null;
                     const externalEditRequest = getExternalEditRequest(item);
+                    const externalScoreReport = getExternalScoreReport(item);
                     return (
                     <article
                       key={item.messageId}
@@ -356,6 +363,27 @@ export function MessageBox({
                               却下
                             </button>
                           </div>
+                        </div>
+                      )}
+                      {externalScoreReport && (
+                        <div style={{ marginTop: "0.45rem" }}>
+                          <p className="meta">
+                            外部報告: {externalScoreReport.eventName} / {externalScoreReport.phaseName}
+                            {" / Pool "}{externalScoreReport.phaseGroupName} / Set {externalScoreReport.setId}
+                          </p>
+                          <button
+                            type="button"
+                            className="ghost tiny"
+                            disabled={!canApplyExternalScoreReport(item)}
+                            onClick={() => onApplyExternalScoreReport(item)}
+                          >
+                            外部報告を反映
+                          </button>
+                          {!canApplyExternalScoreReport(item) && (
+                            <p className="meta">
+                              対象イベントのsnapshotを選択し、プールがロック中で、登録済み外部編集者と送信者が一致している必要があります。
+                            </p>
+                          )}
                         </div>
                       )}
                       <p className="message-body">{item.body}</p>

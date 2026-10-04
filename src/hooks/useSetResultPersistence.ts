@@ -6,9 +6,21 @@ import {
 } from "../domain/bracketDisplay";
 import type { SetSlot, SetSnapshot } from "../domain/bracketProgression";
 import type { SetResultDraftState, SetScoreDraft } from "./useSetResultDrafts";
+import type { ApplyExternalScoreReportInput } from "../domain/tournamentWorkspaceRepository";
 
 type SlotScore = { entrantId: string; score: number };
 type SideDrafts = Record<string, "1P" | "2P" | "">;
+type ConfirmedSetScore = {
+  eventId: string;
+  eventName: string;
+  phaseName: string;
+  phaseGroupId: string;
+  phaseGroupName: string;
+  setId: string;
+  winnerId: string;
+  directWin: boolean;
+  slotScores: SlotScore[];
+};
 
 type SaveSetResultInput = {
   slug: string;
@@ -52,6 +64,7 @@ type UseSetResultPersistenceOptions<TWorkspace> = {
   restoreSetDraftState: (workspace: TWorkspace, eventId: string, setId: string) => void;
   refreshSnapshotEvents: () => Promise<void>;
   closeMatchDialog: () => void;
+  onConfirmedResult?: (report: ConfirmedSetScore) => Promise<boolean>;
 };
 
 export function useSetResultPersistence<TWorkspace>({
@@ -70,6 +83,7 @@ export function useSetResultPersistence<TWorkspace>({
   restoreSetDraftState,
   refreshSnapshotEvents,
   closeMatchDialog,
+  onConfirmedResult,
 }: UseSetResultPersistenceOptions<TWorkspace>) {
   async function saveLocalResult(input: SaveSetResultInput) {
     setBusy(true);
@@ -147,9 +161,34 @@ export function useSetResultPersistence<TWorkspace>({
         overlaySyncFailed = true;
       }
 
+      let externalReportFailed = false;
+      let externalReportSent = false;
+      if (input.confirmed && onConfirmedResult) {
+        try {
+          externalReportSent = await onConfirmedResult({
+            eventId: input.event.eventId,
+            eventName: input.event.name,
+            phaseName: input.set.phaseName ?? "",
+            phaseGroupId: input.set.phaseGroupId ?? "",
+            phaseGroupName: input.set.phaseGroupName ?? "",
+            setId: input.setId,
+            winnerId,
+            directWin,
+            slotScores,
+          });
+        } catch (error) {
+          externalReportFailed = true;
+          setError(`結果はローカルで確定しましたが、外部報告の送信に失敗しました: ${String(error)}`);
+        }
+      }
+
       const saveMessage =
         input.confirmed
-          ? "結果を確定しました。確定済みの試合だけが一括報告の対象になります。"
+          ? externalReportFailed
+            ? "結果を確定しましたが、外部報告は送信できませんでした。"
+            : externalReportSent
+              ? "結果を確定し、外部報告をブロードキャストしました。"
+              : "結果を確定しました。確定済みの試合だけが一括報告の対象になります。"
           : "入力を保存しました。確定すると一括報告の対象になります。";
       setMessage(
         overlaySyncFailed
@@ -187,6 +226,43 @@ export function useSetResultPersistence<TWorkspace>({
     }
 
     await saveLocalResult({ ...input, event, set, setId: set.setId });
+  }
+
+  async function applyIncomingExternalScoreReport(input: ApplyExternalScoreReportInput & {
+    set: SetSnapshot;
+  }) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const workspace = await invoke<TWorkspace>("apply_external_score_report", {
+        input: {
+          result: input.result,
+          phaseGroupId: input.phaseGroupId,
+          senderName: input.senderName,
+          senderUserId: input.senderUserId,
+        },
+      });
+      setWorkspace(workspace);
+      removeDraftsForSet(input.result.setId);
+      removeInterimDraft(input.result.setId);
+      closeMatchDialog();
+      let overlaySyncFailed = false;
+      try {
+        await syncOverlayScores(input.set, input.result.slotScores);
+      } catch {
+        overlaySyncFailed = true;
+      }
+      setMessage(
+        overlaySyncFailed
+          ? "外部報告の結果を反映しましたが、オーバーレイ同期に失敗しました。"
+          : "外部報告の結果をローカルsnapshotに反映しました。",
+      );
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function discardAllLocalDrafts(input: { slug: string; eventId: string }) {
@@ -313,6 +389,7 @@ export function useSetResultPersistence<TWorkspace>({
   return {
     saveLocalResult,
     saveMatchResult,
+    applyIncomingExternalScoreReport,
     discardAllLocalDrafts,
     discardLocalDraftForSet,
     discardDraftsForEvent,

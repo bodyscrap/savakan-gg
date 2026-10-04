@@ -5,6 +5,7 @@ import {
 	canBroadcastCallListSync,
 	extractCallTargetIdentityFromMeta,
 	getExternalEditRequest,
+	getExternalScoreReport,
 	formatSenderProfileLabel,
 	hasSenderIdCollision,
 	isSameCallTargetIdentity,
@@ -161,6 +162,7 @@ describe("external edit requests", () => {
 			phaseGroupName: "Pool A",
 			phaseGroupDisplayIdentifier: "A",
 		});
+
 	});
 
 	it("rejects malformed, replied-to, or sender-mismatched requests", () => {
@@ -175,6 +177,63 @@ describe("external edit requests", () => {
 		expect(getExternalEditRequest({
 			...externalEditRequestMessage,
 			messageMeta: { externalEditRequest: true },
+		})).toBeNull();
+	});
+});
+
+describe("external score reports", () => {
+	const reportMessage: GenericMessage = {
+		...externalEditRequestMessage,
+		messageMeta: {
+			externalScoreReport: true,
+			externalScoreReportTournamentId: "tournament-1",
+			externalScoreReportSlug: "tournament-slug",
+			externalScoreReportEventId: "event-1",
+			externalScoreReportEventName: "Event",
+			externalScoreReportPhaseName: "Phase 1",
+			externalScoreReportPhaseGroupId: "group-1",
+			externalScoreReportPhaseGroupName: "Pool A",
+			externalScoreReportSetId: "set-1",
+			externalScoreReportWinnerId: "entrant-1",
+			externalScoreReportDirectWin: false,
+			externalScoreReportSlotScores: [
+				{ entrantId: "entrant-1", score: 2 },
+				{ entrantId: "entrant-2", score: 1 },
+			],
+		},
+		method: "external_score_report",
+	};
+
+	it("extracts a complete confirmed result report", () => {
+		expect(getExternalScoreReport(reportMessage)).toEqual({
+			tournamentId: "tournament-1",
+			slug: "tournament-slug",
+			eventId: "event-1",
+			eventName: "Event",
+			phaseName: "Phase 1",
+			phaseGroupId: "group-1",
+			phaseGroupName: "Pool A",
+			setId: "set-1",
+			winnerId: "entrant-1",
+			directWin: false,
+			slotScores: [
+				{ entrantId: "entrant-1", score: 2 },
+				{ entrantId: "entrant-2", score: 1 },
+			],
+		});
+	});
+
+	it("rejects incomplete rosters and reports sent as replies", () => {
+		expect(getExternalScoreReport({
+			...reportMessage,
+			messageMeta: {
+				...reportMessage.messageMeta,
+				externalScoreReportSlotScores: [{ entrantId: "entrant-1", score: 2 }],
+			},
+		})).toBeNull();
+		expect(getExternalScoreReport({
+			...reportMessage,
+			parentMessageId: "parent-1",
 		})).toBeNull();
 	});
 });

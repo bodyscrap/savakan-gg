@@ -93,7 +93,9 @@ import {
   isSenderProfileReadyForMessaging as resolveSenderProfileReadiness,
   isDqRequestMessage,
   getExternalEditRequest,
+  getExternalScoreReport,
   resolveSenderSettingsStatus,
+  type ExternalScoreReport,
 } from "../domain/messageUtils";
 import {
   type SetSnapshot,
@@ -103,6 +105,7 @@ import "./App.css";
 
 const STARTGG_FETCH_PER_PAGE = 50;
 const EMPTY_PLAYER_ALIAS_MAP: Record<string, string> = {};
+type ConfirmedExternalScoreReport = Omit<ExternalScoreReport, "tournamentId" | "slug">;
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("create");
@@ -139,6 +142,9 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const externalScoreReportSenderRef = useRef<
+    ((report: ConfirmedExternalScoreReport) => Promise<boolean>) | null
+  >(null);
   const [playerDisplayAliasSnapshot, setPlayerDisplayAliasSnapshot] = useState<{
     eventId: string;
     enabled: boolean;
@@ -213,6 +219,7 @@ function App() {
     restoreWorkspaceGraph,
     saveEventManagementMeta,
     savePhaseGroupScoreEditLock,
+    savePhaseGroupExternalScoreBroadcast,
     savePhaseGroupExternalEditor,
     saveEventAlias,
     saveLocalPlayerMeta,
@@ -242,6 +249,7 @@ function App() {
   });
   const {
     saveMatchResult: persistMatchResult,
+    applyIncomingExternalScoreReport: persistIncomingExternalScoreReport,
     discardDraftsForEvent,
     discardDraftForMatch,
     resetMatchResultCascade,
@@ -282,6 +290,11 @@ function App() {
     },
     refreshSnapshotEvents: refreshLocalSnapshotEvents,
     closeMatchDialog,
+    onConfirmedResult: async (report) => {
+      return externalScoreReportSenderRef.current
+        ? externalScoreReportSenderRef.current(report)
+        : false;
+    },
   });
   const {
     itemLists,
@@ -462,6 +475,7 @@ function App() {
     canOpenDqDialog,
     postGenericMessage,
     sendExternalEditRequest,
+    sendExternalScoreReport,
     replyToThread,
     replyToExternalEditRequest,
     openDqRequestDialog,
@@ -804,11 +818,62 @@ function App() {
   });
   const selectedPoolScoreEditLocked = !selectedPhasePoolGroup?.phaseGroupId
     || !(selectedEventMeta?.scoreEditEnabledPhaseGroupIds ?? []).includes(selectedPhasePoolGroup.phaseGroupId);
+  const selectedPoolExternalScoreBroadcastEnabled = Boolean(
+    selectedPhasePoolGroup?.phaseGroupId
+    && (selectedEventMeta?.externalScoreBroadcastPhaseGroupIds ?? [])
+      .includes(selectedPhasePoolGroup.phaseGroupId),
+  );
   const selectedPoolExternalEditor = selectedPhasePoolGroup?.phaseGroupId
     ? (selectedEventMeta?.externalEditors ?? []).find(
       (editor) => editor.phaseGroupId === selectedPhasePoolGroup.phaseGroupId,
     ) ?? null
     : null;
+
+  externalScoreReportSenderRef.current = async (result) => {
+    const phaseGroupId = result.phaseGroupId.trim();
+    if (
+      phaseGroupId === ""
+      || selectedEventMeta?.eventId !== result.eventId
+      || !(selectedEventMeta.externalScoreBroadcastPhaseGroupIds ?? []).includes(phaseGroupId)
+    ) {
+      return false;
+    }
+    if (!snapshot || snapshot.events.every((event) => event.eventId !== result.eventId)) {
+      throw new Error("外部報告のイベントsnapshotを特定できません。");
+    }
+    const report: ExternalScoreReport = {
+      ...result,
+      tournamentId: snapshot.tournamentId,
+      slug: snapshot.slug,
+    };
+    await sendExternalScoreReport(report);
+    return true;
+  };
+
+  async function changeSelectedPoolExternalScoreBroadcast(enabled: boolean) {
+    if (!snapshot || !selectedEvent || !selectedPhasePoolGroup?.phaseGroupId) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await savePhaseGroupExternalScoreBroadcast({
+        slug: snapshot.slug,
+        eventId: selectedEvent.eventId,
+        eventName: selectedEvent.name,
+        phaseGroupId: selectedPhasePoolGroup.phaseGroupId,
+        enabled,
+      });
+      setMessage(enabled
+        ? "確定したスコアの外部報告を有効にしました。"
+        : "確定したスコアの外部報告を無効にしました。");
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function canAcceptExternalEditRequest(message: Parameters<typeof getExternalEditRequest>[0]) {
     const request = getExternalEditRequest(message);
@@ -834,6 +899,79 @@ function App() {
         && set.phaseGroupName === request.phaseGroupName,
     );
     return phaseGroupExists && matchingSet;
+  }
+
+  function canApplyExternalScoreReport(message: Parameters<typeof getExternalScoreReport>[0]) {
+    const report = getExternalScoreReport(message);
+    if (
+      !report
+      || busy
+      || disableLocalCommunication
+      || !snapshot
+      || !selectedEvent
+      || selectedEventMeta?.eventId !== selectedEvent.eventId
+      || report.tournamentId !== snapshot.tournamentId
+      || report.slug !== snapshot.slug
+      || report.eventId !== selectedEvent.eventId
+      || report.eventName !== selectedEvent.name
+      || message.senderName === ""
+    ) {
+      return false;
+    }
+    const set = selectedEvent.sets.find((item) => item.setId === report.setId);
+    if (
+      !set
+      || set.phaseGroupId !== report.phaseGroupId
+      || set.phaseName !== report.phaseName
+      || set.phaseGroupName !== report.phaseGroupName
+    ) {
+      return false;
+    }
+    const scoreEditLocked = !(selectedEventMeta.scoreEditEnabledPhaseGroupIds ?? [])
+      .includes(report.phaseGroupId);
+    const authorizedEditor = (selectedEventMeta.externalEditors ?? []).some(
+      (editor) => editor.phaseGroupId === report.phaseGroupId
+        && editor.senderName === message.senderName
+        && editor.senderUserId === message.senderUserId,
+    );
+    const setEntrantIds = set.slots
+      .map((slot) => slot.entrantId)
+      .filter((entrantId): entrantId is string => entrantId !== null)
+      .sort();
+    const reportEntrantIds = report.slotScores.map((score) => score.entrantId).sort();
+    return scoreEditLocked
+      && authorizedEditor
+      && setEntrantIds.length === 2
+      && setEntrantIds.every((entrantId, index) => entrantId === reportEntrantIds[index])
+      && report.slotScores.some((score) => score.entrantId === report.winnerId);
+  }
+
+  function applyExternalScoreReport(message: Parameters<typeof getExternalScoreReport>[0]) {
+    const report = getExternalScoreReport(message);
+    if (!report || !canApplyExternalScoreReport(message) || !snapshot || !selectedEvent) {
+      setError("外部報告の送信者、対象snapshot、スコアロック状態を確認できません。");
+      return;
+    }
+    const set = selectedEvent.sets.find((item) => item.setId === report.setId);
+    if (!set) {
+      setError("外部報告の対象setが選択中snapshotに見つかりません。");
+      return;
+    }
+    void persistIncomingExternalScoreReport({
+      set,
+      phaseGroupId: report.phaseGroupId,
+      senderName: message.senderName,
+      senderUserId: message.senderUserId,
+      result: {
+        slug: snapshot.slug,
+        eventId: selectedEvent.eventId,
+        setId: set.setId,
+        winnerId: report.winnerId,
+        confirmed: true,
+        directWin: report.directWin,
+        slotScores: report.slotScores,
+      },
+    });
   }
 
   async function acceptExternalEditRequest(message: Parameters<typeof getExternalEditRequest>[0]) {
@@ -884,7 +1022,7 @@ function App() {
     void replyToExternalEditRequest(message, false);
   }
 
-  function requestExternalEditor() {
+  async function requestExternalEditor() {
     if (
       !snapshot
       || !selectedEvent
@@ -904,7 +1042,9 @@ function App() {
       setError("外部編集申請を送信するイベント/プールを選択してください。");
       return;
     }
-    void sendExternalEditRequest({
+    setBusy(true);
+    try {
+      const requestSent = await sendExternalEditRequest({
       tournamentId: snapshot.tournamentId,
       slug: snapshot.slug,
       eventId: selectedEvent.eventId,
@@ -914,6 +1054,22 @@ function App() {
       phaseGroupName: selectedPhasePoolGroup.phaseGroupName,
       phaseGroupDisplayIdentifier: selectedPhasePoolGroup.phaseGroupDisplayIdentifier,
     });
+    if (!requestSent) {
+      return;
+    }
+    await savePhaseGroupExternalScoreBroadcast({
+      slug: snapshot.slug,
+      eventId: selectedEvent.eventId,
+      eventName: selectedEvent.name,
+      phaseGroupId: selectedPhasePoolGroup.phaseGroupId,
+      enabled: true,
+    });
+    setMessage("外部編集申請を送信し、確定スコアの外部報告を有効にしました。");
+    } catch (error) {
+    setError(`外部編集申請は送信済みですが、外部報告設定を保存できませんでした: ${String(error)}`);
+    } finally {
+    setBusy(false);
+    }
   }
 
   async function changeSelectedPoolScoreEditLock(locked: boolean) {
@@ -1375,6 +1531,9 @@ function App() {
             onAcceptExternalEditRequest={(item) => void acceptExternalEditRequest(item)}
             canReplyToExternalEditRequest={canReplyToExternalEditRequest}
             onRejectExternalEditRequest={rejectExternalEditRequest}
+            getExternalScoreReport={getExternalScoreReport}
+            canApplyExternalScoreReport={canApplyExternalScoreReport}
+            onApplyExternalScoreReport={applyExternalScoreReport}
             canResolveActiveThread={canResolveActiveThread}
             onResolveActiveThread={resolveMailboxThread}
             canDeleteActiveThread={canDeleteActiveThread}
@@ -1575,11 +1734,13 @@ function App() {
             phaseScopedPoolGroups={phaseScopedPoolGroups}
             selectedPhasePoolGroup={selectedPhasePoolGroup}
             selectedPoolScoreEditLocked={selectedPoolScoreEditLocked}
+            selectedPoolExternalScoreBroadcastEnabled={selectedPoolExternalScoreBroadcastEnabled}
             externalEditor={selectedPoolExternalEditor}
             canRequestExternalEditor={canBroadcastCallListSync}
             onRequestExternalEditor={requestExternalEditor}
             onPhasePoolChange={setSelectedPhasePoolKey}
             onSelectedPoolScoreEditLockChange={(locked) => void changeSelectedPoolScoreEditLock(locked)}
+            onSelectedPoolExternalScoreBroadcastChange={(enabled) => void changeSelectedPoolExternalScoreBroadcast(enabled)}
             bracketScaleStyle={bracketScaleStyle}
             bracketZoomLevel={bracketZoomLevel}
             bracketZoomLevels={BRACKET_ZOOM_LEVELS}

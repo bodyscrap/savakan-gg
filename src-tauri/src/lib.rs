@@ -13,14 +13,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use if_addrs::get_if_addrs;
 use models::{
-    BracketBatchReportInput, BracketBatchReportResult, ClearLocalSetResultDraftInput,
-    CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, GenericMessage, ItemListConfig,
-    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetScoreInput,
-    LocalSetScoreUpdateInput, LocalSnapshotEventListItem, MobileResultRequestInput,
-    MobileResultRequestItem, PlaySide, ReportSetResultInput, ResetSetResultCascadeInput,
-    ResetSetResultCascadeResult, SaveEventManagementMetaInput, SenderProfile,
-    SetPhaseGroupExternalEditorInput, SetPhaseGroupScoreEditLockInput, SetSnapshot,
-    TournamentPreview, TournamentSnapshot, TournamentWorkspace,
+    ApplyExternalScoreReportInput, BracketBatchReportInput, BracketBatchReportResult,
+    ClearLocalSetResultDraftInput, CreateEventSnapshotBySlugInput, CreateEventSnapshotInput,
+    GenericMessage, ItemListConfig, LocalPlayerMetaInput, LocalSetPlaySideInput,
+    LocalSetResultInput, LocalSetScoreInput, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
+    MobileResultRequestInput, MobileResultRequestItem, PlaySide, ReportSetResultInput,
+    ResetSetResultCascadeInput, ResetSetResultCascadeResult, SaveEventManagementMetaInput,
+    SenderProfile, SetPhaseGroupExternalEditorInput, SetPhaseGroupExternalScoreBroadcastInput,
+    SetPhaseGroupScoreEditLockInput, SetSnapshot, TournamentPreview, TournamentSnapshot,
+    TournamentWorkspace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -3540,9 +3541,13 @@ fn hydrate_mobile_detail_with_local_meta(
         .iter()
         .find(|event| event.event_id == event_id);
     let entrant_name_by_id = event_meta
-        .map(|event| event.entrants.iter()
-            .map(|entrant| (entrant.entrant_id.clone(), entrant.entrant_name.clone()))
-            .collect::<HashMap<String, String>>())
+        .map(|event| {
+            event
+                .entrants
+                .iter()
+                .map(|entrant| (entrant.entrant_id.clone(), entrant.entrant_name.clone()))
+                .collect::<HashMap<String, String>>()
+        })
         .unwrap_or_default();
     let alias_name_by_id = event_meta
         .filter(|event| {
@@ -3551,10 +3556,19 @@ fn hydrate_mobile_detail_with_local_meta(
                 .as_ref()
                 .is_some_and(|setting| setting.use_alias_name)
         })
-        .map(|event| event.entrants.iter()
-            .filter(|entrant| !entrant.alias_name.trim().is_empty())
-            .map(|entrant| (entrant.entrant_id.clone(), entrant.alias_name.trim().to_owned()))
-            .collect::<HashMap<String, String>>())
+        .map(|event| {
+            event
+                .entrants
+                .iter()
+                .filter(|entrant| !entrant.alias_name.trim().is_empty())
+                .map(|entrant| {
+                    (
+                        entrant.entrant_id.clone(),
+                        entrant.alias_name.trim().to_owned(),
+                    )
+                })
+                .collect::<HashMap<String, String>>()
+        })
         .unwrap_or_default();
     let entrant_id_by_name = entrant_name_by_id
         .iter()
@@ -5637,7 +5651,11 @@ fn validate_resolve_permission(
         return Err("スレッド作成者のみが解決メッセージを送信できます。".to_owned());
     }
 
-    if root.method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER) {
+    if root
+        .method
+        .trim()
+        .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
+    {
         let root_identity = extract_call_target_identity(root.message_meta.as_ref())
             .ok_or_else(|| "呼び出しID情報がないため、この呼び出しを解決できません。".to_owned())?;
         let resolve_identity = extract_call_target_identity(resolve_meta)
@@ -6102,11 +6120,19 @@ async fn refresh_until_gf_reset_set_available(
     per_page: u32,
     source_grand_final_set_id: &str,
 ) -> Result<(TournamentWorkspace, Option<SetSnapshot>), String> {
-    let mut workspace =
-        match refresh_workspace_after_remote_report(app, token, slug, event_id, per_page, &[]).await {
-            Ok(value) => value,
-            Err(_) => storage::load_workspace(app, slug, event_id)?,
-        };
+    let mut workspace = match refresh_workspace_after_remote_report(
+        app,
+        token,
+        slug,
+        event_id,
+        per_page,
+        &[],
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => storage::load_workspace(app, slug, event_id)?,
+    };
 
     for attempt in 0..GF_RESET_LINK_RETRY_ATTEMPTS {
         let remote_reset_set = workspace
@@ -6128,7 +6154,8 @@ async fn refresh_until_gf_reset_set_available(
 
         sleep(Duration::from_millis(GF_RESET_LINK_RETRY_DELAY_MS)).await;
         workspace =
-            match refresh_workspace_after_remote_report(app, token, slug, event_id, per_page, &[]).await
+            match refresh_workspace_after_remote_report(app, token, slug, event_id, per_page, &[])
+                .await
             {
                 Ok(value) => value,
                 Err(_) => storage::load_workspace(app, slug, event_id)?,
@@ -6923,6 +6950,14 @@ fn set_phase_group_score_edit_lock(
 }
 
 #[tauri::command]
+fn set_phase_group_external_score_broadcast(
+    app: tauri::AppHandle,
+    input: SetPhaseGroupExternalScoreBroadcastInput,
+) -> Result<TournamentWorkspace, String> {
+    storage::set_phase_group_external_score_broadcast(&app, input)
+}
+
+#[tauri::command]
 fn set_phase_group_external_editor(
     app: tauri::AppHandle,
     input: SetPhaseGroupExternalEditorInput,
@@ -6936,6 +6971,14 @@ fn save_local_set_result(
     input: LocalSetResultInput,
 ) -> Result<TournamentWorkspace, String> {
     storage::upsert_local_set_result(&app, input)
+}
+
+#[tauri::command]
+fn apply_external_score_report(
+    app: tauri::AppHandle,
+    input: ApplyExternalScoreReportInput,
+) -> Result<TournamentWorkspace, String> {
+    storage::apply_external_score_report(&app, input)
 }
 
 #[tauri::command]
@@ -7162,8 +7205,10 @@ pub fn run() {
             derive_player_ids,
             save_local_set_play_side,
             set_phase_group_score_edit_lock,
+            set_phase_group_external_score_broadcast,
             set_phase_group_external_editor,
             save_local_set_result,
+            apply_external_score_report,
             save_local_set_scores,
             report_confirmed_sets_from_bracket,
             sync_tournament,

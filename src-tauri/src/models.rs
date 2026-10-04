@@ -135,6 +135,8 @@ pub struct EventLocalMeta {
     #[serde(default)]
     pub score_edit_enabled_phase_group_ids: Vec<String>,
     #[serde(default)]
+    pub external_score_broadcast_phase_group_ids: Vec<String>,
+    #[serde(default)]
     pub external_editors: Vec<PhaseGroupExternalEditor>,
     pub entrants: Vec<EventEntrantMeta>,
 }
@@ -166,6 +168,16 @@ pub struct SetPhaseGroupScoreEditLockInput {
     pub event_name: String,
     pub phase_group_id: String,
     pub locked: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPhaseGroupExternalScoreBroadcastInput {
+    pub slug: String,
+    pub event_id: String,
+    pub event_name: String,
+    pub phase_group_id: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +256,15 @@ pub struct LocalSetResultInput {
     #[serde(default)]
     pub direct_win: bool,
     pub slot_scores: Vec<LocalSetScoreInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyExternalScoreReportInput {
+    pub result: LocalSetResultInput,
+    pub phase_group_id: String,
+    pub sender_name: String,
+    pub sender_user_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -354,7 +375,10 @@ pub struct EventSnapshot {
 }
 
 pub fn is_intermediate_set(phase_groups: &[PhaseGroupSnapshot], set: &SetSnapshot) -> bool {
-    if phase_groups.iter().all(|phase_group| phase_group.set_ids.is_empty()) {
+    if phase_groups
+        .iter()
+        .all(|phase_group| phase_group.set_ids.is_empty())
+    {
         return set.is_intermediate;
     }
 

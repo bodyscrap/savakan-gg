@@ -20,6 +20,7 @@ import {
   isValidIpv4,
   isValidSenderUserId,
   splitIpv4List,
+  type ExternalScoreReport,
   type ExternalEditRequest,
   type MessageScope,
 } from "../domain/messageUtils";
@@ -490,24 +491,24 @@ export function useMailbox({
     }
   }
 
-  async function sendExternalEditRequest(input: ExternalEditRequestInput) {
+  async function sendExternalEditRequest(input: ExternalEditRequestInput): Promise<boolean> {
     onError("");
     onMessage("");
     if (disableLocalCommunication) {
       onError("ローカル通信を行わない設定のため、外部編集申請は送信できません。設定タブで解除してください。");
-      return;
+      return false;
     }
     if (!senderProfileReadyForMessaging) {
       onError("設定タブで送信者名・8桁ユーザーID・自分のIPを保存してから申請してください。");
-      return;
+      return false;
     }
     if (!isValidIpv4(senderProfile.broadcastSubnetMask)) {
       onError("ブロードキャスト先のサブネットマスクが不正です。設定タブを確認してください。");
-      return;
+      return false;
     }
     if (!scope || input.eventId !== scope.eventId || input.tournamentId !== scope.tournamentId) {
       onError("申請対象イベントが現在のイベント選択と一致しません。");
-      return;
+      return false;
     }
     if (
       [
@@ -522,7 +523,7 @@ export function useMailbox({
       || !isValidSenderUserId(senderProfile.senderUserId)
     ) {
       onError("外部編集申請に必要なイベント・プール・送信者情報が不足しています。");
-      return;
+      return false;
     }
 
     const messageMeta = {
@@ -560,9 +561,56 @@ export function useMailbox({
         setSelectedThreadId(normalized.threadId);
       }
       onMessage(`外部編集申請をブロードキャストしました: ${input.phaseName} / ${input.phaseGroupName}`);
+      return true;
     } catch (error) {
       onError(String(error));
+      return false;
     }
+  }
+
+  async function sendExternalScoreReport(report: ExternalScoreReport) {
+    if (disableLocalCommunication) {
+      throw new Error("ローカル通信OFFのため外部報告を送信できません。");
+    }
+    if (!senderProfileReadyForMessaging || !isValidIpv4(senderProfile.broadcastSubnetMask)) {
+      throw new Error("外部報告の送信には有効な送信者情報とブロードキャスト設定が必要です。");
+    }
+
+    const messageMeta = buildScopedMessageMeta({
+      externalScoreReport: true,
+      externalScoreReportTournamentId: report.tournamentId,
+      externalScoreReportSlug: report.slug,
+      externalScoreReportEventId: report.eventId,
+      externalScoreReportEventName: report.eventName,
+      externalScoreReportPhaseName: report.phaseName,
+      externalScoreReportPhaseGroupId: report.phaseGroupId,
+      externalScoreReportPhaseGroupName: report.phaseGroupName,
+      externalScoreReportSetId: report.setId,
+      externalScoreReportWinnerId: report.winnerId,
+      externalScoreReportDirectWin: report.directWin,
+      externalScoreReportSlotScores: report.slotScores,
+    }, {
+      tournamentId: report.tournamentId,
+      slug: report.slug,
+      eventId: report.eventId,
+      phaseName: report.phaseName,
+      phaseGroupName: report.phaseGroupName,
+    });
+    const sent = await invoke<GenericMessage>("send_mailbox_message", {
+      input: {
+        profile: senderProfile,
+        messageType: "normal",
+        messageMeta,
+        method: "external_score_report",
+        subject: `外部報告: ${report.eventName} / ${report.phaseName} / ${report.phaseGroupName} / ${report.setId}`,
+        body: `外部編集者 ${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から確定スコアが届きました。\n勝者: ${report.winnerId}\nスコア: ${report.slotScores.map((score) => `${score.entrantId}=${score.score < 0 ? "DQ" : score.score}`).join(" / ")}`,
+        deliveryTargetMode: "broadcast",
+        deliveryTargetIp: null,
+        threadId: null,
+        parentMessageId: null,
+      },
+    });
+    addMailboxMessage(sent);
   }
 
   async function replyToThread() {
@@ -967,6 +1015,7 @@ export function useMailbox({
     canOpenDqDialog,
     postGenericMessage,
     sendExternalEditRequest,
+    sendExternalScoreReport,
     replyToThread,
     replyToExternalEditRequest,
     openDqRequestDialog,

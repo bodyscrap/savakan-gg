@@ -5,6 +5,7 @@ import {
   loadTournamentWorkspace,
   persistEventAlias,
   persistEventManagementMeta,
+  persistPhaseGroupExternalScoreBroadcast,
   persistPhaseGroupExternalEditor,
   persistPhaseGroupScoreEditLock,
   persistLocalPlayerMeta,
@@ -117,6 +118,18 @@ export function useTournamentWorkspace({
     locked: boolean;
   }) {
     const result = await persistPhaseGroupScoreEditLock(input);
+    setWorkspace(result);
+    return result;
+  }
+
+  async function savePhaseGroupExternalScoreBroadcast(input: {
+    slug: string;
+    eventId: string;
+    eventName: string;
+    phaseGroupId: string;
+    enabled: boolean;
+  }) {
+    const result = await persistPhaseGroupExternalScoreBroadcast(input);
     setWorkspace(result);
     return result;
   }
@@ -255,6 +268,7 @@ export function useTournamentWorkspace({
     restoreWorkspaceGraph,
     saveEventManagementMeta,
     savePhaseGroupScoreEditLock,
+    savePhaseGroupExternalScoreBroadcast,
     savePhaseGroupExternalEditor,
     saveEventAlias,
     saveLocalPlayerMeta,

@@ -54,6 +54,7 @@ export type EventLocalMeta = {
   lastSelectedPhaseGroupName?: string | null;
   eventManagement?: EventManagementMeta | null;
   scoreEditEnabledPhaseGroupIds?: string[];
+  externalScoreBroadcastPhaseGroupIds?: string[];
   externalEditors?: PhaseGroupExternalEditor[];
   entrants: EventEntrantMeta[];
 };
@@ -149,6 +150,29 @@ export type SetPhaseGroupScoreEditLockInput = {
   locked: boolean;
 };
 
+export type SetPhaseGroupExternalScoreBroadcastInput = {
+  slug: string;
+  eventId: string;
+  eventName: string;
+  phaseGroupId: string;
+  enabled: boolean;
+};
+
+export type ApplyExternalScoreReportInput = {
+  result: {
+    slug: string;
+    eventId: string;
+    setId: string;
+    winnerId: string;
+    confirmed: boolean;
+    directWin: boolean;
+    slotScores: Array<{ entrantId: string; score: number }>;
+  };
+  phaseGroupId: string;
+  senderName: string;
+  senderUserId: string;
+};
+
 export type SaveLocalPlayerMetaInput = {
   slug: string;
   eventId: string;
@@ -217,6 +241,18 @@ export async function persistPhaseGroupScoreEditLock(
   input: SetPhaseGroupScoreEditLockInput,
 ): Promise<TournamentWorkspace> {
   return invoke<TournamentWorkspace>("set_phase_group_score_edit_lock", { input });
+}
+
+export async function persistPhaseGroupExternalScoreBroadcast(
+  input: SetPhaseGroupExternalScoreBroadcastInput,
+): Promise<TournamentWorkspace> {
+  return invoke<TournamentWorkspace>("set_phase_group_external_score_broadcast", { input });
+}
+
+export async function applyExternalScoreReport(
+  input: ApplyExternalScoreReportInput,
+): Promise<TournamentWorkspace> {
+  return invoke<TournamentWorkspace>("apply_external_score_report", { input });
 }
 
 export async function persistPhaseGroupExternalEditor(

@@ -43,11 +43,13 @@ type BracketTabProps = {
   phaseScopedPoolGroups: PhasePoolGroup[];
   selectedPhasePoolGroup: PhasePoolGroup | null;
   selectedPoolScoreEditLocked: boolean;
+  selectedPoolExternalScoreBroadcastEnabled: boolean;
   externalEditor: PhaseGroupExternalEditor | null;
   canRequestExternalEditor: boolean;
   onRequestExternalEditor: () => void;
   onPhasePoolChange: (key: string) => void;
   onSelectedPoolScoreEditLockChange: (locked: boolean) => void;
+  onSelectedPoolExternalScoreBroadcastChange: (enabled: boolean) => void;
   bracketScaleStyle: CSSProperties;
   bracketZoomLevel: number;
   bracketZoomLevels: readonly number[];
@@ -79,11 +81,13 @@ export function BracketTab({
   phaseScopedPoolGroups,
   selectedPhasePoolGroup,
   selectedPoolScoreEditLocked,
+  selectedPoolExternalScoreBroadcastEnabled,
   externalEditor,
   canRequestExternalEditor,
   onRequestExternalEditor,
   onPhasePoolChange,
   onSelectedPoolScoreEditLockChange,
+  onSelectedPoolExternalScoreBroadcastChange,
   bracketScaleStyle,
   bracketZoomLevel,
   bracketZoomLevels,
@@ -199,15 +203,26 @@ export function BracketTab({
             ) : (
               <section className="phase-group" key={selectedPhasePoolGroup.key}>
                 <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
-                <label className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={selectedPoolScoreEditLocked}
-                    disabled={busy || !selectedPhasePoolGroup.phaseGroupId}
-                    onChange={(event) => onSelectedPoolScoreEditLockChange(event.currentTarget.checked)}
-                  />
-                  スコア編集のロック
-                </label>
+                <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+                  <label className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={selectedPoolScoreEditLocked}
+                      disabled={busy || !selectedPhasePoolGroup.phaseGroupId}
+                      onChange={(event) => onSelectedPoolScoreEditLockChange(event.currentTarget.checked)}
+                    />
+                    スコア編集のロック
+                  </label>
+                  <label className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={selectedPoolExternalScoreBroadcastEnabled}
+                      disabled={busy || !selectedPhasePoolGroup.phaseGroupId}
+                      onChange={(event) => onSelectedPoolExternalScoreBroadcastChange(event.currentTarget.checked)}
+                    />
+                    確定したスコアをブロードキャスト
+                  </label>
+                </div>
                 <div className="panel-toolbar compact">
                   <p className="meta">
                     外部編集者: {externalEditor

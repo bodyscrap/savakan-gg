@@ -11,13 +11,14 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::models::{
-    BracketGraphEdge, BracketGraphSnapshot, EventEntrantMeta, EventLocalMeta, EventManagementMeta,
-    EventSnapshot, GenericMessage, ItemListConfig, LocalGrandFinalResetResultMeta,
-    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetResultMeta,
-    LocalSetScoreMeta, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
-    MobileResultRequestInput, MobileResultRequestItem, PhaseGroupGraphSeedSnapshot,
-    PhaseGroupExternalEditor, PhaseGroupSeedSnapshot, SaveEventManagementMetaInput, SenderProfile,
-    SetPhaseGroupExternalEditorInput, SetPhaseGroupScoreEditLockInput, SetPlaySideMeta,
+    ApplyExternalScoreReportInput, BracketGraphEdge, BracketGraphSnapshot, EventEntrantMeta,
+    EventLocalMeta, EventManagementMeta, EventSnapshot, GenericMessage, ItemListConfig,
+    LocalGrandFinalResetResultMeta, LocalPlayerMetaInput, LocalSetPlaySideInput,
+    LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta, LocalSetScoreUpdateInput,
+    LocalSnapshotEventListItem, MobileResultRequestInput, MobileResultRequestItem,
+    PhaseGroupExternalEditor, PhaseGroupGraphSeedSnapshot, PhaseGroupSeedSnapshot,
+    SaveEventManagementMetaInput, SenderProfile, SetPhaseGroupExternalEditorInput,
+    SetPhaseGroupExternalScoreBroadcastInput, SetPhaseGroupScoreEditLockInput, SetPlaySideMeta,
     SetSnapshot, TournamentEventPreviewItem, TournamentLocalMeta, TournamentSnapshot,
     TournamentWorkspace,
 };
@@ -250,6 +251,7 @@ fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
             last_selected_phase_group_name: None,
             event_management: None,
             score_edit_enabled_phase_group_ids: Vec::new(),
+            external_score_broadcast_phase_group_ids: Vec::new(),
             external_editors: Vec::new(),
             entrants: Vec::new(),
         }],
@@ -581,6 +583,20 @@ fn score_edit_enabled_for_phase_group(
     })
 }
 
+fn external_score_report_sender_is_authorized(
+    event_meta: &EventLocalMeta,
+    phase_group_id: &str,
+    sender_name: &str,
+    sender_user_id: &str,
+) -> bool {
+    !score_edit_enabled_for_phase_group(Some(event_meta), phase_group_id)
+        && event_meta.external_editors.iter().any(|editor| {
+            editor.phase_group_id == phase_group_id
+                && editor.sender_name == sender_name
+                && editor.sender_user_id == sender_user_id
+        })
+}
+
 #[cfg(test)]
 mod score_edit_lock_tests {
     use super::*;
@@ -610,6 +626,53 @@ mod score_edit_lock_tests {
         assert!(!score_edit_enabled_for_phase_group(
             Some(&updated_meta),
             "pool-b"
+        ));
+        assert!(updated_meta
+            .external_score_broadcast_phase_group_ids
+            .is_empty());
+    }
+
+    #[test]
+    fn external_score_report_requires_locked_pool_and_registered_sender() {
+        let event_meta: EventLocalMeta = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "eventName": "Event",
+            "entrants": [],
+            "externalEditors": [{
+                "phaseGroupId": "pool-a",
+                "senderName": "External",
+                "senderUserId": "12345678"
+            }]
+        }))
+        .expect("event metadata should deserialize");
+
+        assert!(external_score_report_sender_is_authorized(
+            &event_meta,
+            "pool-a",
+            "External",
+            "12345678"
+        ));
+        assert!(!external_score_report_sender_is_authorized(
+            &event_meta,
+            "pool-a",
+            "Other",
+            "12345678"
+        ));
+        assert!(!external_score_report_sender_is_authorized(
+            &event_meta,
+            "pool-a",
+            "External",
+            "87654321"
+        ));
+        let mut unlocked_meta = event_meta;
+        unlocked_meta
+            .score_edit_enabled_phase_group_ids
+            .push("pool-a".to_owned());
+        assert!(!external_score_report_sender_is_authorized(
+            &unlocked_meta,
+            "pool-a",
+            "External",
+            "12345678"
         ));
     }
 
@@ -767,6 +830,7 @@ fn merge_snapshot_into_meta(
             last_selected_phase_group_name: None,
             event_management: None,
             score_edit_enabled_phase_group_ids: Vec::new(),
+            external_score_broadcast_phase_group_ids: Vec::new(),
             external_editors: Vec::new(),
             entrants: Vec::new(),
         });
@@ -1157,9 +1221,9 @@ fn collect_duplicate_unresolved_call_roots(
                     .unwrap_or(false)
         })
         .filter(|root| {
-            !messages.iter().any(|item| {
-                item.thread_id == root.thread_id && item.message_type == "resolve"
-            })
+            !messages
+                .iter()
+                .any(|item| item.thread_id == root.thread_id && item.message_type == "resolve")
         })
         .cloned()
         .collect()
@@ -1544,10 +1608,8 @@ type ProgressionCandidatesBySeed<'a> =
     HashMap<&'a str, Vec<(&'a crate::models::SetSnapshot, &'static str)>>;
 type ProgressionCandidatesByGroupAndSeed<'a> =
     HashMap<String, HashMap<String, Vec<(&'a crate::models::SetSnapshot, &'static str)>>>;
-type ProgressionCandidatesByGroupSeedAndRound<'a> = HashMap<
-    String,
-    HashMap<String, HashMap<i64, (&'a crate::models::SetSnapshot, &'static str)>>,
->;
+type ProgressionCandidatesByGroupSeedAndRound<'a> =
+    HashMap<String, HashMap<String, HashMap<i64, (&'a crate::models::SetSnapshot, &'static str)>>>;
 type WinnersToLosersRoundMap = HashMap<String, HashMap<i64, HashSet<i64>>>;
 
 fn build_bracket_graph(
@@ -1583,8 +1645,7 @@ fn build_bracket_graph(
     let mut phase_group_sets_by_key_and_round =
         HashMap::<String, HashMap<i64, Vec<&crate::models::SetSnapshot>>>::new();
     let mut progression_candidates_by_seed = ProgressionCandidatesBySeed::new();
-    let mut progression_candidates_by_group_and_seed =
-        ProgressionCandidatesByGroupAndSeed::new();
+    let mut progression_candidates_by_group_and_seed = ProgressionCandidatesByGroupAndSeed::new();
     let mut progression_candidates_by_group_seed_and_round =
         ProgressionCandidatesByGroupSeedAndRound::new();
     for set in &event.sets {
@@ -1849,9 +1910,7 @@ fn build_bracket_graph(
     for group_rounds in phase_group_sets_by_key_and_round.values() {
         let Some(first_losers_round) = group_rounds
             .iter()
-            .filter(|(round, sets)| {
-                **round < 0 && sets.iter().any(|set| is_losers_set(set))
-            })
+            .filter(|(round, sets)| **round < 0 && sets.iter().any(|set| is_losers_set(set)))
             .map(|(round, _)| *round)
             .max()
         else {
@@ -1861,9 +1920,9 @@ fn build_bracket_graph(
             .iter()
             .filter(|(round, sets)| {
                 **round > 0
-                    &&
-                sets.iter()
-                    .any(|set| !is_losers_set(set) && !is_grand_final_set(set))
+                    && sets
+                        .iter()
+                        .any(|set| !is_losers_set(set) && !is_grand_final_set(set))
             })
             .map(|(round, _)| *round)
             .min()
@@ -1875,10 +1934,7 @@ fn build_bracket_graph(
             .get(&first_winners_round)
             .into_iter()
             .flatten()
-            .filter(|set| {
-                !is_losers_set(set)
-                    && !is_grand_final_set(set)
-            })
+            .filter(|set| !is_losers_set(set) && !is_grand_final_set(set))
             .map(|set| set.set_id.clone())
             .collect::<Vec<_>>();
         let mut losers_first_ids = group_rounds
@@ -1921,12 +1977,7 @@ fn build_bracket_graph(
         .sets
         .iter()
         .filter(|set| intermediate_set_ids.contains(set.set_id.as_str()))
-        .map(|set| {
-            (
-                set.set_id.as_str(),
-                hidden_pipe_source_slot_indexes(set),
-            )
-        })
+        .map(|set| (set.set_id.as_str(), hidden_pipe_source_slot_indexes(set)))
         .collect::<HashMap<_, _>>();
 
     let mut edges = Vec::new();
@@ -2097,18 +2148,16 @@ fn build_winners_to_losers_round_map(
                         .collect::<Vec<_>>();
                     let source_rounds = candidates
                         .iter()
-                        .filter_map(|(source_set, _)| {
-                            source_set.round.and_then(i64::checked_abs)
-                        })
+                        .filter_map(|(source_set, _)| source_set.round.and_then(i64::checked_abs))
                         .collect::<HashSet<_>>();
                     if source_rounds.len() == 1 {
                         if let Some((source_set, relation)) = candidates.first() {
-                        record_winners_to_losers_round_mapping(
-                            &mut winners_to_losers_rounds,
-                            source_set,
-                            target,
-                            relation,
-                        );
+                            record_winners_to_losers_round_mapping(
+                                &mut winners_to_losers_rounds,
+                                source_set,
+                                target,
+                                relation,
+                            );
                         }
                     }
                 }
@@ -2121,10 +2170,9 @@ fn build_winners_to_losers_round_map(
             .iter()
             .filter(|(round, sets)| {
                 **round < 0
-                    &&
-                sets.iter().any(|set| {
-                    is_losers_set(set) && !is_round_transition_exception(set)
-                })
+                    && sets
+                        .iter()
+                        .any(|set| is_losers_set(set) && !is_round_transition_exception(set))
             })
             .map(|(round, _)| *round)
             .max();
@@ -2132,17 +2180,15 @@ fn build_winners_to_losers_round_map(
             .iter()
             .filter(|(round, sets)| {
                 **round > 0
-                    &&
-                sets.iter().any(|set| {
-                    !is_losers_set(set)
-                        && !is_grand_final_set(set)
-                        && !is_round_transition_exception(set)
-                })
+                    && sets.iter().any(|set| {
+                        !is_losers_set(set)
+                            && !is_grand_final_set(set)
+                            && !is_round_transition_exception(set)
+                    })
             })
             .map(|(round, _)| *round)
             .min();
-        if let (Some(winners_round), Some(losers_round)) =
-            (first_winners_round, first_losers_round)
+        if let (Some(winners_round), Some(losers_round)) = (first_winners_round, first_losers_round)
         {
             winners_to_losers_rounds
                 .entry(group_key.clone())
@@ -2698,9 +2744,7 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
     if needs_progression_rebuild {
         rebuild_progression_from_completed_sets(&mut snapshot);
     }
-    if needs_progression_rebuild
-        && restore_pending_local_results(app, slug, &mut snapshot, true)?
-    {
+    if needs_progression_rebuild && restore_pending_local_results(app, slug, &mut snapshot, true)? {
         rebuild_progression_from_completed_sets(&mut snapshot);
     }
     cache_progression_snapshot(&snapshot, true, true);
@@ -2721,12 +2765,7 @@ pub fn load_snapshot(app: &AppHandle, slug: &str) -> Result<TournamentSnapshot, 
     Ok(snapshot)
 }
 
-fn event_snapshot_file_matches(
-    file_name: &str,
-    slug: &str,
-    event_id: &str,
-    suffix: &str,
-) -> bool {
+fn event_snapshot_file_matches(file_name: &str, slug: &str, event_id: &str, suffix: &str) -> bool {
     let event_fragment = format!(
         "-{}-{}-",
         sanitize_slug(&normalize_slug_for_storage(slug)),
@@ -2754,7 +2793,9 @@ fn load_event_snapshot_from_files(
     let mut matched_files = 0;
     let mut read_bytes = 0;
 
-    for entry in fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))? {
+    for entry in
+        fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
+    {
         let path = match entry {
             Ok(value) => value.path(),
             Err(_) => continue,
@@ -2822,7 +2863,9 @@ fn load_event_graph_snapshot_from_files(
     let dir = snapshots_dir(app)?;
     let slug_key = normalize_slug_for_storage(slug);
     let mut selected_snapshot: Option<TournamentSnapshot> = None;
-    for entry in fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))? {
+    for entry in
+        fs::read_dir(dir).map_err(|e| format!("保存ディレクトリの走査に失敗しました: {e}"))?
+    {
         let path = match entry {
             Ok(value) => value.path(),
             Err(_) => continue,
@@ -2867,20 +2910,17 @@ fn load_event_snapshot(
     event_id: &str,
 ) -> Result<TournamentSnapshot, String> {
     let mut loaded_from_graph = false;
-    let mut snapshot = if let Some(snapshot) =
-        load_event_snapshot_from_files(app, slug, event_id, false)?
-    {
-        snapshot
-    } else if let Some(snapshot) =
-        load_event_graph_snapshot_from_files(app, slug, event_id)?
-    {
-        loaded_from_graph = true;
-        snapshot
-    } else {
-        return Err(format!(
-            "指定イベントのローカルsnapshotが見つかりません: {event_id}"
-        ));
-    };
+    let mut snapshot =
+        if let Some(snapshot) = load_event_snapshot_from_files(app, slug, event_id, false)? {
+            snapshot
+        } else if let Some(snapshot) = load_event_graph_snapshot_from_files(app, slug, event_id)? {
+            loaded_from_graph = true;
+            snapshot
+        } else {
+            return Err(format!(
+                "指定イベントのローカルsnapshotが見つかりません: {event_id}"
+            ));
+        };
 
     let has_pending_results = restore_pending_local_results(app, slug, &mut snapshot, false)?;
     let needs_progression_rebuild = loaded_from_graph || has_pending_results;
@@ -2988,7 +3028,9 @@ fn restore_pending_local_results(
         else {
             continue;
         };
-        let has_reset_markers = results.iter().any(|result| result.reset_source_set_id.is_some());
+        let has_reset_markers = results
+            .iter()
+            .any(|result| result.reset_source_set_id.is_some());
         if require_roster_match {
             restored_any |= restore_matching_pending_results_for_event(event, &results);
         } else {
@@ -3036,10 +3078,7 @@ fn restore_matching_pending_results_for_event(
     restored_any
 }
 
-fn pending_result_matches_event_roster(
-    event: &EventSnapshot,
-    result: &LocalSetResultMeta,
-) -> bool {
+fn pending_result_matches_event_roster(event: &EventSnapshot, result: &LocalSetResultMeta) -> bool {
     if result.reset_source_set_id.is_some() {
         return true;
     }
@@ -3166,7 +3205,13 @@ fn known_resolved_entrant_names_for_round_robin_set(
                 == normalize_group_key(target_set.phase_group_display_identifier.as_ref())
     });
     let group_set_ids = phase_group
-        .map(|group| group.set_ids.iter().map(String::as_str).collect::<HashSet<_>>())
+        .map(|group| {
+            group
+                .set_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>()
+        })
         .unwrap_or_default();
     let target_group_key = phase_group_key(target_set);
 
@@ -3232,8 +3277,7 @@ fn restore_missing_slot_entrants(
         .filter(|slot| slot.entrant_id.is_none())
         .count();
 
-    if ordered_entrant_ids.len() != set.slots.len()
-        || missing_entrant_ids.len() != empty_slot_count
+    if ordered_entrant_ids.len() != set.slots.len() || missing_entrant_ids.len() != empty_slot_count
     {
         return;
     }
@@ -3311,11 +3355,11 @@ fn cache_progression_snapshot(
             .as_ref()
             .map(|entry| entry.snapshot.clone())
             .unwrap_or_else(|| TournamentSnapshot {
-            tournament_id: snapshot.tournament_id.clone(),
-            slug: snapshot.slug.clone(),
-            name: snapshot.name.clone(),
-            events: Vec::new(),
-            updated_at: snapshot.updated_at,
+                tournament_id: snapshot.tournament_id.clone(),
+                slug: snapshot.slug.clone(),
+                name: snapshot.name.clone(),
+                events: Vec::new(),
+                updated_at: snapshot.updated_at,
             })
     };
     for event in &snapshot.events {
@@ -3435,9 +3479,9 @@ fn build_progression_targets_by_source(
                 1 => dependent_set.entrant2_source.as_ref(),
                 _ => None,
             };
-            if let Some(source) = source.filter(|source| {
-                source.source_type.as_deref() == Some("seed")
-            }) {
+            if let Some(source) =
+                source.filter(|source| source.source_type.as_deref() == Some("seed"))
+            {
                 if let Some(seed_id) = source.type_id.as_deref() {
                     dependent_slots_by_seed_id
                         .entry(seed_id)
@@ -3664,7 +3708,8 @@ fn rebuild_progression_from_completed_sets(
                 set_id: set.set_id.clone(),
                 phase_index: crate::models::phase_sequence_index_for_set(event, set),
                 winner_id: winner_id.clone(),
-                is_round_robin: set.state == 3 && is_round_robin_set(snapshot, &event.event_id, set),
+                is_round_robin: set.state == 3
+                    && is_round_robin_set(snapshot, &event.event_id, set),
             });
         }
     }
@@ -3817,9 +3862,7 @@ fn rebuild_progression_from_completed_sets(
             continue;
         }
         if !completed.is_round_robin {
-            if let Some(targets_by_source) =
-                progression_targets_by_event.get(&completed.event_id)
-            {
+            if let Some(targets_by_source) = progression_targets_by_event.get(&completed.event_id) {
                 apply_local_progression(
                     snapshot,
                     &completed.event_id,
@@ -3921,8 +3964,7 @@ fn rebuild_event_progression_preserving_pending_results(
     event_id: &str,
     pending_results: &[LocalSetResultMeta],
 ) -> HashSet<String> {
-    let mut invalidated_set_ids =
-        rebuild_event_progression_from_completed_sets(snapshot, event_id);
+    let mut invalidated_set_ids = rebuild_event_progression_from_completed_sets(snapshot, event_id);
     let restored_pending_results = snapshot
         .events
         .iter_mut()
@@ -3958,9 +4000,7 @@ fn normalize_completed_source_slots(event: &mut EventSnapshot) {
         .sets
         .iter()
         .filter(|set| {
-            !round_robin_set_ids.contains(&set.set_id)
-                && set.state == 3
-                && set.winner_id.is_some()
+            !round_robin_set_ids.contains(&set.set_id) && set.state == 3 && set.winner_id.is_some()
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -4366,10 +4406,8 @@ pub fn list_local_snapshot_events(
         }
     }
 
-    let needs_graph_fallback = items.is_empty()
-        || items
-            .values()
-            .any(|item| item.tournament_name == item.slug);
+    let needs_graph_fallback =
+        items.is_empty() || items.values().any(|item| item.tournament_name == item.slug);
     if needs_graph_fallback {
         for entry in fs::read_dir(&dir)
             .map_err(|e| format!("保存済みスナップショット一覧の取得に失敗しました: {e}"))?
@@ -4602,9 +4640,7 @@ fn is_slot_empty(slot: &crate::models::SetSlotSnapshot) -> bool {
     slot.entrant_id.is_none() || slot.entrant_name.trim().eq_ignore_ascii_case("tbd")
 }
 
-fn hidden_pipe_source_slot_indexes(
-    set: &crate::models::SetSnapshot,
-) -> Option<Vec<usize>> {
+fn hidden_pipe_source_slot_indexes(set: &crate::models::SetSnapshot) -> Option<Vec<usize>> {
     let sources = [set.entrant1_source.as_ref(), set.entrant2_source.as_ref()];
     let meaningful_slots = sources
         .into_iter()
@@ -4762,13 +4798,14 @@ fn rewrite_intermediate_source(
 
     source_value.resolved_set_id = Some(resolved_set_id.clone());
     source_value.condition = Some(relation.clone());
-    source_value.placeholder_name = sets_by_id
-        .get(resolved_set_id.as_str())
-        .and_then(|candidate| match relation.as_str() {
-            "winner" => candidate.winner_progression_seed_placeholder_name.clone(),
-            "loser" => candidate.loser_progression_seed_placeholder_name.clone(),
-            _ => None,
-        });
+    source_value.placeholder_name =
+        sets_by_id
+            .get(resolved_set_id.as_str())
+            .and_then(|candidate| match relation.as_str() {
+                "winner" => candidate.winner_progression_seed_placeholder_name.clone(),
+                "loser" => candidate.loser_progression_seed_placeholder_name.clone(),
+                _ => None,
+            });
     source_value.condition_string = Some(format!("{relation} of {set_name}"));
 }
 
@@ -4823,18 +4860,15 @@ fn progression_candidate_for_target<'a>(
         }
 
         if let Some(candidates) = same_group_candidates {
-            if let Some(candidate) = candidates
-                .iter()
-                .find(|(candidate, relation)| {
-                    is_losers_set(candidate) != is_losers_set(target)
-                        && winners_to_losers_round_match(
-                            candidate,
-                            target,
-                            relation,
-                            winners_to_losers_rounds_by_group,
-                        ) == Some(true)
-                })
-            {
+            if let Some(candidate) = candidates.iter().find(|(candidate, relation)| {
+                is_losers_set(candidate) != is_losers_set(target)
+                    && winners_to_losers_round_match(
+                        candidate,
+                        target,
+                        relation,
+                        winners_to_losers_rounds_by_group,
+                    ) == Some(true)
+            }) {
                 return Some(*candidate);
             }
             if let Some(candidate) = candidates.iter().find(|(candidate, relation)| {
@@ -5073,8 +5107,8 @@ fn winners_to_losers_round_match(
         return None;
     }
 
-    let destination_rounds = winners_to_losers_rounds_by_group
-        .get(&graph_phase_group_key(source))?;
+    let destination_rounds =
+        winners_to_losers_rounds_by_group.get(&graph_phase_group_key(source))?;
     if let Some(destination_rounds) = destination_rounds.get(&source_round) {
         if destination_rounds.len() == 1 {
             return Some(destination_rounds.contains(&target_round));
@@ -5303,9 +5337,10 @@ fn is_inactive_grand_final_reset_set(
     }) else {
         return true;
     };
-    !grand_final.winner_id.as_deref().is_some_and(|winner_id| {
-        winner_is_from_losers_side(event, grand_final, winner_id)
-    })
+    !grand_final
+        .winner_id
+        .as_deref()
+        .is_some_and(|winner_id| winner_is_from_losers_side(event, grand_final, winner_id))
 }
 
 fn move_entrant_slot_first(slots: &mut [crate::models::SetSlotSnapshot], entrant_id: &str) -> bool {
@@ -5747,27 +5782,26 @@ fn build_api_tbd_source_labels(event: &EventSnapshot) -> HashMap<String, String>
             let Some(source) = entrant_source_for_slot(set, slot_index) else {
                 continue;
             };
-            let source_label = source_set_id_and_code_from_api_source(
-                source,
-                &set_display_code_by_id,
-            )
-            .map(|(source_set_id, source_set_code)| {
-                let kind = if target_is_losers {
-                    // Losers側は「Winners由来なら loser of / Losers由来なら winner of」を優先する。
-                    let source_is_losers = source_is_losers_by_set_id
-                        .get(&source_set_id)
-                        .copied()
-                        .unwrap_or(false);
-                    if source_is_losers {
-                        "winner"
-                    } else {
-                        "loser"
-                    }
-                } else {
-                    source_kind_from_api_source(source).unwrap_or("winner")
-                };
-                normalize_source_text(kind, &source_set_code)
-            });
+            let source_label =
+                source_set_id_and_code_from_api_source(source, &set_display_code_by_id).map(
+                    |(source_set_id, source_set_code)| {
+                        let kind = if target_is_losers {
+                            // Losers側は「Winners由来なら loser of / Losers由来なら winner of」を優先する。
+                            let source_is_losers = source_is_losers_by_set_id
+                                .get(&source_set_id)
+                                .copied()
+                                .unwrap_or(false);
+                            if source_is_losers {
+                                "winner"
+                            } else {
+                                "loser"
+                            }
+                        } else {
+                            source_kind_from_api_source(source).unwrap_or("winner")
+                        };
+                        normalize_source_text(kind, &source_set_code)
+                    },
+                );
             let placeholder_name = source
                 .placeholder_name
                 .as_deref()
@@ -6148,16 +6182,13 @@ impl SourceRelationLookup {
 }
 
 fn is_round_robin_set_in_event(event: &EventSnapshot, set: &crate::models::SetSnapshot) -> bool {
-    event
-        .phase_groups
-        .iter()
-        .any(|group| {
-            group.phase_group_id == set.phase_group_id.as_deref().unwrap_or_default()
-                && group
-                    .bracket_type
-                    .as_deref()
-                    .is_some_and(|bracket_type| bracket_type.eq_ignore_ascii_case("ROUND_ROBIN"))
-        })
+    event.phase_groups.iter().any(|group| {
+        group.phase_group_id == set.phase_group_id.as_deref().unwrap_or_default()
+            && group
+                .bracket_type
+                .as_deref()
+                .is_some_and(|bracket_type| bracket_type.eq_ignore_ascii_case("ROUND_ROBIN"))
+    })
 }
 
 #[cfg(test)]
@@ -6641,7 +6672,11 @@ fn is_completed_round_robin_group(
     event_id: &str,
     set_id: &str,
 ) -> bool {
-    let Some(event) = snapshot.events.iter().find(|event| event.event_id == event_id) else {
+    let Some(event) = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+    else {
         return false;
     };
     let Some(target_set) = event.sets.iter().find(|set| set.set_id == set_id) else {
@@ -6740,9 +6775,12 @@ fn apply_completed_round_robin_progression(
         if set.slots.len() == 2 {
             let first = &set.slots[0];
             let second = &set.slots[1];
-            if let (Some(first_id), Some(second_id), Some(first_score), Some(second_score)) =
-                (&first.entrant_id, &second.entrant_id, first.score, second.score)
-            {
+            if let (Some(first_id), Some(second_id), Some(first_score), Some(second_score)) = (
+                &first.entrant_id,
+                &second.entrant_id,
+                first.score,
+                second.score,
+            ) {
                 let first_score = round_robin_game_score_for_tiebreak(first_score);
                 let second_score = round_robin_game_score_for_tiebreak(second_score);
                 *game_wins.entry(first_id.clone()).or_insert(0.0) += first_score;
@@ -7053,7 +7091,13 @@ fn apply_local_progression(
     winner_id: &str,
     targets_by_source: &HashMap<String, Vec<ProgressionTarget>>,
 ) {
-    apply_local_progression_inner(snapshot, event_id, source_set_id, winner_id, targets_by_source);
+    apply_local_progression_inner(
+        snapshot,
+        event_id,
+        source_set_id,
+        winner_id,
+        targets_by_source,
+    );
 }
 
 fn apply_local_progression_incremental(
@@ -7063,7 +7107,13 @@ fn apply_local_progression_incremental(
     winner_id: &str,
     targets_by_source: &HashMap<String, Vec<ProgressionTarget>>,
 ) -> HashSet<String> {
-    apply_local_progression_inner(snapshot, event_id, source_set_id, winner_id, targets_by_source)
+    apply_local_progression_inner(
+        snapshot,
+        event_id,
+        source_set_id,
+        winner_id,
+        targets_by_source,
+    )
 }
 
 fn apply_local_progression_inner(
@@ -7196,9 +7246,7 @@ fn apply_indexed_progression_targets(
                     seed.entrant_id = Some(entrant_id.to_owned());
                     seed.entrant_name = Some(entrant_name.to_owned());
                 }
-                for &(dependent_set_index, dependent_slot_index) in
-                    &seed_target.dependent_slots
-                {
+                for &(dependent_set_index, dependent_slot_index) in &seed_target.dependent_slots {
                     let Some(dependent_set) = event.sets.get_mut(dependent_set_index) else {
                         continue;
                     };
@@ -7324,15 +7372,17 @@ fn has_result_or_pending_for_set_ids(
     event.sets.iter().any(|set| {
         set_ids.contains(&set.set_id)
             && (set.winner_id.is_some() || set.slots.iter().any(|slot| slot.score.is_some()))
-    }) || local_meta.pending_set_results.iter().any(|result| {
-        result.event_id == event.event_id && set_ids.contains(&result.set_id)
     }) || local_meta
-        .pending_grand_final_reset_results
+        .pending_set_results
         .iter()
-        .any(|result| {
-            result.event_id == event.event_id
-                && set_ids.contains(&result.source_grand_final_set_id)
-        })
+        .any(|result| result.event_id == event.event_id && set_ids.contains(&result.set_id))
+        || local_meta
+            .pending_grand_final_reset_results
+            .iter()
+            .any(|result| {
+                result.event_id == event.event_id
+                    && set_ids.contains(&result.source_grand_final_set_id)
+            })
 }
 
 fn phase_group_for_set<'a>(
@@ -7401,7 +7451,9 @@ fn round_robin_progression_seed_ids(
                                 == Some(source_group.phase_group_id.as_str())
                                 || normalize_group_key(
                                     seed.origin_phase_group_display_identifier.as_ref(),
-                                ) == normalize_group_key(source_group.display_identifier.as_ref()))
+                                ) == normalize_group_key(
+                                    source_group.display_identifier.as_ref(),
+                                ))
                             && seed.origin_placement == progression.origin_placement
                             && (progression.origin_order.is_none()
                                 || seed.origin_order == progression.origin_order)
@@ -7546,7 +7598,11 @@ pub fn clear_reset_set_results_from_snapshot(
     set_ids: &[String],
 ) {
     let set_ids = set_ids.iter().collect::<HashSet<_>>();
-    let Some(event) = snapshot.events.iter_mut().find(|event| event.event_id == event_id) else {
+    let Some(event) = snapshot
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == event_id)
+    else {
         return;
     };
 
@@ -7594,8 +7650,7 @@ pub fn list_affected_set_ids_for_reset(
         .find(|event| event.event_id == event_id)
         .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
 
-    collect_affected_reset_targets(&snapshot, event, source_set_id)
-        .map(|targets| targets.set_ids)
+    collect_affected_reset_targets(&snapshot, event, source_set_id).map(|targets| targets.set_ids)
 }
 
 pub fn reset_local_set_result_with_dependencies(
@@ -7644,11 +7699,7 @@ pub fn reset_local_set_result_with_dependencies(
             .filter_map(|slot| slot.entrant_id.clone())
             .collect::<HashSet<String>>();
 
-        clear_affected_progression_seeds(
-            event,
-            &reset_targets.seed_ids,
-            &mut invalid_entrant_ids,
-        );
+        clear_affected_progression_seeds(event, &reset_targets.seed_ids, &mut invalid_entrant_ids);
 
         for target_set_id in &affected_set_ids {
             let Some(set) = event
@@ -7746,6 +7797,7 @@ pub fn set_event_alias(
             last_selected_phase_group_name: None,
             event_management: None,
             score_edit_enabled_phase_group_ids: Vec::new(),
+            external_score_broadcast_phase_group_ids: Vec::new(),
             external_editors: Vec::new(),
             entrants: Vec::new(),
         });
@@ -7949,6 +8001,7 @@ pub fn save_local_meta(
             last_selected_phase_group_name: None,
             event_management: None,
             score_edit_enabled_phase_group_ids: Vec::new(),
+            external_score_broadcast_phase_group_ids: Vec::new(),
             external_editors: Vec::new(),
             entrants: Vec::new(),
         });
@@ -8088,6 +8141,7 @@ pub fn load_local_meta(
             last_selected_phase_group_name: None,
             event_management: None,
             score_edit_enabled_phase_group_ids: Vec::new(),
+            external_score_broadcast_phase_group_ids: Vec::new(),
             external_editors: Vec::new(),
             entrants: Vec::new(),
         });
@@ -8250,6 +8304,61 @@ pub fn upsert_local_set_result(
     app: &AppHandle,
     input: LocalSetResultInput,
 ) -> Result<TournamentWorkspace, String> {
+    upsert_local_set_result_inner(app, input, None)
+}
+
+pub fn apply_external_score_report(
+    app: &AppHandle,
+    input: ApplyExternalScoreReportInput,
+) -> Result<TournamentWorkspace, String> {
+    if !input.result.confirmed
+        || input.sender_name.trim().is_empty()
+        || input.sender_user_id.trim().len() != 8
+        || !input
+            .sender_user_id
+            .trim()
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+    {
+        return Err("外部報告の確定状態または送信者情報が不正です。".to_owned());
+    }
+    let winner_score = input
+        .result
+        .slot_scores
+        .iter()
+        .find(|score| score.entrant_id == input.result.winner_id)
+        .map(|score| score.score);
+    let other_scores = input
+        .result
+        .slot_scores
+        .iter()
+        .filter(|score| score.entrant_id != input.result.winner_id)
+        .collect::<Vec<_>>();
+    let valid_score_result = input.result.slot_scores.len() == 2
+        && other_scores.len() == 1
+        && winner_score.is_some_and(|score| {
+            if input.result.direct_win {
+                score == 0 && other_scores[0].score == 0
+            } else {
+                score >= 0 && (other_scores[0].score < 0 || score > other_scores[0].score)
+            }
+        });
+    if !valid_score_result {
+        return Err("外部報告のスコアまたは勝者が一致しません。".to_owned());
+    }
+    let authorization = (
+        input.phase_group_id,
+        input.sender_name,
+        input.sender_user_id,
+    );
+    upsert_local_set_result_inner(app, input.result, Some(authorization))
+}
+
+fn upsert_local_set_result_inner(
+    app: &AppHandle,
+    input: LocalSetResultInput,
+    external_report_authorization: Option<(String, String, String)>,
+) -> Result<TournamentWorkspace, String> {
     let started_at = Instant::now();
     if input.set_id.starts_with("preview_") {
         return Err(
@@ -8278,7 +8387,32 @@ pub fn upsert_local_set_result(
         );
     }
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
-    ensure_set_score_edit_enabled(&local_meta, &snapshot, &input.event_id, &input.set_id)?;
+    if let Some((phase_group_id, sender_name, sender_user_id)) = external_report_authorization {
+        let set_phase_group_id = snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == input.event_id)
+            .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
+            .and_then(|set| set.phase_group_id.as_deref())
+            .unwrap_or_default();
+        let event_meta = local_meta
+            .events
+            .iter()
+            .find(|event| event.event_id == input.event_id)
+            .ok_or_else(|| "外部報告の対象イベントメタが見つかりません。".to_owned())?;
+        if set_phase_group_id != phase_group_id
+            || !external_score_report_sender_is_authorized(
+                event_meta,
+                &phase_group_id,
+                &sender_name,
+                &sender_user_id,
+            )
+        {
+            return Err("外部報告の送信者または対象プールのロック状態が一致しません。".to_owned());
+        }
+    } else {
+        ensure_set_score_edit_enabled(&local_meta, &snapshot, &input.event_id, &input.set_id)?;
+    }
 
     let event_name = snapshot
         .events
@@ -8525,11 +8659,7 @@ pub fn upsert_local_set_result(
 
             local_meta.pending_set_results.retain(|result| {
                 !affected_set_ids.contains(&result.set_id)
-                    || pending_result_matches_snapshot_roster(
-                        &snapshot,
-                        &applied_event_id,
-                        result,
-                    )
+                    || pending_result_matches_snapshot_roster(&snapshot, &applied_event_id, result)
             });
             local_meta
                 .pending_grand_final_reset_results
@@ -8558,20 +8688,16 @@ pub fn upsert_local_set_result(
             !invalidated_set_ids.contains(&result.set_id)
                 || pending_result_matches_snapshot_roster(&snapshot, &applied_event_id, result)
         });
-        local_meta.pending_grand_final_reset_results.retain(|result| {
-            !invalidated_set_ids.contains(&result.source_grand_final_set_id)
-        });
+        local_meta
+            .pending_grand_final_reset_results
+            .retain(|result| !invalidated_set_ids.contains(&result.source_grand_final_set_id));
         local_meta
             .set_play_sides
             .retain(|side| !invalidated_set_ids.contains(&side.set_id));
     }
 
     save_local_meta(app, &applied_event_id, &local_meta)?;
-    cache_progression_snapshot(
-        &snapshot,
-        false,
-        should_rebuild_progression,
-    );
+    cache_progression_snapshot(&snapshot, false, should_rebuild_progression);
     save_event_graph_snapshot(app, &snapshot, &applied_event_id)?;
 
     storage_perf_log(|| {
@@ -9007,6 +9133,7 @@ pub fn upsert_local_player_meta(
             last_selected_phase_group_name: None,
             event_management: None,
             score_edit_enabled_phase_group_ids: Vec::new(),
+            external_score_broadcast_phase_group_ids: Vec::new(),
             external_editors: Vec::new(),
             entrants: Vec::new(),
         });
@@ -9142,6 +9269,7 @@ pub fn save_event_management_meta(
             last_selected_phase_group_name: None,
             event_management: None,
             score_edit_enabled_phase_group_ids: Vec::new(),
+            external_score_broadcast_phase_group_ids: Vec::new(),
             external_editors: Vec::new(),
             entrants: Vec::new(),
         });
@@ -9198,6 +9326,7 @@ pub fn set_phase_group_score_edit_lock(
                 last_selected_phase_group_name: None,
                 event_management: None,
                 score_edit_enabled_phase_group_ids: Vec::new(),
+                external_score_broadcast_phase_group_ids: Vec::new(),
                 external_editors: Vec::new(),
                 entrants: Vec::new(),
             });
@@ -9220,6 +9349,77 @@ pub fn set_phase_group_score_edit_lock(
         event_meta
             .score_edit_enabled_phase_group_ids
             .push(phase_group_id.to_owned());
+    }
+    local_meta.slug = input.slug;
+    local_meta.updated_at = Utc::now();
+    save_local_meta(app, &input.event_id, &local_meta)?;
+
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
+}
+
+pub fn set_phase_group_external_score_broadcast(
+    app: &AppHandle,
+    input: SetPhaseGroupExternalScoreBroadcastInput,
+) -> Result<TournamentWorkspace, String> {
+    let snapshot = load_event_snapshot(app, &input.slug, &input.event_id)?;
+    let phase_group_id = input.phase_group_id.trim();
+    if phase_group_id.is_empty()
+        || !snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == input.event_id)
+            .is_some_and(|event| {
+                event
+                    .phase_groups
+                    .iter()
+                    .any(|group| group.phase_group_id == phase_group_id)
+            })
+    {
+        return Err("指定プールがローカルsnapshotに見つかりません。".to_owned());
+    }
+
+    let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
+    let event_index = local_meta
+        .events
+        .iter()
+        .position(|event| event.event_id == input.event_id)
+        .unwrap_or_else(|| {
+            local_meta.events.push(EventLocalMeta {
+                event_id: input.event_id.clone(),
+                event_name: input.event_name.clone(),
+                event_alias: None,
+                last_selected_phase_name: None,
+                last_selected_phase_group_name: None,
+                event_management: None,
+                score_edit_enabled_phase_group_ids: Vec::new(),
+                external_score_broadcast_phase_group_ids: Vec::new(),
+                external_editors: Vec::new(),
+                entrants: Vec::new(),
+            });
+            local_meta.events.len() - 1
+        });
+    let event_meta = local_meta
+        .events
+        .get_mut(event_index)
+        .ok_or_else(|| "イベントメタの更新先を特定できませんでした。".to_owned())?;
+    event_meta.event_name = input.event_name;
+    if input.enabled {
+        if !event_meta
+            .external_score_broadcast_phase_group_ids
+            .iter()
+            .any(|enabled_id| enabled_id == phase_group_id)
+        {
+            event_meta
+                .external_score_broadcast_phase_group_ids
+                .push(phase_group_id.to_owned());
+        }
+    } else {
+        event_meta
+            .external_score_broadcast_phase_group_ids
+            .retain(|enabled_id| enabled_id != phase_group_id);
     }
     local_meta.slug = input.slug;
     local_meta.updated_at = Utc::now();
@@ -9271,6 +9471,7 @@ pub fn set_phase_group_external_editor(
                 last_selected_phase_group_name: None,
                 event_management: None,
                 score_edit_enabled_phase_group_ids: Vec::new(),
+                external_score_broadcast_phase_group_ids: Vec::new(),
                 external_editors: Vec::new(),
                 entrants: Vec::new(),
             });
@@ -9332,6 +9533,7 @@ pub fn set_event_last_phase_pool_selection(
             last_selected_phase_group_name: None,
             event_management: None,
             score_edit_enabled_phase_group_ids: Vec::new(),
+            external_score_broadcast_phase_group_ids: Vec::new(),
             external_editors: Vec::new(),
             entrants: Vec::new(),
         });
