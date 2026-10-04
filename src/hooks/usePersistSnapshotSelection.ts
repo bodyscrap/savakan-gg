@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
+import type { EventSnapshot } from "../domain/bracketDisplay";
 import { sameSnapshotEventKey } from "../domain/snapshotDisplay";
 import {
   buildSnapshotSelectionPersistenceKey,
@@ -13,7 +14,7 @@ import {
 
 type UsePersistSnapshotSelectionOptions = {
   snapshot: { slug: string } | null;
-  selectedEvent: { eventId: string; name: string } | null;
+  selectedEvent: EventSnapshot | null;
   selectedMessageScope: { phaseName: string; phaseGroupName: string } | null;
   selectedPhaseName: string;
   selectedPhasePoolKey: string;

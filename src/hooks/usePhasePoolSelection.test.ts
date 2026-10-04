@@ -13,9 +13,13 @@ describe("phase and pool selection", () => {
   });
 
   it("keeps a valid pool key, falls back to the first key, or clears an empty list", () => {
-    const groups = [{ key: "phase::pool-a" }, { key: "phase::pool-b" }] as PhasePoolGroup[];
-    expect(resolveSelectedPhasePoolKey(groups, "phase::pool-b")).toBe("phase::pool-b");
-    expect(resolveSelectedPhasePoolKey(groups, "missing")).toBe("phase::pool-a");
+    const groups = [
+      { key: "id:pool-a", phaseName: "phase", phaseGroupName: "pool-a" },
+      { key: "id:pool-b", phaseName: "phase", phaseGroupName: "pool-b" },
+    ] as PhasePoolGroup[];
+    expect(resolveSelectedPhasePoolKey(groups, "id:pool-b")).toBe("id:pool-b");
+    expect(resolveSelectedPhasePoolKey(groups, "phase::pool-b")).toBe("id:pool-b");
+    expect(resolveSelectedPhasePoolKey(groups, "missing")).toBe("id:pool-a");
     expect(resolveSelectedPhasePoolKey([], "phase::pool-a")).toBe("");
   });
 });

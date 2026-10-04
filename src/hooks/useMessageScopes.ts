@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { EventSnapshot } from "../domain/bracketDisplay";
-import { parsePhasePoolKey, type MessageScope } from "../domain/messageUtils";
+import type { MessageScope } from "../domain/messageUtils";
+import { resolveSelectedPhasePoolNames } from "../domain/snapshotSelectionPersistence";
 import type { TournamentSnapshot } from "./useTournamentWorkspace";
 
 type UseMessageScopesOptions = {
@@ -21,16 +22,18 @@ export function useMessageScopes({
       return null;
     }
 
-    const parsedPhasePool = parsePhasePoolKey(selectedPhasePoolKey);
-    const selectedPhase = parsedPhasePool?.phaseName ?? selectedPhaseName.trim();
-    const selectedPhaseGroup = parsedPhasePool?.phaseGroupName ?? "";
+    const { phaseName, phaseGroupName } = resolveSelectedPhasePoolNames(
+      selectedEvent,
+      selectedPhaseName,
+      selectedPhasePoolKey,
+    );
 
     return {
       tournamentId: snapshot.tournamentId,
       slug: snapshot.slug,
       eventId: selectedEvent.eventId,
-      phaseName: selectedPhase,
-      phaseGroupName: selectedPhaseGroup,
+      phaseName,
+      phaseGroupName,
     };
   }, [selectedEvent, selectedPhaseName, selectedPhasePoolKey, snapshot]);
 

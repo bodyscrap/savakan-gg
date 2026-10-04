@@ -1,5 +1,20 @@
+import { buildPhasePoolGroups, type EventSnapshot } from "./bracketDisplay";
 import { parsePhasePoolKey } from "./messageUtils";
 import { toSlugInput } from "./slugUtils";
+
+export function resolveSelectedPhasePoolNames(
+  selectedEvent: EventSnapshot,
+  selectedPhaseName: string,
+  selectedPhasePoolKey: string,
+) {
+  const selectedGroup = buildPhasePoolGroups(selectedEvent)
+    .find((group) => group.key === selectedPhasePoolKey);
+  const parsed = parsePhasePoolKey(selectedPhasePoolKey);
+  return {
+    phaseName: (selectedGroup?.phaseName ?? parsed?.phaseName ?? selectedPhaseName).trim(),
+    phaseGroupName: (selectedGroup?.phaseGroupName ?? parsed?.phaseGroupName ?? "").trim(),
+  };
+}
 
 export function buildSnapshotSelectionPersistenceKey(
   slug: string,
@@ -18,13 +33,15 @@ export function buildSnapshotSelectionPersistenceKey(
 
 export function resolveEventPhasePoolPersistence(
   snapshot: { slug: string },
-  selectedEvent: { eventId: string; name: string },
+  selectedEvent: EventSnapshot,
   selectedPhaseName: string,
   selectedPhasePoolKey: string,
 ) {
-  const parsed = parsePhasePoolKey(selectedPhasePoolKey);
-  const phaseName = (parsed?.phaseName ?? selectedPhaseName).trim();
-  const phaseGroupName = (parsed?.phaseGroupName ?? "").trim();
+  const { phaseName, phaseGroupName } = resolveSelectedPhasePoolNames(
+    selectedEvent,
+    selectedPhaseName,
+    selectedPhasePoolKey,
+  );
   if (phaseName === "" || phaseGroupName === "") {
     return null;
   }

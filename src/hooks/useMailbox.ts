@@ -6,6 +6,7 @@ import {
   extractCallTargetIdentityFromMeta,
   extractCallThreadIdentity,
   getExternalEditRequest,
+  getExternalScoreReport,
   hasSameGenericMessageOrder,
   isLikelyPlayerId,
   isMessageForScope,
@@ -219,6 +220,36 @@ export function useMailbox({
       return next.length === current.length ? current : next;
     });
   }, [genericMessages, genericMessagesReady, mailboxReadMessageIdsReady]);
+
+  useEffect(() => {
+    if (!genericMessagesReady || !mailboxReadMessageIdsReady) {
+      return;
+    }
+
+    const externalScoreReportThreadIds = new Set(
+      genericMessages
+        .filter((message) => getExternalScoreReport(message) !== null)
+        .map((message) => message.threadId),
+    );
+    const incomingReportThreadMessageIds = genericMessages
+      .filter((message) => externalScoreReportThreadIds.has(message.threadId)
+        && message.senderUserId !== senderProfile.senderUserId)
+      .map((message) => message.messageId);
+    if (incomingReportThreadMessageIds.length === 0) {
+      return;
+    }
+
+    setMailboxReadMessageIds((current) => {
+      const next = new Set(current);
+      incomingReportThreadMessageIds.forEach((messageId) => next.add(messageId));
+      return next.size === current.length ? current : [...next];
+    });
+  }, [
+    genericMessages,
+    genericMessagesReady,
+    mailboxReadMessageIdsReady,
+    senderProfile.senderUserId,
+  ]);
 
   useEffect(() => {
     if (!senderProfileReady) {
