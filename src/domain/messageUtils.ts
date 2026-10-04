@@ -87,6 +87,17 @@ export type CallTargetIdentity = {
   playerId: string;
 };
 
+export type ExternalEditRequest = {
+  tournamentId: string;
+  slug: string;
+  eventId: string;
+  eventName: string;
+  phaseName: string;
+  phaseGroupId: string;
+  phaseGroupName: string;
+  phaseGroupDisplayIdentifier: string | null;
+};
+
 export type CallSyncStatusTarget = {
   threadId: string;
   senderUserId: string;
@@ -175,6 +186,54 @@ export function normalizeGenericMessages(rawValue: unknown): GenericMessage[] {
     .map((item) => normalizeGenericMessage(item))
     .filter((item): item is GenericMessage => item !== null)
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+}
+
+export function getExternalEditRequest(message: GenericMessage): ExternalEditRequest | null {
+  const meta = message.messageMeta;
+  if (
+    message.messageType !== "normal"
+    || message.parentMessageId !== null
+    || message.method !== "external_edit_request"
+    || !meta
+    || meta.externalEditRequest !== true
+  ) {
+    return null;
+  }
+
+  const readText = (key: string) => (
+    typeof meta[key] === "string" ? (meta[key] as string).trim() : ""
+  );
+  const request = {
+    tournamentId: readText("externalEditTournamentId"),
+    slug: readText("externalEditSlug"),
+    eventId: readText("externalEditEventId"),
+    eventName: readText("externalEditEventName"),
+    phaseName: readText("externalEditPhaseName"),
+    phaseGroupId: readText("externalEditPhaseGroupId"),
+    phaseGroupName: readText("externalEditPhaseGroupName"),
+    phaseGroupDisplayIdentifier: readText("externalEditPhaseGroupDisplayIdentifier") || null,
+  };
+  const senderName = readText("externalEditorName");
+  const senderUserId = readText("externalEditorSenderUserId");
+
+  if (
+    [
+      request.tournamentId,
+      request.slug,
+      request.eventId,
+      request.eventName,
+      request.phaseName,
+      request.phaseGroupId,
+      request.phaseGroupName,
+    ].some((value) => value === "")
+    || senderName !== message.senderName
+    || senderUserId !== message.senderUserId
+    || !isValidSenderUserId(senderUserId)
+  ) {
+    return null;
+  }
+
+  return request;
 }
 
 export function hasSameGenericMessageOrder(left: GenericMessage[], right: GenericMessage[]): boolean {

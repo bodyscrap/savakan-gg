@@ -16,9 +16,10 @@ use crate::models::{
     LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetResultMeta,
     LocalSetScoreMeta, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
     MobileResultRequestInput, MobileResultRequestItem, PhaseGroupGraphSeedSnapshot,
-    PhaseGroupSeedSnapshot, SaveEventManagementMetaInput, SenderProfile, SetPlaySideMeta,
-    SetSnapshot,
-    TournamentEventPreviewItem, TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
+    PhaseGroupExternalEditor, PhaseGroupSeedSnapshot, SaveEventManagementMetaInput, SenderProfile,
+    SetPhaseGroupExternalEditorInput, SetPhaseGroupScoreEditLockInput, SetPlaySideMeta,
+    SetSnapshot, TournamentEventPreviewItem, TournamentLocalMeta, TournamentSnapshot,
+    TournamentWorkspace,
 };
 
 const STORAGE_DIR_NAME: &str = "savakan-gg";
@@ -248,6 +249,8 @@ fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
             event_management: None,
+            score_edit_enabled_phase_group_ids: Vec::new(),
+            external_editors: Vec::new(),
             entrants: Vec::new(),
         }],
         set_play_sides: Vec::new(),
@@ -537,6 +540,167 @@ fn result_entrant_ids_match_set_roster(
             .all(|entrant_id| entrant_ids.contains(entrant_id.as_str()))
 }
 
+fn phase_group_id_for_set<'a>(event: &'a EventSnapshot, set_id: &str) -> Option<&'a str> {
+    let source_set_id = source_grand_final_set_id_from_virtual_reset_set_id(set_id)
+        .unwrap_or_else(|| set_id.to_owned());
+    let set = event.sets.iter().find(|set| set.set_id == source_set_id)?;
+
+    let phase_group = set
+        .phase_group_id
+        .as_deref()
+        .and_then(|phase_group_id| {
+            event
+                .phase_groups
+                .iter()
+                .find(|group| group.phase_group_id == phase_group_id)
+        })
+        .or_else(|| {
+            event.phase_groups.iter().find(|group| {
+                group.phase_order == set.phase_order
+                    && group.display_identifier == set.phase_group_display_identifier
+            })
+        })
+        .or_else(|| {
+            event.phase_groups.iter().find(|group| {
+                group.phase_name == set.phase_name
+                    && group.display_identifier == set.phase_group_display_identifier
+            })
+        })?;
+
+    Some(phase_group.phase_group_id.as_str())
+}
+
+fn score_edit_enabled_for_phase_group(
+    event_meta: Option<&EventLocalMeta>,
+    phase_group_id: &str,
+) -> bool {
+    event_meta.is_some_and(|meta| {
+        meta.score_edit_enabled_phase_group_ids
+            .iter()
+            .any(|enabled_id| enabled_id == phase_group_id)
+    })
+}
+
+#[cfg(test)]
+mod score_edit_lock_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_event_meta_defaults_to_locked_and_only_explicitly_unlocked_pools_allow_scores() {
+        let legacy_meta: EventLocalMeta = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "eventName": "Event",
+            "entrants": []
+        }))
+        .expect("legacy event metadata should deserialize");
+        assert!(legacy_meta.score_edit_enabled_phase_group_ids.is_empty());
+        assert!(!score_edit_enabled_for_phase_group(
+            Some(&legacy_meta),
+            "pool-a"
+        ));
+
+        let mut updated_meta = legacy_meta;
+        updated_meta
+            .score_edit_enabled_phase_group_ids
+            .push("pool-a".to_owned());
+        assert!(score_edit_enabled_for_phase_group(
+            Some(&updated_meta),
+            "pool-a"
+        ));
+        assert!(!score_edit_enabled_for_phase_group(
+            Some(&updated_meta),
+            "pool-b"
+        ));
+    }
+
+    #[test]
+    fn set_lock_is_scoped_to_its_phase_group() {
+        let snapshot: TournamentSnapshot = serde_json::from_value(serde_json::json!({
+            "tournamentId": "tournament",
+            "slug": "tournament/slug",
+            "name": "Tournament",
+            "events": [{
+                "eventId": "event",
+                "name": "Event",
+                "phaseGroups": [
+                    { "phaseGroupId": "pool-a" },
+                    { "phaseGroupId": "pool-b" }
+                ],
+                "sets": [
+                    { "setId": "set-a", "phaseGroupId": "pool-a", "fullRoundText": "Round 1", "state": 1, "slots": [] },
+                    { "setId": "set-b", "phaseGroupId": "pool-b", "fullRoundText": "Round 1", "state": 1, "slots": [] }
+                ]
+            }],
+            "updatedAt": "2026-10-04T00:00:00Z"
+        }))
+        .expect("snapshot should deserialize");
+        let mut local_meta = build_empty_meta("tournament/slug", "event");
+        let workspace = TournamentWorkspace {
+            snapshot,
+            local_meta: local_meta.clone(),
+        };
+        assert!(is_set_score_edit_locked(&workspace, "event", "set-a"));
+
+        local_meta.events[0]
+            .score_edit_enabled_phase_group_ids
+            .push("pool-a".to_owned());
+        let workspace = TournamentWorkspace {
+            snapshot: workspace.snapshot,
+            local_meta,
+        };
+        assert!(!is_set_score_edit_locked(&workspace, "event", "set-a"));
+        assert!(is_set_score_edit_locked(&workspace, "event", "set-b"));
+    }
+}
+
+pub fn is_set_score_edit_locked(
+    workspace: &TournamentWorkspace,
+    event_id: &str,
+    set_id: &str,
+) -> bool {
+    let Some(event) = workspace
+        .snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+    else {
+        return true;
+    };
+    let Some(phase_group_id) = phase_group_id_for_set(event, set_id) else {
+        return true;
+    };
+    let event_meta = workspace
+        .local_meta
+        .events
+        .iter()
+        .find(|meta| meta.event_id == event_id);
+
+    !score_edit_enabled_for_phase_group(event_meta, phase_group_id)
+}
+
+fn ensure_set_score_edit_enabled(
+    local_meta: &TournamentLocalMeta,
+    snapshot: &TournamentSnapshot,
+    event_id: &str,
+    set_id: &str,
+) -> Result<(), String> {
+    let event = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
+    let phase_group_id = phase_group_id_for_set(event, set_id)
+        .ok_or_else(|| "プールを特定できないためスコアを変更できません。".to_owned())?;
+    let event_meta = local_meta
+        .events
+        .iter()
+        .find(|meta| meta.event_id == event_id);
+    if !score_edit_enabled_for_phase_group(event_meta, phase_group_id) {
+        return Err("このプールは編集ロック中のため、スコアを変更できません。".to_owned());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "storage/tests/result_entrant_roster_tests.rs"]
 mod result_entrant_roster_tests;
@@ -569,11 +733,15 @@ fn merge_snapshot_into_meta(
             phase_groups: Vec::new(),
             sets: Vec::new(),
         });
+    let mut set_by_id = HashMap::with_capacity(event.sets.len());
+    for set in &event.sets {
+        set_by_id.entry(set.set_id.as_str()).or_insert(set);
+    }
     meta.pending_set_results.retain(|pending| {
         if pending.event_id != event_id {
             return true;
         }
-        let Some(set) = event.sets.iter().find(|set| set.set_id == pending.set_id) else {
+        let Some(set) = set_by_id.get(pending.set_id.as_str()) else {
             return false;
         };
         let score_entrant_ids = pending
@@ -598,6 +766,8 @@ fn merge_snapshot_into_meta(
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
             event_management: None,
+            score_edit_enabled_phase_group_ids: Vec::new(),
+            external_editors: Vec::new(),
             entrants: Vec::new(),
         });
         meta.events.len().saturating_sub(1)
@@ -611,6 +781,12 @@ fn merge_snapshot_into_meta(
 
     let mut seen_entrant_ids = HashSet::new();
     let mut valid_set_slot_keys = HashSet::new();
+    let mut entrant_index_by_id = HashMap::with_capacity(event_meta.entrants.len());
+    for (index, entrant) in event_meta.entrants.iter().enumerate() {
+        entrant_index_by_id
+            .entry(entrant.entrant_id.clone())
+            .or_insert(index);
+    }
 
     for set in &event.sets {
         let set_id = set.set_id.clone();
@@ -628,15 +804,12 @@ fn merge_snapshot_into_meta(
                 continue;
             }
 
-            if let Some(existing) = event_meta
-                .entrants
-                .iter_mut()
-                .find(|item| item.entrant_id == *entrant_id)
-            {
-                existing.entrant_name = slot.entrant_name.clone();
+            if let Some(existing_index) = entrant_index_by_id.get(entrant_id).copied() {
+                event_meta.entrants[existing_index].entrant_name = slot.entrant_name.clone();
                 continue;
             }
 
+            let entrant_index = event_meta.entrants.len();
             event_meta.entrants.push(EventEntrantMeta {
                 entrant_id: entrant_id.clone(),
                 entrant_name: slot.entrant_name.clone(),
@@ -646,6 +819,7 @@ fn merge_snapshot_into_meta(
                 auth_code: derive_auth_code(&snapshot.slug, &event.event_id, entrant_id),
                 notes: None,
             });
+            entrant_index_by_id.insert(entrant_id.clone(), entrant_index);
         }
     }
 
@@ -3416,6 +3590,16 @@ fn build_progression_targets_by_source(
 fn rebuild_progression_from_completed_sets(
     snapshot: &mut TournamentSnapshot,
 ) -> HashSet<(String, String)> {
+    struct CompletedSet {
+        event_index: usize,
+        set_index: usize,
+        event_id: String,
+        set_id: String,
+        phase_index: Option<usize>,
+        winner_id: String,
+        is_round_robin: bool,
+    }
+
     let started_at = Instant::now();
     let event_count = snapshot.events.len();
     let set_count = snapshot
@@ -3467,37 +3651,38 @@ fn rebuild_progression_from_completed_sets(
             })
         })
         .collect::<HashMap<_, _>>();
-    let mut completed_sets = snapshot
-        .events
-        .iter()
-        .flat_map(|event| {
-            event.sets.iter().filter_map(|set| {
-                set.winner_id.as_ref().map(|winner_id| {
-                    (
-                        event.event_id.clone(),
-                        set.set_id.clone(),
-                        set.phase_order.unwrap_or(i64::MAX),
-                        winner_id.clone(),
-                    )
-                })
-            })
-        })
-        .collect::<Vec<_>>();
+    let mut completed_sets = Vec::new();
+    for (event_index, event) in snapshot.events.iter().enumerate() {
+        for (set_index, set) in event.sets.iter().enumerate() {
+            let Some(winner_id) = set.winner_id.as_ref() else {
+                continue;
+            };
+            completed_sets.push(CompletedSet {
+                event_index,
+                set_index,
+                event_id: event.event_id.clone(),
+                set_id: set.set_id.clone(),
+                phase_index: crate::models::phase_sequence_index_for_set(event, set),
+                winner_id: winner_id.clone(),
+                is_round_robin: set.state == 3 && is_round_robin_set(snapshot, &event.event_id, set),
+            });
+        }
+    }
     let completed_set_count = completed_sets.len();
-    completed_sets.sort_by_key(|item| {
-        snapshot
-            .events
-            .iter()
-            .find_map(|event| {
-                if event.event_id != item.0 {
-                    return None;
-                }
-                let set = event.sets.iter().find(|set| set.set_id == item.1)?;
-                crate::models::phase_sequence_index_for_set(event, set)
-            })
+    completed_sets.sort_by_key(|set| {
+        set.phase_index
             .map(|index| (false, index))
             .unwrap_or((true, usize::MAX))
     });
+    let mut completed_set_indices_by_phase = HashMap::<(usize, usize), Vec<usize>>::new();
+    for (completed_index, set) in completed_sets.iter().enumerate() {
+        if let Some(phase_index) = set.phase_index {
+            completed_set_indices_by_phase
+                .entry((set.event_index, phase_index))
+                .or_default()
+                .push(completed_index);
+        }
+    }
 
     for event in &mut snapshot.events {
         reset_derived_progression_sets(event);
@@ -3530,122 +3715,118 @@ fn rebuild_progression_from_completed_sets(
                 .map(|(phase_index, _)| (event.event_id.clone(), phase_index))
         })
         .collect::<Vec<_>>();
-    let mut replayed_completed_sets = HashSet::new();
+    let mut replayed_completed_sets = HashSet::<(usize, usize)>::new();
     let mut replayed_round_robin_groups = HashSet::new();
+    let mut event_indices_by_id = HashMap::with_capacity(snapshot.events.len());
+    for (index, event) in snapshot.events.iter().enumerate() {
+        event_indices_by_id
+            .entry(event.event_id.clone())
+            .or_insert(index);
+    }
+    let mut round_robin_groups_by_phase = HashMap::<(usize, usize), Vec<String>>::new();
+    for (event_id, group_key) in &round_robin_groups {
+        let Some(event_index) = event_indices_by_id.get(event_id).copied() else {
+            continue;
+        };
+        let event = &snapshot.events[event_index];
+        let Some(set) = event
+            .sets
+            .iter()
+            .find(|set| phase_group_key(set) == *group_key)
+        else {
+            continue;
+        };
+        if let Some(phase_index) = crate::models::phase_sequence_index_for_set(event, set) {
+            round_robin_groups_by_phase
+                .entry((event_index, phase_index))
+                .or_default()
+                .push(group_key.clone());
+        }
+    }
 
     for (event_id, phase_index) in phase_steps {
-        for (completed_event_id, set_id, _, winner_id) in &completed_sets {
-            if completed_event_id != &event_id {
-                continue;
-            }
-            let set_phase_index = snapshot
-                .events
-                .iter()
-                .find(|event| event.event_id == event_id)
-                .and_then(|event| event.sets.iter().find(|set| set.set_id == *set_id))
-                .and_then(|set| {
-                    snapshot
-                        .events
-                        .iter()
-                        .find(|event| event.event_id == event_id)
-                        .and_then(|event| crate::models::phase_sequence_index_for_set(event, set))
-                });
-            if set_phase_index != Some(phase_index) {
-                continue;
-            }
-            replayed_completed_sets.insert((event_id.clone(), set_id.clone()));
+        let Some(event_index) = event_indices_by_id.get(&event_id).copied() else {
+            continue;
+        };
+        if let Some(completed_indices) =
+            completed_set_indices_by_phase.get(&(event_index, phase_index))
+        {
+            for completed_index in completed_indices {
+                let completed = &completed_sets[*completed_index];
+                replayed_completed_sets.insert((completed.event_index, completed.set_index));
 
-            let is_still_completed = snapshot
-                .events
-                .iter()
-                .find(|event| event.event_id == event_id)
-                .and_then(|event| event.sets.iter().find(|set| set.set_id == *set_id))
-                .is_some_and(|set| {
-                    set.state == 3 && set.winner_id.as_deref() == Some(winner_id.as_str())
-                });
-            if !is_still_completed {
-                continue;
-            }
+                let is_still_completed = snapshot
+                    .events
+                    .get(completed.event_index)
+                    .and_then(|event| event.sets.get(completed.set_index))
+                    .is_some_and(|set| {
+                        set.state == 3
+                            && set.winner_id.as_deref() == Some(completed.winner_id.as_str())
+                    });
+                if !is_still_completed {
+                    continue;
+                }
 
-            let is_round_robin = snapshot
-                .events
-                .iter()
-                .find(|event| event.event_id == event_id)
-                .and_then(|event| event.sets.iter().find(|set| set.set_id == *set_id))
-                .is_some_and(|set| is_round_robin_set(snapshot, &event_id, set));
-            if !is_round_robin {
-                if let Some(targets_by_source) = progression_targets_by_event.get(&event_id) {
-                    apply_local_progression(
-                        snapshot,
-                        &event_id,
-                        set_id,
-                        winner_id,
-                        targets_by_source,
-                    );
+                if !completed.is_round_robin {
+                    if let Some(targets_by_source) =
+                        progression_targets_by_event.get(&completed.event_id)
+                    {
+                        apply_local_progression(
+                            snapshot,
+                            &completed.event_id,
+                            &completed.set_id,
+                            &completed.winner_id,
+                            targets_by_source,
+                        );
+                    }
                 }
             }
         }
 
-        for (group_event_id, group_key) in &round_robin_groups {
-            if group_event_id != &event_id {
-                continue;
+        if let Some(group_keys) = round_robin_groups_by_phase.get(&(event_index, phase_index)) {
+            for group_key in group_keys {
+                replayed_round_robin_groups.insert((event_id.clone(), group_key.clone()));
+                let mut invalidated_group_set_ids = HashSet::new();
+                apply_completed_round_robin_progression(
+                    snapshot,
+                    &event_id,
+                    group_key,
+                    &mut invalidated_group_set_ids,
+                );
+                invalidated_result_set_ids.extend(
+                    invalidated_group_set_ids
+                        .into_iter()
+                        .map(|set_id| (event_id.clone(), set_id)),
+                );
             }
-            let group_phase_index = snapshot
-                .events
-                .iter()
-                .find(|event| event.event_id == event_id)
-                .and_then(|event| {
-                    event
-                        .sets
-                        .iter()
-                        .find(|set| phase_group_key(set) == *group_key)
-                        .and_then(|set| {
-                            crate::models::phase_sequence_index_for_set(event, set)
-                        })
-                });
-            if group_phase_index != Some(phase_index) {
-                continue;
-            }
-            replayed_round_robin_groups.insert((event_id.clone(), group_key.clone()));
-            let mut invalidated_group_set_ids = HashSet::new();
-            apply_completed_round_robin_progression(
-                snapshot,
-                &event_id,
-                group_key,
-                &mut invalidated_group_set_ids,
-            );
-            invalidated_result_set_ids.extend(
-                invalidated_group_set_ids
-                    .into_iter()
-                    .map(|set_id| (event_id.clone(), set_id)),
-            );
         }
     }
 
-    for (event_id, set_id, _, winner_id) in &completed_sets {
-        if replayed_completed_sets.contains(&(event_id.clone(), set_id.clone())) {
+    for completed in &completed_sets {
+        if replayed_completed_sets.contains(&(completed.event_index, completed.set_index)) {
             continue;
         }
         let is_still_completed = snapshot
             .events
-            .iter()
-            .find(|event| event.event_id == *event_id)
-            .and_then(|event| event.sets.iter().find(|set| set.set_id == *set_id))
+            .get(completed.event_index)
+            .and_then(|event| event.sets.get(completed.set_index))
             .is_some_and(|set| {
-                set.state == 3 && set.winner_id.as_deref() == Some(winner_id.as_str())
+                set.state == 3 && set.winner_id.as_deref() == Some(completed.winner_id.as_str())
             });
         if !is_still_completed {
             continue;
         }
-        let is_round_robin = snapshot
-            .events
-            .iter()
-            .find(|event| event.event_id == *event_id)
-            .and_then(|event| event.sets.iter().find(|set| set.set_id == *set_id))
-            .is_some_and(|set| is_round_robin_set(snapshot, event_id, set));
-        if !is_round_robin {
-            if let Some(targets_by_source) = progression_targets_by_event.get(event_id) {
-                apply_local_progression(snapshot, event_id, set_id, winner_id, targets_by_source);
+        if !completed.is_round_robin {
+            if let Some(targets_by_source) =
+                progression_targets_by_event.get(&completed.event_id)
+            {
+                apply_local_progression(
+                    snapshot,
+                    &completed.event_id,
+                    &completed.set_id,
+                    &completed.winner_id,
+                    targets_by_source,
+                );
             }
         }
     }
@@ -3667,6 +3848,7 @@ fn rebuild_progression_from_completed_sets(
         );
     }
 
+    let normalize_sources_started_at = Instant::now();
     for event in &mut snapshot.events {
         normalize_completed_source_slots(event);
         apply_seed_sources_to_set_slots(event);
@@ -3690,12 +3872,14 @@ fn rebuild_progression_from_completed_sets(
             }
         }
     }
+    let normalize_sources_elapsed_us = normalize_sources_started_at.elapsed().as_micros();
     storage_perf_log(|| {
         format!(
-            "rebuild_progression events={} sets={} completed_sets={} elapsed_us={}",
+            "rebuild_progression events={} sets={} completed_sets={} normalize_sources_us={} elapsed_us={}",
             event_count,
             set_count,
             completed_set_count,
+            normalize_sources_elapsed_us,
             started_at.elapsed().as_micros()
         )
     });
@@ -3753,19 +3937,31 @@ fn rebuild_event_progression_preserving_pending_results(
 }
 
 fn normalize_completed_source_slots(event: &mut EventSnapshot) {
-    let is_round_robin_set = |set: &crate::models::SetSnapshot| {
-        event.phase_groups.iter().any(|group| {
-            group.phase_group_id == set.phase_group_id.as_deref().unwrap_or_default()
-                && group
-                    .bracket_type
-                    .as_deref()
-                    .is_some_and(|bracket_type| bracket_type.eq_ignore_ascii_case("ROUND_ROBIN"))
+    let source_lookup = SourceRelationLookup::new(event);
+    let round_robin_set_ids = event
+        .sets
+        .iter()
+        .filter(|set| is_round_robin_set_in_event(event, set))
+        .map(|set| set.set_id.clone())
+        .collect::<HashSet<_>>();
+    let phase_index_by_set_id = event
+        .sets
+        .iter()
+        .map(|set| {
+            (
+                set.set_id.clone(),
+                crate::models::phase_sequence_index_for_set(event, set),
+            )
         })
-    };
+        .collect::<HashMap<_, _>>();
     let completed_sets = event
         .sets
         .iter()
-        .filter(|set| !is_round_robin_set(set) && set.state == 3 && set.winner_id.is_some())
+        .filter(|set| {
+            !round_robin_set_ids.contains(&set.set_id)
+                && set.state == 3
+                && set.winner_id.is_some()
+        })
         .cloned()
         .collect::<Vec<_>>();
 
@@ -3790,11 +3986,21 @@ fn normalize_completed_source_slots(event: &mut EventSnapshot) {
                 if target.set_id == source_set.set_id {
                     return false;
                 }
-                if is_round_robin_set(target) {
+                if round_robin_set_ids.contains(&target.set_id) {
                     return false;
                 }
                 if (source_set.winner_placement.is_some() || source_set.loser_placement.is_some())
-                    && is_later_phase_in_event_order(event, target, source_set)
+                    && phase_index_by_set_id
+                        .get(target.set_id.as_str())
+                        .copied()
+                        .flatten()
+                        .zip(
+                            phase_index_by_set_id
+                                .get(source_set.set_id.as_str())
+                                .copied()
+                                .flatten(),
+                        )
+                        .is_some_and(|(target_index, source_index)| target_index > source_index)
                 {
                     return false;
                 }
@@ -3814,7 +4020,13 @@ fn normalize_completed_source_slots(event: &mut EventSnapshot) {
                         _ => None,
                     };
                     source.and_then(|source| {
-                        source_relation_reaches_set(event, source, source_set, &mut HashSet::new())
+                        source_relation_reaches_set(
+                            event,
+                            source,
+                            source_set,
+                            &mut HashSet::new(),
+                            &source_lookup,
+                        )
                     })
                 };
                 let target = &mut event.sets[target_index];
@@ -5693,6 +5905,7 @@ fn advance_completed_set_to_next_real_sets(
     winner_name: &str,
     loser: Option<(&str, &str)>,
 ) {
+    let source_lookup = SourceRelationLookup::new(event);
     let mut winner_placed = false;
     let mut loser_placed = false;
     for target_index in 0..event.sets.len() {
@@ -5724,7 +5937,13 @@ fn advance_completed_set_to_next_real_sets(
                 }
             };
             let Some(relation) = source.and_then(|source| {
-                source_relation_reaches_set(event, source, source_set, &mut HashSet::new())
+                source_relation_reaches_set(
+                    event,
+                    source,
+                    source_set,
+                    &mut HashSet::new(),
+                    &source_lookup,
+                )
             }) else {
                 continue;
             };
@@ -5766,6 +5985,7 @@ fn source_relation_reaches_set(
     source: &crate::models::SetEntrantSourceSnapshot,
     source_set: &crate::models::SetSnapshot,
     visited: &mut HashSet<String>,
+    lookup: &SourceRelationLookup,
 ) -> Option<&'static str> {
     if source.source_type.as_deref() == Some("bye") {
         return None;
@@ -5807,12 +6027,12 @@ fn source_relation_reaches_set(
 
     // API のsourceにset IDがない場合のみconditionStringを使う。
     // 同じset記号が別Poolにもある場合は、誤流入を避けるため照合しない。
-    let display_codes = build_set_display_code_by_id(event);
-    let source_code = display_codes
+    let source_code = lookup
+        .display_code_by_set_id
         .get(&source_set.set_id)
-        .cloned()
-        .or_else(|| source_set.identifier.clone())
-        .or_else(|| source_set.phase_group_set_name.clone());
+        .map(String::as_str)
+        .or(source_set.identifier.as_deref())
+        .or(source_set.phase_group_set_name.as_deref());
     if let Some(source_code) = source_code {
         let source_tokens = source
             .condition_string
@@ -5820,14 +6040,15 @@ fn source_relation_reaches_set(
             .map(normalized_reference_tokens)
             .unwrap_or_default();
         let normalized_code = normalize_reference_text(&source_code);
-        let code_matches = display_codes
-            .iter()
-            .filter(|(_, code)| normalize_reference_text(code) == normalized_code)
-            .map(|(set_id, _)| set_id.as_str())
-            .collect::<Vec<_>>();
+        let code_matches_unique = lookup
+            .set_ids_by_normalized_code
+            .get(&normalized_code)
+            .is_some_and(|set_ids| {
+                set_ids.len() == 1 && set_ids.contains(source_set.set_id.as_str())
+            });
         if !normalized_code.is_empty()
             && source_tokens.iter().any(|token| token == &normalized_code)
-            && code_matches.as_slice() == [source_set.set_id.as_str()]
+            && code_matches_unique
         {
             return source_relation;
         }
@@ -5837,8 +6058,9 @@ fn source_relation_reaches_set(
     if !visited.insert(nested_set_id.to_owned()) {
         return None;
     }
-    let nested_set = event.sets.iter().find(|set| set.set_id == nested_set_id)?;
-    if !crate::models::is_intermediate_set(&event.phase_groups, nested_set) {
+    let nested_set_index = lookup.set_index_by_id.get(nested_set_id)?;
+    let nested_set = event.sets.get(*nested_set_index)?;
+    if !lookup.intermediate_set_ids.contains(nested_set_id) {
         return None;
     }
     let nested_relation = [
@@ -5848,7 +6070,7 @@ fn source_relation_reaches_set(
     .into_iter()
     .flatten()
     .find_map(|nested_source| {
-        source_relation_reaches_set(event, nested_source, source_set, visited)
+        source_relation_reaches_set(event, nested_source, source_set, visited, lookup)
     })?;
 
     let connected_source_count = [
@@ -5866,6 +6088,76 @@ fn source_relation_reaches_set(
     }
 
     (source_kind_from_api_source(source) == Some(nested_relation)).then_some(nested_relation)
+}
+
+struct SourceRelationLookup {
+    display_code_by_set_id: HashMap<String, String>,
+    set_ids_by_normalized_code: HashMap<String, HashSet<String>>,
+    set_index_by_id: HashMap<String, usize>,
+    intermediate_set_ids: HashSet<String>,
+}
+
+impl SourceRelationLookup {
+    fn new(event: &EventSnapshot) -> Self {
+        let display_code_by_set_id = build_set_display_code_by_id(event);
+        let mut set_ids_by_normalized_code = HashMap::<String, HashSet<String>>::new();
+        for (set_id, code) in &display_code_by_set_id {
+            let normalized_code = normalize_reference_text(code);
+            if !normalized_code.is_empty() {
+                set_ids_by_normalized_code
+                    .entry(normalized_code)
+                    .or_default()
+                    .insert(set_id.clone());
+            }
+        }
+
+        let mut set_index_by_id = HashMap::with_capacity(event.sets.len());
+        for (index, set) in event.sets.iter().enumerate() {
+            set_index_by_id.entry(set.set_id.clone()).or_insert(index);
+        }
+
+        let phase_group_set_ids = event
+            .phase_groups
+            .iter()
+            .flat_map(|group| group.set_ids.iter().cloned())
+            .collect::<HashSet<_>>();
+        let has_phase_group_set_ids = event
+            .phase_groups
+            .iter()
+            .any(|group| !group.set_ids.is_empty());
+        let intermediate_set_ids = event
+            .sets
+            .iter()
+            .filter(|set| {
+                if has_phase_group_set_ids {
+                    !phase_group_set_ids.contains(&set.set_id)
+                } else {
+                    set.is_intermediate
+                }
+            })
+            .map(|set| set.set_id.clone())
+            .collect();
+
+        Self {
+            display_code_by_set_id,
+            set_ids_by_normalized_code,
+            set_index_by_id,
+            intermediate_set_ids,
+        }
+    }
+}
+
+fn is_round_robin_set_in_event(event: &EventSnapshot, set: &crate::models::SetSnapshot) -> bool {
+    event
+        .phase_groups
+        .iter()
+        .any(|group| {
+            group.phase_group_id == set.phase_group_id.as_deref().unwrap_or_default()
+                && group
+                    .bracket_type
+                    .as_deref()
+                    .is_some_and(|bracket_type| bracket_type.eq_ignore_ascii_case("ROUND_ROBIN"))
+        })
 }
 
 #[cfg(test)]
@@ -7329,6 +7621,9 @@ pub fn reset_local_set_result_with_dependencies(
         collect_affected_reset_targets(&snapshot, event, source_set_id)?
     };
     let affected_set_ids = reset_targets.set_ids;
+    for set_id in &affected_set_ids {
+        ensure_set_score_edit_enabled(&local_meta, &snapshot, event_id, set_id)?;
+    }
 
     let remove_ids = affected_set_ids.iter().collect::<HashSet<&String>>();
 
@@ -7450,6 +7745,8 @@ pub fn set_event_alias(
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
             event_management: None,
+            score_edit_enabled_phase_group_ids: Vec::new(),
+            external_editors: Vec::new(),
             entrants: Vec::new(),
         });
         local_meta.events.len().saturating_sub(1)
@@ -7470,6 +7767,32 @@ pub fn save_event_snapshot(
     event_id: &str,
     event_alias: Option<String>,
 ) -> Result<TournamentLocalMeta, String> {
+    save_event_snapshot_with_pending_policy(app, snapshot, event_id, event_alias, false)
+}
+
+pub fn save_event_snapshot_and_discard_pending(
+    app: &AppHandle,
+    snapshot: &TournamentSnapshot,
+    event_id: &str,
+    event_alias: Option<String>,
+    pending_slug: &str,
+) -> Result<TournamentLocalMeta, String> {
+    if normalize_slug_for_storage(pending_slug) != normalize_slug_for_storage(&snapshot.slug) {
+        save_event_snapshot(app, snapshot, event_id, event_alias)?;
+        return discard_pending_set_results_for_snapshot_refresh(app, pending_slug, event_id);
+    }
+
+    save_event_snapshot_with_pending_policy(app, snapshot, event_id, event_alias, true)
+}
+
+fn save_event_snapshot_with_pending_policy(
+    app: &AppHandle,
+    snapshot: &TournamentSnapshot,
+    event_id: &str,
+    event_alias: Option<String>,
+    discard_pending_results: bool,
+) -> Result<TournamentLocalMeta, String> {
+    let started_at = Instant::now();
     let event_snapshot = snapshot
         .events
         .iter()
@@ -7565,7 +7888,11 @@ pub fn save_event_snapshot(
     };
     save_pristine_snapshot(app, &pristine_event_snapshot)?;
 
-    let mut local_meta = sync_local_meta_from_snapshot(app, &merged_snapshot, event_id)?;
+    let meta_load_started_at = Instant::now();
+    let current_meta = load_local_meta(app, &merged_snapshot.slug, event_id)?;
+    let meta_load_elapsed_us = meta_load_started_at.elapsed().as_micros();
+    let meta_merge_started_at = Instant::now();
+    let mut local_meta = merge_snapshot_into_meta(&merged_snapshot, event_id, current_meta);
     if let Some(event_meta) = local_meta
         .events
         .iter_mut()
@@ -7573,9 +7900,34 @@ pub fn save_event_snapshot(
     {
         event_meta.event_alias = event_alias;
     }
+    if discard_pending_results {
+        local_meta
+            .pending_set_results
+            .retain(|pending| pending.event_id != event_id);
+        local_meta
+            .pending_grand_final_reset_results
+            .retain(|pending| pending.event_id != event_id);
+    }
     local_meta.updated_at = Utc::now();
+    let meta_merge_elapsed_us = meta_merge_started_at.elapsed().as_micros();
+    let meta_save_started_at = Instant::now();
     save_local_meta(app, event_id, &local_meta)?;
-    cache_progression_snapshot(&merged_snapshot, true, true);
+    let meta_save_elapsed_us = meta_save_started_at.elapsed().as_micros();
+    if !discard_pending_results {
+        cache_progression_snapshot(&merged_snapshot, true, true);
+    }
+    storage_perf_log(|| {
+        format!(
+            "save_event_snapshot event={} sets={} discard_pending={} meta_load_us={} meta_merge_us={} meta_save_us={} total_us={}",
+            event_id,
+            event_snapshot.sets.len(),
+            discard_pending_results,
+            meta_load_elapsed_us,
+            meta_merge_elapsed_us,
+            meta_save_elapsed_us,
+            started_at.elapsed().as_micros()
+        )
+    });
 
     Ok(local_meta)
 }
@@ -7596,6 +7948,8 @@ pub fn save_local_meta(
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
             event_management: None,
+            score_edit_enabled_phase_group_ids: Vec::new(),
+            external_editors: Vec::new(),
             entrants: Vec::new(),
         });
     }
@@ -7733,6 +8087,8 @@ pub fn load_local_meta(
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
             event_management: None,
+            score_edit_enabled_phase_group_ids: Vec::new(),
+            external_editors: Vec::new(),
             entrants: Vec::new(),
         });
     }
@@ -7782,9 +8138,35 @@ pub fn sync_local_meta_from_snapshot(
     snapshot: &TournamentSnapshot,
     event_id: &str,
 ) -> Result<TournamentLocalMeta, String> {
+    let started_at = Instant::now();
+    let load_started_at = Instant::now();
     let current_meta = load_local_meta(app, &snapshot.slug, event_id)?;
+    let load_elapsed_us = load_started_at.elapsed().as_micros();
+    let merge_started_at = Instant::now();
     let merged_meta = merge_snapshot_into_meta(snapshot, event_id, current_meta);
+    let merge_elapsed_us = merge_started_at.elapsed().as_micros();
     save_local_meta(app, event_id, &merged_meta)?;
+    storage_perf_log(|| {
+        format!(
+            "sync_local_meta event={} sets={} entrants={} load_us={} merge_us={} total_us={}",
+            event_id,
+            snapshot
+                .events
+                .iter()
+                .find(|event| event.event_id == event_id)
+                .map(|event| event.sets.len())
+                .unwrap_or(0),
+            merged_meta
+                .events
+                .iter()
+                .find(|event| event.event_id == event_id)
+                .map(|event| event.entrants.len())
+                .unwrap_or(0),
+            load_elapsed_us,
+            merge_elapsed_us,
+            started_at.elapsed().as_micros()
+        )
+    });
     Ok(merged_meta)
 }
 
@@ -7896,6 +8278,7 @@ pub fn upsert_local_set_result(
         );
     }
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
+    ensure_set_score_edit_enabled(&local_meta, &snapshot, &input.event_id, &input.set_id)?;
 
     let event_name = snapshot
         .events
@@ -8226,6 +8609,7 @@ pub fn upsert_local_set_scores(
         return Err("Winners側のプレイヤーがGrand Finalに勝利したため、Grand Final Resetのスコアは保存できません。".to_owned());
     }
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
+    ensure_set_score_edit_enabled(&local_meta, &snapshot, &input.event_id, &input.set_id)?;
 
     if snapshot
         .events
@@ -8398,6 +8782,12 @@ pub fn clear_pending_set_results(
         .filter(|item| item.event_id == event_id)
         .map(|item| item.source_grand_final_set_id.clone())
         .collect::<HashSet<String>>();
+    for set_id in pending_set_ids
+        .iter()
+        .chain(&pending_gf_reset_source_set_ids)
+    {
+        ensure_set_score_edit_enabled(&local_meta, &snapshot, event_id, set_id)?;
+    }
 
     let mut restored_from_pristine = false;
 
@@ -8474,6 +8864,8 @@ pub fn clear_pending_set_result_for_set(
     set_id: &str,
 ) -> Result<TournamentWorkspace, String> {
     let local_meta = load_local_meta(app, slug, event_id)?;
+    let mut snapshot = load_event_snapshot(app, slug, event_id)?;
+    ensure_set_score_edit_enabled(&local_meta, &snapshot, event_id, set_id)?;
     if local_meta
         .pending_set_results
         .iter()
@@ -8485,7 +8877,6 @@ pub fn clear_pending_set_result_for_set(
         );
     }
 
-    let mut snapshot = load_event_snapshot(app, slug, event_id)?;
     let pristine_snapshot = load_pristine_event_snapshot(app, slug, event_id).ok();
 
     {
@@ -8615,6 +9006,8 @@ pub fn upsert_local_player_meta(
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
             event_management: None,
+            score_edit_enabled_phase_group_ids: Vec::new(),
+            external_editors: Vec::new(),
             entrants: Vec::new(),
         });
         local_meta.events.len().saturating_sub(1)
@@ -8748,6 +9141,8 @@ pub fn save_event_management_meta(
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
             event_management: None,
+            score_edit_enabled_phase_group_ids: Vec::new(),
+            external_editors: Vec::new(),
             entrants: Vec::new(),
         });
         local_meta.events.len().saturating_sub(1)
@@ -8766,6 +9161,150 @@ pub fn save_event_management_meta(
     local_meta.updated_at = Utc::now();
     save_local_meta(app, &input.event_id, &local_meta)?;
     Ok(local_meta)
+}
+
+pub fn set_phase_group_score_edit_lock(
+    app: &AppHandle,
+    input: SetPhaseGroupScoreEditLockInput,
+) -> Result<TournamentWorkspace, String> {
+    let snapshot = load_event_snapshot(app, &input.slug, &input.event_id)?;
+    let phase_group_id = input.phase_group_id.trim();
+    if phase_group_id.is_empty()
+        || !snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == input.event_id)
+            .is_some_and(|event| {
+                event
+                    .phase_groups
+                    .iter()
+                    .any(|group| group.phase_group_id == phase_group_id)
+            })
+    {
+        return Err("指定プールがローカルsnapshotに見つかりません。".to_owned());
+    }
+
+    let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
+    let event_index = local_meta
+        .events
+        .iter()
+        .position(|event| event.event_id == input.event_id)
+        .unwrap_or_else(|| {
+            local_meta.events.push(EventLocalMeta {
+                event_id: input.event_id.clone(),
+                event_name: input.event_name.clone(),
+                event_alias: None,
+                last_selected_phase_name: None,
+                last_selected_phase_group_name: None,
+                event_management: None,
+                score_edit_enabled_phase_group_ids: Vec::new(),
+                external_editors: Vec::new(),
+                entrants: Vec::new(),
+            });
+            local_meta.events.len() - 1
+        });
+    let event_meta = local_meta
+        .events
+        .get_mut(event_index)
+        .ok_or_else(|| "イベントメタの更新先を特定できませんでした。".to_owned())?;
+    event_meta.event_name = input.event_name;
+    if input.locked {
+        event_meta
+            .score_edit_enabled_phase_group_ids
+            .retain(|enabled_id| enabled_id != phase_group_id);
+    } else if !event_meta
+        .score_edit_enabled_phase_group_ids
+        .iter()
+        .any(|enabled_id| enabled_id == phase_group_id)
+    {
+        event_meta
+            .score_edit_enabled_phase_group_ids
+            .push(phase_group_id.to_owned());
+    }
+    local_meta.slug = input.slug;
+    local_meta.updated_at = Utc::now();
+    save_local_meta(app, &input.event_id, &local_meta)?;
+
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
+}
+
+pub fn set_phase_group_external_editor(
+    app: &AppHandle,
+    input: SetPhaseGroupExternalEditorInput,
+) -> Result<TournamentWorkspace, String> {
+    let snapshot = load_event_snapshot(app, &input.slug, &input.event_id)?;
+    let phase_group_id = input.phase_group_id.trim();
+    let sender_name = input.sender_name.trim();
+    let sender_user_id = input.sender_user_id.trim();
+    if phase_group_id.is_empty()
+        || sender_name.is_empty()
+        || sender_user_id.len() != 8
+        || !sender_user_id.bytes().all(|byte| byte.is_ascii_digit())
+        || !snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == input.event_id)
+            .is_some_and(|event| {
+                event
+                    .phase_groups
+                    .iter()
+                    .any(|group| group.phase_group_id == phase_group_id)
+            })
+    {
+        return Err("外部編集者または指定プールの情報が不正です。".to_owned());
+    }
+
+    let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
+    let event_index = local_meta
+        .events
+        .iter()
+        .position(|event| event.event_id == input.event_id)
+        .unwrap_or_else(|| {
+            local_meta.events.push(EventLocalMeta {
+                event_id: input.event_id.clone(),
+                event_name: input.event_name.clone(),
+                event_alias: None,
+                last_selected_phase_name: None,
+                last_selected_phase_group_name: None,
+                event_management: None,
+                score_edit_enabled_phase_group_ids: Vec::new(),
+                external_editors: Vec::new(),
+                entrants: Vec::new(),
+            });
+            local_meta.events.len() - 1
+        });
+    let event_meta = local_meta
+        .events
+        .get_mut(event_index)
+        .ok_or_else(|| "イベントメタの更新先を特定できませんでした。".to_owned())?;
+    event_meta.event_name = input.event_name;
+
+    let editor = PhaseGroupExternalEditor {
+        phase_group_id: phase_group_id.to_owned(),
+        sender_name: sender_name.to_owned(),
+        sender_user_id: sender_user_id.to_owned(),
+    };
+    if let Some(existing) = event_meta
+        .external_editors
+        .iter_mut()
+        .find(|existing| existing.phase_group_id == phase_group_id)
+    {
+        *existing = editor;
+    } else {
+        event_meta.external_editors.push(editor);
+    }
+
+    local_meta.slug = input.slug;
+    local_meta.updated_at = Utc::now();
+    save_local_meta(app, &input.event_id, &local_meta)?;
+
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
 }
 
 pub fn set_event_last_phase_pool_selection(
@@ -8792,6 +9331,8 @@ pub fn set_event_last_phase_pool_selection(
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
             event_management: None,
+            score_edit_enabled_phase_group_ids: Vec::new(),
+            external_editors: Vec::new(),
             entrants: Vec::new(),
         });
         local_meta.events.len().saturating_sub(1)

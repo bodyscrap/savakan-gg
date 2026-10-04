@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { GenericMessage } from "../components/MessageBox";
 import {
 	buildCallTargetId,
 	canBroadcastCallListSync,
 	extractCallTargetIdentityFromMeta,
+	getExternalEditRequest,
 	formatSenderProfileLabel,
 	hasSenderIdCollision,
 	isSameCallTargetIdentity,
@@ -10,6 +12,33 @@ import {
 	normalizeSenderUserId,
 	resolveSenderSettingsStatus,
 } from "./messageUtils";
+
+const externalEditRequestMessage: GenericMessage = {
+  messageId: "message-1",
+  threadId: "thread-1",
+  parentMessageId: null,
+  messageType: "normal",
+  messageMeta: {
+    externalEditRequest: true,
+    externalEditTournamentId: "tournament-1",
+    externalEditSlug: "tournament-slug",
+    externalEditEventId: "event-1",
+    externalEditEventName: "Event",
+    externalEditPhaseName: "Phase 1",
+    externalEditPhaseGroupId: "group-1",
+    externalEditPhaseGroupName: "Pool A",
+    externalEditPhaseGroupDisplayIdentifier: "A",
+    externalEditorName: "Operator",
+    externalEditorSenderUserId: "12345678",
+  },
+  method: "external_edit_request",
+  subject: "External edit request",
+  senderName: "Operator",
+  senderUserId: "12345678",
+  senderIp: "192.168.1.20",
+  body: "Please accept",
+  createdAt: "2025-01-01T00:00:00.000Z",
+};
 
 const validProfile = {
 	senderName: "Operator",
@@ -117,5 +146,35 @@ describe("sender messaging readiness", () => {
 			.toBe("選択デバイスのIPが不正です。");
 		expect(resolveSenderSettingsStatus(valid))
 			.toBe("デバイス選択後、IP/サブネットは自動適用されます。");
+	});
+});
+
+describe("external edit requests", () => {
+	it("extracts a complete request when its sender metadata matches the message", () => {
+		expect(getExternalEditRequest(externalEditRequestMessage)).toEqual({
+			tournamentId: "tournament-1",
+			slug: "tournament-slug",
+			eventId: "event-1",
+			eventName: "Event",
+			phaseName: "Phase 1",
+			phaseGroupId: "group-1",
+			phaseGroupName: "Pool A",
+			phaseGroupDisplayIdentifier: "A",
+		});
+	});
+
+	it("rejects malformed, replied-to, or sender-mismatched requests", () => {
+		expect(getExternalEditRequest({
+			...externalEditRequestMessage,
+			messageMeta: { ...externalEditRequestMessage.messageMeta, externalEditorSenderUserId: "87654321" },
+		})).toBeNull();
+		expect(getExternalEditRequest({
+			...externalEditRequestMessage,
+			parentMessageId: "parent-1",
+		})).toBeNull();
+		expect(getExternalEditRequest({
+			...externalEditRequestMessage,
+			messageMeta: { externalEditRequest: true },
+		})).toBeNull();
 	});
 });

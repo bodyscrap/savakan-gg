@@ -132,7 +132,40 @@ pub struct EventLocalMeta {
     pub last_selected_phase_group_name: Option<String>,
     #[serde(default)]
     pub event_management: Option<EventManagementMeta>,
+    #[serde(default)]
+    pub score_edit_enabled_phase_group_ids: Vec<String>,
+    #[serde(default)]
+    pub external_editors: Vec<PhaseGroupExternalEditor>,
     pub entrants: Vec<EventEntrantMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhaseGroupExternalEditor {
+    pub phase_group_id: String,
+    pub sender_name: String,
+    pub sender_user_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPhaseGroupExternalEditorInput {
+    pub slug: String,
+    pub event_id: String,
+    pub event_name: String,
+    pub phase_group_id: String,
+    pub sender_name: String,
+    pub sender_user_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPhaseGroupScoreEditLockInput {
+    pub slug: String,
+    pub event_id: String,
+    pub event_name: String,
+    pub phase_group_id: String,
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

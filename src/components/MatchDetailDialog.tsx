@@ -29,6 +29,7 @@ type MatchDetailDialogProps = {
   busy: boolean;
   overlayBusy: boolean;
   scoreInputDisabled: boolean;
+  scoreEditLocked: boolean;
   directWinnerId: string | null;
   displayPlayersBySide: boolean;
   onDisplayPlayersBySideChange: (checked: boolean) => void;
@@ -61,6 +62,7 @@ export function MatchDetailDialog({
   busy,
   overlayBusy,
   scoreInputDisabled,
+  scoreEditLocked,
   directWinnerId,
   displayPlayersBySide,
   onDisplayPlayersBySideChange,
@@ -106,6 +108,7 @@ export function MatchDetailDialog({
         {completed && (
           <p className="meta">確定済みsetのスコアは変更できません。修正する場合は「影響setを取消」からやり直してください。</p>
         )}
+        {scoreEditLocked && <p className="meta">このプールは編集ロック中です。スコア入力・結果更新はできません。</p>}
         {!matchupReady && <p className="meta">対戦カード確定後にプレイヤーサイドを変更できます。</p>}
         {randomNotice && randomNotice.setId === match.setId && (
           <p className={`meta side-random-notice ${randomNotice.changed ? "changed" : "unchanged"}`}>
@@ -188,7 +191,7 @@ export function MatchDetailDialog({
                       <button
                         type="button"
                         className="ghost tiny"
-                        disabled={busy || completed}
+                        disabled={busy || completed || scoreEditLocked}
                         onClick={() => onToggleWinner(entrantId, otherEntrantId)}
                       >
                         {directWinnerId === entrantId ? "解除" : "Win"}
@@ -198,7 +201,7 @@ export function MatchDetailDialog({
                       <button
                         type="button"
                         className="ghost tiny"
-                        disabled={busy || completed}
+                        disabled={busy || completed || scoreEditLocked}
                         onClick={() => onSetDq(entrantId, otherEntrantId)}
                       >
                         DQ
@@ -221,17 +224,17 @@ export function MatchDetailDialog({
 
         <div className="dialog-actions dialog-actions-split match-dialog-actions">
           <div className="dialog-danger-actions">
-            <button type="button" className="ghost" disabled={busy || completed} onClick={onDiscardDraft}>
+            <button type="button" className="ghost" disabled={busy || completed || scoreEditLocked} onClick={onDiscardDraft}>
               下書きの破棄
             </button>
-            <button type="button" className="ghost" disabled={busy} onClick={onResetSet}>
+            <button type="button" className="ghost" disabled={busy || scoreEditLocked} onClick={onResetSet}>
               setの取り消し
             </button>
           </div>
           <div className="dialog-primary-actions">
             <button
               type="button"
-              disabled={busy || completed || !matchupReady || isDqDraft}
+              disabled={busy || completed || !matchupReady || isDqDraft || scoreEditLocked}
               onClick={onSaveDraft}
             >
               更新
@@ -239,7 +242,7 @@ export function MatchDetailDialog({
             <button type="button" className="ghost" disabled={busy || overlayBusy} onClick={onToggleOverlay}>
               {overlayActive ? "配信停止" : "配信開始"}
             </button>
-            <button type="button" disabled={busy || completed || !matchupReady} onClick={onConfirm}>
+            <button type="button" disabled={busy || completed || !matchupReady || scoreEditLocked} onClick={onConfirm}>
               確定
             </button>
           </div>

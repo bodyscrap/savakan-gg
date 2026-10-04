@@ -328,8 +328,9 @@ export function buildPhasePoolGroups(event: EventSnapshot | null): PhasePoolGrou
     const seedOrder = phaseGroupMetadata.seedOrder ?? [];
     const seeds = phaseGroupMetadata.seeds ?? [];
     const hasStablePhasePoolIdentity = set.phaseOrder !== null && phaseGroupDisplayIdentifier !== null;
-    const groupKey = set.phaseGroupId
-      ? `id:${set.phaseGroupId}`
+    const phaseGroupId = set.phaseGroupId ?? phaseGroupMetadata.phaseGroupId ?? null;
+    const groupKey = phaseGroupId
+      ? `id:${phaseGroupId}`
       : hasStablePhasePoolIdentity
         ? `order:${set.phaseOrder}::pool:${phaseGroupDisplayIdentifier}`
         : `name:${phaseName}::${phaseGroupName}`;
@@ -357,7 +358,7 @@ export function buildPhasePoolGroups(event: EventSnapshot | null): PhasePoolGrou
 
     groupMap.set(groupKey, {
       key: groupKey,
-      phaseGroupId: set.phaseGroupId ?? null,
+      phaseGroupId,
       phaseName,
       phaseGroupName,
       bracketType,

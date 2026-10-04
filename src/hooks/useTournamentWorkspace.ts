@@ -5,6 +5,8 @@ import {
   loadTournamentWorkspace,
   persistEventAlias,
   persistEventManagementMeta,
+  persistPhaseGroupExternalEditor,
+  persistPhaseGroupScoreEditLock,
   persistLocalPlayerMeta,
   persistLocalSetPlaySide,
   refreshTournamentSnapshot,
@@ -103,6 +105,31 @@ export function useTournamentWorkspace({
     setting: EventManagementMeta;
   }) {
     const result = await persistEventManagementMeta(input);
+    setWorkspace(result);
+    return result;
+  }
+
+  async function savePhaseGroupScoreEditLock(input: {
+    slug: string;
+    eventId: string;
+    eventName: string;
+    phaseGroupId: string;
+    locked: boolean;
+  }) {
+    const result = await persistPhaseGroupScoreEditLock(input);
+    setWorkspace(result);
+    return result;
+  }
+
+  async function savePhaseGroupExternalEditor(input: {
+    slug: string;
+    eventId: string;
+    eventName: string;
+    phaseGroupId: string;
+    senderName: string;
+    senderUserId: string;
+  }) {
+    const result = await persistPhaseGroupExternalEditor(input);
     setWorkspace(result);
     return result;
   }
@@ -227,6 +254,8 @@ export function useTournamentWorkspace({
     refreshRemoteSnapshot,
     restoreWorkspaceGraph,
     saveEventManagementMeta,
+    savePhaseGroupScoreEditLock,
+    savePhaseGroupExternalEditor,
     saveEventAlias,
     saveLocalPlayerMeta,
     saveLocalSetPlaySide,

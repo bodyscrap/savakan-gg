@@ -19,6 +19,7 @@ import {
   isValidIpv4,
   isValidSenderUserId,
   splitIpv4List,
+  type ExternalEditRequest,
   type MessageScope,
 } from "../domain/messageUtils";
 
@@ -32,6 +33,8 @@ type MailboxSenderProfile = {
   bindIp: string;
   broadcastSubnetMask: string;
 };
+
+type ExternalEditRequestInput = ExternalEditRequest;
 
 type UseMailboxOptions = {
   activeTab: string;
@@ -475,6 +478,81 @@ export function useMailbox({
     }
   }
 
+  async function sendExternalEditRequest(input: ExternalEditRequestInput) {
+    onError("");
+    onMessage("");
+    if (disableLocalCommunication) {
+      onError("ローカル通信を行わない設定のため、外部編集申請は送信できません。設定タブで解除してください。");
+      return;
+    }
+    if (!senderProfileReadyForMessaging) {
+      onError("設定タブで送信者名・8桁ユーザーID・自分のIPを保存してから申請してください。");
+      return;
+    }
+    if (!isValidIpv4(senderProfile.broadcastSubnetMask)) {
+      onError("ブロードキャスト先のサブネットマスクが不正です。設定タブを確認してください。");
+      return;
+    }
+    if (!scope || input.eventId !== scope.eventId || input.tournamentId !== scope.tournamentId) {
+      onError("申請対象イベントが現在のイベント選択と一致しません。");
+      return;
+    }
+    if (
+      [
+        input.tournamentId,
+        input.slug,
+        input.eventId,
+        input.eventName,
+        input.phaseName,
+        input.phaseGroupId,
+        input.phaseGroupName,
+      ].some((value) => value.trim() === "")
+      || !isValidSenderUserId(senderProfile.senderUserId)
+    ) {
+      onError("外部編集申請に必要なイベント・プール・送信者情報が不足しています。");
+      return;
+    }
+
+    const messageMeta = {
+      ...(buildScopedMessageMeta(null, scope) ?? {}),
+      externalEditRequest: true,
+      externalEditTournamentId: input.tournamentId,
+      externalEditSlug: input.slug,
+      externalEditEventId: input.eventId,
+      externalEditEventName: input.eventName,
+      externalEditPhaseName: input.phaseName,
+      externalEditPhaseGroupId: input.phaseGroupId,
+      externalEditPhaseGroupName: input.phaseGroupName,
+      externalEditPhaseGroupDisplayIdentifier: input.phaseGroupDisplayIdentifier ?? "",
+      externalEditorName: senderProfile.senderName.trim(),
+      externalEditorSenderUserId: senderProfile.senderUserId.trim(),
+    };
+
+    try {
+      const sent = await invoke<GenericMessage>("send_mailbox_message", {
+        input: {
+          profile: senderProfile,
+          messageType: "normal",
+          messageMeta,
+          method: "external_edit_request",
+          subject: `外部編集申請: ${input.eventName} / ${input.phaseName} / ${input.phaseGroupName}`,
+          body: `${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から外部編集申請が届きました。\n対象: ${input.eventName} / ${input.phaseName} / ${input.phaseGroupName}`,
+          deliveryTargetMode: "broadcast",
+          deliveryTargetIp: null,
+          threadId: null,
+          parentMessageId: null,
+        },
+      });
+      const normalized = addMailboxMessage(sent);
+      if (normalized) {
+        setSelectedThreadId(normalized.threadId);
+      }
+      onMessage(`外部編集申請をブロードキャストしました: ${input.phaseName} / ${input.phaseGroupName}`);
+    } catch (error) {
+      onError(String(error));
+    }
+  }
+
   async function replyToThread() {
     onError("");
     onMessage("");
@@ -837,6 +915,7 @@ export function useMailbox({
     canDeleteActiveThread,
     canOpenDqDialog,
     postGenericMessage,
+    sendExternalEditRequest,
     replyToThread,
     openDqRequestDialog,
     closeDqRequestDialog,

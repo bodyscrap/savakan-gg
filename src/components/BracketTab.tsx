@@ -5,6 +5,7 @@ import type {
   SetSnapshot,
 } from "../domain/bracketProgression";
 import type { PhasePoolGroup } from "../domain/bracketDisplay";
+import type { PhaseGroupExternalEditor } from "../domain/tournamentWorkspaceRepository";
 import { EliminationBracket, type EliminationBracketSectionView } from "./EliminationBracket";
 import { getBracketProgressionModel } from "../domain/bracketProgression";
 import { RoundRobinBracket } from "./RoundRobinBracket";
@@ -29,6 +30,7 @@ type RoundRobinView = {
 };
 
 type BracketTabProps = {
+  busy: boolean;
   draftPendingCount: number;
   confirmedReportableCount: number;
   hasSnapshot: boolean;
@@ -40,7 +42,12 @@ type BracketTabProps = {
   onPhaseNameChange: (phaseName: string) => void;
   phaseScopedPoolGroups: PhasePoolGroup[];
   selectedPhasePoolGroup: PhasePoolGroup | null;
+  selectedPoolScoreEditLocked: boolean;
+  externalEditor: PhaseGroupExternalEditor | null;
+  canRequestExternalEditor: boolean;
+  onRequestExternalEditor: () => void;
   onPhasePoolChange: (key: string) => void;
+  onSelectedPoolScoreEditLockChange: (locked: boolean) => void;
   bracketScaleStyle: CSSProperties;
   bracketZoomLevel: number;
   bracketZoomLevels: readonly number[];
@@ -59,6 +66,7 @@ type BracketTabProps = {
 };
 
 export function BracketTab({
+  busy,
   draftPendingCount,
   confirmedReportableCount,
   hasSnapshot,
@@ -70,7 +78,12 @@ export function BracketTab({
   onPhaseNameChange,
   phaseScopedPoolGroups,
   selectedPhasePoolGroup,
+  selectedPoolScoreEditLocked,
+  externalEditor,
+  canRequestExternalEditor,
+  onRequestExternalEditor,
   onPhasePoolChange,
+  onSelectedPoolScoreEditLockChange,
   bracketScaleStyle,
   bracketZoomLevel,
   bracketZoomLevels,
@@ -87,6 +100,10 @@ export function BracketTab({
   onEliminationSetActivate,
   onOpenSet,
 }: BracketTabProps) {
+  const selectedBracketModel = selectedPhasePoolGroup
+    ? getBracketProgressionModel(selectedPhasePoolGroup.bracketType)
+    : null;
+
   return (
     <>
       <section className="panel">
@@ -138,29 +155,29 @@ export function BracketTab({
                   ) : (
                     phaseScopedPoolGroups.map((group) => (
                       <option key={group.key} value={group.key}>
-                        {group.phaseName} / Pool {group.phaseGroupName} ({group.sets.length} sets)
+                        Pool {group.phaseGroupName}
                       </option>
                     ))
                   )}
                 </select>
               </label>
 
-            <div className="bracket-view-tools" style={bracketScaleStyle}>
-              <label htmlFor="bracket-zoom-select">
-                表示倍率
-                <select
-                  id="bracket-zoom-select"
-                  value={String(bracketZoomLevel)}
-                  onChange={(event) => onBracketZoomChange(event.currentTarget.value)}
-                >
-                  {bracketZoomLevels.map((level) => (
-                    <option key={level} value={String(level)}>
-                      {level.toFixed(2)}x
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+              <div className="bracket-view-tools" style={bracketScaleStyle}>
+                <label htmlFor="bracket-zoom-select">
+                  表示倍率
+                  <select
+                    id="bracket-zoom-select"
+                    value={String(bracketZoomLevel)}
+                    onChange={(event) => onBracketZoomChange(event.currentTarget.value)}
+                  >
+                    {bracketZoomLevels.map((level) => (
+                      <option key={level} value={String(level)}>
+                        {level.toFixed(2)}x
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
             </div>
 
             <div className="bracket-actions">
@@ -182,8 +199,38 @@ export function BracketTab({
             ) : (
               <section className="phase-group" key={selectedPhasePoolGroup.key}>
                 <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={selectedPoolScoreEditLocked}
+                    disabled={busy || !selectedPhasePoolGroup.phaseGroupId}
+                    onChange={(event) => onSelectedPoolScoreEditLockChange(event.currentTarget.checked)}
+                  />
+                  スコア編集のロック
+                </label>
+                <div className="panel-toolbar compact">
+                  <p className="meta">
+                    外部編集者: {externalEditor
+                      ? `${externalEditor.senderName} (${externalEditor.senderUserId})`
+                      : "未設定"}
+                  </p>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={
+                      busy
+                      || selectedPoolScoreEditLocked
+                      || !selectedPhasePoolGroup.phaseGroupId
+                      || !canRequestExternalEditor
+                    }
+                    onClick={onRequestExternalEditor}
+                  >
+                    外部編集申請
+                  </button>
+                </div>
+                <p className="meta">外部編集申請は、このプールのスコア編集ロック解除中にブロードキャストできます。</p>
 
-                {getBracketProgressionModel(selectedPhasePoolGroup.bracketType) === "round_robin" ? (
+                {selectedBracketModel === "round_robin" ? (
                   <RoundRobinBracket
                     scaleStyle={bracketScaleStyle}
                     setCount={selectedPhasePoolGroup.sets.length}
@@ -199,15 +246,25 @@ export function BracketTab({
                     onMatchClick={onRoundRobinMatchClick}
                   />
                 ) : (
-                  <EliminationBracket
-                    scaleStyle={bracketScaleStyle}
-                    phaseGroupKey={selectedPhasePoolGroup.key}
-                    seeds={selectedPhasePoolGroup.seeds}
-                    seedMap={selectedPhasePoolGroup.seedMap}
-                    sections={eliminationSections}
-                    onActivateSet={onEliminationSetActivate}
-                    onOpenSet={onOpenSet}
-                  />
+                  <>
+                    {(selectedBracketModel === "single_elimination"
+                      || selectedBracketModel === "double_elimination") && (
+                      <h3>
+                        {selectedBracketModel === "single_elimination"
+                          ? "Single Elimination"
+                          : "Double Elimination"}
+                      </h3>
+                    )}
+                    <EliminationBracket
+                      scaleStyle={bracketScaleStyle}
+                      phaseGroupKey={selectedPhasePoolGroup.key}
+                      seeds={selectedPhasePoolGroup.seeds}
+                      seedMap={selectedPhasePoolGroup.seedMap}
+                      sections={eliminationSections}
+                      onActivateSet={onEliminationSetActivate}
+                      onOpenSet={onOpenSet}
+                    />
+                  </>
                 )}
               </section>
             )}

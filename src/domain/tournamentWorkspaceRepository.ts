@@ -53,7 +53,24 @@ export type EventLocalMeta = {
   lastSelectedPhaseName?: string | null;
   lastSelectedPhaseGroupName?: string | null;
   eventManagement?: EventManagementMeta | null;
+  scoreEditEnabledPhaseGroupIds?: string[];
+  externalEditors?: PhaseGroupExternalEditor[];
   entrants: EventEntrantMeta[];
+};
+
+export type PhaseGroupExternalEditor = {
+  phaseGroupId: string;
+  senderName: string;
+  senderUserId: string;
+};
+
+export type SetPhaseGroupExternalEditorInput = {
+  slug: string;
+  eventId: string;
+  eventName: string;
+  phaseGroupId: string;
+  senderName: string;
+  senderUserId: string;
 };
 
 export type SetPlaySideMeta = {
@@ -124,6 +141,14 @@ export type SaveEventManagementMetaInput = {
   setting: EventManagementMeta;
 };
 
+export type SetPhaseGroupScoreEditLockInput = {
+  slug: string;
+  eventId: string;
+  eventName: string;
+  phaseGroupId: string;
+  locked: boolean;
+};
+
 export type SaveLocalPlayerMetaInput = {
   slug: string;
   eventId: string;
@@ -186,6 +211,18 @@ export async function restoreTournamentGraph(slug: string, eventId: string): Pro
 
 export async function persistEventManagementMeta(input: SaveEventManagementMetaInput): Promise<TournamentWorkspace> {
   return invoke<TournamentWorkspace>("save_event_management_meta", { input });
+}
+
+export async function persistPhaseGroupScoreEditLock(
+  input: SetPhaseGroupScoreEditLockInput,
+): Promise<TournamentWorkspace> {
+  return invoke<TournamentWorkspace>("set_phase_group_score_edit_lock", { input });
+}
+
+export async function persistPhaseGroupExternalEditor(
+  input: SetPhaseGroupExternalEditorInput,
+): Promise<TournamentWorkspace> {
+  return invoke<TournamentWorkspace>("set_phase_group_external_editor", { input });
 }
 
 export async function persistEventAlias(

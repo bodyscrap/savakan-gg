@@ -92,6 +92,7 @@ import {
   hasSenderIdCollision,
   isSenderProfileReadyForMessaging as resolveSenderProfileReadiness,
   isDqRequestMessage,
+  getExternalEditRequest,
   resolveSenderSettingsStatus,
 } from "../domain/messageUtils";
 import {
@@ -211,6 +212,8 @@ function App() {
     refreshRemoteSnapshot,
     restoreWorkspaceGraph,
     saveEventManagementMeta,
+    savePhaseGroupScoreEditLock,
+    savePhaseGroupExternalEditor,
     saveEventAlias,
     saveLocalPlayerMeta,
     saveLocalSetPlaySide,
@@ -457,6 +460,7 @@ function App() {
     canDeleteActiveThread,
     canOpenDqDialog,
     postGenericMessage,
+    sendExternalEditRequest,
     replyToThread,
     openDqRequestDialog,
     closeDqRequestDialog,
@@ -796,6 +800,124 @@ function App() {
     obsOverlayState,
     scoreDrafts,
   });
+  const selectedPoolScoreEditLocked = !selectedPhasePoolGroup?.phaseGroupId
+    || !(selectedEventMeta?.scoreEditEnabledPhaseGroupIds ?? []).includes(selectedPhasePoolGroup.phaseGroupId);
+  const selectedPoolExternalEditor = selectedPhasePoolGroup?.phaseGroupId
+    ? (selectedEventMeta?.externalEditors ?? []).find(
+      (editor) => editor.phaseGroupId === selectedPhasePoolGroup.phaseGroupId,
+    ) ?? null
+    : null;
+
+  function canAcceptExternalEditRequest(message: Parameters<typeof getExternalEditRequest>[0]) {
+    const request = getExternalEditRequest(message);
+    if (
+      !request
+      || busy
+      || !snapshot
+      || !selectedEvent
+      || request.tournamentId !== snapshot.tournamentId
+      || request.slug !== snapshot.slug
+      || request.eventId !== selectedEvent.eventId
+      || message.senderUserId === senderProfile.senderUserId
+    ) {
+      return false;
+    }
+    const phaseGroupExists = (selectedEvent.phaseGroups ?? []).some(
+      (group) => group.phaseGroupId === request.phaseGroupId
+        && group.phaseName === request.phaseName,
+    );
+    const matchingSet = selectedEvent.sets.some(
+      (set) => set.phaseGroupId === request.phaseGroupId
+        && set.phaseName === request.phaseName
+        && set.phaseGroupName === request.phaseGroupName,
+    );
+    return phaseGroupExists && matchingSet;
+  }
+
+  async function acceptExternalEditRequest(message: Parameters<typeof getExternalEditRequest>[0]) {
+    const request = getExternalEditRequest(message);
+    if (!request || !canAcceptExternalEditRequest(message) || !selectedEvent) {
+      setError("申請対象イベントが選択されていないか、申請情報が不正です。");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await savePhaseGroupExternalEditor({
+        slug: snapshot?.slug ?? toApiSlug(slug),
+        eventId: selectedEvent.eventId,
+        eventName: selectedEvent.name,
+        phaseGroupId: request.phaseGroupId,
+        senderName: message.senderName,
+        senderUserId: message.senderUserId,
+      });
+      setSelectedPhaseName(request.phaseName);
+      setSelectedPhasePoolKey(`id:${request.phaseGroupId}`);
+      setActiveTab("bracket");
+      setMessage(`外部編集申請を受理しました: ${request.phaseName} / ${request.phaseGroupName}`);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function requestExternalEditor() {
+    if (
+      !snapshot
+      || !selectedEvent
+      || !selectedPhasePoolGroup?.phaseGroupId
+    ) {
+      setError("外部編集申請を送信するイベント/プールを選択してください。");
+      return;
+    }
+    if (selectedPoolScoreEditLocked) {
+      setError("外部編集申請を送信するには、このプールのスコア編集ロックを解除してください。");
+      return;
+    }
+    if (busy) {
+      return;
+    }
+    if (!selectedEventMeta || selectedEvent.eventId !== selectedEventMeta.eventId) {
+      setError("外部編集申請を送信するイベント/プールを選択してください。");
+      return;
+    }
+    void sendExternalEditRequest({
+      tournamentId: snapshot.tournamentId,
+      slug: snapshot.slug,
+      eventId: selectedEvent.eventId,
+      eventName: selectedEvent.name,
+      phaseName: selectedPhasePoolGroup.phaseName,
+      phaseGroupId: selectedPhasePoolGroup.phaseGroupId,
+      phaseGroupName: selectedPhasePoolGroup.phaseGroupName,
+      phaseGroupDisplayIdentifier: selectedPhasePoolGroup.phaseGroupDisplayIdentifier,
+    });
+  }
+
+  async function changeSelectedPoolScoreEditLock(locked: boolean) {
+    if (!selectedEvent || !selectedPhasePoolGroup?.phaseGroupId) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await savePhaseGroupScoreEditLock({
+        slug: toApiSlug(slug),
+        eventId: selectedEvent.eventId,
+        eventName: selectedEvent.name,
+        phaseGroupId: selectedPhasePoolGroup.phaseGroupId,
+        locked,
+      });
+      setMessage(locked ? "このプールのスコア編集をロックしました。" : "このプールのスコア編集を許可しました。");
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const currentPlayerDisplayAliasSnapshot = selectedEvent
     && playerDisplayAliasSnapshot?.eventId === selectedEvent.eventId
     ? playerDisplayAliasSnapshot
@@ -1227,6 +1349,9 @@ function App() {
             onSelectThread={setSelectedThreadId}
             onProcessDqRequest={processDqRequestFromMessage}
             isDqRequestMessage={isDqRequestMessage}
+            getExternalEditRequest={getExternalEditRequest}
+            canAcceptExternalEditRequest={canAcceptExternalEditRequest}
+            onAcceptExternalEditRequest={(item) => void acceptExternalEditRequest(item)}
             canResolveActiveThread={canResolveActiveThread}
             onResolveActiveThread={resolveMailboxThread}
             canDeleteActiveThread={canDeleteActiveThread}
@@ -1414,6 +1539,7 @@ function App() {
         {activeTab === "bracket" && (
         <>
           <BracketTab
+            busy={busy}
             draftPendingCount={draftPendingCount}
             confirmedReportableCount={confirmedReportableCount}
             hasSnapshot={Boolean(snapshot)}
@@ -1425,7 +1551,12 @@ function App() {
             onPhaseNameChange={setSelectedPhaseName}
             phaseScopedPoolGroups={phaseScopedPoolGroups}
             selectedPhasePoolGroup={selectedPhasePoolGroup}
+            selectedPoolScoreEditLocked={selectedPoolScoreEditLocked}
+            externalEditor={selectedPoolExternalEditor}
+            canRequestExternalEditor={canBroadcastCallListSync}
+            onRequestExternalEditor={requestExternalEditor}
             onPhasePoolChange={setSelectedPhasePoolKey}
+            onSelectedPoolScoreEditLockChange={(locked) => void changeSelectedPoolScoreEditLock(locked)}
             bracketScaleStyle={bracketScaleStyle}
             bracketZoomLevel={bracketZoomLevel}
             bracketZoomLevels={BRACKET_ZOOM_LEVELS}
@@ -1473,7 +1604,9 @@ function App() {
                 || isCompletedSet(activeMatch)
                 || !isMatchupReady(activeMatch)
                 || directWinnerId !== null
+                || selectedPoolScoreEditLocked
               }
+              scoreEditLocked={selectedPoolScoreEditLocked}
               directWinnerId={directWinnerId}
               displayPlayersBySide={displayBracketPlayersBySide}
               onDisplayPlayersBySideChange={setDisplayBracketPlayersBySide}

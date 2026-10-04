@@ -13,13 +13,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use if_addrs::get_if_addrs;
 use models::{
-    BracketBatchReportInput, BracketBatchReportResult,
-    ClearLocalSetResultDraftInput, CreateEventSnapshotBySlugInput, CreateEventSnapshotInput,
-    GenericMessage, ItemListConfig, LocalPlayerMetaInput, LocalSetPlaySideInput,
-    LocalSetResultInput, LocalSetScoreInput, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
-    MobileResultRequestInput, MobileResultRequestItem, PlaySide, ReportSetResultInput,
-    ResetSetResultCascadeInput, ResetSetResultCascadeResult, SaveEventManagementMetaInput,
-    SenderProfile, SetSnapshot, TournamentPreview, TournamentSnapshot, TournamentWorkspace,
+    BracketBatchReportInput, BracketBatchReportResult, ClearLocalSetResultDraftInput,
+    CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, GenericMessage, ItemListConfig,
+    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetScoreInput,
+    LocalSetScoreUpdateInput, LocalSnapshotEventListItem, MobileResultRequestInput,
+    MobileResultRequestItem, PlaySide, ReportSetResultInput, ResetSetResultCascadeInput,
+    ResetSetResultCascadeResult, SaveEventManagementMetaInput, SenderProfile,
+    SetPhaseGroupExternalEditorInput, SetPhaseGroupScoreEditLockInput, SetSnapshot,
+    TournamentPreview, TournamentSnapshot, TournamentWorkspace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -204,6 +205,7 @@ struct MobileSetListItem {
     phase_group_name: Option<String>,
     is_intermediate: bool,
     matchup_ready: bool,
+    score_edit_locked: bool,
     state: i64,
     winner_id: Option<String>,
     entrant_names: Vec<String>,
@@ -248,6 +250,7 @@ struct MobileSetDetailItem {
     state: i64,
     winner_id: Option<String>,
     direct_win: bool,
+    score_edit_locked: bool,
     slots: Vec<MobileSetSlotItem>,
 }
 
@@ -682,6 +685,7 @@ mod tests {
             state: 2,
             winner_id: None,
             direct_win: false,
+            score_edit_locked: true,
             slots: vec![
                 MobileSetSlotItem {
                     entrant_id: Some("entrant-1".to_owned()),
@@ -2352,7 +2356,7 @@ fn mobile_input_html() -> &'static str {
         }
 
         function isListItemInputtable(set) {
-            if (Boolean(set?.isIntermediate)) {
+            if (Boolean(set?.isIntermediate) || Boolean(set?.scoreEditLocked)) {
                 return false;
             }
             const isCompleted = Number(set?.state || 0) === 3;
@@ -2511,11 +2515,14 @@ fn mobile_input_html() -> &'static str {
             const slots = getOrderedSlots(detail);
             const matchupReady = isMatchupReady(detail);
             const completed = isCompletedSet(detail);
-            detailMeta.textContent = completed
+            const scoreEditLocked = Boolean(detail?.scoreEditLocked);
+            detailMeta.textContent = scoreEditLocked
+                ? 'このプールは編集ロック中です。スコア入力・結果更新はできません。'
+                : completed
                 ? '結果が確定しているため編集できません。修正する場合は「影響setを取消」からやり直してください。'
                 : '';
             if (discardBtn) {
-                discardBtn.disabled = completed || !matchupReady;
+                discardBtn.disabled = completed || scoreEditLocked || !matchupReady;
             }
             const visibleSlots = slots.slice(0, 2);
             const numericScores = matchupReady
@@ -2545,7 +2552,7 @@ fn mobile_input_html() -> &'static str {
                     return displayOnePOnTop ? (index === 0 ? '1P' : '2P') : (index === 0 ? '2P' : '1P');
                 })();
                 const directWinButton = matchupReady && hasEntrant
-                    ? `<button class="win-btn" type="button" data-win-entrant-id="${entrantId}" ${completed ? 'disabled' : ''}>${directWinnerId === entrantId ? '解除' : 'Win'}</button>`
+                    ? `<button class="win-btn" type="button" data-win-entrant-id="${entrantId}" ${completed || scoreEditLocked ? 'disabled' : ''}>${directWinnerId === entrantId ? '解除' : 'Win'}</button>`
                     : '';
                 const directScore = directWinnerId && hasEntrant
                     ? (directWinnerId === entrantId ? 'W' : 'L')
@@ -2553,16 +2560,16 @@ fn mobile_input_html() -> &'static str {
                 const scoreControls = hasEntrant
                     ? `<div class="player-controls">
                         ${directWinButton}
-                        ${directScore ? `<span class="direct-score-label">${directScore}</span>` : `<input class="set-score-input ${isHigher ? 'score-high' : ''}" data-score-entrant-id="${entrantId}" type="text" inputmode="numeric" pattern="-?[0-9]*" min="-1" step="1" value="${formatScoreInputValue(score)}" ${completed ? 'disabled' : ''} />
+                        ${directScore ? `<span class="direct-score-label">${directScore}</span>` : `<input class="set-score-input ${isHigher ? 'score-high' : ''}" data-score-entrant-id="${entrantId}" type="text" inputmode="numeric" pattern="-?[0-9]*" min="-1" step="1" value="${formatScoreInputValue(score)}" ${completed || scoreEditLocked ? 'disabled' : ''} />
                         <div class="score-step-row">
-                            <button class="score-step-btn" type="button" data-score-adjust="1" data-score-entrant-id="${entrantId}" ${completed || directWinnerId ? 'disabled' : ''}>+</button>
-                            <button class="score-step-btn" type="button" data-score-adjust="-1" data-score-entrant-id="${entrantId}" ${completed || directWinnerId ? 'disabled' : ''}>−</button>
+                            <button class="score-step-btn" type="button" data-score-adjust="1" data-score-entrant-id="${entrantId}" ${completed || scoreEditLocked || directWinnerId ? 'disabled' : ''}>+</button>
+                            <button class="score-step-btn" type="button" data-score-adjust="-1" data-score-entrant-id="${entrantId}" ${completed || scoreEditLocked || directWinnerId ? 'disabled' : ''}>−</button>
                         </div>`}
-                        ${completed ? '<span class="slot-lock-note">確定済みset</span>' : (matchupReady ? '' : '<span class="slot-lock-note">対戦カード未確定</span>')}
+                        ${scoreEditLocked ? '<span class="slot-lock-note">プール編集ロック中</span>' : (completed ? '<span class="slot-lock-note">確定済みset</span>' : (matchupReady ? '' : '<span class="slot-lock-note">対戦カード未確定</span>'))}
                     </div>`
                     : `<div class="player-controls"><span class="slot-lock-note">対戦カード未確定</span></div>`;
                 const dqButton = matchupReady && hasEntrant
-                    ? `<button class="dq-btn" type="button" data-dq-entrant-id="${entrantId}" ${completed ? 'disabled' : ''}>DQ</button>`
+                    ? `<button class="dq-btn" type="button" data-dq-entrant-id="${entrantId}" ${completed || scoreEditLocked ? 'disabled' : ''}>DQ</button>`
                     : '';
                 const sideClass = sideLabel === '1P' ? 'side-1p' : (sideLabel === '2P' ? 'side-2p' : '');
                 const escapedEntrantName = escapeHtml(slot?.entrantName || 'TBD');
@@ -2670,10 +2677,10 @@ fn mobile_input_html() -> &'static str {
             }
 
             if (confirmBtn) {
-                confirmBtn.disabled = completed || !matchupReady;
+                confirmBtn.disabled = completed || scoreEditLocked || !matchupReady;
             }
             if (updateBtn) {
-                updateBtn.disabled = completed || !matchupReady;
+                updateBtn.disabled = completed || scoreEditLocked || !matchupReady;
             }
             if (swapSideBtn) {
                 swapSideBtn.disabled = completed || !matchupReady;
@@ -2927,6 +2934,7 @@ fn mobile_input_html() -> &'static str {
                     <h2>${set.fullRoundText}</h2>
                     <p class="meta">${setLabel}</p>
                     ${phaseLabel ? `<p class="meta">${phaseLabel}</p>` : ''}
+                    ${set.scoreEditLocked ? '<p class="meta">編集ロック中（入力不可）</p>' : ''}
                     <p class="meta">${players}</p>
                 </article>`;
             }).join('');
@@ -3466,6 +3474,7 @@ fn build_mobile_set_detail_from_set_snapshot(
         state: set.state,
         winner_id: set.winner_id.clone(),
         direct_win: false,
+        score_edit_locked: true,
         slots: set
             .slots
             .iter()
@@ -3659,6 +3668,7 @@ fn hydrate_mobile_detail_with_local_meta(
     if let Some(pending) = pending {
         apply_pending_mobile_result(&mut detail, pending);
     }
+    detail.score_edit_locked = storage::is_set_score_edit_locked(workspace, event_id, set_id);
     if detail.full_round_text.trim().is_empty() {
         detail.full_round_text = format!("Set {}", detail.set_code);
     }
@@ -3770,6 +3780,7 @@ fn build_mobile_set_detail_local_only(
             Some(pending.winner_id.clone())
         },
         direct_win: pending.direct_win,
+        score_edit_locked: true,
         slots,
     })
 }
@@ -3995,6 +4006,11 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 phase_group_name: set.phase_group_name.clone(),
                 is_intermediate: crate::models::is_intermediate_set(&event.phase_groups, set),
                 matchup_ready: mobile_set_has_matchup(&set.slots),
+                score_edit_locked: storage::is_set_score_edit_locked(
+                    &workspace,
+                    &event_id,
+                    &set.set_id,
+                ),
                 state: if confirmed_pending_set_ids.contains(set.set_id.as_str()) {
                     3
                 } else {
@@ -4139,6 +4155,15 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
             return;
         };
+
+        if storage::is_set_score_edit_locked(&workspace_before, &event_id, &set_id) {
+            respond_json(
+                request,
+                423,
+                "{\"error\":\"このプールは編集ロック中のため、スマートフォンからスコアを変更できません。\"}".to_owned(),
+            );
+            return;
+        }
 
         if target_set.state == 3 {
             respond_json(
@@ -4620,6 +4645,15 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             );
             return;
         };
+
+        if storage::is_set_score_edit_locked(&workspace, &payload.event_id, &payload.set_id) {
+            respond_json(
+                request,
+                423,
+                "{\"error\":\"このプールは編集ロック中のため、スマートフォンから結果を送信できません。\"}".to_owned(),
+            );
+            return;
+        }
 
         let known_entrant_ids = target_set
             .slots
@@ -6554,11 +6588,12 @@ async fn create_event_snapshot(
     validate_event_bracket_types(&snapshot, &input.event_id)?;
     let event_alias = resolve_event_alias(input.event_alias.clone(), &snapshot, &input.event_id);
 
-    storage::save_event_snapshot(&app, &snapshot, &input.event_id, event_alias)?;
-    let local_meta = storage::discard_pending_set_results_for_snapshot_refresh(
+    let local_meta = storage::save_event_snapshot_and_discard_pending(
         &app,
-        &input.slug,
+        &snapshot,
         &input.event_id,
+        event_alias,
+        &input.slug,
     )?;
     let snapshot = storage::load_snapshot(&app, &snapshot.slug)?;
 
@@ -6620,7 +6655,7 @@ async fn create_event_snapshot_by_slug(
         }
     };
 
-    if !fallback_slug.is_empty() {
+    if target_event_id.is_none() && !fallback_slug.is_empty() {
         emit_event_snapshot_progress(
             &app,
             startgg::EventSnapshotFetchProgress {
@@ -6702,9 +6737,13 @@ async fn create_event_snapshot_by_slug(
 
     let event_alias = resolve_event_alias(input.event_alias.clone(), &snapshot, &event_id);
 
-    storage::save_event_snapshot(&app, &snapshot, &event_id, event_alias)?;
-    let local_meta =
-        storage::discard_pending_set_results_for_snapshot_refresh(&app, &snapshot.slug, &event_id)?;
+    let local_meta = storage::save_event_snapshot_and_discard_pending(
+        &app,
+        &snapshot,
+        &event_id,
+        event_alias,
+        &snapshot.slug,
+    )?;
     let snapshot = storage::load_snapshot(&app, &snapshot.slug)?;
 
     Ok(TournamentWorkspace {
@@ -6731,9 +6770,13 @@ async fn refresh_local_event_snapshot_from_remote(
         .find(|item| item.event_id == event_id)
         .and_then(|item| item.event_alias);
 
-    storage::save_event_snapshot(&app, &snapshot, &event_id, existing_alias)?;
-    let local_meta =
-        storage::discard_pending_set_results_for_snapshot_refresh(&app, &slug, &event_id)?;
+    let local_meta = storage::save_event_snapshot_and_discard_pending(
+        &app,
+        &snapshot,
+        &event_id,
+        existing_alias,
+        &slug,
+    )?;
     let snapshot = storage::load_snapshot(&app, &slug)?;
 
     Ok(TournamentWorkspace {
@@ -6872,6 +6915,22 @@ fn save_local_set_play_side(
 }
 
 #[tauri::command]
+fn set_phase_group_score_edit_lock(
+    app: tauri::AppHandle,
+    input: SetPhaseGroupScoreEditLockInput,
+) -> Result<TournamentWorkspace, String> {
+    storage::set_phase_group_score_edit_lock(&app, input)
+}
+
+#[tauri::command]
+fn set_phase_group_external_editor(
+    app: tauri::AppHandle,
+    input: SetPhaseGroupExternalEditorInput,
+) -> Result<TournamentWorkspace, String> {
+    storage::set_phase_group_external_editor(&app, input)
+}
+
+#[tauri::command]
 fn save_local_set_result(
     app: tauri::AppHandle,
     input: LocalSetResultInput,
@@ -6966,11 +7025,18 @@ async fn reset_set_result_cascade(
     if affected_set_ids.is_empty() {
         return Err("取り消し対象setが見つかりませんでした。".to_owned());
     }
-
     let reset_remote = input.reset_remote.unwrap_or(false);
     if reset_remote {
         let token = storage::load_token(&app)?;
         let workspace_before = storage::load_workspace(&app, &input.slug, &input.event_id)?;
+        if affected_set_ids.iter().any(|set_id| {
+            storage::is_set_score_edit_locked(&workspace_before, &input.event_id, set_id)
+        }) {
+            return Err(
+                "編集ロック中のプールが取り消し対象に含まれるため、結果を取り消せません。"
+                    .to_owned(),
+            );
+        }
         let local_event = workspace_before
             .snapshot
             .events
@@ -7095,6 +7161,8 @@ pub fn run() {
             save_local_player_meta,
             derive_player_ids,
             save_local_set_play_side,
+            set_phase_group_score_edit_lock,
+            set_phase_group_external_editor,
             save_local_set_result,
             save_local_set_scores,
             report_confirmed_sets_from_bracket,

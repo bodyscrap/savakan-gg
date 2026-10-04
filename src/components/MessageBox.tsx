@@ -1,3 +1,5 @@
+import type { ExternalEditRequest } from "../domain/messageUtils";
+
 export type GenericMessage = {
   messageId: string;
   threadId: string;
@@ -57,6 +59,9 @@ type MessageBoxProps = {
   onSelectThread: (threadId: string) => void;
   onProcessDqRequest: (message: GenericMessage) => void;
   isDqRequestMessage: (message: GenericMessage) => boolean;
+  getExternalEditRequest: (message: GenericMessage) => ExternalEditRequest | null;
+  canAcceptExternalEditRequest: (message: GenericMessage) => boolean;
+  onAcceptExternalEditRequest: (message: GenericMessage) => void;
   canResolveActiveThread: boolean;
   onResolveActiveThread: () => void;
   canDeleteActiveThread: boolean;
@@ -99,6 +104,9 @@ export function MessageBox({
   onSelectThread,
   onProcessDqRequest,
   isDqRequestMessage,
+  getExternalEditRequest,
+  canAcceptExternalEditRequest,
+  onAcceptExternalEditRequest,
   canResolveActiveThread,
   onResolveActiveThread,
   canDeleteActiveThread,
@@ -287,6 +295,7 @@ export function MessageBox({
                 <div className="mailbox-message-list">
                   {activeThreadMessages.map((item) => {
                     const isResolutionOwnerRoot = isResolutionOwner(activeThread) && item.parentMessageId === null;
+                    const externalEditRequest = getExternalEditRequest(item);
                     return (
                     <article
                       key={item.messageId}
@@ -311,6 +320,25 @@ export function MessageBox({
                           <button type="button" className="ghost tiny" onClick={() => onProcessDqRequest(item)} disabled={disableLocalCommunication}>
                             DQ処理
                           </button>
+                        </div>
+                      )}
+                      {externalEditRequest && (
+                        <div style={{ marginTop: "0.45rem" }}>
+                          <p className="meta">
+                            外部編集申請: {externalEditRequest.eventName} / {externalEditRequest.phaseName}
+                            {" / Pool "}{externalEditRequest.phaseGroupName}
+                          </p>
+                          <button
+                            type="button"
+                            className="ghost tiny"
+                            disabled={!canAcceptExternalEditRequest(item)}
+                            onClick={() => onAcceptExternalEditRequest(item)}
+                          >
+                            申請受理
+                          </button>
+                          {!canAcceptExternalEditRequest(item) && (
+                            <p className="meta">対象イベントのスナップショットを選択すると受理できます。</p>
+                          )}
                         </div>
                       )}
                       <p className="message-body">{item.body}</p>
