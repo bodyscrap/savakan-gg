@@ -928,7 +928,6 @@ function App() {
       .includes(set.phaseGroupId);
     const authorizedEditor = (selectedEventMeta.externalEditors ?? []).some(
       (editor) => editor.phaseGroupId === set.phaseGroupId
-        && editor.senderName === message.senderName
         && editor.senderUserId === message.senderUserId,
     );
     const setEntrantIds = set.slots

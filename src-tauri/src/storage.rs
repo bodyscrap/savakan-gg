@@ -586,14 +586,11 @@ fn score_edit_enabled_for_phase_group(
 fn external_score_report_sender_is_authorized(
     event_meta: &EventLocalMeta,
     phase_group_id: &str,
-    sender_name: &str,
     sender_user_id: &str,
 ) -> bool {
     !score_edit_enabled_for_phase_group(Some(event_meta), phase_group_id)
         && event_meta.external_editors.iter().any(|editor| {
-            editor.phase_group_id == phase_group_id
-                && editor.sender_name == sender_name
-                && editor.sender_user_id == sender_user_id
+            editor.phase_group_id == phase_group_id && editor.sender_user_id == sender_user_id
         })
 }
 
@@ -649,19 +646,11 @@ mod score_edit_lock_tests {
         assert!(external_score_report_sender_is_authorized(
             &event_meta,
             "pool-a",
-            "External",
             "12345678"
         ));
         assert!(!external_score_report_sender_is_authorized(
             &event_meta,
             "pool-a",
-            "Other",
-            "12345678"
-        ));
-        assert!(!external_score_report_sender_is_authorized(
-            &event_meta,
-            "pool-a",
-            "External",
             "87654321"
         ));
         let mut unlocked_meta = event_meta;
@@ -671,7 +660,6 @@ mod score_edit_lock_tests {
         assert!(!external_score_report_sender_is_authorized(
             &unlocked_meta,
             "pool-a",
-            "External",
             "12345678"
         ));
     }
@@ -8346,14 +8334,14 @@ pub fn apply_external_score_report(
     if !valid_score_result {
         return Err("外部報告のスコアまたは勝者が一致しません。".to_owned());
     }
-    let authorization = (input.sender_name, input.sender_user_id);
+    let authorization = input.sender_user_id;
     upsert_local_set_result_inner(app, input.result, Some(authorization))
 }
 
 fn upsert_local_set_result_inner(
     app: &AppHandle,
     input: LocalSetResultInput,
-    external_report_authorization: Option<(String, String)>,
+    external_report_authorization: Option<String>,
 ) -> Result<TournamentWorkspace, String> {
     let started_at = Instant::now();
     if input.set_id.starts_with("preview_") {
@@ -8383,7 +8371,7 @@ fn upsert_local_set_result_inner(
         );
     }
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
-    if let Some((sender_name, sender_user_id)) = external_report_authorization {
+    if let Some(sender_user_id) = external_report_authorization {
         let phase_group_id = snapshot
             .events
             .iter()
@@ -8399,12 +8387,8 @@ fn upsert_local_set_result_inner(
             .iter()
             .find(|event| event.event_id == input.event_id)
             .ok_or_else(|| "外部報告の対象イベントメタが見つかりません。".to_owned())?;
-        if !external_score_report_sender_is_authorized(
-            event_meta,
-            &phase_group_id,
-            &sender_name,
-            &sender_user_id,
-        ) {
+        if !external_score_report_sender_is_authorized(event_meta, &phase_group_id, &sender_user_id)
+        {
             return Err("外部報告の送信者または対象プールのロック状態が一致しません。".to_owned());
         }
     } else {
