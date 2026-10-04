@@ -218,7 +218,7 @@ export function BracketTab({
                   {selectedPoolScoreEditLocked && externalEditor && (
                     <>
                       <span className="meta">
-                        外部編集者: {externalEditor.senderName} ({externalEditor.senderUserId})
+                        外部報告者: {externalEditor.senderName} ({externalEditor.senderUserId})
                       </span>
                       <button
                         type="button"
@@ -226,7 +226,7 @@ export function BracketTab({
                         disabled={busy}
                         onClick={onClearSelectedPoolExternalEditor}
                       >
-                        外部編集者を解除
+                        外部報告者を解除
                       </button>
                     </>
                   )}
@@ -247,7 +247,7 @@ export function BracketTab({
                         disabled={busy || !canRequestExternalEditor}
                         onClick={onRequestExternalEditor}
                       >
-                        外部編集申請
+                        外部報告申請
                       </button>
                     </>
                   )}

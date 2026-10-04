@@ -335,11 +335,11 @@ export function MessageBox({
                       {externalEditRequest && (
                         <div style={{ marginTop: "0.45rem" }}>
                           <p className="meta">
-                            外部編集申請: {externalEditRequest.eventName} / {externalEditRequest.phaseName}
+                            外部報告申請: {externalEditRequest.eventName} / {externalEditRequest.phaseName}
                             {" / Pool "}{externalEditRequest.phaseGroupName}
                           </p>
                           <p className="meta">
-                            受理は申請元イベントのスナップショット選択時のみ可能です。受理すると対象プールをロックし、申請者を外部編集者に設定します。
+                            受理は申請元イベントのスナップショット選択時のみ可能です。受理すると対象プールをロックし、申請者を外部報告者に設定します。
                           </p>
                           <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
                             <button
@@ -425,7 +425,7 @@ export function MessageBox({
                 )}
                 {activeThreadExternalEditRequest && isResolutionOwner(activeThread) && (
                   <div className="panel-toolbar compact" style={{ marginTop: "0.6rem" }}>
-                    <p className="meta">外部編集申請の発信者は、申請スレッドを解決または削除できます。</p>
+                    <p className="meta">外部報告申請の発信者は、申請スレッドを解決または削除できます。</p>
                     <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                       <button type="button" className="ghost" onClick={onResolveActiveThread} disabled={!canResolveActiveThread}>
                         解決

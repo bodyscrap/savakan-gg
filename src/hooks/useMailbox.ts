@@ -535,7 +535,7 @@ export function useMailbox({
     onError("");
     onMessage("");
     if (disableLocalCommunication) {
-      onError("ローカル通信を行わない設定のため、外部編集申請は送信できません。設定タブで解除してください。");
+      onError("ローカル通信を行わない設定のため、外部報告申請は送信できません。設定タブで解除してください。");
       return false;
     }
     if (!senderProfileReadyForMessaging) {
@@ -562,7 +562,7 @@ export function useMailbox({
       ].some((value) => value.trim() === "")
       || !isValidSenderUserId(senderProfile.senderUserId)
     ) {
-      onError("外部編集申請に必要なイベント・プール・送信者情報が不足しています。");
+      onError("外部報告申請に必要なイベント・プール・送信者情報が不足しています。");
       return false;
     }
 
@@ -588,8 +588,8 @@ export function useMailbox({
           messageType: "normal",
           messageMeta,
           method: "external_edit_request",
-          subject: `外部編集申請: ${input.eventName} / ${input.phaseName} / ${input.phaseGroupName}`,
-          body: `${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から外部編集申請が届きました。\n対象: ${input.eventName} / ${input.phaseName} / ${input.phaseGroupName}`,
+          subject: `外部報告申請: ${input.eventName} / ${input.phaseName} / ${input.phaseGroupName}`,
+          body: `${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から外部報告申請が届きました。\n対象: ${input.eventName} / ${input.phaseName} / ${input.phaseGroupName}`,
           deliveryTargetMode: "broadcast",
           deliveryTargetIp: null,
           threadId: null,
@@ -600,7 +600,7 @@ export function useMailbox({
       if (normalized) {
         setSelectedThreadId(normalized.threadId);
       }
-      onMessage(`外部編集申請をブロードキャストしました: ${input.phaseName} / ${input.phaseGroupName}`);
+      onMessage(`外部報告申請をブロードキャストしました: ${input.phaseName} / ${input.phaseGroupName}`);
       return true;
     } catch (error) {
       onError(String(error));
@@ -643,7 +643,7 @@ export function useMailbox({
         messageMeta,
         method: "external_score_report",
         subject: `外部報告: ${report.eventName} / ${report.phaseName} / ${report.phaseGroupName} / ${report.setId}`,
-        body: `外部編集者 ${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から確定スコアが届きました。\n勝者: ${report.winnerId}\nスコア: ${report.slotScores.map((score) => `${score.entrantId}=${score.score < 0 ? "DQ" : score.score}`).join(" / ")}`,
+        body: `外部報告者 ${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から確定スコアが届きました。\n勝者: ${report.winnerId}\nスコア: ${report.slotScores.map((score) => `${score.entrantId}=${score.score < 0 ? "DQ" : score.score}`).join(" / ")}`,
         deliveryTargetMode: "broadcast",
         deliveryTargetIp: null,
         threadId: null,
@@ -713,7 +713,7 @@ export function useMailbox({
     onError("");
     onMessage("");
     if (!canReplyToExternalEditRequest(message)) {
-      onError("外部編集申請への返信に必要な送信者情報、返信先、または未解決スレッドがありません。");
+      onError("外部報告申請への返信に必要な送信者情報、返信先、または未解決スレッドがありません。");
       return false;
     }
 
@@ -725,8 +725,8 @@ export function useMailbox({
           method: message.method,
           subject: `Re: ${message.subject}`,
           body: accepted
-            ? "外部編集申請を受理しました。対象フェーズ/プールのスコア編集をロックし、申請者を外部編集者に設定しました。"
-            : "外部編集申請を却下しました。",
+            ? "外部報告申請を受理しました。対象フェーズ/プールのスコア編集をロックし、申請者を外部報告者に設定しました。"
+            : "外部報告申請を却下しました。",
           messageMeta: buildScopedMessageMeta(null, scope),
           deliveryTargetMode: "direct",
           deliveryTargetIp: message.senderIp.trim(),
@@ -735,7 +735,7 @@ export function useMailbox({
         },
       });
       addMailboxMessage(sent);
-      onMessage(accepted ? "外部編集申請を受理し、返信しました。" : "外部編集申請を却下し、返信しました。");
+      onMessage(accepted ? "外部報告申請を受理し、返信しました。" : "外部報告申請を却下し、返信しました。");
       return true;
     } catch (error) {
       onError(String(error));

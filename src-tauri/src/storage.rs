@@ -9876,7 +9876,7 @@ pub fn set_phase_group_external_editor(
                     .any(|group| group.phase_group_id == phase_group_id)
             })
     {
-        return Err("外部編集者または指定プールの情報が不正です。".to_owned());
+        return Err("外部報告者または指定プールの情報が不正です。".to_owned());
     }
 
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;

@@ -1113,7 +1113,7 @@ function App() {
         && editor.senderUserId === message.senderUserId,
     );
     if (!authorizedEditor) {
-      return "送信者は対象プールの承認済み外部編集者ではありません。";
+      return "送信者は対象プールの承認済み外部報告者ではありません。";
     }
     const setEntrantIds = set.slots
       .map((slot) => slot.entrantId)
@@ -1257,7 +1257,7 @@ function App() {
       setSelectedPhaseName(request.phaseName);
       setSelectedPhasePoolKey(`id:${request.phaseGroupId}`);
       setActiveTab("bracket");
-      setMessage(`外部編集申請を受理し、返信しました: ${request.phaseName} / ${request.phaseGroupName}`);
+      setMessage(`外部報告申請を受理し、返信しました: ${request.phaseName} / ${request.phaseGroupName}`);
     } catch (error) {
       setError(String(error));
     } finally {
@@ -1275,18 +1275,18 @@ function App() {
       || !selectedEvent
       || !selectedPhasePoolGroup?.phaseGroupId
     ) {
-      setError("外部編集申請を送信するイベント/プールを選択してください。");
+      setError("外部報告申請を送信するイベント/プールを選択してください。");
       return;
     }
     if (selectedPoolScoreEditLocked) {
-      setError("外部編集申請を送信するには、このプールのスコア編集ロックを解除してください。");
+      setError("外部報告申請を送信するには、このプールのスコア編集ロックを解除してください。");
       return;
     }
     if (busy) {
       return;
     }
     if (!selectedEventMeta || selectedEvent.eventId !== selectedEventMeta.eventId) {
-      setError("外部編集申請を送信するイベント/プールを選択してください。");
+      setError("外部報告申請を送信するイベント/プールを選択してください。");
       return;
     }
     setBusy(true);
@@ -1311,9 +1311,9 @@ function App() {
       phaseGroupId: selectedPhasePoolGroup.phaseGroupId,
       enabled: true,
     });
-    setMessage("外部編集申請を送信し、確定スコアの外部報告を有効にしました。");
+    setMessage("外部報告申請を送信し、確定スコアの外部報告を有効にしました。");
     } catch (error) {
-    setError(`外部編集申請は送信済みですが、外部報告設定を保存できませんでした: ${String(error)}`);
+    setError(`外部報告申請は送信済みですが、外部報告設定を保存できませんでした: ${String(error)}`);
     } finally {
     setBusy(false);
     }
@@ -1353,7 +1353,7 @@ function App() {
     ) {
       return;
     }
-    if (!window.confirm(`外部編集者 ${selectedPoolExternalEditor.senderName} (${selectedPoolExternalEditor.senderUserId}) をこのプールから解除しますか？`)) {
+    if (!window.confirm(`外部報告者 ${selectedPoolExternalEditor.senderName} (${selectedPoolExternalEditor.senderUserId}) をこのプールから解除しますか？`)) {
       return;
     }
     setBusy(true);
@@ -1366,7 +1366,7 @@ function App() {
         eventName: selectedEvent.name,
         phaseGroupId,
       });
-      setMessage("このプールの外部編集者を解除しました。");
+      setMessage("このプールの外部報告者を解除しました。");
     } catch (error) {
       setError(String(error));
     } finally {
