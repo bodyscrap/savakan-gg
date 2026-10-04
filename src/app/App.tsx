@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { save as saveFile } from "@tauri-apps/plugin-dialog";
 import { CreateSnapshot } from "../components/CreateSnapshot";
 import { DqRequestDialog } from "../components/DqRequestDialog";
 import { useDqCameraScan } from "../hooks/useDqCameraScan";
@@ -74,6 +75,13 @@ import {
   normalizeCallListRotateSeconds,
   useCallList,
 } from "../hooks/useCallList";
+import {
+  exportTournamentShareArchive,
+  importTournamentShareArchive,
+  saveLastSlug,
+  saveLastSnapshotSelection,
+  writeSnapshotExportFile,
+} from "../domain/tournamentWorkspaceRepository";
 import {
   useTournamentWorkspace,
   type PlaySide,
@@ -703,6 +711,72 @@ function App() {
     closeMatchDialog,
   });
   selectLocalSnapshotEventRef.current = selectLocalSnapshotEvent;
+
+  async function exportShareFile(item: LocalSnapshotEventListItem) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const safeSlug = item.slug.replace(/^tournament\//, "").replace(/[^\w.-]+/g, "-");
+      const safeEventId = item.eventId.replace(/[^\w.-]+/g, "-");
+      const path = await saveFile({
+        title: "スナップショットをエクスポート",
+        defaultPath: `savakan-gg-${safeSlug}-${safeEventId}-snapshot.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) {
+        return;
+      }
+
+      const archive = await exportTournamentShareArchive(item.slug, item.eventId);
+      await writeSnapshotExportFile(path, JSON.stringify(archive, null, 2));
+      setMessage(`スナップショットをエクスポートしました: ${item.tournamentName} / ${item.eventName}`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importShareFile(file: File) {
+    if (!window.confirm(
+      "スナップショットをインポートしますか？同一イベントが既にある場合はsnapshotと大会設定画面のイベント別メタデータを置き換え、対象イベントの保留中結果とプール別ロック/外部編集者設定を初期化します。設定タブの情報、メッセージ、送信者プロフィールは変更しません。",
+    )) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const importedWorkspace = await importTournamentShareArchive(await file.text());
+      const importedEvent = importedWorkspace.snapshot.events[0];
+      if (!importedEvent) {
+        throw new Error("スナップショットにイベントがありません。");
+      }
+
+      await saveLastSlug(importedWorkspace.snapshot.slug);
+      await saveLastSnapshotSelection({
+        slug: importedWorkspace.snapshot.slug,
+        eventId: importedEvent.eventId,
+        phaseName: null,
+        phaseGroupName: null,
+      });
+      clearAllDrafts();
+      closeMatchDialog();
+      setWorkspace(importedWorkspace);
+      setSlug(importedWorkspace.snapshot.slug);
+      setSelectedEventId(importedEvent.eventId);
+      setSelectedPhaseName("");
+      setSelectedPhasePoolKey("");
+      await refreshLocalSnapshotEvents();
+      setActiveTab("bracket");
+      setMessage(`スナップショットをインポートしました: ${importedWorkspace.snapshot.name} / ${importedEvent.name}`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useSnapshotTabAutoLoad({
     activeTab,
@@ -1609,6 +1683,8 @@ function App() {
               onRefresh={() => void refreshLocalSnapshotEvents()}
               onSelectEvent={(item) => void selectLocalSnapshotEvent(item)}
               onDeleteEvent={(item) => void deleteLocalSnapshotEvent(item)}
+              onImportShareFile={(file) => void importShareFile(file)}
+              onExportShareFile={(item) => void exportShareFile(item)}
             />
           </>
         )}

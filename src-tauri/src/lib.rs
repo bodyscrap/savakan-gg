@@ -22,7 +22,7 @@ use models::{
     ResetSetResultCascadeResult, RestoreEventGraphInput, RestoreEventGraphResult,
     SaveEventManagementMetaInput, SenderProfile, SetPhaseGroupExternalEditorInput,
     SetPhaseGroupExternalScoreBroadcastInput, SetPhaseGroupScoreEditLockInput, SetSnapshot,
-    TournamentPreview, TournamentSnapshot, TournamentWorkspace,
+    TournamentPreview, TournamentShareArchive, TournamentSnapshot, TournamentWorkspace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -6851,6 +6851,37 @@ fn list_local_snapshot_events(
 }
 
 #[tauri::command]
+fn export_tournament_share_archive(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+) -> Result<TournamentShareArchive, String> {
+    storage::export_tournament_share_archive(&app, &slug, &event_id)
+}
+
+#[tauri::command]
+fn write_snapshot_export_file(path: String, contents: String) -> Result<(), String> {
+    let target = std::path::PathBuf::from(path);
+    if !target
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        return Err("保存先はJSONファイルを指定してください。".to_owned());
+    }
+    std::fs::write(&target, contents)
+        .map_err(|error| format!("スナップショットの保存に失敗しました: {error}"))
+}
+
+#[tauri::command]
+fn import_tournament_share_archive(
+    app: tauri::AppHandle,
+    archive_json: String,
+) -> Result<TournamentWorkspace, String> {
+    storage::import_tournament_share_archive(&app, &archive_json)
+}
+
+#[tauri::command]
 fn delete_local_snapshot_event(
     app: tauri::AppHandle,
     slug: String,
@@ -7164,6 +7195,7 @@ async fn reset_set_result_cascade(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             save_startgg_token,
             load_saved_startgg_token,
@@ -7202,6 +7234,9 @@ pub fn run() {
             load_local_tournament_workspace,
             preview_tournament,
             list_local_snapshot_events,
+            export_tournament_share_archive,
+            write_snapshot_export_file,
+            import_tournament_share_archive,
             delete_local_snapshot_event,
             create_event_snapshot,
             create_event_snapshot_by_slug,

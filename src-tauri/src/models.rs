@@ -27,6 +27,40 @@ pub struct TournamentWorkspace {
     pub local_meta: TournamentLocalMeta,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentShareArchive {
+    pub format: String,
+    pub schema_version: u32,
+    pub snapshot: TournamentSnapshot,
+    pub event_settings: TournamentShareEventSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentShareEventSettings {
+    #[serde(default)]
+    pub event_alias: Option<String>,
+    #[serde(default)]
+    pub event_management: Option<EventManagementMeta>,
+    #[serde(default)]
+    pub entrants: Vec<TournamentShareEntrantMeta>,
+    #[serde(default)]
+    pub set_play_sides: Vec<SetPlaySideMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TournamentShareEntrantMeta {
+    pub entrant_id: String,
+    #[serde(default)]
+    pub alias_name: String,
+    #[serde(default)]
+    pub play_side: Option<PlaySide>,
+    #[serde(default)]
+    pub character_names: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemListConfig {

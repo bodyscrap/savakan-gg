@@ -130,6 +130,23 @@ export type TournamentWorkspace = {
   localMeta: TournamentLocalMeta;
 };
 
+export type TournamentShareArchive = {
+  format: "savakan-gg-event-share";
+  schemaVersion: 2;
+  snapshot: TournamentSnapshot;
+  eventSettings: {
+    eventAlias: string | null;
+    eventManagement: EventManagementMeta | null;
+    entrants: Array<{
+      entrantId: string;
+      aliasName: string;
+      playSide: PlaySide | null;
+      characterNames: string[];
+    }>;
+    setPlaySides: SetPlaySideMeta[];
+  };
+};
+
 export type SnapshotRestoreScope =
   | "currentPool"
   | "lockedPoolsInCurrentPhase"
@@ -241,6 +258,21 @@ export async function listLocalSnapshotEvents(): Promise<LocalSnapshotEventListI
 
 export async function loadTournamentWorkspace(slug: string, eventId: string): Promise<TournamentWorkspace> {
   return invoke<TournamentWorkspace>("load_local_tournament_workspace", { slug, eventId });
+}
+
+export async function exportTournamentShareArchive(
+  slug: string,
+  eventId: string,
+): Promise<TournamentShareArchive> {
+  return invoke<TournamentShareArchive>("export_tournament_share_archive", { slug, eventId });
+}
+
+export async function writeSnapshotExportFile(path: string, contents: string): Promise<void> {
+  await invoke("write_snapshot_export_file", { path, contents });
+}
+
+export async function importTournamentShareArchive(archiveJson: string): Promise<TournamentWorkspace> {
+  return invoke<TournamentWorkspace>("import_tournament_share_archive", { archiveJson });
 }
 
 export async function refreshTournamentSnapshot(

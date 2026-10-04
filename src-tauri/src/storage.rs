@@ -21,7 +21,9 @@ use crate::models::{
     RestoreEventGraphResult, SaveEventManagementMetaInput, SenderProfile,
     SetPhaseGroupExternalEditorInput, SetPhaseGroupExternalScoreBroadcastInput,
     SetPhaseGroupScoreEditLockInput, SetPlaySideMeta, SetSnapshot, SnapshotRestoreScope,
-    TournamentEventPreviewItem, TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
+    TournamentEventPreviewItem, TournamentLocalMeta, TournamentShareArchive,
+    TournamentShareEntrantMeta, TournamentShareEventSettings, TournamentSnapshot,
+    TournamentWorkspace,
 };
 
 const STORAGE_DIR_NAME: &str = "savakan-gg";
@@ -1566,6 +1568,206 @@ pub fn save_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(
         &snapshot.events,
     )?;
     Ok(())
+}
+
+pub fn export_tournament_share_archive(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentShareArchive, String> {
+    let pristine_snapshot = load_pristine_event_snapshot(app, slug, event_id)?;
+    let event = pristine_snapshot
+        .events
+        .first()
+        .ok_or_else(|| format!("共有対象のイベントがありません: {event_id}"))?;
+    let event_set_ids = event
+        .sets
+        .iter()
+        .map(|set| set.set_id.as_str())
+        .collect::<HashSet<_>>();
+    let event_entrant_ids = event
+        .sets
+        .iter()
+        .flat_map(|set| set.slots.iter())
+        .filter_map(|slot| slot.entrant_id.as_deref())
+        .collect::<HashSet<_>>();
+    let local_meta = load_local_meta(app, slug, event_id)?;
+    let event_meta = local_meta
+        .events
+        .iter()
+        .find(|event_meta| event_meta.event_id == event_id);
+    let event_settings = TournamentShareEventSettings {
+        event_alias: event_meta.and_then(|event_meta| event_meta.event_alias.clone()),
+        event_management: event_meta.and_then(|event_meta| event_meta.event_management.clone()),
+        entrants: event_meta
+            .into_iter()
+            .flat_map(|event_meta| event_meta.entrants.iter())
+            .filter(|entrant| event_entrant_ids.contains(entrant.entrant_id.as_str()))
+            .map(|entrant| TournamentShareEntrantMeta {
+                entrant_id: entrant.entrant_id.clone(),
+                alias_name: entrant.alias_name.clone(),
+                play_side: entrant.play_side.clone(),
+                character_names: entrant.character_names.clone(),
+            })
+            .collect(),
+        set_play_sides: local_meta
+            .set_play_sides
+            .iter()
+            .filter(|side| event_set_ids.contains(side.set_id.as_str()))
+            .cloned()
+            .collect::<Vec<SetPlaySideMeta>>(),
+    };
+
+    Ok(TournamentShareArchive {
+        format: "savakan-gg-event-share".to_owned(),
+        schema_version: 2,
+        snapshot: pristine_snapshot,
+        event_settings,
+    })
+}
+
+pub fn import_tournament_share_archive(
+    app: &AppHandle,
+    archive_json: &str,
+) -> Result<TournamentWorkspace, String> {
+    let archive = serde_json::from_str::<TournamentShareArchive>(archive_json)
+        .map_err(|error| format!("スナップショットの読み込みに失敗しました: {error}"))?;
+    if archive.format != "savakan-gg-event-share" || archive.schema_version != 2 {
+        return Err("未対応のスナップショット形式です。".to_owned());
+    }
+    if archive.snapshot.events.len() != 1 {
+        return Err("スナップショットにはイベントが1件だけ含まれている必要があります。".to_owned());
+    }
+    let event = &archive.snapshot.events[0];
+    let event_entrant_ids = event
+        .sets
+        .iter()
+        .flat_map(|set| set.slots.iter())
+        .filter_map(|slot| slot.entrant_id.as_deref())
+        .collect::<HashSet<_>>();
+    if archive.snapshot.tournament_id.trim().is_empty()
+        || archive.snapshot.slug.trim().is_empty()
+        || event.event_id.trim().is_empty()
+        || archive
+            .event_settings
+            .entrants
+            .iter()
+            .any(|entrant| !event_entrant_ids.contains(entrant.entrant_id.as_str()))
+        || archive.event_settings.set_play_sides.iter().any(|side| {
+            !event.sets.iter().any(|set| {
+                set.set_id == side.set_id
+                    && set
+                        .slots
+                        .iter()
+                        .any(|slot| slot.entrant_id.as_deref() == Some(&side.entrant_id))
+            })
+        })
+    {
+        return Err("スナップショット内のsnapshotとイベント設定が一致しません。".to_owned());
+    }
+
+    let event_id = event.event_id.clone();
+    let event_name = event.name.clone();
+    let snapshot = archive.snapshot;
+    let event_settings = archive.event_settings;
+    let normalized_slug = normalize_slug_for_storage(&snapshot.slug);
+    let graph_event = snapshot
+        .events
+        .first()
+        .ok_or_else(|| "スナップショットにイベントがありません。".to_owned())?;
+    let graph = build_bracket_graph(&snapshot, graph_event);
+
+    save_event_snapshot_file(
+        app,
+        &snapshot,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        &event_id,
+        &event_name,
+        false,
+    )?;
+    remove_stale_event_snapshot_files(
+        app,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        &snapshot.events,
+        false,
+    )?;
+    save_pristine_snapshot(app, &snapshot)?;
+    save_event_graph_file(
+        app,
+        &graph,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        &event_id,
+        &event_name,
+    )?;
+    remove_stale_event_graph_files(
+        app,
+        &snapshot.tournament_id,
+        &normalized_slug,
+        &snapshot.events,
+    )?;
+
+    let mut local_meta = merge_snapshot_into_meta(
+        &snapshot,
+        &event_id,
+        load_local_meta(app, &snapshot.slug, &event_id)?,
+    );
+    let event_set_ids = snapshot
+        .events
+        .iter()
+        .flat_map(|event| event.sets.iter().map(|set| set.set_id.as_str()))
+        .collect::<HashSet<_>>();
+    local_meta
+        .set_play_sides
+        .retain(|side| !event_set_ids.contains(side.set_id.as_str()));
+    local_meta
+        .set_play_sides
+        .extend(event_settings.set_play_sides);
+    if let Some(event_meta) = local_meta
+        .events
+        .iter_mut()
+        .find(|event_meta| event_meta.event_id == event_id)
+    {
+        event_meta.event_alias = event_settings.event_alias;
+        event_meta.event_management = event_settings.event_management;
+        event_meta.score_edit_enabled_phase_group_ids.clear();
+        event_meta.external_score_broadcast_phase_group_ids.clear();
+        event_meta.external_editors.clear();
+        event_meta.last_selected_phase_name = None;
+        event_meta.last_selected_phase_group_name = None;
+        for entrant in &mut event_meta.entrants {
+            entrant.alias_name.clear();
+            entrant.play_side = None;
+            entrant.character_names.clear();
+        }
+        for shared_entrant in event_settings.entrants {
+            if let Some(entrant) = event_meta
+                .entrants
+                .iter_mut()
+                .find(|entrant| entrant.entrant_id == shared_entrant.entrant_id)
+            {
+                entrant.alias_name = shared_entrant.alias_name;
+                entrant.play_side = shared_entrant.play_side;
+                entrant.character_names = shared_entrant.character_names;
+            }
+        }
+    }
+    local_meta
+        .pending_set_results
+        .retain(|result| result.event_id != event_id);
+    local_meta
+        .pending_grand_final_reset_results
+        .retain(|result| result.event_id != event_id);
+    local_meta
+        .set_confirmation_history
+        .retain(|record| record.event_id != event_id);
+    local_meta.updated_at = Utc::now();
+    save_local_meta(app, &event_id, &local_meta)?;
+    invalidate_progression_cache(&snapshot.slug);
+
+    load_workspace(app, &snapshot.slug, &event_id)
 }
 
 fn save_event_graph_snapshot(
