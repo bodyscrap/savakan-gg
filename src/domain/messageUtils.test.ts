@@ -6,6 +6,7 @@ import {
 	extractCallTargetIdentityFromMeta,
 	getExternalEditRequest,
 	getExternalScoreReport,
+	isMessageForScope,
 	formatSenderProfileLabel,
 	hasSenderIdCollision,
 	isSameCallTargetIdentity,
@@ -235,5 +236,40 @@ describe("external score reports", () => {
 			...reportMessage,
 			parentMessageId: "parent-1",
 		})).toBeNull();
+	});
+
+	it("uses tournament, event, and set identifiers without requiring sender-side labels", () => {
+		expect(getExternalScoreReport({
+			...reportMessage,
+			messageMeta: {
+				externalScoreReport: true,
+				externalScoreReportTournamentId: "tournament-1",
+				externalScoreReportEventId: "event-1",
+				externalScoreReportSetId: "set-1",
+				externalScoreReportWinnerId: "entrant-1",
+				externalScoreReportDirectWin: false,
+				externalScoreReportSlotScores: [
+					{ entrantId: "entrant-1", score: 2 },
+					{ entrantId: "entrant-2", score: 1 },
+				],
+			},
+		})).not.toBeNull();
+		expect(isMessageForScope({
+			...reportMessage,
+			messageMeta: {
+				...reportMessage.messageMeta,
+				scopeTournamentId: "tournament-1",
+				scopeSlug: "sender-side-slug",
+				scopeEventId: "event-1",
+				scopePhaseName: "different phase label",
+				scopePhaseGroupName: "different pool label",
+			},
+		}, {
+			tournamentId: "tournament-1",
+			slug: "receiver-side-slug",
+			eventId: "event-1",
+			phaseName: "Phase 1",
+			phaseGroupName: "Pool A",
+		})).toBe(true);
 	});
 });

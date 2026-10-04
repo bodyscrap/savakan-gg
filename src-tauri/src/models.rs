@@ -262,7 +262,6 @@ pub struct LocalSetResultInput {
 #[serde(rename_all = "camelCase")]
 pub struct ApplyExternalScoreReportInput {
     pub result: LocalSetResultInput,
-    pub phase_group_id: String,
     pub sender_name: String,
     pub sender_user_id: String,
 }

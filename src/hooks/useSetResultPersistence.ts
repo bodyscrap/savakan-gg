@@ -238,7 +238,6 @@ export function useSetResultPersistence<TWorkspace>({
       const workspace = await invoke<TWorkspace>("apply_external_score_report", {
         input: {
           result: input.result,
-          phaseGroupId: input.phaseGroupId,
           senderName: input.senderName,
           senderUserId: input.senderUserId,
         },

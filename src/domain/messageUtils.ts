@@ -311,12 +311,7 @@ export function getExternalScoreReport(message: GenericMessage): ExternalScoreRe
   if (
     [
       report.tournamentId,
-      report.slug,
       report.eventId,
-      report.eventName,
-      report.phaseName,
-      report.phaseGroupId,
-      report.phaseGroupName,
       report.setId,
       report.winnerId,
     ].some((value) => value === "")
@@ -436,14 +431,21 @@ export function isMessageForScope(message: GenericMessage, scope: MessageScope |
 
   const hasScopePhase = scope.phaseName.trim() !== "";
   const hasScopePhaseGroup = scope.phaseGroupName.trim() !== "";
-  const phaseMatches = !hasScopePhase || scopePhaseName === "" || scopePhaseName === scope.phaseName;
-  const phaseGroupMatches = !hasScopePhaseGroup || scopePhaseGroupName === "" || scopePhaseGroupName === scope.phaseGroupName;
+  const isExternalScoreReport = message.method === "external_score_report";
+  const phaseMatches = isExternalScoreReport
+    || !hasScopePhase
+    || scopePhaseName === ""
+    || scopePhaseName === scope.phaseName;
+  const phaseGroupMatches = isExternalScoreReport
+    || !hasScopePhaseGroup
+    || scopePhaseGroupName === ""
+    || scopePhaseGroupName === scope.phaseGroupName;
 
   if (
     scopeEventId !== ""
     && scopeEventId === scope.eventId
     && (scopeTournamentId === "" || scopeTournamentId === scope.tournamentId)
-    && (scopeSlug === "" || scopeSlug === scope.slug)
+    && (isExternalScoreReport || scopeSlug === "" || scopeSlug === scope.slug)
   ) {
     return phaseMatches && phaseGroupMatches;
   }

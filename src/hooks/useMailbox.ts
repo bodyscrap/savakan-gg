@@ -76,6 +76,7 @@ export function useMailbox({
 }: UseMailboxOptions) {
   const [genericMessages, setGenericMessages] = useState<GenericMessage[]>([]);
   const [genericMessagesReady, setGenericMessagesReady] = useState(false);
+  const [mailboxReadMessageIdsReady, setMailboxReadMessageIdsReady] = useState(false);
   const [mailboxMethodDraft, setMailboxMethodDraft] = useState("generic");
   const [mailboxSubjectDraft, setMailboxSubjectDraft] = useState("");
   const [messageDeliveryMode, setMessageDeliveryMode] = useState<"broadcast" | "direct">("broadcast");
@@ -135,6 +136,8 @@ export function useMailbox({
       }
     } catch {
       // Ignore malformed local settings.
+    } finally {
+      setMailboxReadMessageIdsReady(true);
     }
   }, []);
 
@@ -196,20 +199,26 @@ export function useMailbox({
   }, [mailboxFilterSetting]);
 
   useEffect(() => {
+    if (!mailboxReadMessageIdsReady) {
+      return;
+    }
     try {
       window.localStorage.setItem(MAILBOX_READ_IDS_STORAGE_KEY, JSON.stringify(mailboxReadMessageIds));
     } catch {
       // Ignore local storage failures.
     }
-  }, [mailboxReadMessageIds]);
+  }, [mailboxReadMessageIds, mailboxReadMessageIdsReady]);
 
   useEffect(() => {
+    if (!genericMessagesReady || !mailboxReadMessageIdsReady) {
+      return;
+    }
     setMailboxReadMessageIds((current) => {
       const known = new Set(genericMessages.map((item) => item.messageId));
       const next = current.filter((id) => known.has(id));
       return next.length === current.length ? current : next;
     });
-  }, [genericMessages]);
+  }, [genericMessages, genericMessagesReady, mailboxReadMessageIdsReady]);
 
   useEffect(() => {
     if (!senderProfileReady) {
@@ -946,7 +955,12 @@ export function useMailbox({
   }, [mailboxThreads]);
 
   useEffect(() => {
-    if (activeTab !== "message" || !activeThread) {
+    if (
+      !genericMessagesReady
+      || !mailboxReadMessageIdsReady
+      || activeTab !== "message"
+      || !activeThread
+    ) {
       return;
     }
 
@@ -964,7 +978,14 @@ export function useMailbox({
       }
       return next.size === current.length ? current : [...next];
     });
-  }, [activeTab, activeThread, activeThreadMessages, senderProfile.senderUserId]);
+  }, [
+    activeTab,
+    activeThread,
+    activeThreadMessages,
+    genericMessagesReady,
+    mailboxReadMessageIdsReady,
+    senderProfile.senderUserId,
+  ]);
 
   function updateMailboxFilter(key: keyof MailboxFilterSetting, checked: boolean) {
     setSelectedThreadId("");

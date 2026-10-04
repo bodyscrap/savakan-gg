@@ -8346,18 +8346,14 @@ pub fn apply_external_score_report(
     if !valid_score_result {
         return Err("外部報告のスコアまたは勝者が一致しません。".to_owned());
     }
-    let authorization = (
-        input.phase_group_id,
-        input.sender_name,
-        input.sender_user_id,
-    );
+    let authorization = (input.sender_name, input.sender_user_id);
     upsert_local_set_result_inner(app, input.result, Some(authorization))
 }
 
 fn upsert_local_set_result_inner(
     app: &AppHandle,
     input: LocalSetResultInput,
-    external_report_authorization: Option<(String, String, String)>,
+    external_report_authorization: Option<(String, String)>,
 ) -> Result<TournamentWorkspace, String> {
     let started_at = Instant::now();
     if input.set_id.starts_with("preview_") {
@@ -8387,27 +8383,28 @@ fn upsert_local_set_result_inner(
         );
     }
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
-    if let Some((phase_group_id, sender_name, sender_user_id)) = external_report_authorization {
-        let set_phase_group_id = snapshot
+    if let Some((sender_name, sender_user_id)) = external_report_authorization {
+        let phase_group_id = snapshot
             .events
             .iter()
             .find(|event| event.event_id == input.event_id)
             .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
             .and_then(|set| set.phase_group_id.as_deref())
-            .unwrap_or_default();
+            .map(str::trim)
+            .filter(|phase_group_id| !phase_group_id.is_empty())
+            .ok_or_else(|| "外部報告の対象プールを特定できません。".to_owned())?
+            .to_owned();
         let event_meta = local_meta
             .events
             .iter()
             .find(|event| event.event_id == input.event_id)
             .ok_or_else(|| "外部報告の対象イベントメタが見つかりません。".to_owned())?;
-        if set_phase_group_id != phase_group_id
-            || !external_score_report_sender_is_authorized(
-                event_meta,
-                &phase_group_id,
-                &sender_name,
-                &sender_user_id,
-            )
-        {
+        if !external_score_report_sender_is_authorized(
+            event_meta,
+            &phase_group_id,
+            &sender_name,
+            &sender_user_id,
+        ) {
             return Err("外部報告の送信者または対象プールのロック状態が一致しません。".to_owned());
         }
     } else {

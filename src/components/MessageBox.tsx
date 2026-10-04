@@ -368,8 +368,10 @@ export function MessageBox({
                       {externalScoreReport && (
                         <div style={{ marginTop: "0.45rem" }}>
                           <p className="meta">
-                            外部報告: {externalScoreReport.eventName} / {externalScoreReport.phaseName}
-                            {" / Pool "}{externalScoreReport.phaseGroupName} / Set {externalScoreReport.setId}
+                            外部報告: {externalScoreReport.eventName || externalScoreReport.eventId}
+                            {externalScoreReport.phaseName && ` / ${externalScoreReport.phaseName}`}
+                            {externalScoreReport.phaseGroupName && ` / Pool ${externalScoreReport.phaseGroupName}`}
+                            {" / Set "}{externalScoreReport.setId}
                           </p>
                           <button
                             type="button"

@@ -168,7 +168,6 @@ export type ApplyExternalScoreReportInput = {
     directWin: boolean;
     slotScores: Array<{ entrantId: string; score: number }>;
   };
-  phaseGroupId: string;
   senderName: string;
   senderUserId: string;
 };

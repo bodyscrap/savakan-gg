@@ -818,6 +818,10 @@ function App() {
   });
   const selectedPoolScoreEditLocked = !selectedPhasePoolGroup?.phaseGroupId
     || !(selectedEventMeta?.scoreEditEnabledPhaseGroupIds ?? []).includes(selectedPhasePoolGroup.phaseGroupId);
+  const selectedEventSetsById = useMemo(
+    () => new Map((selectedEvent?.sets ?? []).map((set) => [set.setId, set])),
+    [selectedEvent],
+  );
   const selectedPoolExternalScoreBroadcastEnabled = Boolean(
     selectedPhasePoolGroup?.phaseGroupId
     && (selectedEventMeta?.externalScoreBroadcastPhaseGroupIds ?? [])
@@ -911,26 +915,19 @@ function App() {
       || !selectedEvent
       || selectedEventMeta?.eventId !== selectedEvent.eventId
       || report.tournamentId !== snapshot.tournamentId
-      || report.slug !== snapshot.slug
       || report.eventId !== selectedEvent.eventId
-      || report.eventName !== selectedEvent.name
       || message.senderName === ""
     ) {
       return false;
     }
-    const set = selectedEvent.sets.find((item) => item.setId === report.setId);
-    if (
-      !set
-      || set.phaseGroupId !== report.phaseGroupId
-      || set.phaseName !== report.phaseName
-      || set.phaseGroupName !== report.phaseGroupName
-    ) {
+    const set = selectedEventSetsById.get(report.setId);
+    if (!set?.phaseGroupId) {
       return false;
     }
     const scoreEditLocked = !(selectedEventMeta.scoreEditEnabledPhaseGroupIds ?? [])
-      .includes(report.phaseGroupId);
+      .includes(set.phaseGroupId);
     const authorizedEditor = (selectedEventMeta.externalEditors ?? []).some(
-      (editor) => editor.phaseGroupId === report.phaseGroupId
+      (editor) => editor.phaseGroupId === set.phaseGroupId
         && editor.senderName === message.senderName
         && editor.senderUserId === message.senderUserId,
     );
@@ -952,14 +949,13 @@ function App() {
       setError("外部報告の送信者、対象snapshot、スコアロック状態を確認できません。");
       return;
     }
-    const set = selectedEvent.sets.find((item) => item.setId === report.setId);
+    const set = selectedEventSetsById.get(report.setId);
     if (!set) {
       setError("外部報告の対象setが選択中snapshotに見つかりません。");
       return;
     }
     void persistIncomingExternalScoreReport({
       set,
-      phaseGroupId: report.phaseGroupId,
       senderName: message.senderName,
       senderUserId: message.senderUserId,
       result: {
