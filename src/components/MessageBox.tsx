@@ -62,6 +62,8 @@ type MessageBoxProps = {
   getExternalEditRequest: (message: GenericMessage) => ExternalEditRequest | null;
   canAcceptExternalEditRequest: (message: GenericMessage) => boolean;
   onAcceptExternalEditRequest: (message: GenericMessage) => void;
+  canReplyToExternalEditRequest: (message: GenericMessage) => boolean;
+  onRejectExternalEditRequest: (message: GenericMessage) => void;
   canResolveActiveThread: boolean;
   onResolveActiveThread: () => void;
   canDeleteActiveThread: boolean;
@@ -107,6 +109,8 @@ export function MessageBox({
   getExternalEditRequest,
   canAcceptExternalEditRequest,
   onAcceptExternalEditRequest,
+  canReplyToExternalEditRequest,
+  onRejectExternalEditRequest,
   canResolveActiveThread,
   onResolveActiveThread,
   canDeleteActiveThread,
@@ -119,6 +123,9 @@ export function MessageBox({
   onOpenDqDialog,
 }: MessageBoxProps) {
   const normalizedSenderUserId = senderUserId.trim();
+  const activeThreadExternalEditRequest = activeThread
+    ? getExternalEditRequest(activeThread)
+    : null;
   const isResolutionOwner = (thread: GenericMessage | null) => (
     normalizedSenderUserId !== ""
     && thread?.senderUserId.trim() === normalizedSenderUserId
@@ -328,17 +335,27 @@ export function MessageBox({
                             外部編集申請: {externalEditRequest.eventName} / {externalEditRequest.phaseName}
                             {" / Pool "}{externalEditRequest.phaseGroupName}
                           </p>
-                          <button
-                            type="button"
-                            className="ghost tiny"
-                            disabled={!canAcceptExternalEditRequest(item)}
-                            onClick={() => onAcceptExternalEditRequest(item)}
-                          >
-                            申請受理
-                          </button>
-                          {!canAcceptExternalEditRequest(item) && (
-                            <p className="meta">対象イベントのスナップショットを選択すると受理できます。</p>
-                          )}
+                          <p className="meta">
+                            受理は申請元イベントのスナップショット選択時のみ可能です。受理すると対象プールをロックし、申請者を外部編集者に設定します。
+                          </p>
+                          <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
+                            <button
+                              type="button"
+                              className="ghost tiny"
+                              disabled={!canAcceptExternalEditRequest(item) || !canReplyToExternalEditRequest(item)}
+                              onClick={() => onAcceptExternalEditRequest(item)}
+                            >
+                              受理
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost tiny"
+                              disabled={!canReplyToExternalEditRequest(item)}
+                              onClick={() => onRejectExternalEditRequest(item)}
+                            >
+                              却下
+                            </button>
+                          </div>
                         </div>
                       )}
                       <p className="message-body">{item.body}</p>
@@ -347,42 +364,51 @@ export function MessageBox({
                   })}
                 </div>
 
-                <div className="panel-toolbar compact" style={{ marginTop: "0.6rem" }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                    <p className="meta">スレッド作成者は「解決」メッセージで完了通知できます。</p>
-                    <p className="meta">削除すると、このスレッドのメッセージはすべて消えます。</p>
-                  </div>
-                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                    <button type="button" className="ghost" onClick={onResolveActiveThread} disabled={!canResolveActiveThread}>
-                      解決
-                    </button>
-                    <button type="button" className="ghost" onClick={onDeleteActiveThread} disabled={!canDeleteActiveThread}>
-                      スレッド削除
-                    </button>
-                  </div>
-                </div>
+                {!activeThreadExternalEditRequest && (
+                  <>
+                    <div className="panel-toolbar compact" style={{ marginTop: "0.6rem" }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                        <p className="meta">スレッド作成者は「解決」メッセージで完了通知できます。</p>
+                        <p className="meta">削除すると、このスレッドのメッセージはすべて消えます。</p>
+                      </div>
+                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <button type="button" className="ghost" onClick={onResolveActiveThread} disabled={!canResolveActiveThread}>
+                          解決
+                        </button>
+                        <button type="button" className="ghost" onClick={onDeleteActiveThread} disabled={!canDeleteActiveThread}>
+                          スレッド削除
+                        </button>
+                      </div>
+                    </div>
 
-                <div style={{ marginTop: "0.6rem" }}>
-                  <textarea
-                    value={replyBodyDraft}
-                    onChange={(e) => onReplyBodyChange(e.currentTarget.value)}
-                    rows={4}
-                    placeholder="このスレッドへの返信"
-                    style={{ width: "100%" }}
-                    disabled={disableLocalCommunication}
-                  />
-                </div>
-                <div className="panel-toolbar compact">
-                  <p className="meta">返信メッセージはこのスレッドに集約されます。</p>
-                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                    <button type="button" onClick={onReplyToThread} disabled={!canReplyToThread}>
-                      返信
-                    </button>
-                    <button type="button" className="ghost" onClick={onOpenDqDialog} disabled={!canOpenDqDialog}>
-                      DQ申請
-                    </button>
-                  </div>
-                </div>
+                    <div style={{ marginTop: "0.6rem" }}>
+                      <textarea
+                        value={replyBodyDraft}
+                        onChange={(e) => onReplyBodyChange(e.currentTarget.value)}
+                        rows={4}
+                        placeholder="このスレッドへの返信"
+                        style={{ width: "100%" }}
+                        disabled={disableLocalCommunication}
+                      />
+                    </div>
+                    <div className="panel-toolbar compact">
+                      <p className="meta">返信メッセージはこのスレッドに集約されます。</p>
+                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <button type="button" onClick={onReplyToThread} disabled={!canReplyToThread}>
+                          返信
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={onOpenDqDialog}
+                          disabled={!canOpenDqDialog}
+                        >
+                          DQ申請
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </>
             )}
           </section>

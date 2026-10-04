@@ -5,6 +5,7 @@ import {
   buildScopedMessageMeta,
   extractCallTargetIdentityFromMeta,
   extractCallThreadIdentity,
+  getExternalEditRequest,
   hasSameGenericMessageOrder,
   isLikelyPlayerId,
   isMessageForScope,
@@ -362,6 +363,14 @@ export function useMailbox({
     && !disableLocalCommunication
     && senderProfileReadyForMessaging
     && normalizedReplyBody !== "";
+  function canReplyToExternalEditRequest(message: GenericMessage) {
+    return !!getExternalEditRequest(message)
+      && !disableLocalCommunication
+      && !activeThreadResolved
+      && senderProfileReadyForMessaging
+      && message.senderUserId !== senderProfile.senderUserId
+      && isValidIpv4(message.senderIp.trim());
+  }
   const isOwnActiveThread = !!activeThread
     && activeThread.senderUserId.trim() === senderProfile.senderUserId.trim();
   const canDeleteActiveThread = !!activeThread
@@ -606,6 +615,40 @@ export function useMailbox({
       onMessage("返信を送信しました。スレッドに追加されます。");
     } catch (error) {
       onError(String(error));
+    }
+  }
+
+  async function replyToExternalEditRequest(message: GenericMessage, accepted: boolean): Promise<boolean> {
+    onError("");
+    onMessage("");
+    if (!canReplyToExternalEditRequest(message)) {
+      onError("外部編集申請への返信に必要な送信者情報、返信先、または未解決スレッドがありません。");
+      return false;
+    }
+
+    try {
+      const sent = await invoke<GenericMessage>("send_mailbox_message", {
+        input: {
+          profile: senderProfile,
+          messageType: "normal",
+          method: message.method,
+          subject: `Re: ${message.subject}`,
+          body: accepted
+            ? "外部編集申請を受理しました。対象フェーズ/プールのスコア編集をロックし、申請者を外部編集者に設定しました。"
+            : "外部編集申請を却下しました。",
+          messageMeta: buildScopedMessageMeta(null, scope),
+          deliveryTargetMode: "direct",
+          deliveryTargetIp: message.senderIp.trim(),
+          threadId: message.threadId,
+          parentMessageId: message.messageId,
+        },
+      });
+      addMailboxMessage(sent);
+      onMessage(accepted ? "外部編集申請を受理し、返信しました。" : "外部編集申請を却下し、返信しました。");
+      return true;
+    } catch (error) {
+      onError(String(error));
+      return false;
     }
   }
 
@@ -912,11 +955,13 @@ export function useMailbox({
     activeCallThreadIdentity,
     canSendGenericMessage,
     canReplyToThread,
+    canReplyToExternalEditRequest,
     canDeleteActiveThread,
     canOpenDqDialog,
     postGenericMessage,
     sendExternalEditRequest,
     replyToThread,
+    replyToExternalEditRequest,
     openDqRequestDialog,
     closeDqRequestDialog,
     resetDqRequestDialog,

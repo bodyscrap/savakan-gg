@@ -457,11 +457,13 @@ function App() {
     resolveActiveThread: resolveMailboxThread,
     canSendGenericMessage,
     canReplyToThread,
+    canReplyToExternalEditRequest,
     canDeleteActiveThread,
     canOpenDqDialog,
     postGenericMessage,
     sendExternalEditRequest,
     replyToThread,
+    replyToExternalEditRequest,
     openDqRequestDialog,
     closeDqRequestDialog,
     submitDqRequest,
@@ -836,7 +838,7 @@ function App() {
 
   async function acceptExternalEditRequest(message: Parameters<typeof getExternalEditRequest>[0]) {
     const request = getExternalEditRequest(message);
-    if (!request || !canAcceptExternalEditRequest(message) || !selectedEvent) {
+    if (!request || !canAcceptExternalEditRequest(message) || !snapshot || !selectedEvent) {
       setError("申請対象イベントが選択されていないか、申請情報が不正です。");
       return;
     }
@@ -844,23 +846,42 @@ function App() {
     setError("");
     setMessage("");
     try {
+      const scoreEditEnabledPhaseGroupIds = selectedEventMeta?.eventId === selectedEvent.eventId
+        ? (selectedEventMeta.scoreEditEnabledPhaseGroupIds ?? [])
+        : [];
+      if (!scoreEditEnabledPhaseGroupIds.includes(request.phaseGroupId)) {
+        await savePhaseGroupScoreEditLock({
+          slug: snapshot.slug,
+          eventId: selectedEvent.eventId,
+          eventName: selectedEvent.name,
+          phaseGroupId: request.phaseGroupId,
+          locked: true,
+        });
+      }
       await savePhaseGroupExternalEditor({
-        slug: snapshot?.slug ?? toApiSlug(slug),
+        slug: snapshot.slug,
         eventId: selectedEvent.eventId,
         eventName: selectedEvent.name,
         phaseGroupId: request.phaseGroupId,
         senderName: message.senderName,
         senderUserId: message.senderUserId,
       });
+      if (!await replyToExternalEditRequest(message, true)) {
+        return;
+      }
       setSelectedPhaseName(request.phaseName);
       setSelectedPhasePoolKey(`id:${request.phaseGroupId}`);
       setActiveTab("bracket");
-      setMessage(`外部編集申請を受理しました: ${request.phaseName} / ${request.phaseGroupName}`);
+      setMessage(`外部編集申請を受理し、返信しました: ${request.phaseName} / ${request.phaseGroupName}`);
     } catch (error) {
       setError(String(error));
     } finally {
       setBusy(false);
     }
+  }
+
+  function rejectExternalEditRequest(message: Parameters<typeof getExternalEditRequest>[0]) {
+    void replyToExternalEditRequest(message, false);
   }
 
   function requestExternalEditor() {
@@ -1352,6 +1373,8 @@ function App() {
             getExternalEditRequest={getExternalEditRequest}
             canAcceptExternalEditRequest={canAcceptExternalEditRequest}
             onAcceptExternalEditRequest={(item) => void acceptExternalEditRequest(item)}
+            canReplyToExternalEditRequest={canReplyToExternalEditRequest}
+            onRejectExternalEditRequest={rejectExternalEditRequest}
             canResolveActiveThread={canResolveActiveThread}
             onResolveActiveThread={resolveMailboxThread}
             canDeleteActiveThread={canDeleteActiveThread}
