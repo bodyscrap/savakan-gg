@@ -17,7 +17,7 @@ export const CALL_LIST_COLOR_SECONDS_MIN = 30;
 export const CALL_LIST_COLOR_SECONDS_MAX = 3600;
 export const CALL_LIST_COLOR_SECONDS_DEFAULT = 600;
 
-const CALL_LIST_EVENT_PAGE_SIZE = 3;
+const CALL_LIST_EVENT_PAGE_SIZE = 4;
 const CALL_LIST_ROTATE_SECONDS_STORAGE_KEY = "savakan-gg.call-list-rotate-seconds.v1";
 const CALL_LIST_COLOR_SECONDS_STORAGE_KEY = "savakan-gg.call-list-color-seconds.v1";
 
@@ -164,6 +164,8 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
       }
 
       const callIdentity = extractCallThreadIdentity(root);
+      const entrantId = callIdentity?.callEntrantId
+        || extractMetaString(root.messageMeta, "callEntrantId");
       const entrantName = callIdentity?.callEntrantName
         || extractMetaString(root.messageMeta, "callEntrantName")
         || extractMetaString(root.messageMeta, "callEntrantId")
@@ -183,6 +185,7 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
       if (found) {
         found.players.push({
           threadId: root.threadId,
+          entrantId,
           entrantName,
           createdAt: root.createdAt,
           senderName: root.senderName,
@@ -192,12 +195,14 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
           key: groupKey,
           eventAlias: eventMeta.eventAlias,
           tournamentName: eventMeta.tournamentName,
+          tournamentId: eventMeta.tournamentId,
           eventName: eventMeta.eventName,
           eventId: eventMeta.eventId,
           phaseName: eventMeta.phaseName,
           phaseGroupName: eventMeta.phaseGroupName,
           players: [{
             threadId: root.threadId,
+            entrantId,
             entrantName,
             createdAt: root.createdAt,
             senderName: root.senderName,

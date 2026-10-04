@@ -11,13 +11,14 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::models::{
-    ApplyExternalScoreReportInput, BracketGraphEdge, BracketGraphSnapshot, EventEntrantMeta,
-    EventLocalMeta, EventManagementMeta, EventSnapshot, GenericMessage, ItemListConfig,
-    LocalGrandFinalResetResultMeta, LocalPlayerMetaInput, LocalSetPlaySideInput,
-    LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta, LocalSetScoreUpdateInput,
-    LocalSnapshotEventListItem, MobileResultRequestInput, MobileResultRequestItem,
-    PhaseGroupExternalEditor, PhaseGroupGraphSeedSnapshot, PhaseGroupSeedSnapshot,
-    RestoreEventGraphInput, RestoreEventGraphResult, SaveEventManagementMetaInput, SenderProfile,
+    ApplyExternalScoreReportInput, BracketGraphEdge, BracketGraphSnapshot,
+    ClearPhaseGroupExternalEditorInput, EventEntrantMeta, EventLocalMeta, EventManagementMeta,
+    EventSnapshot, GenericMessage, ItemListConfig, LocalGrandFinalResetResultMeta,
+    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetResultMeta,
+    LocalSetScoreMeta, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
+    MobileResultRequestInput, MobileResultRequestItem, PhaseGroupExternalEditor,
+    PhaseGroupGraphSeedSnapshot, PhaseGroupSeedSnapshot, RestoreEventGraphInput,
+    RestoreEventGraphResult, SaveEventManagementMetaInput, SenderProfile,
     SetPhaseGroupExternalEditorInput, SetPhaseGroupExternalScoreBroadcastInput,
     SetPhaseGroupScoreEditLockInput, SetPlaySideMeta, SetSnapshot, SnapshotRestoreScope,
     TournamentEventPreviewItem, TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
@@ -4386,6 +4387,18 @@ pub fn list_local_snapshot_events(
                 event_alias: event.event_alias.clone(),
                 last_selected_phase_name: event.last_selected_phase_name.clone(),
                 last_selected_phase_group_name: event.last_selected_phase_group_name.clone(),
+                use_alias_name: event
+                    .event_management
+                    .as_ref()
+                    .is_some_and(|setting| setting.use_alias_name),
+                entrant_aliases_by_id: event
+                    .entrants
+                    .iter()
+                    .filter_map(|entrant| {
+                        let alias = entrant.alias_name.trim();
+                        (!alias.is_empty()).then(|| (entrant.entrant_id.clone(), alias.to_owned()))
+                    })
+                    .collect(),
                 set_count: 0,
             };
             let key = (
@@ -4453,6 +4466,8 @@ pub fn list_local_snapshot_events(
                         event_alias: None,
                         last_selected_phase_name: None,
                         last_selected_phase_group_name: None,
+                        use_alias_name: false,
+                        entrant_aliases_by_id: HashMap::new(),
                         set_count: graph.event.sets.len(),
                     });
                 }
@@ -9700,6 +9715,48 @@ pub fn set_phase_group_external_editor(
     local_meta.slug = input.slug;
     local_meta.updated_at = Utc::now();
     save_local_meta(app, &input.event_id, &local_meta)?;
+
+    Ok(TournamentWorkspace {
+        snapshot,
+        local_meta,
+    })
+}
+
+pub fn clear_phase_group_external_editor(
+    app: &AppHandle,
+    input: ClearPhaseGroupExternalEditorInput,
+) -> Result<TournamentWorkspace, String> {
+    let snapshot = load_event_snapshot(app, &input.slug, &input.event_id)?;
+    let phase_group_id = input.phase_group_id.trim();
+    if phase_group_id.is_empty()
+        || !snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == input.event_id)
+            .is_some_and(|event| {
+                event
+                    .phase_groups
+                    .iter()
+                    .any(|group| group.phase_group_id == phase_group_id)
+            })
+    {
+        return Err("指定プールの情報が不正です。".to_owned());
+    }
+
+    let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
+    if let Some(event_meta) = local_meta
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == input.event_id)
+    {
+        event_meta.event_name = input.event_name;
+        event_meta
+            .external_editors
+            .retain(|editor| editor.phase_group_id != phase_group_id);
+        local_meta.slug = input.slug;
+        local_meta.updated_at = Utc::now();
+        save_local_meta(app, &input.event_id, &local_meta)?;
+    }
 
     Ok(TournamentWorkspace {
         snapshot,

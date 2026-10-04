@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 fn default_bind_ip() -> String {
     "0.0.0.0".to_owned()
@@ -158,6 +159,15 @@ pub struct SetPhaseGroupExternalEditorInput {
     pub phase_group_id: String,
     pub sender_name: String,
     pub sender_user_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearPhaseGroupExternalEditorInput {
+    pub slug: String,
+    pub event_id: String,
+    pub event_name: String,
+    pub phase_group_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -758,6 +768,10 @@ pub struct LocalSnapshotEventListItem {
     pub last_selected_phase_name: Option<String>,
     #[serde(default)]
     pub last_selected_phase_group_name: Option<String>,
+    #[serde(default)]
+    pub use_alias_name: bool,
+    #[serde(default)]
+    pub entrant_aliases_by_id: HashMap<String, String>,
     pub set_count: usize,
 }
 

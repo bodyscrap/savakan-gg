@@ -213,7 +213,8 @@ body {
 .content.call-list-mode {
   align-content: stretch;
   grid-template-rows: auto minmax(0, 1fr);
-  max-height: calc(100vh - 4rem);
+  max-height: calc(100vh - 2.5rem);
+  padding-bottom: 1.25rem;
   overflow: hidden;
 }
 
@@ -586,7 +587,7 @@ button:disabled {
 .call-list-event-grid {
   display: grid;
   grid-template-columns: 1fr;
-  grid-template-rows: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(4, minmax(0, 1fr));
   gap: 0.6rem;
   height: 100%;
   overflow: hidden;
@@ -616,14 +617,6 @@ button:disabled {
 .call-list-event-alias {
   display: block;
   font-weight: 800;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.call-list-event-detail {
-  display: block;
-  font-weight: 400;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2219,6 +2212,7 @@ li {
 
   .content.call-list-mode {
     max-height: calc(100vh - 4rem);
+    padding-bottom: 1.25rem;
     overflow: hidden;
   }
 

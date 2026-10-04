@@ -14,15 +14,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use if_addrs::get_if_addrs;
 use models::{
     ApplyExternalScoreReportInput, BracketBatchReportInput, BracketBatchReportResult,
-    ClearLocalSetResultDraftInput, CreateEventSnapshotBySlugInput, CreateEventSnapshotInput,
-    GenericMessage, ItemListConfig, LocalPlayerMetaInput, LocalSetPlaySideInput,
-    LocalSetResultInput, LocalSetScoreInput, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
-    MobileResultRequestInput, MobileResultRequestItem, PlaySide, ReportSetResultInput,
-    ResetSetResultCascadeInput, ResetSetResultCascadeResult, RestoreEventGraphInput,
-    RestoreEventGraphResult, SaveEventManagementMetaInput, SenderProfile,
-    SetPhaseGroupExternalEditorInput, SetPhaseGroupExternalScoreBroadcastInput,
-    SetPhaseGroupScoreEditLockInput, SetSnapshot, TournamentPreview, TournamentSnapshot,
-    TournamentWorkspace,
+    ClearLocalSetResultDraftInput, ClearPhaseGroupExternalEditorInput,
+    CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, GenericMessage, ItemListConfig,
+    LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetScoreInput,
+    LocalSetScoreUpdateInput, LocalSnapshotEventListItem, MobileResultRequestInput,
+    MobileResultRequestItem, PlaySide, ReportSetResultInput, ResetSetResultCascadeInput,
+    ResetSetResultCascadeResult, RestoreEventGraphInput, RestoreEventGraphResult,
+    SaveEventManagementMetaInput, SenderProfile, SetPhaseGroupExternalEditorInput,
+    SetPhaseGroupExternalScoreBroadcastInput, SetPhaseGroupScoreEditLockInput, SetSnapshot,
+    TournamentPreview, TournamentSnapshot, TournamentWorkspace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -6966,6 +6966,14 @@ fn set_phase_group_external_editor(
 }
 
 #[tauri::command]
+fn clear_phase_group_external_editor(
+    app: tauri::AppHandle,
+    input: ClearPhaseGroupExternalEditorInput,
+) -> Result<TournamentWorkspace, String> {
+    storage::clear_phase_group_external_editor(&app, input)
+}
+
+#[tauri::command]
 fn save_local_set_result(
     app: tauri::AppHandle,
     input: LocalSetResultInput,
@@ -7207,6 +7215,7 @@ pub fn run() {
             set_phase_group_score_edit_lock,
             set_phase_group_external_score_broadcast,
             set_phase_group_external_editor,
+            clear_phase_group_external_editor,
             save_local_set_result,
             apply_external_score_report,
             save_local_set_scores,

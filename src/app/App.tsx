@@ -18,7 +18,12 @@ import {
 } from "../hooks/useAppPreferences";
 import { toApiSlug, toEventApiSlug } from "../domain/slugUtils";
 import { SettingsScreen } from "../components/SettingMenu";
-import { StatusBoard, StatusBoardHero } from "../components/StatusBoard";
+import {
+  StatusBoard,
+  StatusBoardHero,
+  type CallListEventGroup,
+  type CallListPlayer,
+} from "../components/StatusBoard";
 import { PlayerListInfo } from "../components/PlayerListInfo";
 import { MessageBox } from "../components/MessageBox";
 import { ItemListEditor } from "../components/ItemListEditor";
@@ -83,6 +88,7 @@ import {
   formatScoreValue,
   isCompletedSet,
   isMatchupReady,
+  resolveEntrantDisplayName,
   type EventSnapshot,
 } from "../domain/bracketDisplay";
 import {
@@ -222,6 +228,7 @@ function App() {
     savePhaseGroupScoreEditLock,
     savePhaseGroupExternalScoreBroadcast,
     savePhaseGroupExternalEditor,
+    clearPhaseGroupExternalEditor,
     saveEventAlias,
     saveLocalPlayerMeta,
     saveLocalSetPlaySide,
@@ -536,6 +543,44 @@ function App() {
     genericMessages,
     senderUserId: senderProfile.senderUserId,
   });
+
+  const callListAliasSettingsByEvent = useMemo(() => {
+    const settings = new Map<string, {
+      useAliasName: boolean;
+      aliasesByEntrantId: Record<string, string | undefined>;
+    }>();
+    const eventKey = (tournamentId: string, eventId: string) => `${tournamentId}::${eventId}`;
+
+    for (const event of localSnapshotEvents) {
+      settings.set(eventKey(event.tournamentId, event.eventId), {
+        useAliasName: event.useAliasName === true,
+        aliasesByEntrantId: event.entrantAliasesById ?? EMPTY_PLAYER_ALIAS_MAP,
+      });
+    }
+
+    for (const event of workspace?.localMeta.events ?? []) {
+      settings.set(eventKey(workspace?.localMeta.tournamentId ?? "", event.eventId), {
+        useAliasName: event.eventManagement?.useAliasName === true,
+        aliasesByEntrantId: Object.fromEntries(
+          event.entrants.map((entrant) => [entrant.entrantId, entrant.aliasName]),
+        ),
+      });
+    }
+
+    return settings;
+  }, [localSnapshotEvents, workspace]);
+
+  function resolveCallListPlayerName(
+    group: CallListEventGroup,
+    player: CallListPlayer,
+  ) {
+    const aliasSettings = callListAliasSettingsByEvent.get(`${group.tournamentId}::${group.eventId}`);
+    return resolveEntrantDisplayName(
+      player.entrantName,
+      aliasSettings?.aliasesByEntrantId[player.entrantId],
+      aliasSettings?.useAliasName ?? false,
+    );
+  }
 
   const {
     homeSnapshotSearchInput,
@@ -1184,6 +1229,38 @@ function App() {
     }
   }
 
+  async function clearSelectedPoolExternalEditor() {
+    const phaseGroupId = selectedPhasePoolGroup?.phaseGroupId;
+    if (
+      !snapshot
+      || !selectedEvent
+      || !phaseGroupId
+      || !selectedPoolScoreEditLocked
+      || !selectedPoolExternalEditor
+    ) {
+      return;
+    }
+    if (!window.confirm(`外部編集者 ${selectedPoolExternalEditor.senderName} (${selectedPoolExternalEditor.senderUserId}) をこのプールから解除しますか？`)) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await clearPhaseGroupExternalEditor({
+        slug: snapshot.slug,
+        eventId: selectedEvent.eventId,
+        eventName: selectedEvent.name,
+        phaseGroupId,
+      });
+      setMessage("このプールの外部編集者を解除しました。");
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const currentPlayerDisplayAliasSnapshot = selectedEvent
     && playerDisplayAliasSnapshot?.eventId === selectedEvent.eventId
     ? playerDisplayAliasSnapshot
@@ -1659,6 +1736,7 @@ function App() {
           )}
           pageSwitchedAtMs={callListPageSwitchedAtMs}
           colorToRedSeconds={callListColorToRedSeconds}
+          resolvePlayerName={resolveCallListPlayerName}
         />
       )}
 
@@ -1836,6 +1914,7 @@ function App() {
             onPhasePoolChange={setSelectedPhasePoolKey}
             onSelectedPoolScoreEditLockChange={(locked) => void changeSelectedPoolScoreEditLock(locked)}
             onSelectedPoolExternalScoreBroadcastChange={(enabled) => void changeSelectedPoolExternalScoreBroadcast(enabled)}
+            onClearSelectedPoolExternalEditor={() => void clearSelectedPoolExternalEditor()}
             bracketScaleStyle={bracketScaleStyle}
             bracketZoomLevel={bracketZoomLevel}
             bracketZoomLevels={BRACKET_ZOOM_LEVELS}

@@ -50,6 +50,7 @@ type BracketTabProps = {
   onPhasePoolChange: (key: string) => void;
   onSelectedPoolScoreEditLockChange: (locked: boolean) => void;
   onSelectedPoolExternalScoreBroadcastChange: (enabled: boolean) => void;
+  onClearSelectedPoolExternalEditor: () => void;
   bracketScaleStyle: CSSProperties;
   bracketZoomLevel: number;
   bracketZoomLevels: readonly number[];
@@ -88,6 +89,7 @@ export function BracketTab({
   onPhasePoolChange,
   onSelectedPoolScoreEditLockChange,
   onSelectedPoolExternalScoreBroadcastChange,
+  onClearSelectedPoolExternalEditor,
   bracketScaleStyle,
   bracketZoomLevel,
   bracketZoomLevels,
@@ -203,7 +205,7 @@ export function BracketTab({
             ) : (
               <section className="phase-group" key={selectedPhasePoolGroup.key}>
                 <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
-                <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
                   <label className="checkbox-row">
                     <input
                       type="checkbox"
@@ -213,40 +215,43 @@ export function BracketTab({
                     />
                     スコア編集のロック
                   </label>
+                  {selectedPoolScoreEditLocked && externalEditor && (
+                    <>
+                      <span className="meta">
+                        外部編集者: {externalEditor.senderName} ({externalEditor.senderUserId})
+                      </span>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={busy}
+                        onClick={onClearSelectedPoolExternalEditor}
+                      >
+                        外部編集者を解除
+                      </button>
+                    </>
+                  )}
                   {!selectedPoolScoreEditLocked && (
-                    <label className="checkbox-row">
-                      <input
-                        type="checkbox"
-                        checked={selectedPoolExternalScoreBroadcastEnabled}
-                        disabled={busy || !selectedPhasePoolGroup.phaseGroupId}
-                        onChange={(event) => onSelectedPoolExternalScoreBroadcastChange(event.currentTarget.checked)}
-                      />
-                      スコア確定時に外部報告
-                    </label>
+                    <>
+                      <label className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={selectedPoolExternalScoreBroadcastEnabled}
+                          disabled={busy || !selectedPhasePoolGroup.phaseGroupId}
+                          onChange={(event) => onSelectedPoolExternalScoreBroadcastChange(event.currentTarget.checked)}
+                        />
+                        スコア確定時に外部報告
+                      </label>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={busy || !canRequestExternalEditor}
+                        onClick={onRequestExternalEditor}
+                      >
+                        外部編集申請
+                      </button>
+                    </>
                   )}
                 </div>
-                <div className="panel-toolbar compact">
-                  <p className="meta">
-                    外部編集者: {externalEditor
-                      ? `${externalEditor.senderName} (${externalEditor.senderUserId})`
-                      : "未設定"}
-                  </p>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={
-                      busy
-                      || selectedPoolScoreEditLocked
-                      || !selectedPhasePoolGroup.phaseGroupId
-                      || !canRequestExternalEditor
-                    }
-                    onClick={onRequestExternalEditor}
-                  >
-                    外部編集申請
-                  </button>
-                </div>
-                <p className="meta">外部編集申請は、このプールのスコア編集ロック解除中にブロードキャストできます。</p>
-
                 {selectedBracketModel === "round_robin" ? (
                   <RoundRobinBracket
                     scaleStyle={bracketScaleStyle}

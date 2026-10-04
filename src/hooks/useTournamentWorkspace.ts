@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   listLocalSnapshotEvents,
   loadTournamentWorkspace,
+  clearPhaseGroupExternalEditor,
   persistEventAlias,
   persistEventManagementMeta,
   persistPhaseGroupExternalScoreBroadcast,
@@ -151,6 +152,17 @@ export function useTournamentWorkspace({
     return result;
   }
 
+  async function clearPhaseGroupExternalEditorForPool(input: {
+    slug: string;
+    eventId: string;
+    eventName: string;
+    phaseGroupId: string;
+  }) {
+    const result = await clearPhaseGroupExternalEditor(input);
+    setWorkspace(result);
+    return result;
+  }
+
   async function saveEventAlias(targetSlug: string, eventId: string, eventAlias: string | null) {
     const result = await persistEventAlias(targetSlug, eventId, eventAlias);
     setWorkspace(result);
@@ -274,6 +286,7 @@ export function useTournamentWorkspace({
     savePhaseGroupScoreEditLock,
     savePhaseGroupExternalScoreBroadcast,
     savePhaseGroupExternalEditor,
+    clearPhaseGroupExternalEditor: clearPhaseGroupExternalEditorForPool,
     saveEventAlias,
     saveLocalPlayerMeta,
     saveLocalSetPlaySide,

@@ -12,6 +12,8 @@ export type LocalSnapshotEventListItem = {
   eventAlias: string | null;
   lastSelectedPhaseName?: string | null;
   lastSelectedPhaseGroupName?: string | null;
+  useAliasName?: boolean;
+  entrantAliasesById?: Record<string, string>;
   setCount: number;
 };
 
@@ -72,6 +74,13 @@ export type SetPhaseGroupExternalEditorInput = {
   phaseGroupId: string;
   senderName: string;
   senderUserId: string;
+};
+
+export type ClearPhaseGroupExternalEditorInput = {
+  slug: string;
+  eventId: string;
+  eventName: string;
+  phaseGroupId: string;
 };
 
 export type SetPlaySideMeta = {
@@ -278,6 +287,12 @@ export async function persistPhaseGroupExternalEditor(
   input: SetPhaseGroupExternalEditorInput,
 ): Promise<TournamentWorkspace> {
   return invoke<TournamentWorkspace>("set_phase_group_external_editor", { input });
+}
+
+export async function clearPhaseGroupExternalEditor(
+  input: ClearPhaseGroupExternalEditorInput,
+): Promise<TournamentWorkspace> {
+  return invoke<TournamentWorkspace>("clear_phase_group_external_editor", { input });
 }
 
 export async function persistEventAlias(

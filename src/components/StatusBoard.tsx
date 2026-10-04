@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 
 export type CallListPlayer = {
   threadId: string;
+  entrantId: string;
   entrantName: string;
   createdAt: string;
   senderName: string;
@@ -11,6 +12,7 @@ export type CallListEventGroup = {
   key: string;
   eventAlias: string;
   tournamentName: string;
+  tournamentId: string;
   eventName: string;
   eventId: string;
   phaseName: string;
@@ -123,6 +125,7 @@ type StatusBoardProps = {
   resolvePhaseName: (eventId: string, phaseName: string) => string;
   pageSwitchedAtMs: number;
   colorToRedSeconds: number;
+  resolvePlayerName: (group: CallListEventGroup, player: CallListPlayer) => string;
 };
 
 export function StatusBoard({
@@ -134,6 +137,7 @@ export function StatusBoard({
   resolvePhaseName,
   pageSwitchedAtMs,
   colorToRedSeconds,
+  resolvePlayerName,
 }: StatusBoardProps) {
   return (
     <section className="panel call-list-panel">
@@ -154,7 +158,10 @@ export function StatusBoard({
           )}
         </div>
       ) : (
-        <div className="call-list-event-grid">
+        <div
+          className="call-list-event-grid"
+          style={{ gridTemplateRows: `repeat(${Math.max(activePage.length, 1)}, minmax(0, 1fr))` }}
+        >
           {activePage.map((group) => (
             <article className="event-list-item" key={`call-list-${group.key}`}>
               <div className="event-list-head">
@@ -166,14 +173,6 @@ export function StatusBoard({
                     {"/"}
                     {group.phaseGroupName !== "" ? group.phaseGroupName : "-"}
                     {")"}
-                  </span>
-                  <span className="call-list-event-detail">
-                    {group.tournamentName !== "" ? group.tournamentName : "-"}
-                    {" / "}
-                    {group.eventName !== "" ? group.eventName : "-"}
-                    {" [eventId:"}
-                    {group.eventId !== "" ? group.eventId : "-"}
-                    {"]"}
                   </span>
                 </p>
                 <span className="meta">{group.players.length} 件</span>
@@ -202,7 +201,7 @@ export function StatusBoard({
 
                     return (
                       <span className="call-list-player-chip" key={`${group.key}-${player.threadId}`} style={chipStyle}>
-                        <span className="call-list-player-chip-name">{player.entrantName}</span>
+                        <span className="call-list-player-chip-name">{resolvePlayerName(group, player)}</span>
                         <span className="call-list-player-chip-elapsed">
                           {formatCallElapsedTime(player.createdAt, pageSwitchedAtMs)}
                         </span>
