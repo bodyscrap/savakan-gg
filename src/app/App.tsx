@@ -78,10 +78,9 @@ import {
 import {
   exportTournamentShareArchive,
   importTournamentShareArchive,
-  saveLastSlug,
-  saveLastSnapshotSelection,
   writeSnapshotExportFile,
 } from "../domain/tournamentWorkspaceRepository";
+import { findSnapshotEventByIdentity, sameSnapshotEventKey } from "../domain/snapshotDisplay";
 import {
   useTournamentWorkspace,
   type PlaySide,
@@ -120,6 +119,38 @@ import "./App.css";
 const STARTGG_FETCH_PER_PAGE = 50;
 const EMPTY_PLAYER_ALIAS_MAP: Record<string, string> = {};
 type ConfirmedExternalScoreReport = Omit<ExternalScoreReport, "tournamentId" | "slug">;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readSnapshotArchiveIdentity(archiveJson: string) {
+  const archive: unknown = JSON.parse(archiveJson);
+  if (!isRecord(archive)) {
+    throw new Error("スナップショットの形式が不正です。");
+  }
+
+  const snapshot = archive.snapshot;
+  if (!isRecord(snapshot)) {
+    throw new Error("スナップショットの大会情報がありません。");
+  }
+  const events = snapshot.events;
+  const event = Array.isArray(events) ? events[0] : null;
+  if (
+    typeof snapshot.slug !== "string"
+    || !Array.isArray(events)
+    || events.length !== 1
+    || !isRecord(event)
+    || typeof event.eventId !== "string"
+  ) {
+    throw new Error("スナップショットのイベント情報が不正です。");
+  }
+
+  return {
+    slug: snapshot.slug,
+    eventId: event.eventId,
+  };
+}
 
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("create");
@@ -739,37 +770,45 @@ function App() {
   }
 
   async function importShareFile(file: File) {
-    if (!window.confirm(
-      "スナップショットをインポートしますか？同一イベントが既にある場合はsnapshotと大会設定画面のイベント別メタデータを置き換え、対象イベントの保留中結果とプール別ロック/外部編集者設定を初期化します。設定タブの情報、メッセージ、送信者プロフィールは変更しません。",
-    )) {
-      return;
-    }
     setBusy(true);
     setError("");
     setMessage("");
     try {
-      const importedWorkspace = await importTournamentShareArchive(await file.text());
+      const archiveJson = await file.text();
+      const identity = readSnapshotArchiveIdentity(archiveJson);
+      const currentItems = await fetchLocalSnapshotEvents();
+      const existingEvent = findSnapshotEventByIdentity(
+        currentItems,
+        identity.slug,
+        identity.eventId,
+      );
+      if (existingEvent && !window.confirm(
+        `同一イベントのスナップショットが既にあります。\n${existingEvent.tournamentName} / ${existingEvent.eventName}\n\nスナップショットとイベント別メタデータを上書きしますか？`,
+      )) {
+        return;
+      }
+
+      const importedWorkspace = await importTournamentShareArchive(archiveJson);
       const importedEvent = importedWorkspace.snapshot.events[0];
       if (!importedEvent) {
         throw new Error("スナップショットにイベントがありません。");
       }
 
-      await saveLastSlug(importedWorkspace.snapshot.slug);
-      await saveLastSnapshotSelection({
-        slug: importedWorkspace.snapshot.slug,
-        eventId: importedEvent.eventId,
-        phaseName: null,
-        phaseGroupName: null,
-      });
-      clearAllDrafts();
-      closeMatchDialog();
-      setWorkspace(importedWorkspace);
-      setSlug(importedWorkspace.snapshot.slug);
-      setSelectedEventId(importedEvent.eventId);
-      setSelectedPhaseName("");
-      setSelectedPhasePoolKey("");
-      await refreshLocalSnapshotEvents();
-      setActiveTab("bracket");
+      if (
+        sameSnapshotEventKey(
+          slug,
+          selectedEventId,
+          importedWorkspace.snapshot.slug,
+          importedEvent.eventId,
+        )
+      ) {
+        clearAllDrafts();
+        closeMatchDialog();
+        setWorkspace(null);
+        setSelectedPhaseName("");
+        setSelectedPhasePoolKey("");
+      }
+      await fetchLocalSnapshotEvents();
       setMessage(`スナップショットをインポートしました: ${importedWorkspace.snapshot.name} / ${importedEvent.name}`);
     } catch (err) {
       setError(String(err));

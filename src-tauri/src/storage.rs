@@ -1765,6 +1765,12 @@ pub fn import_tournament_share_archive(
         .retain(|record| record.event_id != event_id);
     local_meta.updated_at = Utc::now();
     save_local_meta(app, &event_id, &local_meta)?;
+    if load_last_snapshot_selection(app)?.is_some_and(|selection| {
+        normalize_slug_for_storage(&selection.slug) == normalized_slug
+            && selection.event_id == event_id
+    }) {
+        save_last_snapshot_selection(app, "", "", None, None)?;
+    }
     invalidate_progression_cache(&snapshot.slug);
 
     load_workspace(app, &snapshot.slug, &event_id)
