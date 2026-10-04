@@ -328,10 +328,13 @@ export function useMailbox({
     () => activeThreadMessages.some((item) => item.messageType === "resolve"),
     [activeThreadMessages],
   );
+  const isOwnExternalEditRequestThread = !!activeThread
+    && !!getExternalEditRequest(activeThread)
+    && activeThread.senderUserId.trim() === senderProfile.senderUserId.trim();
   const canResolveActiveThread = !!activeThread
     && !activeThreadResolved
     && !disableLocalCommunication
-    && activeThread.senderUserId === senderProfile.senderUserId;
+    && activeThread.senderUserId.trim() === senderProfile.senderUserId.trim();
   const activeCallThreadIdentity = useMemo(() => extractCallThreadIdentity(activeThread), [activeThread]);
   const canOpenDqDialog = !!activeThread
     && !activeThreadResolved
@@ -375,7 +378,7 @@ export function useMailbox({
     && activeThread.senderUserId.trim() === senderProfile.senderUserId.trim();
   const canDeleteActiveThread = !!activeThread
     && !disableLocalCommunication
-    && (!isOwnActiveThread || activeThreadResolved);
+    && (!isOwnActiveThread || activeThreadResolved || isOwnExternalEditRequestThread);
 
   function addMailboxMessage(rawMessage: GenericMessage) {
     const normalized = normalizeGenericMessage(rawMessage);
@@ -822,7 +825,11 @@ export function useMailbox({
       onError("削除するスレッドを選択してください。");
       return;
     }
-    if (activeThread.senderUserId.trim() === senderProfile.senderUserId.trim() && !activeThreadResolved) {
+    if (
+      activeThread.senderUserId.trim() === senderProfile.senderUserId.trim()
+      && !activeThreadResolved
+      && !isOwnExternalEditRequestThread
+    ) {
       const warningMessage = "自分が発行した未解決スレッドは削除できません。先に「解決」を送信してください。";
       window.alert(warningMessage);
       onError(warningMessage);

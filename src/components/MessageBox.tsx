@@ -409,6 +409,19 @@ export function MessageBox({
                     </div>
                   </>
                 )}
+                {activeThreadExternalEditRequest && isResolutionOwner(activeThread) && (
+                  <div className="panel-toolbar compact" style={{ marginTop: "0.6rem" }}>
+                    <p className="meta">外部編集申請の発信者は、申請スレッドを解決または削除できます。</p>
+                    <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                      <button type="button" className="ghost" onClick={onResolveActiveThread} disabled={!canResolveActiveThread}>
+                        解決
+                      </button>
+                      <button type="button" className="ghost" onClick={onDeleteActiveThread} disabled={!canDeleteActiveThread}>
+                        スレッド削除
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </section>
