@@ -821,6 +821,15 @@ function App() {
   });
   const selectedPoolScoreEditLocked = !selectedPhasePoolGroup?.phaseGroupId
     || !(selectedEventMeta?.scoreEditEnabledPhaseGroupIds ?? []).includes(selectedPhasePoolGroup.phaseGroupId);
+  const lockedPoolGroupIdsForCurrentPhase = phaseScopedPoolGroups.flatMap((group) => {
+    const phaseGroupId = group.phaseGroupId;
+    if (!phaseGroupId || group.phaseName !== selectedPhaseName) {
+      return [];
+    }
+    return (selectedEventMeta?.scoreEditEnabledPhaseGroupIds ?? []).includes(phaseGroupId)
+      ? []
+      : [phaseGroupId];
+  });
   const selectedEventSetsById = useMemo(
     () => new Map((selectedEvent?.sets ?? []).map((set) => [set.setId, set])),
     [selectedEvent],
@@ -841,6 +850,7 @@ function App() {
     if (
       phaseGroupId === ""
       || selectedEventMeta?.eventId !== result.eventId
+      || !(selectedEventMeta.scoreEditEnabledPhaseGroupIds ?? []).includes(phaseGroupId)
       || !(selectedEventMeta.externalScoreBroadcastPhaseGroupIds ?? []).includes(phaseGroupId)
     ) {
       return false;
@@ -858,7 +868,14 @@ function App() {
   };
 
   async function changeSelectedPoolExternalScoreBroadcast(enabled: boolean) {
-    if (!snapshot || !selectedEvent || !selectedPhasePoolGroup?.phaseGroupId) {
+    const phaseGroupId = selectedPhasePoolGroup?.phaseGroupId;
+    if (
+      !snapshot
+      || !selectedEvent
+      || !phaseGroupId
+      || selectedEventMeta?.eventId !== selectedEvent.eventId
+      || !(selectedEventMeta.scoreEditEnabledPhaseGroupIds ?? []).includes(phaseGroupId)
+    ) {
       return;
     }
     setBusy(true);
@@ -869,12 +886,12 @@ function App() {
         slug: snapshot.slug,
         eventId: selectedEvent.eventId,
         eventName: selectedEvent.name,
-        phaseGroupId: selectedPhasePoolGroup.phaseGroupId,
+        phaseGroupId,
         enabled,
       });
       setMessage(enabled
-        ? "確定したスコアの外部報告を有効にしました。"
-        : "確定したスコアの外部報告を無効にしました。");
+        ? "スコア確定時の外部報告を有効にしました。"
+        : "スコア確定時の外部報告を無効にしました。");
     } catch (error) {
       setError(String(error));
     } finally {
@@ -1249,11 +1266,19 @@ function App() {
     ).catch((refreshError: unknown) => setError(String(refreshError)));
   }, [eventMgmtSettingsReady, selectedEvent?.eventId, useAliasName]);
 
-  async function restoreGraphAndRefreshDisplay() {
-    const restoredWorkspace = await restoreGraphFromSnapshot();
-    if (!restoredWorkspace) {
+  async function restoreGraphAndRefreshDisplay(
+    scope: "currentPool" | "lockedPoolsInCurrentPhase" | "all",
+    phaseGroupId: string | null,
+    phaseName: string | null,
+  ) {
+    const restoredResult = await restoreGraphFromSnapshot(scope, phaseGroupId, phaseName);
+    if (!restoredResult) {
       return;
     }
+    if (scope !== "all") {
+      restoredResult.affectedSetIds.forEach(removeDraftsForSet);
+    }
+    const restoredWorkspace = restoredResult.workspace;
     const restoredEventMeta = restoredWorkspace.localMeta.events.find(
       (event) => event.eventId === selectedEventId,
     );
@@ -1914,11 +1939,32 @@ function App() {
             }}
             restoreOpen={restoreDialogOpen}
             selectedEventName={selectedEvent?.name ?? "選択中のイベント"}
-            canRestoreFromSnapshot={!busy && Boolean(selectedEvent)}
+            canRestoreCurrentPool={
+              !busy
+              && Boolean(selectedEvent)
+              && Boolean(selectedPhasePoolGroup?.phaseGroupId)
+            }
+            canRestoreLockedPoolsInCurrentPhase={
+              !busy
+              && Boolean(selectedEvent)
+              && selectedEventMeta?.eventId === selectedEvent?.eventId
+              && lockedPoolGroupIdsForCurrentPhase.length > 0
+            }
+            canRestoreAll={!busy && Boolean(selectedEvent)}
             canUpdateSnapshot={!busy && toApiSlug(slug) !== ""}
             canDiscardAllDrafts={!busy && toApiSlug(slug) !== "" && Boolean(selectedEvent)}
             onCloseRestore={() => setRestoreDialogOpen(false)}
-            onRestoreFromSnapshot={() => void restoreGraphAndRefreshDisplay()}
+            onRestoreCurrentPool={() => void restoreGraphAndRefreshDisplay(
+              "currentPool",
+              selectedPhasePoolGroup?.phaseGroupId ?? null,
+              selectedPhaseName,
+            )}
+            onRestoreLockedPoolsInCurrentPhase={() => void restoreGraphAndRefreshDisplay(
+              "lockedPoolsInCurrentPhase",
+              null,
+              selectedPhaseName,
+            )}
+            onRestoreAll={() => void restoreGraphAndRefreshDisplay("all", null, null)}
             onUpdateSnapshot={() => {
               setRestoreDialogOpen(false);
               void updateSnapshot();

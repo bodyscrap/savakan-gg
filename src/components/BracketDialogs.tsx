@@ -20,11 +20,15 @@ type BracketDialogsProps = {
   onConfirmResult: () => void;
   restoreOpen: boolean;
   selectedEventName: string;
-  canRestoreFromSnapshot: boolean;
+  canRestoreCurrentPool: boolean;
+  canRestoreLockedPoolsInCurrentPhase: boolean;
+  canRestoreAll: boolean;
   canUpdateSnapshot: boolean;
   canDiscardAllDrafts: boolean;
   onCloseRestore: () => void;
-  onRestoreFromSnapshot: () => void;
+  onRestoreCurrentPool: () => void;
+  onRestoreLockedPoolsInCurrentPhase: () => void;
+  onRestoreAll: () => void;
   onUpdateSnapshot: () => void;
   onDiscardAllDrafts: () => void;
   overlaySwitch: OverlaySwitchView | null;
@@ -57,11 +61,15 @@ export function BracketDialogs({
   onConfirmResult,
   restoreOpen,
   selectedEventName,
-  canRestoreFromSnapshot,
+  canRestoreCurrentPool,
+  canRestoreLockedPoolsInCurrentPhase,
+  canRestoreAll,
   canUpdateSnapshot,
   canDiscardAllDrafts,
   onCloseRestore,
-  onRestoreFromSnapshot,
+  onRestoreCurrentPool,
+  onRestoreLockedPoolsInCurrentPhase,
+  onRestoreAll,
   onUpdateSnapshot,
   onDiscardAllDrafts,
   overlaySwitch,
@@ -143,16 +151,27 @@ export function BracketDialogs({
             </div>
             <div className="dialog-body" style={{ display: "grid", gap: "0.5rem" }}>
               <p className="meta">
-                スナップショット取得後の対象eventの未報告結果（確定済みを含む）は破棄されます。
+                選択範囲のスコアを、最後に取得したスナップショット時点に戻します。範囲内の未報告結果も破棄されます。
               </p>
-              <button type="button" className="ghost" disabled={!canRestoreFromSnapshot} onClick={onRestoreFromSnapshot}>
-                スナップショットから復元
+              <button type="button" className="ghost" disabled={!canRestoreCurrentPool} onClick={onRestoreCurrentPool}>
+                スナップショットから復元(現在Pool)
               </button>
-              <button type="button" className="ghost" disabled={!canUpdateSnapshot} onClick={onUpdateSnapshot}>
-                スナップショットの更新
+              <button
+                type="button"
+                className="ghost"
+                disabled={!canRestoreLockedPoolsInCurrentPhase}
+                onClick={onRestoreLockedPoolsInCurrentPhase}
+              >
+                スナップショットから復元(現在Phaseのロック中Pool)
+              </button>
+              <button type="button" className="ghost" disabled={!canRestoreAll} onClick={onRestoreAll}>
+                スナップショットから復元(全体)
               </button>
               <button type="button" className="ghost" disabled={!canDiscardAllDrafts} onClick={onDiscardAllDrafts}>
                 全下書きの破棄
+              </button>
+              <button type="button" className="ghost" disabled={!canUpdateSnapshot} onClick={onUpdateSnapshot}>
+                スナップショットの更新(全体)
               </button>
             </div>
           </section>

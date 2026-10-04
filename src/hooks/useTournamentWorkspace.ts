@@ -15,6 +15,7 @@ import {
   type EventManagementMeta,
   type LocalSnapshotEventListItem,
   type PlaySide,
+  type RestoreEventGraphInput,
   type TournamentWorkspace,
 } from "../domain/tournamentWorkspaceRepository";
 
@@ -25,6 +26,9 @@ export type {
   LocalGrandFinalResetResultMeta,
   LocalSetResultMeta,
   PlaySide,
+  RestoreEventGraphInput,
+  RestoreEventGraphResult,
+  SnapshotRestoreScope,
   SetPlaySideMeta,
   TournamentLocalMeta,
   TournamentSnapshot,
@@ -93,9 +97,9 @@ export function useTournamentWorkspace({
     return result;
   }
 
-  async function restoreWorkspaceGraph(targetSlug: string, eventId: string) {
-    const result = await restoreTournamentGraph(targetSlug, eventId);
-    setWorkspace(result);
+  async function restoreWorkspaceGraph(input: RestoreEventGraphInput) {
+    const result = await restoreTournamentGraph(input);
+    setWorkspace(result.workspace);
     return result;
   }
 

@@ -17,10 +17,10 @@ use crate::models::{
     LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta, LocalSetScoreUpdateInput,
     LocalSnapshotEventListItem, MobileResultRequestInput, MobileResultRequestItem,
     PhaseGroupExternalEditor, PhaseGroupGraphSeedSnapshot, PhaseGroupSeedSnapshot,
-    SaveEventManagementMetaInput, SenderProfile, SetPhaseGroupExternalEditorInput,
-    SetPhaseGroupExternalScoreBroadcastInput, SetPhaseGroupScoreEditLockInput, SetPlaySideMeta,
-    SetSnapshot, TournamentEventPreviewItem, TournamentLocalMeta, TournamentSnapshot,
-    TournamentWorkspace,
+    RestoreEventGraphInput, RestoreEventGraphResult, SaveEventManagementMetaInput, SenderProfile,
+    SetPhaseGroupExternalEditorInput, SetPhaseGroupExternalScoreBroadcastInput,
+    SetPhaseGroupScoreEditLockInput, SetPlaySideMeta, SetSnapshot, SnapshotRestoreScope,
+    TournamentEventPreviewItem, TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace,
 };
 
 const STORAGE_DIR_NAME: &str = "savakan-gg";
@@ -8259,23 +8259,216 @@ fn replace_event_with_pristine_snapshot(
     Ok(())
 }
 
+fn locked_phase_group_ids_for_phase(
+    event: &EventSnapshot,
+    event_meta: &EventLocalMeta,
+    phase_name: &str,
+) -> HashSet<String> {
+    let unlocked_phase_group_ids = event_meta
+        .score_edit_enabled_phase_group_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut locked_phase_group_ids = event
+        .phase_groups
+        .iter()
+        .filter(|group| {
+            group.phase_name.as_deref().map(str::trim) == Some(phase_name)
+                && !unlocked_phase_group_ids.contains(group.phase_group_id.as_str())
+        })
+        .map(|group| group.phase_group_id.clone())
+        .collect::<HashSet<_>>();
+
+    locked_phase_group_ids.extend(event.sets.iter().filter_map(|set| {
+        let phase_group_id = set.phase_group_id.as_deref()?;
+        (set.phase_name.as_deref().map(str::trim) == Some(phase_name)
+            && !unlocked_phase_group_ids.contains(phase_group_id))
+        .then(|| phase_group_id.to_owned())
+    }));
+    locked_phase_group_ids
+}
+
+#[cfg(test)]
+mod snapshot_restore_scope_tests {
+    use super::*;
+
+    #[test]
+    fn locked_pool_restore_scope_excludes_unlocked_pools_and_other_phases() {
+        let event: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Event",
+            "phaseGroups": [
+                { "phaseGroupId": "locked-a", "phaseName": "Phase 1" },
+                { "phaseGroupId": "unlocked-a", "phaseName": "Phase 1" },
+                { "phaseGroupId": "locked-b", "phaseName": "Phase 2" }
+            ],
+            "sets": []
+        }))
+        .expect("event snapshot should deserialize");
+        let event_meta: EventLocalMeta = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "eventName": "Event",
+            "entrants": [],
+            "scoreEditEnabledPhaseGroupIds": ["unlocked-a"]
+        }))
+        .expect("event metadata should deserialize");
+
+        assert_eq!(
+            locked_phase_group_ids_for_phase(&event, &event_meta, "Phase 1"),
+            HashSet::from(["locked-a".to_owned()])
+        );
+    }
+}
+
 pub fn restore_event_graph_from_snapshot(
     app: &AppHandle,
-    slug: &str,
-    event_id: &str,
-) -> Result<TournamentWorkspace, String> {
-    let mut workspace = load_workspace(app, slug, event_id)?;
-    let pristine_snapshot = load_pristine_event_snapshot(app, slug, event_id)?;
-    replace_event_with_pristine_snapshot(&mut workspace.snapshot, &pristine_snapshot, event_id)?;
-    let local_meta = discard_pending_set_results_for_snapshot_refresh(app, slug, event_id)?;
-    let local_meta = merge_snapshot_into_meta(&workspace.snapshot, event_id, local_meta);
+    input: RestoreEventGraphInput,
+) -> Result<RestoreEventGraphResult, String> {
+    let normalized_slug = normalize_slug_for_storage(&input.slug);
+    let mut workspace = load_workspace(app, &normalized_slug, &input.event_id)?;
+    let pristine_snapshot = load_pristine_event_snapshot(app, &normalized_slug, &input.event_id)?;
+    let pristine_event = pristine_snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == input.event_id)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "取得時点のスナップショットにイベントがありません: {}",
+                input.event_id
+            )
+        })?;
+    let mut affected_set_ids = HashSet::new();
+    let mut restored_phase_group_ids = HashSet::new();
+
+    match input.scope {
+        SnapshotRestoreScope::All => {
+            replace_event_with_pristine_snapshot(
+                &mut workspace.snapshot,
+                &pristine_snapshot,
+                &input.event_id,
+            )?;
+            affected_set_ids.extend(pristine_event.sets.iter().map(|set| set.set_id.clone()));
+        }
+        SnapshotRestoreScope::CurrentPool => {
+            let phase_group_id = input
+                .phase_group_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "復元対象のPoolが選択されていません。".to_owned())?;
+            if !pristine_event
+                .sets
+                .iter()
+                .any(|set| set.phase_group_id.as_deref() == Some(phase_group_id))
+            {
+                return Err("スナップショットに対象Poolのsetがありません。".to_owned());
+            }
+            restored_phase_group_ids.insert(phase_group_id.to_owned());
+        }
+        SnapshotRestoreScope::LockedPoolsInCurrentPhase => {
+            let phase_name = input
+                .phase_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "復元対象のPhaseが選択されていません。".to_owned())?;
+            let event_meta = workspace
+                .local_meta
+                .events
+                .iter()
+                .find(|event| event.event_id == input.event_id)
+                .ok_or_else(|| "復元対象イベントの設定が見つかりません。".to_owned())?;
+            restored_phase_group_ids =
+                locked_phase_group_ids_for_phase(&pristine_event, event_meta, phase_name);
+            if restored_phase_group_ids.is_empty() {
+                return Err("選択中Phaseにスコア編集ロック中のPoolがありません。".to_owned());
+            }
+        }
+    }
+
+    if input.scope != SnapshotRestoreScope::All {
+        let pristine_sets = pristine_event
+            .sets
+            .iter()
+            .filter(|set| {
+                set.phase_group_id
+                    .as_ref()
+                    .is_some_and(|id| restored_phase_group_ids.contains(id))
+            })
+            .map(|set| (set.set_id.clone(), set.clone()))
+            .collect::<HashMap<_, _>>();
+        if pristine_sets.is_empty() {
+            return Err("復元対象Poolにsetがありません。".to_owned());
+        }
+        let event = workspace
+            .snapshot
+            .events
+            .iter_mut()
+            .find(|event| event.event_id == input.event_id)
+            .ok_or_else(|| format!("復元対象イベントが見つかりません: {}", input.event_id))?;
+        for (set_id, pristine_set) in pristine_sets {
+            let current_set = event
+                .sets
+                .iter_mut()
+                .find(|set| set.set_id == set_id)
+                .ok_or_else(|| format!("復元対象setが見つかりません: {set_id}"))?;
+            *current_set = pristine_set;
+            affected_set_ids.insert(set_id);
+        }
+        for phase_group_id in &restored_phase_group_ids {
+            if let Some(pristine_group) = pristine_event
+                .phase_groups
+                .iter()
+                .find(|group| &group.phase_group_id == phase_group_id)
+            {
+                if let Some(current_group) = event
+                    .phase_groups
+                    .iter_mut()
+                    .find(|group| &group.phase_group_id == phase_group_id)
+                {
+                    *current_group = pristine_group.clone();
+                }
+            }
+        }
+        affected_set_ids.extend(rebuild_event_progression_from_completed_sets(
+            &mut workspace.snapshot,
+            &input.event_id,
+        ));
+    }
+
+    let mut local_meta = workspace.local_meta;
+    if input.scope == SnapshotRestoreScope::All {
+        local_meta
+            .pending_set_results
+            .retain(|item| item.event_id != input.event_id);
+        local_meta
+            .pending_grand_final_reset_results
+            .retain(|item| item.event_id != input.event_id);
+    } else {
+        local_meta.pending_set_results.retain(|item| {
+            item.event_id != input.event_id || !affected_set_ids.contains(&item.set_id)
+        });
+        local_meta.pending_grand_final_reset_results.retain(|item| {
+            item.event_id != input.event_id
+                || !affected_set_ids.contains(&item.source_grand_final_set_id)
+        });
+        local_meta.set_confirmation_history.retain(|item| {
+            item.event_id != input.event_id || !affected_set_ids.contains(&item.set_id)
+        });
+        local_meta
+            .set_play_sides
+            .retain(|item| !affected_set_ids.contains(&item.set_id));
+    }
+    local_meta.updated_at = Utc::now();
+    local_meta = merge_snapshot_into_meta(&workspace.snapshot, &input.event_id, local_meta);
+    save_local_meta(app, &input.event_id, &local_meta)?;
     let event = workspace
         .snapshot
         .events
         .iter()
-        .find(|event| event.event_id == event_id)
-        .ok_or_else(|| format!("復元対象イベントが見つかりません: {event_id}"))?;
-    let normalized_slug = normalize_slug_for_storage(slug);
+        .find(|event| event.event_id == input.event_id)
+        .ok_or_else(|| format!("復元対象イベントが見つかりません: {}", input.event_id))?;
     let graph = build_bracket_graph(&workspace.snapshot, event);
 
     save_event_graph_file(
@@ -8293,9 +8486,16 @@ pub fn restore_event_graph_from_snapshot(
         std::slice::from_ref(event),
     )?;
 
-    Ok(TournamentWorkspace {
-        snapshot: workspace.snapshot,
-        local_meta,
+    invalidate_progression_cache(&normalized_slug);
+    let mut affected_set_ids = affected_set_ids.into_iter().collect::<Vec<_>>();
+    affected_set_ids.sort();
+
+    Ok(RestoreEventGraphResult {
+        workspace: TournamentWorkspace {
+            snapshot: workspace.snapshot,
+            local_meta,
+        },
+        affected_set_ids,
     })
 }
 

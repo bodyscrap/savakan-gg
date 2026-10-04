@@ -18,8 +18,9 @@ use models::{
     GenericMessage, ItemListConfig, LocalPlayerMetaInput, LocalSetPlaySideInput,
     LocalSetResultInput, LocalSetScoreInput, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
     MobileResultRequestInput, MobileResultRequestItem, PlaySide, ReportSetResultInput,
-    ResetSetResultCascadeInput, ResetSetResultCascadeResult, SaveEventManagementMetaInput,
-    SenderProfile, SetPhaseGroupExternalEditorInput, SetPhaseGroupExternalScoreBroadcastInput,
+    ResetSetResultCascadeInput, ResetSetResultCascadeResult, RestoreEventGraphInput,
+    RestoreEventGraphResult, SaveEventManagementMetaInput, SenderProfile,
+    SetPhaseGroupExternalEditorInput, SetPhaseGroupExternalScoreBroadcastInput,
     SetPhaseGroupScoreEditLockInput, SetSnapshot, TournamentPreview, TournamentSnapshot,
     TournamentWorkspace,
 };
@@ -6815,10 +6816,9 @@ async fn refresh_local_event_snapshot_from_remote(
 #[tauri::command]
 fn restore_local_event_graph_from_snapshot(
     app: tauri::AppHandle,
-    slug: String,
-    event_id: String,
-) -> Result<TournamentWorkspace, String> {
-    storage::restore_event_graph_from_snapshot(&app, &slug, &event_id)
+    input: RestoreEventGraphInput,
+) -> Result<RestoreEventGraphResult, String> {
+    storage::restore_event_graph_from_snapshot(&app, input)
 }
 
 #[tauri::command]

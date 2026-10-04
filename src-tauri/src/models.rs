@@ -373,6 +373,33 @@ pub struct EventSnapshot {
     pub sets: Vec<SetSnapshot>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SnapshotRestoreScope {
+    CurrentPool,
+    LockedPoolsInCurrentPhase,
+    All,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreEventGraphInput {
+    pub slug: String,
+    pub event_id: String,
+    pub scope: SnapshotRestoreScope,
+    #[serde(default)]
+    pub phase_group_id: Option<String>,
+    #[serde(default)]
+    pub phase_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreEventGraphResult {
+    pub workspace: TournamentWorkspace,
+    pub affected_set_ids: Vec<String>,
+}
+
 pub fn is_intermediate_set(phase_groups: &[PhaseGroupSnapshot], set: &SetSnapshot) -> bool {
     if phase_groups
         .iter()

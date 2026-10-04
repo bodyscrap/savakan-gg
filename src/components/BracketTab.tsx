@@ -213,15 +213,17 @@ export function BracketTab({
                     />
                     スコア編集のロック
                   </label>
-                  <label className="checkbox-row">
-                    <input
-                      type="checkbox"
-                      checked={selectedPoolExternalScoreBroadcastEnabled}
-                      disabled={busy || !selectedPhasePoolGroup.phaseGroupId}
-                      onChange={(event) => onSelectedPoolExternalScoreBroadcastChange(event.currentTarget.checked)}
-                    />
-                    確定したスコアをブロードキャスト
-                  </label>
+                  {!selectedPoolScoreEditLocked && (
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={selectedPoolExternalScoreBroadcastEnabled}
+                        disabled={busy || !selectedPhasePoolGroup.phaseGroupId}
+                        onChange={(event) => onSelectedPoolExternalScoreBroadcastChange(event.currentTarget.checked)}
+                      />
+                      スコア確定時に外部報告
+                    </label>
+                  )}
                 </div>
                 <div className="panel-toolbar compact">
                   <p className="meta">

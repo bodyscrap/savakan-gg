@@ -4,7 +4,13 @@ import type { EventSnapshotProgress } from "../components/CreateSnapshot";
 import type { EventManagementSetting } from "../domain/eventManagement";
 import { sameSnapshotEventKey } from "../domain/snapshotDisplay";
 import { removeSnapshotEvent, saveLastSlug, saveLastSnapshotSelection } from "../domain/tournamentWorkspaceRepository";
-import type { LocalSnapshotEventListItem, TournamentWorkspace } from "../domain/tournamentWorkspaceRepository";
+import type {
+  LocalSnapshotEventListItem,
+  RestoreEventGraphInput,
+  RestoreEventGraphResult,
+  SnapshotRestoreScope,
+  TournamentWorkspace,
+} from "../domain/tournamentWorkspaceRepository";
 import { toApiSlug, toSlugInput } from "../domain/slugUtils";
 
 type UseEventSnapshotMaintenanceOptions = {
@@ -29,7 +35,7 @@ type UseEventSnapshotMaintenanceOptions = {
   snapshot: Pick<TournamentWorkspace["snapshot"], "slug"> | null;
   saveEventAlias: (slug: string, eventId: string, alias: string | null) => Promise<unknown>;
   refreshRemoteSnapshot: (slug: string, eventId: string, perPage: number) => Promise<unknown>;
-  restoreWorkspaceGraph: (slug: string, eventId: string) => Promise<TournamentWorkspace>;
+  restoreWorkspaceGraph: (input: RestoreEventGraphInput) => Promise<RestoreEventGraphResult>;
   refreshLocalSnapshotEvents: () => Promise<void>;
   loadWorkspace: (slug: string, eventId: string) => Promise<unknown>;
   clearAllDrafts: () => void;
@@ -219,7 +225,11 @@ export function useEventSnapshotMaintenance({
     }
   }
 
-  async function restoreGraphFromSnapshot(): Promise<TournamentWorkspace | null> {
+  async function restoreGraphFromSnapshot(
+    scope: SnapshotRestoreScope,
+    phaseGroupId: string | null,
+    phaseName: string | null,
+  ): Promise<RestoreEventGraphResult | null> {
     const normalizedSlug = toApiSlug(slug);
     const eventId = selectedEvent?.eventId ?? selectedEventId;
     if (normalizedSlug === "" || eventId === "") {
@@ -233,11 +243,21 @@ export function useEventSnapshotMaintenance({
     setMessage("");
 
     try {
-      const restoredWorkspace = await restoreWorkspaceGraph(normalizedSlug, eventId);
-      clearAllDrafts();
+      const restoredResult = await restoreWorkspaceGraph({
+        slug: normalizedSlug,
+        eventId,
+        scope,
+        phaseGroupId,
+        phaseName,
+      });
+      if (scope === "all") {
+        clearAllDrafts();
+      }
       closeMatchDialog();
-      setMessage("最後に取得したスナップショット時点に復元しました。対象eventの未報告結果は破棄されました。");
-      return restoredWorkspace;
+      setMessage(scope === "all"
+        ? "最後に取得したスナップショット時点に全体を復元しました。対象eventの未報告結果は破棄されました。"
+        : `最後に取得したスナップショット時点に復元しました。影響set: ${restoredResult.affectedSetIds.length}件`);
+      return restoredResult;
     } catch (err) {
       setError(String(err));
       return null;

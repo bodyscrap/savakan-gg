@@ -121,6 +121,24 @@ export type TournamentWorkspace = {
   localMeta: TournamentLocalMeta;
 };
 
+export type SnapshotRestoreScope =
+  | "currentPool"
+  | "lockedPoolsInCurrentPhase"
+  | "all";
+
+export type RestoreEventGraphInput = {
+  slug: string;
+  eventId: string;
+  scope: SnapshotRestoreScope;
+  phaseGroupId: string | null;
+  phaseName: string | null;
+};
+
+export type RestoreEventGraphResult = {
+  workspace: TournamentWorkspace;
+  affectedSetIds: string[];
+};
+
 export type SnapshotSelection = {
   slug: string;
   eventId: string;
@@ -228,8 +246,10 @@ export async function refreshTournamentSnapshot(
   });
 }
 
-export async function restoreTournamentGraph(slug: string, eventId: string): Promise<TournamentWorkspace> {
-  return invoke<TournamentWorkspace>("restore_local_event_graph_from_snapshot", { slug, eventId });
+export async function restoreTournamentGraph(
+  input: RestoreEventGraphInput,
+): Promise<RestoreEventGraphResult> {
+  return invoke<RestoreEventGraphResult>("restore_local_event_graph_from_snapshot", { input });
 }
 
 export async function persistEventManagementMeta(input: SaveEventManagementMetaInput): Promise<TournamentWorkspace> {
