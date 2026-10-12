@@ -74,6 +74,7 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
   const [focusOwnUnresolved, setFocusOwnUnresolved] = useState(false);
   const [pageSwitchedAtMs, setPageSwitchedAtMs] = useState(() => Date.now());
   const [progressNowMs, setProgressNowMs] = useState(() => Date.now());
+  const [pageRotationPaused, setPageRotationPaused] = useState(false);
   const [displayGroups, setDisplayGroups] = useState<CallListEventGroup[]>([]);
   const [rebuildToken, setRebuildToken] = useState(0);
   const [cycleCount, setCycleCount] = useState(0);
@@ -242,7 +243,9 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
       }
 
       const currentKeys = new Set(current.map((item) => item.key));
-      const next = current.map((item) => latestGroupsByKey.get(item.key) ?? item);
+      const next = current
+        .map((item) => latestGroupsByKey.get(item.key))
+        .filter((item): item is CallListEventGroup => item !== undefined);
 
       for (const group of latestGroups) {
         if (!currentKeys.has(group.key)) {
@@ -316,7 +319,7 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
   }, [pageIndex, pages.length]);
 
   useEffect(() => {
-    if (activeTab !== "call-list" || pages.length === 0) {
+    if (activeTab !== "call-list" || pages.length === 0 || pageRotationPaused) {
       return;
     }
 
@@ -344,10 +347,10 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
       return next;
     });
     setProgressNowMs(now);
-  }, [activeTab, pageSwitchedAtMs, pages.length, rotateMs]);
+  }, [activeTab, pageRotationPaused, pageSwitchedAtMs, pages.length, rotateMs]);
 
   useEffect(() => {
-    if (activeTab !== "call-list" || pages.length === 0) {
+    if (activeTab !== "call-list" || pages.length === 0 || pageRotationPaused) {
       setProgressNowMs(Date.now());
       return;
     }
@@ -360,10 +363,10 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
     return () => {
       window.clearInterval(tickerId);
     };
-  }, [activeTab, pages.length]);
+  }, [activeTab, pageRotationPaused, pages.length]);
 
   useEffect(() => {
-    if (activeTab !== "call-list" || pages.length === 0) {
+    if (activeTab !== "call-list" || pages.length === 0 || pageRotationPaused) {
       setProgressNowMs(Date.now());
       return;
     }
@@ -382,7 +385,7 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
     return () => {
       window.clearInterval(timerId);
     };
-  }, [activeTab, pages.length, rotateMs]);
+  }, [activeTab, pageRotationPaused, pages.length, rotateMs]);
 
   function resetDisplay(options: ResetCallListDisplayOptions = {}) {
     const now = Date.now();
@@ -410,6 +413,13 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
     });
   }
 
+  function pausePageRotation(paused: boolean) {
+    setPageRotationPaused(paused);
+    const now = Date.now();
+    setPageSwitchedAtMs(now);
+    setProgressNowMs(now);
+  }
+
   return {
     displayGroups,
     eventGroups: displayGroups,
@@ -434,5 +444,6 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
     colorToRedSeconds,
     resetDisplay,
     advancePage,
+    pausePageRotation,
   };
 }

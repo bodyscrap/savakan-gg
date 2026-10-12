@@ -127,6 +127,7 @@ type StatusBoardProps = {
   pageSwitchedAtMs: number;
   colorToRedSeconds: number;
   resolvePlayerName: (group: CallListEventGroup, player: CallListPlayer) => string;
+  onResolveOwnCall: (group: CallListEventGroup, player: CallListPlayer) => void;
 };
 
 export function StatusBoard({
@@ -139,6 +140,7 @@ export function StatusBoard({
   pageSwitchedAtMs,
   colorToRedSeconds,
   resolvePlayerName,
+  onResolveOwnCall,
 }: StatusBoardProps) {
   return (
     <section className="panel call-list-panel">
@@ -200,16 +202,30 @@ export function StatusBoard({
                     const elapsedSeconds = callElapsedSeconds(player.createdAt, pageSwitchedAtMs);
                     const chipStyle = buildCallListPlayerChipStyle(elapsedSeconds, colorToRedSeconds);
 
-                    return (
+                    const className = `call-list-player-chip${player.isOwn ? " call-list-player-chip--own" : ""}`;
+                    const name = resolvePlayerName(group, player);
+                    const elapsed = formatCallElapsedTime(player.createdAt, pageSwitchedAtMs);
+
+                    return player.isOwn ? (
+                      <button
+                        type="button"
+                        className={className}
+                        key={`${group.key}-${player.threadId}`}
+                        style={chipStyle}
+                        onClick={() => onResolveOwnCall(group, player)}
+                        aria-label={`${name} の呼び出しを解決`}
+                      >
+                        <span className="call-list-player-chip-name">{name}</span>
+                        <span className="call-list-player-chip-elapsed">{elapsed}</span>
+                      </button>
+                    ) : (
                       <span
-                        className={`call-list-player-chip${player.isOwn ? " call-list-player-chip--own" : ""}`}
+                        className={className}
                         key={`${group.key}-${player.threadId}`}
                         style={chipStyle}
                       >
-                        <span className="call-list-player-chip-name">{resolvePlayerName(group, player)}</span>
-                        <span className="call-list-player-chip-elapsed">
-                          {formatCallElapsedTime(player.createdAt, pageSwitchedAtMs)}
-                        </span>
+                        <span className="call-list-player-chip-name">{name}</span>
+                        <span className="call-list-player-chip-elapsed">{elapsed}</span>
                       </span>
                     );
                   })}

@@ -959,20 +959,28 @@ export function useMailbox({
     }
   }
 
-  async function resolveActiveThread() {
+  async function resolveThread(threadId?: string): Promise<boolean> {
     onError("");
     onMessage("");
+    const targetThread = threadId
+      ? genericMessages.find((item) => item.threadId === threadId && item.parentMessageId === null) ?? null
+      : activeThread;
     if (disableLocalCommunication) {
       onError("ローカル通信を行わない設定のため、解決メッセージ送信は無効です。設定タブで解除してください。");
-      return;
+      return false;
     }
-    if (!activeThread) {
+    if (!targetThread) {
       onError("解決するスレッドを選択してください。");
-      return;
+      return false;
     }
-    if (!canResolveActiveThread) {
+    const targetResolved = genericMessages.some(
+      (item) => item.threadId === targetThread.threadId && item.messageType === "resolve",
+    );
+    const canResolveTarget = !targetResolved
+      && targetThread.senderUserId.trim() === senderProfile.senderUserId.trim();
+    if (!canResolveTarget) {
       onError("スレッド作成者のみが解決メッセージを送信できます。未解決スレッドを選択してください。");
-      return;
+      return false;
     }
 
     try {
@@ -980,21 +988,27 @@ export function useMailbox({
         input: {
           profile: senderProfile,
           messageType: "resolve",
-          method: activeThread.method,
-          subject: `Resolved: ${activeThread.subject}`,
+          method: targetThread.method,
+          subject: `Resolved: ${targetThread.subject}`,
           body: "解決",
-          messageMeta: activeThread.messageMeta,
+          messageMeta: targetThread.messageMeta,
           deliveryTargetMode: "broadcast",
           deliveryTargetIp: null,
-          threadId: activeThread.threadId,
-          parentMessageId: activeThread.messageId,
+          threadId: targetThread.threadId,
+          parentMessageId: targetThread.messageId,
         },
       });
       addMailboxMessage(sent);
       onMessage("解決メッセージを送信しました。スレッドは完了扱いになります。");
+      return true;
     } catch (error) {
       onError(String(error));
+      return false;
     }
+  }
+
+  async function resolveActiveThread() {
+    await resolveThread();
   }
 
   function deleteActiveThread() {
@@ -1171,6 +1185,7 @@ export function useMailbox({
     resetDqRequestDialog,
     submitDqRequest,
     resolveActiveThread,
+    resolveThread,
     deleteActiveThread,
     forceClearMessages,
     dqDialog,

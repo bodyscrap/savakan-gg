@@ -530,6 +530,7 @@ function App() {
     activeThreadResolved,
     canResolveActiveThread,
     resolveActiveThread: resolveMailboxThread,
+    resolveThread: resolveMailboxThreadById,
     canSendGenericMessage,
     canReplyToThread,
     canReplyToExternalEditRequest,
@@ -571,6 +572,11 @@ function App() {
     },
   });
 
+  const [callListResolveDialog, setCallListResolveDialog] = useState<{
+    threadId: string;
+    playerName: string;
+  } | null>(null);
+  const [callListResolveSubmitting, setCallListResolveSubmitting] = useState(false);
   const {
     displayGroups: callListDisplayGroups,
     hasCallListMessages,
@@ -593,11 +599,44 @@ function App() {
     colorToRedSeconds: callListColorToRedSeconds,
     resetDisplay: resetCallListDisplay,
     advancePage: advanceCallListPage,
+    pausePageRotation: pauseCallListPageRotation,
   } = useCallList({
     activeTab,
     genericMessages,
     senderUserId: senderProfile.senderUserId,
   });
+
+  function openCallListResolveDialog(group: CallListEventGroup, player: CallListPlayer) {
+    setCallListResolveDialog({
+      threadId: player.threadId,
+      playerName: resolveCallListPlayerName(group, player),
+    });
+    pauseCallListPageRotation(true);
+  }
+
+  function closeCallListResolveDialog() {
+    if (callListResolveSubmitting) {
+      return;
+    }
+    setCallListResolveDialog(null);
+    pauseCallListPageRotation(false);
+  }
+
+  async function confirmCallListThreadResolution() {
+    if (!callListResolveDialog || callListResolveSubmitting) {
+      return;
+    }
+    setCallListResolveSubmitting(true);
+    try {
+      const resolved = await resolveMailboxThreadById(callListResolveDialog.threadId);
+      if (resolved) {
+        setCallListResolveDialog(null);
+        pauseCallListPageRotation(false);
+      }
+    } finally {
+      setCallListResolveSubmitting(false);
+    }
+  }
 
   const callListAliasSettingsByEvent = useMemo(() => {
     const settings = new Map<string, {
@@ -2061,7 +2100,49 @@ function App() {
           pageSwitchedAtMs={callListPageSwitchedAtMs}
           colorToRedSeconds={callListColorToRedSeconds}
           resolvePlayerName={resolveCallListPlayerName}
+          onResolveOwnCall={openCallListResolveDialog}
         />
+      )}
+
+      {callListResolveDialog && (
+        <div className="dialog-backdrop" onClick={closeCallListResolveDialog}>
+          <section
+            className="dialog-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="呼び出し解決確認"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="dialog-head">
+              <div>
+                <h3>呼び出しを解決しますか？</h3>
+                <p className="meta">解決すると、このスレッドは未解決の呼び出しリストから削除されます。</p>
+              </div>
+            </div>
+            <div className="dialog-body">
+              <div className="dialog-summary-box">
+                <p className="dialog-summary-title">{callListResolveDialog.playerName}</p>
+              </div>
+            </div>
+            <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                className="ghost"
+                disabled={callListResolveSubmitting}
+                onClick={closeCallListResolveDialog}
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                disabled={callListResolveSubmitting}
+                onClick={() => void confirmCallListThreadResolution()}
+              >
+                {callListResolveSubmitting ? "解決中..." : "解決"}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
 
       {dqDialog && (

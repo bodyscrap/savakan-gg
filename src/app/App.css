@@ -503,7 +503,7 @@ button:disabled {
 
 .mailbox-layout {
   display: grid;
-  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(280px, 400px) minmax(0, 1fr);
   gap: 0.8rem;
 }
 
@@ -517,6 +517,13 @@ button:disabled {
 
 .mailbox-thread-item {
   cursor: pointer;
+}
+
+.mailbox-thread-list .event-list,
+.mailbox-message-list {
+  max-height: 55vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .mailbox-thread-item.mailbox-thread-item--resolution-owner {
@@ -643,6 +650,7 @@ button:disabled {
   padding: 0.72rem 1.4rem 0.78rem;
   line-height: 1.1;
   font-weight: 600;
+  font-family: inherit;
 }
 
 .call-list-player-chip--own {
@@ -652,6 +660,7 @@ button:disabled {
   border-width: 4px;
   border-radius: 1rem;
   padding: 0.5rem 0.95rem 0.55rem;
+  cursor: pointer;
 }
 
 .call-list-player-chip--own .call-list-player-chip-name {
