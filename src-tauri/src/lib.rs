@@ -172,7 +172,7 @@ fn obs_overlay_state() -> &'static Mutex<ObsOverlayRuntimeState> {
             active_set: None,
             event_alias: String::new(),
             preview_font_scale: 1.0,
-            name_fit_mode: "truncate".to_owned(),
+            name_fit_mode: "shrink".to_owned(),
             show_set_info: true,
             show_event_alias: true,
             fully_stopped: false,
@@ -1430,7 +1430,7 @@ fn build_overlay_html() -> &'static str {
         document.documentElement.style.setProperty('--scale', String(Number.isFinite(scale) ? scale : 1));
         const isActive = Boolean(state.active);
                 const isFullyStopped = Boolean(state.fullyStopped);
-                const nameFitMode = String(state.nameFitMode || 'truncate').trim().toLowerCase() === 'shrink'
+                const nameFitMode = String(state.nameFitMode || 'shrink').trim().toLowerCase() === 'shrink'
                     ? 'shrink'
                     : 'truncate';
                 document.body.classList.toggle('fit-shrink', nameFitMode === 'shrink');
@@ -4436,7 +4436,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     red_set_wins: 0,
                     blue_set_wins: 0,
                     font_scale: 1.0,
-                    name_fit_mode: "truncate".to_owned(),
+                    name_fit_mode: "shrink".to_owned(),
                     show_set_info: true,
                     show_event_alias: true,
                     overlay_url: overlay_url(),

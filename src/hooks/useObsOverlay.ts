@@ -173,6 +173,7 @@ type UseObsOverlayOptions = {
 export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: UseObsOverlayOptions) {
   const [obsOverlayState, setObsOverlayState] = useState<ObsOverlayState | null>(null);
   const [obsOverlayBusy, setObsOverlayBusy] = useState(false);
+  const [testOverlayEventAlias, setTestOverlayEventAlias] = useState("テスト大会");
   const [testOverlayRedName, setTestOverlayRedName] = useState("テストプレイヤー1");
   const [testOverlayBlueName, setTestOverlayBlueName] = useState("テストプレイヤー2");
   const [testOverlayRedWins, setTestOverlayRedWins] = useState(0);
@@ -280,7 +281,7 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
               enabled: true,
               setId: "__test__",
               eventName: "テスト配信",
-              eventAlias: "テスト大会",
+              eventAlias: testOverlayEventAlias.trim(),
               roundText: "Preview / Pool A\nPreview\nSet T",
               redPlayerName: testOverlayRedName.trim() || "テストプレイヤー1",
               bluePlayerName: testOverlayBlueName.trim() || "テストプレイヤー2",
@@ -311,6 +312,7 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     obsOverlayState?.fontScale,
     testOverlayRedName,
     testOverlayBlueName,
+    testOverlayEventAlias,
     testOverlayRedWins,
     testOverlayBlueWins,
   ]);
@@ -412,7 +414,7 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
       enabled: true,
       setId: "__test__",
       eventName: "テスト配信",
-      eventAlias: "テスト大会",
+      eventAlias: testOverlayEventAlias.trim(),
       roundText: "Preview / Pool A\nPreview\nSet T",
       redPlayerName: testOverlayRedName.trim() || "テストプレイヤー1",
       bluePlayerName: testOverlayBlueName.trim() || "テストプレイヤー2",
@@ -464,6 +466,8 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     obsOverlayBusy,
     testOverlayRedName,
     setTestOverlayRedName,
+    testOverlayEventAlias,
+    setTestOverlayEventAlias,
     testOverlayBlueName,
     setTestOverlayBlueName,
     testOverlayRedWins,

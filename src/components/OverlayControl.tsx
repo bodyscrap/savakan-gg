@@ -21,6 +21,7 @@ type OverlayControlProps = {
   isTestOverlayActive: boolean;
   activeSetLabel: string | null;
   busy: boolean;
+  testEventAlias: string;
   testRedName: string;
   testBlueName: string;
   testRedWins: number;
@@ -32,6 +33,7 @@ type OverlayControlProps = {
   onShowSetInfoChange: (checked: boolean) => void;
   onShowEventAliasChange: (checked: boolean) => void;
   onTestRedNameChange: (value: string) => void;
+  onTestEventAliasChange: (value: string) => void;
   onTestBlueNameChange: (value: string) => void;
   onTestRedWinsChange: (value: number) => void;
   onTestBlueWinsChange: (value: number) => void;
@@ -45,6 +47,7 @@ export function OverlayControl({
   isTestOverlayActive,
   activeSetLabel,
   busy,
+  testEventAlias,
   testRedName,
   testBlueName,
   testRedWins,
@@ -56,6 +59,7 @@ export function OverlayControl({
   onShowSetInfoChange,
   onShowEventAliasChange,
   onTestRedNameChange,
+  onTestEventAliasChange,
   onTestBlueNameChange,
   onTestRedWinsChange,
   onTestBlueWinsChange,
@@ -131,6 +135,15 @@ export function OverlayControl({
               <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--line)" }}>
                 <p className="meta">テスト配信（タブ離脱で自動停止）</p>
                 <div className="obs-overlay-grid">
+                  <label>
+                    ダミーイベントエイリアス
+                    <input
+                      type="text"
+                      value={testEventAlias}
+                      onChange={(e) => onTestEventAliasChange(e.currentTarget.value)}
+                      disabled={busy}
+                    />
+                  </label>
                   <label>
                     1P プレイヤー名
                     <input

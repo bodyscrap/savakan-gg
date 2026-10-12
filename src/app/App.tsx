@@ -237,6 +237,8 @@ function App() {
   const {
     obsOverlayState,
     obsOverlayBusy,
+    testOverlayEventAlias,
+    setTestOverlayEventAlias,
     testOverlayRedName,
     setTestOverlayRedName,
     testOverlayBlueName,
@@ -2198,6 +2200,7 @@ function App() {
           isTestOverlayActive={isTestOverlayActive}
           activeSetLabel={activeObsOverlaySet?.set.fullRoundText ?? null}
           busy={obsOverlayBusy}
+          testEventAlias={testOverlayEventAlias}
           testRedName={testOverlayRedName}
           testBlueName={testOverlayBlueName}
           testRedWins={testOverlayRedWins}
@@ -2213,6 +2216,7 @@ function App() {
           onShowSetInfoChange={(checked) => void updateObsOverlayShowSetInfo(checked)}
           onShowEventAliasChange={(checked) => void updateObsOverlayShowEventAlias(checked)}
           onTestRedNameChange={setTestOverlayRedName}
+          onTestEventAliasChange={setTestOverlayEventAlias}
           onTestBlueNameChange={setTestOverlayBlueName}
           onTestRedWinsChange={setTestOverlayRedWins}
           onTestBlueWinsChange={setTestOverlayBlueWins}
