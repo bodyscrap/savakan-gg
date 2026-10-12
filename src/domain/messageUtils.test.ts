@@ -6,6 +6,8 @@ import {
 	extractCallTargetIdentityFromMeta,
 	getExternalEditRequest,
 	getExternalScoreReport,
+	getExternalScoreReportBatch,
+	getExternalScoreSyncRequest,
 	isMessageForScope,
 	formatSenderProfileLabel,
 	hasSenderIdCollision,
@@ -271,5 +273,102 @@ describe("external score reports", () => {
 			phaseName: "Phase 1",
 			phaseGroupName: "Pool A",
 		})).toBe(true);
+	});
+
+	it("extracts an ordered report list with pool sequences", () => {
+		const batch = getExternalScoreReportBatch({
+			...reportMessage,
+			messageMeta: {
+				externalScoreReport: true,
+				externalScoreReportResetPool: true,
+				externalScoreReports: [
+					{
+						tournamentId: "tournament-1",
+						slug: "tournament-slug",
+						eventId: "event-1",
+						eventName: "Event",
+						phaseName: "Phase 1",
+						phaseGroupId: "group-1",
+						phaseGroupName: "Pool A",
+						sequence: 1,
+						setId: "set-1",
+						winnerId: "entrant-1",
+						directWin: false,
+						slotScores: [
+							{ entrantId: "entrant-1", score: 2 },
+							{ entrantId: "entrant-2", score: 1 },
+						],
+					},
+					{
+						tournamentId: "tournament-1",
+						slug: "tournament-slug",
+						eventId: "event-1",
+						eventName: "Event",
+						phaseName: "Phase 1",
+						phaseGroupId: "group-1",
+						phaseGroupName: "Pool A",
+						sequence: 2,
+						setId: "set-2",
+						winnerId: "entrant-2",
+						directWin: true,
+						slotScores: [
+							{ entrantId: "entrant-1", score: 0 },
+							{ entrantId: "entrant-2", score: 0 },
+						],
+					},
+				],
+			},
+		});
+
+		expect(batch?.resetPool).toBe(true);
+		expect(batch?.reports.map((report) => report.sequence)).toEqual([1, 2]);
+	});
+
+	it("rejects report lists with a sequence gap", () => {
+		const report = {
+			tournamentId: "tournament-1",
+			eventId: "event-1",
+			phaseGroupId: "group-1",
+			setId: "set-1",
+			winnerId: "entrant-1",
+			directWin: false,
+			slotScores: [
+				{ entrantId: "entrant-1", score: 2 },
+				{ entrantId: "entrant-2", score: 1 },
+			],
+		};
+		expect(getExternalScoreReportBatch({
+			...reportMessage,
+			messageMeta: {
+				externalScoreReport: true,
+				externalScoreReports: [
+					{ ...report, sequence: 1 },
+					{ ...report, setId: "set-2", sequence: 3 },
+				],
+			},
+		})).toBeNull();
+	});
+
+	it("extracts automatic and full synchronization requests", () => {
+		expect(getExternalScoreSyncRequest({
+			...reportMessage,
+			method: "external_score_sync_request",
+			messageMeta: {
+				externalScoreSyncRequest: true,
+				externalScoreSyncTournamentId: "tournament-1",
+				externalScoreSyncSlug: "tournament-slug",
+				externalScoreSyncEventId: "event-1",
+				externalScoreSyncPhaseGroupId: "group-1",
+				externalScoreSyncFromSequence: 1,
+				externalScoreSyncResetPool: true,
+			},
+		})).toEqual({
+			tournamentId: "tournament-1",
+			slug: "tournament-slug",
+			eventId: "event-1",
+			phaseGroupId: "group-1",
+			fromSequence: 1,
+			resetPool: true,
+		});
 	});
 });

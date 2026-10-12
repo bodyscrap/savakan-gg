@@ -45,6 +45,8 @@ type BracketTabProps = {
   selectedPoolScoreEditLocked: boolean;
   selectedPoolExternalScoreBroadcastEnabled: boolean;
   externalEditor: PhaseGroupExternalEditor | null;
+  canSyncExternalEditor: boolean;
+  onSyncExternalEditor: () => void;
   canRequestExternalEditor: boolean;
   onRequestExternalEditor: () => void;
   onPhasePoolChange: (key: string) => void;
@@ -84,6 +86,8 @@ export function BracketTab({
   selectedPoolScoreEditLocked,
   selectedPoolExternalScoreBroadcastEnabled,
   externalEditor,
+  canSyncExternalEditor,
+  onSyncExternalEditor,
   canRequestExternalEditor,
   onRequestExternalEditor,
   onPhasePoolChange,
@@ -220,6 +224,14 @@ export function BracketTab({
                       <span className="meta">
                         外部報告者: {externalEditor.senderName} ({externalEditor.senderUserId})
                       </span>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={!canSyncExternalEditor}
+                        onClick={onSyncExternalEditor}
+                      >
+                        同期
+                      </button>
                       <button
                         type="button"
                         className="ghost"

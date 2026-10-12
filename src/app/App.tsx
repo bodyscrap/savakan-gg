@@ -107,6 +107,9 @@ import {
   isDqRequestMessage,
   getExternalEditRequest,
   getExternalScoreReport,
+  getExternalScoreReportBatch,
+  getExternalScoreSyncRequest,
+  isValidIpv4,
   resolveSenderSettingsStatus,
   type ExternalScoreReport,
 } from "../domain/messageUtils";
@@ -191,6 +194,7 @@ function App() {
     ((report: ConfirmedExternalScoreReport) => Promise<boolean>) | null
   >(null);
   const handledExternalScoreReportsRef = useRef(new Set<string>());
+  const handledExternalScoreSyncRequestsRef = useRef(new Set<string>());
   const [playerDisplayAliasSnapshot, setPlayerDisplayAliasSnapshot] = useState<{
     eventId: string;
     enabled: boolean;
@@ -337,9 +341,19 @@ function App() {
     },
     refreshSnapshotEvents: refreshLocalSnapshotEvents,
     closeMatchDialog,
-    onConfirmedResult: async (report) => {
+    onConfirmedResult: async (report, savedWorkspace) => {
+      const confirmation = [...(savedWorkspace.localMeta.setConfirmationHistory ?? [])]
+        .reverse()
+        .find((item) => (
+          item.eventId === report.eventId
+          && item.phaseGroupId === report.phaseGroupId
+          && item.setId === report.setId
+        ));
+      if (!confirmation) {
+        throw new Error("確定情報のPool連番を取得できませんでした。");
+      }
       return externalScoreReportSenderRef.current
-        ? externalScoreReportSenderRef.current(report)
+        ? externalScoreReportSenderRef.current({ ...report, sequence: confirmation.sequence })
         : false;
     },
   });
@@ -524,6 +538,8 @@ function App() {
     postGenericMessage,
     sendExternalEditRequest,
     sendExternalScoreReport,
+    sendExternalScoreReports,
+    sendExternalScoreSyncRequest,
     replyToThread,
     replyToExternalEditRequest,
     replyToExternalScoreReport,
@@ -1100,9 +1116,6 @@ function App() {
     if (!set?.phaseGroupId) {
       return "対象setまたはプールをsnapshot内で特定できません。";
     }
-    if (isCompletedSet(set)) {
-      return "対象setはすでに確定済みです。";
-    }
     const scoreEditLocked = !(selectedEventMeta.scoreEditEnabledPhaseGroupIds ?? [])
       .includes(set.phaseGroupId);
     if (!scoreEditLocked) {
@@ -1148,7 +1161,7 @@ function App() {
         .filter((messageId): messageId is string => messageId !== null),
     );
     const pendingReports = genericMessages.filter((item) =>
-      getExternalScoreReport(item) !== null
+      getExternalScoreReportBatch(item) !== null
       && item.senderUserId !== senderProfile.senderUserId
       && !repliedToMessageIds.has(item.messageId)
       && !handledExternalScoreReportsRef.current.has(item.messageId),
@@ -1164,14 +1177,16 @@ function App() {
           return;
         }
         handledExternalScoreReportsRef.current.add(item.messageId);
-        const report = getExternalScoreReport(item);
-        if (!report) {
+        const batch = getExternalScoreReportBatch(item);
+        if (!batch) {
           continue;
         }
 
         let rejectionReason = getExternalScoreReportRejectionReason(item);
-        if (!rejectionReason && snapshot && selectedEvent) {
-          const set = selectedEventSetsById.get(report.setId);
+        let deferredForSync = false;
+        const firstReport = batch.reports[0];
+        if (!rejectionReason && snapshot && selectedEvent && firstReport.sequence === undefined) {
+          const set = selectedEventSetsById.get(firstReport.setId);
           if (!set) {
             rejectionReason = "対象setをsnapshot内で特定できません。";
           } else {
@@ -1183,18 +1198,99 @@ function App() {
                 slug: snapshot.slug,
                 eventId: selectedEvent.eventId,
                 setId: set.setId,
-                winnerId: report.winnerId,
+                winnerId: firstReport.winnerId,
                 confirmed: true,
-                directWin: report.directWin,
-                slotScores: report.slotScores,
+                directWin: firstReport.directWin,
+                slotScores: firstReport.slotScores,
               },
             });
             if (applyError) {
-              rejectionReason = "受信側で結果を適用できませんでした。対象setが確定済みか、ロック・承認者・snapshotとの整合性に問題があります。";
+              rejectionReason = `受信側で結果を適用できませんでした: ${applyError}`;
+            }
+          }
+        } else if (!rejectionReason && snapshot && selectedEvent && firstReport.sequence !== undefined) {
+          let currentSequence = Math.max(
+            0,
+            ...(workspace?.localMeta.setConfirmationHistory ?? [])
+              .filter((record) => (
+                record.eventId === firstReport.eventId
+                && record.phaseGroupId === firstReport.phaseGroupId
+              ))
+              .map((record) => record.sequence),
+          );
+          if (batch.resetPool) {
+            if (firstReport.sequence !== 1) {
+              rejectionReason = "全同期の確定情報が先頭番号から始まっていません。";
+            } else {
+              try {
+                await restoreWorkspaceGraph({
+                  slug: snapshot.slug,
+                  eventId: selectedEvent.eventId,
+                  scope: "currentPool",
+                  phaseGroupId: firstReport.phaseGroupId,
+                  phaseName: firstReport.phaseName || null,
+                });
+                currentSequence = 0;
+              } catch (restoreError) {
+                rejectionReason = `同期前のPool初期化に失敗しました: ${String(restoreError)}`;
+              }
+            }
+          }
+          if (!rejectionReason && firstReport.sequence > currentSequence + 1) {
+            try {
+              await sendExternalScoreSyncRequest({
+                tournamentId: firstReport.tournamentId,
+                slug: firstReport.slug,
+                eventId: firstReport.eventId,
+                phaseGroupId: firstReport.phaseGroupId,
+                fromSequence: currentSequence + 1,
+                resetPool: false,
+              }, item.senderIp);
+              setMessage(`外部報告 #${currentSequence + 1} からの再送を自動要求しました。`);
+              deferredForSync = true;
+            } catch (requestError) {
+              rejectionReason = `欠番の再送要求に失敗しました: ${String(requestError)}`;
+            }
+          } else if (!rejectionReason) {
+            for (const report of batch.reports) {
+              if (report.sequence === undefined || report.sequence <= currentSequence) {
+                continue;
+              }
+              if (report.sequence !== currentSequence + 1) {
+                rejectionReason = `確定情報 #${currentSequence + 1} が不足しています。`;
+                break;
+              }
+              const set = selectedEventSetsById.get(report.setId);
+              if (!set) {
+                rejectionReason = `対象set ${report.setId} をsnapshot内で特定できません。`;
+                break;
+              }
+              const applyError = await persistIncomingExternalScoreReport({
+                set,
+                senderName: item.senderName,
+                senderUserId: item.senderUserId,
+                result: {
+                  slug: snapshot.slug,
+                  eventId: selectedEvent.eventId,
+                  setId: set.setId,
+                  winnerId: report.winnerId,
+                  confirmed: true,
+                  directWin: report.directWin,
+                  slotScores: report.slotScores,
+                },
+              });
+              if (applyError) {
+                rejectionReason = `確定情報 #${report.sequence} を適用できませんでした: ${applyError}`;
+                break;
+              }
+              currentSequence = report.sequence;
             }
           }
         }
 
+        if (deferredForSync) {
+          continue;
+        }
         await replyToExternalScoreReport(
           item,
           rejectionReason === null,
@@ -1216,9 +1312,81 @@ function App() {
     selectedEvent,
     selectedEventMeta,
     selectedEventSetsById,
+    sendExternalScoreSyncRequest,
     senderProfile.senderUserId,
     senderProfileReady,
     snapshot,
+    workspace,
+    restoreWorkspaceGraph,
+  ]);
+
+  useEffect(() => {
+    if (!genericMessagesReady || disableLocalCommunication || !senderProfileReady || !snapshot) {
+      return;
+    }
+    const requests = genericMessages.filter((item) => (
+      getExternalScoreSyncRequest(item) !== null
+      && item.senderUserId !== senderProfile.senderUserId
+      && !handledExternalScoreSyncRequestsRef.current.has(item.messageId)
+    ));
+    for (const item of requests) {
+      handledExternalScoreSyncRequestsRef.current.add(item.messageId);
+      const request = getExternalScoreSyncRequest(item);
+      if (
+        !request
+        || request.tournamentId !== snapshot.tournamentId
+        || request.eventId !== selectedEvent?.eventId
+        || !isValidIpv4(item.senderIp)
+      ) {
+        continue;
+      }
+      const records = (workspace?.localMeta.setConfirmationHistory ?? [])
+        .filter((record) => (
+          record.eventId === request.eventId
+          && record.phaseGroupId === request.phaseGroupId
+          && record.sequence >= request.fromSequence
+          && record.slotScores?.length === 2
+        ))
+        .sort((left, right) => left.sequence - right.sequence);
+      if (records.length === 0) {
+        setError("同期要求に返信できる確定情報がありません。");
+        continue;
+      }
+      const reports = records.flatMap((record): ExternalScoreReport[] => {
+        const set = selectedEventSetsById.get(record.setId);
+        if (!set) {
+          return [];
+        }
+        return [{
+          tournamentId: snapshot.tournamentId,
+          slug: snapshot.slug,
+          eventId: request.eventId,
+          eventName: selectedEvent?.name ?? "",
+          phaseName: set.phaseName ?? "",
+          phaseGroupId: request.phaseGroupId,
+          phaseGroupName: set.phaseGroupName ?? "",
+          sequence: record.sequence,
+          setId: record.setId,
+          winnerId: record.winnerId,
+          directWin: record.directWin ?? false,
+          slotScores: record.slotScores ?? [],
+        }];
+      });
+      void sendExternalScoreReports(reports, item.senderIp, request.resetPool).catch((sendError) => {
+        setError(`外部報告の同期返信に失敗しました: ${String(sendError)}`);
+      });
+    }
+  }, [
+    disableLocalCommunication,
+    genericMessages,
+    genericMessagesReady,
+    selectedEvent,
+    selectedEventSetsById,
+    sendExternalScoreReports,
+    senderProfile.senderUserId,
+    senderProfileReady,
+    snapshot,
+    workspace,
   ]);
 
   async function acceptExternalEditRequest(message: Parameters<typeof getExternalEditRequest>[0]) {
@@ -1353,6 +1521,7 @@ function App() {
     ) {
       return;
     }
+
     if (!window.confirm(`外部報告者 ${selectedPoolExternalEditor.senderName} (${selectedPoolExternalEditor.senderUserId}) をこのプールから解除しますか？`)) {
       return;
     }
@@ -1369,6 +1538,40 @@ function App() {
       setMessage("このプールの外部報告者を解除しました。");
     } catch (error) {
       setError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function syncSelectedPoolExternalEditor() {
+    const phaseGroupId = selectedPhasePoolGroup?.phaseGroupId;
+    if (!snapshot || !selectedEvent || !phaseGroupId || !selectedPoolExternalEditor) {
+      setError("同期対象の外部報告者またはPoolが選択されていません。");
+      return;
+    }
+    const reporterMessage = genericMessages.find((item) => (
+      item.senderUserId === selectedPoolExternalEditor.senderUserId
+      && isValidIpv4(item.senderIp)
+    ));
+    if (!reporterMessage) {
+      setError("外部報告者の送信元IPがメールボックスにありません。外部報告者からの通信を受信後に同期してください。");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await sendExternalScoreSyncRequest({
+        tournamentId: snapshot.tournamentId,
+        slug: snapshot.slug,
+        eventId: selectedEvent.eventId,
+        phaseGroupId,
+        fromSequence: 1,
+        resetPool: true,
+      }, reporterMessage.senderIp);
+      setMessage("外部報告者にPoolの全同期を要求しました。返信受信後に自動適用します。");
+    } catch (syncError) {
+      setError(String(syncError));
     } finally {
       setBusy(false);
     }
@@ -2024,6 +2227,8 @@ function App() {
             selectedPoolScoreEditLocked={selectedPoolScoreEditLocked}
             selectedPoolExternalScoreBroadcastEnabled={selectedPoolExternalScoreBroadcastEnabled}
             externalEditor={selectedPoolExternalEditor}
+            canSyncExternalEditor={!busy && senderProfileReady && !disableLocalCommunication}
+            onSyncExternalEditor={() => void syncSelectedPoolExternalEditor()}
             canRequestExternalEditor={canBroadcastCallListSync}
             onRequestExternalEditor={requestExternalEditor}
             onPhasePoolChange={setSelectedPhasePoolKey}

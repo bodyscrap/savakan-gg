@@ -114,6 +114,18 @@ export type LocalGrandFinalResetResultMeta = {
   recordedAt: string;
 };
 
+export type SetConfirmationRecord = {
+  eventId: string;
+  phaseGroupId?: string;
+  setId: string;
+  sequence: number;
+  confirmedAt: string;
+  winnerId: string;
+  slotEntrantIds: string[];
+  directWin?: boolean;
+  slotScores?: Array<{ entrantId: string; score: number }>;
+};
+
 export type TournamentLocalMeta = {
   tournamentId: string;
   slug: string;
@@ -122,6 +134,7 @@ export type TournamentLocalMeta = {
   setPlaySides?: SetPlaySideMeta[];
   pendingSetResults: LocalSetResultMeta[];
   pendingGrandFinalResetResults?: LocalGrandFinalResetResultMeta[];
+  setConfirmationHistory?: SetConfirmationRecord[];
   updatedAt: string;
 };
 

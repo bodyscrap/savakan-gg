@@ -64,7 +64,7 @@ type UseSetResultPersistenceOptions<TWorkspace> = {
   restoreSetDraftState: (workspace: TWorkspace, eventId: string, setId: string) => void;
   refreshSnapshotEvents: () => Promise<void>;
   closeMatchDialog: () => void;
-  onConfirmedResult?: (report: ConfirmedSetScore) => Promise<boolean>;
+  onConfirmedResult?: (report: ConfirmedSetScore, workspace: TWorkspace) => Promise<boolean>;
 };
 
 export function useSetResultPersistence<TWorkspace>({
@@ -175,7 +175,7 @@ export function useSetResultPersistence<TWorkspace>({
             winnerId,
             directWin,
             slotScores,
-          });
+          }, workspace);
         } catch (error) {
           externalReportFailed = true;
           setError(`結果はローカルで確定しましたが、外部報告の送信に失敗しました: ${String(error)}`);

@@ -2,32 +2,50 @@ use super::{append_set_confirmation_record, build_empty_meta, event_snapshot_fil
 use chrono::{TimeZone, Utc};
 
 #[test]
-fn assigns_confirmation_sequences_per_event_and_preserves_slot_order() {
+fn assigns_confirmation_sequences_per_pool_and_preserves_result() {
     let mut meta = build_empty_meta("tournament", "event-a");
     let confirmed_at = Utc.timestamp_opt(1_798_718_400, 0).unwrap();
 
     append_set_confirmation_record(
         &mut meta,
         "event-a",
+        "pool-a",
         "set-a",
         "entrant-1",
         vec!["entrant-1".to_owned(), "entrant-2".to_owned()],
+        false,
+        vec![
+            crate::models::LocalSetScoreMeta {
+                entrant_id: "entrant-1".to_owned(),
+                score: 2,
+            },
+            crate::models::LocalSetScoreMeta {
+                entrant_id: "entrant-2".to_owned(),
+                score: 1,
+            },
+        ],
         confirmed_at,
     );
     append_set_confirmation_record(
         &mut meta,
         "event-a",
+        "pool-a",
         "set-b",
         "entrant-4",
         vec!["entrant-3".to_owned(), "entrant-4".to_owned()],
+        true,
+        Vec::new(),
         confirmed_at,
     );
     append_set_confirmation_record(
         &mut meta,
-        "event-b",
+        "event-a",
+        "pool-b",
         "set-c",
         "entrant-5",
         vec!["entrant-5".to_owned(), "entrant-6".to_owned()],
+        false,
+        Vec::new(),
         confirmed_at,
     );
 
@@ -39,6 +57,8 @@ fn assigns_confirmation_sequences_per_event_and_preserves_slot_order() {
         vec!["entrant-1", "entrant-2"]
     );
     assert_eq!(meta.set_confirmation_history[0].confirmed_at, confirmed_at);
+    assert_eq!(meta.set_confirmation_history[0].phase_group_id, "pool-a");
+    assert_eq!(meta.set_confirmation_history[0].slot_scores[0].score, 2);
 }
 #[test]
 fn loads_metadata_without_confirmation_history() {

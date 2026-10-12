@@ -106,10 +106,25 @@ export type ExternalScoreReport = {
   phaseName: string;
   phaseGroupId: string;
   phaseGroupName: string;
+  sequence?: number;
   setId: string;
   winnerId: string;
   directWin: boolean;
   slotScores: Array<{ entrantId: string; score: number }>;
+};
+
+export type ExternalScoreReportBatch = {
+  reports: ExternalScoreReport[];
+  resetPool: boolean;
+};
+
+export type ExternalScoreSyncRequest = {
+  tournamentId: string;
+  slug: string;
+  eventId: string;
+  phaseGroupId: string;
+  fromSequence: number;
+  resetPool: boolean;
 };
 
 export type CallSyncStatusTarget = {
@@ -250,23 +265,11 @@ export function getExternalEditRequest(message: GenericMessage): ExternalEditReq
   return request;
 }
 
-export function getExternalScoreReport(message: GenericMessage): ExternalScoreReport | null {
-  const meta = message.messageMeta;
-  if (
-    message.messageType !== "normal"
-    || message.parentMessageId !== null
-    || message.method !== "external_score_report"
-    || !meta
-    || meta.externalScoreReport !== true
-    || typeof meta.externalScoreReportDirectWin !== "boolean"
-  ) {
-    return null;
-  }
-
+function parseExternalScoreReport(raw: Record<string, unknown>): ExternalScoreReport | null {
   const readText = (key: string) => (
-    typeof meta[key] === "string" ? (meta[key] as string).trim() : ""
+    typeof raw[key] === "string" ? (raw[key] as string).trim() : ""
   );
-  const rawSlotScores = meta.externalScoreReportSlotScores;
+  const rawSlotScores = raw.slotScores ?? raw.externalScoreReportSlotScores;
   if (!Array.isArray(rawSlotScores)) {
     return null;
   }
@@ -284,20 +287,24 @@ export function getExternalScoreReport(message: GenericMessage): ExternalScoreRe
       : null;
   });
   const report: ExternalScoreReport = {
-    tournamentId: readText("externalScoreReportTournamentId"),
-    slug: readText("externalScoreReportSlug"),
-    eventId: readText("externalScoreReportEventId"),
-    eventName: readText("externalScoreReportEventName"),
-    phaseName: readText("externalScoreReportPhaseName"),
-    phaseGroupId: readText("externalScoreReportPhaseGroupId"),
-    phaseGroupName: readText("externalScoreReportPhaseGroupName"),
-    setId: readText("externalScoreReportSetId"),
-    winnerId: readText("externalScoreReportWinnerId"),
-    directWin: meta.externalScoreReportDirectWin === true,
+    tournamentId: readText("tournamentId") || readText("externalScoreReportTournamentId"),
+    slug: readText("slug") || readText("externalScoreReportSlug"),
+    eventId: readText("eventId") || readText("externalScoreReportEventId"),
+    eventName: readText("eventName") || readText("externalScoreReportEventName"),
+    phaseName: readText("phaseName") || readText("externalScoreReportPhaseName"),
+    phaseGroupId: readText("phaseGroupId") || readText("externalScoreReportPhaseGroupId"),
+    phaseGroupName: readText("phaseGroupName") || readText("externalScoreReportPhaseGroupName"),
+    setId: readText("setId") || readText("externalScoreReportSetId"),
+    winnerId: readText("winnerId") || readText("externalScoreReportWinnerId"),
+    directWin: (raw.directWin ?? raw.externalScoreReportDirectWin) === true,
     slotScores: slotScores.filter(
       (score): score is { entrantId: string; score: number } => score !== null,
     ),
   };
+  const sequence = raw.sequence;
+  if (typeof sequence === "number" && Number.isSafeInteger(sequence) && sequence > 0) {
+    report.sequence = sequence;
+  }
   const entrantIds = report.slotScores.map((score) => score.entrantId);
   const winningScore = report.slotScores.find((score) => score.entrantId === report.winnerId)?.score;
   const otherScore = report.slotScores.find((score) => score.entrantId !== report.winnerId)?.score;
@@ -325,6 +332,92 @@ export function getExternalScoreReport(message: GenericMessage): ExternalScoreRe
   }
 
   return report;
+}
+
+export function getExternalScoreReportBatch(message: GenericMessage): ExternalScoreReportBatch | null {
+  const meta = message.messageMeta;
+  if (
+    message.messageType !== "normal"
+    || message.parentMessageId !== null
+    || message.method !== "external_score_report"
+    || !meta
+    || meta.externalScoreReport !== true
+  ) {
+    return null;
+  }
+
+  if (Array.isArray(meta.externalScoreReports)) {
+    const reports = meta.externalScoreReports.map((value) => (
+      value && typeof value === "object"
+        ? parseExternalScoreReport(value as Record<string, unknown>)
+        : null
+    ));
+    if (
+      reports.length === 0
+      || reports.some((report) => report === null || report.sequence === undefined)
+    ) {
+      return null;
+    }
+    const validReports = reports as ExternalScoreReport[];
+    const first = validReports[0];
+    if (
+      validReports.some((report, index) => (
+        report.tournamentId !== first.tournamentId
+        || report.eventId !== first.eventId
+        || report.phaseGroupId !== first.phaseGroupId
+        || (index > 0 && report.sequence !== validReports[index - 1].sequence! + 1)
+      ))
+    ) {
+      return null;
+    }
+    return {
+      reports: validReports,
+      resetPool: meta.externalScoreReportResetPool === true,
+    };
+  }
+
+  if (typeof meta.externalScoreReportDirectWin !== "boolean") {
+    return null;
+  }
+  const report = parseExternalScoreReport(meta);
+  return report ? { reports: [report], resetPool: false } : null;
+}
+
+export function getExternalScoreReport(message: GenericMessage): ExternalScoreReport | null {
+  return getExternalScoreReportBatch(message)?.reports[0] ?? null;
+}
+
+export function getExternalScoreSyncRequest(message: GenericMessage): ExternalScoreSyncRequest | null {
+  const meta = message.messageMeta;
+  if (
+    message.messageType !== "normal"
+    || message.parentMessageId !== null
+    || message.method !== "external_score_sync_request"
+    || !meta
+    || meta.externalScoreSyncRequest !== true
+  ) {
+    return null;
+  }
+  const readText = (key: string) => (
+    typeof meta[key] === "string" ? (meta[key] as string).trim() : ""
+  );
+  const fromSequence = meta.externalScoreSyncFromSequence;
+  const request: ExternalScoreSyncRequest = {
+    tournamentId: readText("externalScoreSyncTournamentId"),
+    slug: readText("externalScoreSyncSlug"),
+    eventId: readText("externalScoreSyncEventId"),
+    phaseGroupId: readText("externalScoreSyncPhaseGroupId"),
+    fromSequence: typeof fromSequence === "number" ? fromSequence : 0,
+    resetPool: meta.externalScoreSyncResetPool === true,
+  };
+  if (
+    [request.tournamentId, request.eventId, request.phaseGroupId].some((value) => value === "")
+    || !Number.isSafeInteger(request.fromSequence)
+    || request.fromSequence < 1
+  ) {
+    return null;
+  }
+  return request;
 }
 
 export function hasSameGenericMessageOrder(left: GenericMessage[], right: GenericMessage[]): boolean {

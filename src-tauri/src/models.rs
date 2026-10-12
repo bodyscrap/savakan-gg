@@ -147,11 +147,17 @@ pub struct TournamentLocalMeta {
 #[serde(rename_all = "camelCase")]
 pub struct SetConfirmationRecord {
     pub event_id: String,
+    #[serde(default)]
+    pub phase_group_id: String,
     pub set_id: String,
     pub sequence: u64,
     pub confirmed_at: DateTime<Utc>,
     pub winner_id: String,
     pub slot_entrant_ids: Vec<String>,
+    #[serde(default)]
+    pub direct_win: bool,
+    #[serde(default)]
+    pub slot_scores: Vec<LocalSetScoreMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

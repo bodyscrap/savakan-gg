@@ -22,6 +22,7 @@ import {
   isValidSenderUserId,
   splitIpv4List,
   type ExternalScoreReport,
+  type ExternalScoreSyncRequest,
   type ExternalEditRequest,
   type MessageScope,
 } from "../domain/messageUtils";
@@ -608,27 +609,29 @@ export function useMailbox({
     }
   }
 
-  async function sendExternalScoreReport(report: ExternalScoreReport) {
+  async function sendExternalScoreReports(
+    reports: ExternalScoreReport[],
+    deliveryTargetIp: string | null = null,
+    resetPool = false,
+  ) {
     if (disableLocalCommunication) {
       throw new Error("ローカル通信OFFのため外部報告を送信できません。");
     }
     if (!senderProfileReadyForMessaging || !isValidIpv4(senderProfile.broadcastSubnetMask)) {
       throw new Error("外部報告の送信には有効な送信者情報とブロードキャスト設定が必要です。");
     }
+    if (reports.length === 0) {
+      throw new Error("送信する外部報告がありません。");
+    }
+    if (deliveryTargetIp !== null && !isValidIpv4(deliveryTargetIp)) {
+      throw new Error("外部報告の返信先IPが不正です。");
+    }
 
+    const report = reports[0];
     const messageMeta = buildScopedMessageMeta({
       externalScoreReport: true,
-      externalScoreReportTournamentId: report.tournamentId,
-      externalScoreReportSlug: report.slug,
-      externalScoreReportEventId: report.eventId,
-      externalScoreReportEventName: report.eventName,
-      externalScoreReportPhaseName: report.phaseName,
-      externalScoreReportPhaseGroupId: report.phaseGroupId,
-      externalScoreReportPhaseGroupName: report.phaseGroupName,
-      externalScoreReportSetId: report.setId,
-      externalScoreReportWinnerId: report.winnerId,
-      externalScoreReportDirectWin: report.directWin,
-      externalScoreReportSlotScores: report.slotScores,
+      externalScoreReports: reports,
+      externalScoreReportResetPool: resetPool,
     }, {
       tournamentId: report.tournamentId,
       slug: report.slug,
@@ -642,10 +645,57 @@ export function useMailbox({
         messageType: "normal",
         messageMeta,
         method: "external_score_report",
-        subject: `外部報告: ${report.eventName} / ${report.phaseName} / ${report.phaseGroupName} / ${report.setId}`,
-        body: `外部報告者 ${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から確定スコアが届きました。\n勝者: ${report.winnerId}\nスコア: ${report.slotScores.map((score) => `${score.entrantId}=${score.score < 0 ? "DQ" : score.score}`).join(" / ")}`,
-        deliveryTargetMode: "broadcast",
-        deliveryTargetIp: null,
+        subject: `外部報告: ${report.eventName} / ${report.phaseName} / ${report.phaseGroupName} (${reports.length}件)`,
+        body: [
+          `外部報告者 ${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から確定スコアが届きました。`,
+          ...reports.map((item) => (
+            `#${item.sequence ?? "-"} ${item.setId}: ${item.winnerId} (${item.slotScores.map((score) => `${score.entrantId}=${score.score < 0 ? "DQ" : score.score}`).join(" / ")})`
+          )),
+        ].join("\n"),
+        deliveryTargetMode: deliveryTargetIp === null ? "broadcast" : "direct",
+        deliveryTargetIp,
+        threadId: null,
+        parentMessageId: null,
+      },
+    });
+    addMailboxMessage(sent);
+  }
+
+  async function sendExternalScoreReport(report: ExternalScoreReport) {
+    await sendExternalScoreReports([report]);
+  }
+
+  async function sendExternalScoreSyncRequest(
+    request: ExternalScoreSyncRequest,
+    deliveryTargetIp: string,
+  ) {
+    if (disableLocalCommunication || !senderProfileReadyForMessaging) {
+      throw new Error("外部報告の同期要求には有効な送信者情報とローカル通信設定が必要です。");
+    }
+    if (!isValidIpv4(deliveryTargetIp)) {
+      throw new Error("外部報告者のIPアドレスを特定できません。");
+    }
+    const messageMeta = buildScopedMessageMeta({
+      externalScoreSyncRequest: true,
+      externalScoreSyncTournamentId: request.tournamentId,
+      externalScoreSyncSlug: request.slug,
+      externalScoreSyncEventId: request.eventId,
+      externalScoreSyncPhaseGroupId: request.phaseGroupId,
+      externalScoreSyncFromSequence: request.fromSequence,
+      externalScoreSyncResetPool: request.resetPool,
+    }, scope);
+    const sent = await invoke<GenericMessage>("send_mailbox_message", {
+      input: {
+        profile: senderProfile,
+        messageType: "normal",
+        messageMeta,
+        method: "external_score_sync_request",
+        subject: request.resetPool ? "外部報告の全同期要求" : "外部報告の欠番再送要求",
+        body: request.resetPool
+          ? "対象プールのすべての確定情報を送信してください。"
+          : `対象プールの確定情報を #${request.fromSequence} から再送してください。`,
+        deliveryTargetMode: "direct",
+        deliveryTargetIp,
         threadId: null,
         parentMessageId: null,
       },
@@ -1111,6 +1161,8 @@ export function useMailbox({
     postGenericMessage,
     sendExternalEditRequest,
     sendExternalScoreReport,
+    sendExternalScoreReports,
+    sendExternalScoreSyncRequest,
     replyToThread,
     replyToExternalEditRequest,
     replyToExternalScoreReport,

@@ -269,15 +269,18 @@ fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
 fn append_set_confirmation_record(
     local_meta: &mut TournamentLocalMeta,
     event_id: &str,
+    phase_group_id: &str,
     set_id: &str,
     winner_id: &str,
     slot_entrant_ids: Vec<String>,
+    direct_win: bool,
+    slot_scores: Vec<LocalSetScoreMeta>,
     confirmed_at: chrono::DateTime<Utc>,
 ) {
     let sequence = local_meta
         .set_confirmation_history
         .iter()
-        .filter(|record| record.event_id == event_id)
+        .filter(|record| record.event_id == event_id && record.phase_group_id == phase_group_id)
         .map(|record| record.sequence)
         .max()
         .unwrap_or_default()
@@ -286,11 +289,14 @@ fn append_set_confirmation_record(
         .set_confirmation_history
         .push(crate::models::SetConfirmationRecord {
             event_id: event_id.to_owned(),
+            phase_group_id: phase_group_id.to_owned(),
             set_id: set_id.to_owned(),
             sequence,
             confirmed_at,
             winner_id: winner_id.to_owned(),
             slot_entrant_ids,
+            direct_win,
+            slot_scores,
         });
 }
 
@@ -8805,31 +8811,27 @@ fn upsert_local_set_result_inner(
         );
     }
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
-    let existing_set_state = snapshot
+    let (existing_set_state, phase_group_id) = snapshot
         .events
         .iter()
         .find(|event| event.event_id == input.event_id)
         .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
         .map(|set| {
             (
-                set.state >= 3 && set.winner_id.is_some(),
-                is_round_robin_set(&snapshot, &input.event_id, set),
+                (
+                    set.state >= 3 && set.winner_id.is_some(),
+                    is_round_robin_set(&snapshot, &input.event_id, set),
+                ),
+                set.phase_group_id.clone().unwrap_or_default(),
             )
         })
         .ok_or_else(|| {
             "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned()
         })?;
     if let Some(sender_user_id) = external_report_authorization {
-        let phase_group_id = snapshot
-            .events
-            .iter()
-            .find(|event| event.event_id == input.event_id)
-            .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
-            .and_then(|set| set.phase_group_id.as_deref())
-            .map(str::trim)
-            .filter(|phase_group_id| !phase_group_id.is_empty())
-            .ok_or_else(|| "外部報告の対象プールを特定できません。".to_owned())?
-            .to_owned();
+        if phase_group_id.trim().is_empty() {
+            return Err("外部報告の対象プールを特定できません。".to_owned());
+        }
         let event_meta = local_meta
             .events
             .iter()
@@ -8837,7 +8839,7 @@ fn upsert_local_set_result_inner(
             .ok_or_else(|| "外部報告の対象イベントメタが見つかりません。".to_owned())?;
         if !external_score_report_is_applicable(
             event_meta,
-            &phase_group_id,
+            phase_group_id.trim(),
             &sender_user_id,
             existing_set_state.0,
         ) {
@@ -8953,9 +8955,12 @@ fn upsert_local_set_result_inner(
         append_set_confirmation_record(
             &mut local_meta,
             &applied_event_id,
+            &phase_group_id,
             &input.set_id,
             &input.winner_id,
             slot_entrant_ids,
+            input.direct_win,
+            slot_scores.clone(),
             recorded_at,
         );
     }
