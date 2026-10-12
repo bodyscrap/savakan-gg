@@ -1116,6 +1116,9 @@ function App() {
     if (!set?.phaseGroupId) {
       return "対象setまたはプールをsnapshot内で特定できません。";
     }
+    if (report.phaseGroupId && report.phaseGroupId !== set.phaseGroupId) {
+      return "報告されたPoolと対象setのPoolが一致しません。";
+    }
     const scoreEditLocked = !(selectedEventMeta.scoreEditEnabledPhaseGroupIds ?? [])
       .includes(set.phaseGroupId);
     if (!scoreEditLocked) {
@@ -1127,6 +1130,9 @@ function App() {
     );
     if (!authorizedEditor) {
       return "送信者は対象プールの承認済み外部報告者ではありません。";
+    }
+    if (report.sequence !== undefined) {
+      return null;
     }
     const setEntrantIds = set.slots
       .map((slot) => slot.entrantId)
