@@ -92,6 +92,7 @@ export function useMailbox({
   const [mailboxFilterSetting, setMailboxFilterSetting] = useState<MailboxFilterSetting>({
     unresolvedOnly: false,
     unreadOnly: false,
+    externalEditRequestsOnly: false,
   });
   const [mailboxReadMessageIds, setMailboxReadMessageIds] = useState<string[]>([]);
   const [dqDialog, setDqDialog] = useState<DqRequestDialogState | null>(null);
@@ -348,6 +349,12 @@ export function useMailbox({
       if (mailboxFilterSetting.unreadOnly && summary.unreadCount === 0) {
         return false;
       }
+      if (
+        mailboxFilterSetting.externalEditRequestsOnly
+        && !summary.messages.some((message) => getExternalEditRequest(message) !== null)
+      ) {
+        return false;
+      }
       return true;
     })
     .map((summary) => summary.root), [mailboxFilterSetting, mailboxThreadSummaries]);
@@ -590,7 +597,7 @@ export function useMailbox({
           messageMeta,
           method: "external_edit_request",
           subject: `外部報告申請: ${input.eventName} / ${input.phaseName} / ${input.phaseGroupName}`,
-          body: `${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から外部報告申請が届きました。\n対象: ${input.eventName} / ${input.phaseName} / ${input.phaseGroupName}`,
+          body: `${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から外部報告申請が届きました。 対象: ${input.eventName} / ${input.phaseName} / ${input.phaseGroupName}`,
           deliveryTargetMode: "broadcast",
           deliveryTargetIp: null,
           threadId: null,
@@ -777,7 +784,10 @@ export function useMailbox({
           body: accepted
             ? "外部報告申請を受理しました。対象フェーズ/プールのスコア編集をロックし、申請者を外部報告者に設定しました。"
             : "外部報告申請を却下しました。",
-          messageMeta: buildScopedMessageMeta(null, scope),
+          messageMeta: {
+            ...(buildScopedMessageMeta(null, scope) ?? {}),
+            externalEditRequestResponse: accepted ? "accepted" : "rejected",
+          },
           deliveryTargetMode: "direct",
           deliveryTargetIp: message.senderIp.trim(),
           threadId: message.threadId,

@@ -98,6 +98,8 @@ export type ExternalEditRequest = {
   phaseGroupDisplayIdentifier: string | null;
 };
 
+export type ExternalEditRequestStatus = "pending" | "accepted" | "rejected";
+
 export type ExternalScoreReport = {
   tournamentId: string;
   slug: string;
@@ -203,6 +205,7 @@ export function normalizeMailboxFilterSetting(rawValue: unknown): MailboxFilterS
   return {
     unresolvedOnly: Boolean(source.unresolvedOnly),
     unreadOnly: Boolean(source.unreadOnly),
+    externalEditRequestsOnly: Boolean(source.externalEditRequestsOnly),
   };
 }
 
@@ -381,6 +384,38 @@ export function getExternalScoreReportBatch(message: GenericMessage): ExternalSc
   }
   const report = parseExternalScoreReport(meta);
   return report ? { reports: [report], resetPool: false } : null;
+}
+
+export function getExternalEditRequestStatus(
+  requestMessage: GenericMessage,
+  threadMessages: GenericMessage[],
+): ExternalEditRequestStatus | null {
+  if (!getExternalEditRequest(requestMessage)) {
+    return null;
+  }
+
+  const responses = threadMessages
+    .filter((message) => (
+      message.threadId === requestMessage.threadId
+      && message.parentMessageId === requestMessage.messageId
+      && message.senderUserId.trim() !== requestMessage.senderUserId.trim()
+    ))
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+
+  for (const response of responses) {
+    const responseStatus = response.messageMeta?.externalEditRequestResponse;
+    if (responseStatus === "accepted" || responseStatus === "rejected") {
+      return responseStatus;
+    }
+    if (response.body.startsWith("外部報告申請を受理しました。")) {
+      return "accepted";
+    }
+    if (response.body.startsWith("外部報告申請を却下しました。")) {
+      return "rejected";
+    }
+  }
+
+  return "pending";
 }
 
 export function getExternalScoreReport(message: GenericMessage): ExternalScoreReport | null {

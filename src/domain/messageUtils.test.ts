@@ -10,9 +10,11 @@ import {
 	getExternalScoreSyncRequest,
 	isMessageForScope,
 	formatSenderProfileLabel,
+	getExternalEditRequestStatus,
 	hasSenderIdCollision,
 	isSameCallTargetIdentity,
 	isSenderProfileReadyForMessaging,
+	normalizeMailboxFilterSetting,
 	normalizeSenderUserId,
 	resolveSenderSettingsStatus,
 } from "./messageUtils";
@@ -50,6 +52,18 @@ const validProfile = {
 	bindIp: "192.168.1.20",
 	broadcastSubnetMask: "255.255.255.0",
 };
+
+describe("mailbox filter settings", () => {
+	it("defaults missing filters to false and preserves configured filters", () => {
+		expect(normalizeMailboxFilterSetting({ unresolvedOnly: true, unreadOnly: true })).toEqual({
+			unresolvedOnly: true,
+			unreadOnly: true,
+			externalEditRequestsOnly: false,
+		});
+		expect(normalizeMailboxFilterSetting({ externalEditRequestsOnly: true }).externalEditRequestsOnly)
+			.toBe(true);
+	});
+});
 
 describe("call target identity", () => {
 	it("uses event, set, and normalized player ID as the complete call ID", () => {
@@ -181,6 +195,36 @@ describe("external edit requests", () => {
 			...externalEditRequestMessage,
 			messageMeta: { externalEditRequest: true },
 		})).toBeNull();
+	});
+
+	it("reports request status from explicit metadata or legacy reply text", () => {
+		const acceptedReply: GenericMessage = {
+		  ...externalEditRequestMessage,
+		  messageId: "accepted-reply",
+		  parentMessageId: externalEditRequestMessage.messageId,
+		  senderUserId: "87654321",
+		  messageMeta: { externalEditRequestResponse: "accepted" },
+		  createdAt: "2025-01-02T00:00:00.000Z",
+		};
+		const rejectedReply: GenericMessage = {
+		  ...acceptedReply,
+		  messageId: "rejected-reply",
+		  messageMeta: null,
+		  body: "外部報告申請を却下しました。",
+		  createdAt: "2025-01-03T00:00:00.000Z",
+		};
+
+		expect(getExternalEditRequestStatus(externalEditRequestMessage, [externalEditRequestMessage]))
+		  .toBe("pending");
+		expect(getExternalEditRequestStatus(externalEditRequestMessage, [
+		  externalEditRequestMessage,
+		  acceptedReply,
+		])).toBe("accepted");
+		expect(getExternalEditRequestStatus(externalEditRequestMessage, [
+		  externalEditRequestMessage,
+		  acceptedReply,
+		  rejectedReply,
+		])).toBe("rejected");
 	});
 });
 

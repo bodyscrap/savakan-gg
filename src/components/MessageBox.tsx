@@ -1,4 +1,9 @@
-import type { ExternalEditRequest, ExternalScoreReport } from "../domain/messageUtils";
+import {
+  getExternalEditRequestStatus,
+  type ExternalEditRequest,
+  type ExternalEditRequestStatus,
+  type ExternalScoreReport,
+} from "../domain/messageUtils";
 
 export type GenericMessage = {
   messageId: string;
@@ -20,6 +25,7 @@ export type MailboxDeliveryMode = "broadcast" | "direct";
 export type MailboxFilterSetting = {
   unresolvedOnly: boolean;
   unreadOnly: boolean;
+  externalEditRequestsOnly: boolean;
 };
 
 export type MailboxThreadSummary = {
@@ -27,6 +33,12 @@ export type MailboxThreadSummary = {
   messages: GenericMessage[];
   resolved: boolean;
   unreadCount: number;
+};
+
+const externalEditRequestStatusLabels: Record<ExternalEditRequestStatus, string> = {
+  pending: "未処理",
+  accepted: "受理",
+  rejected: "却下",
 };
 
 type MessageBoxProps = {
@@ -128,6 +140,9 @@ export function MessageBox({
   const activeThreadExternalEditRequest = activeThread
     ? getExternalEditRequest(activeThread)
     : null;
+  const activeThreadRequestStatus = activeThread
+    ? getExternalEditRequestStatus(activeThread, activeThreadMessages)
+    : null;
   const isResolutionOwner = (thread: GenericMessage | null) => (
     normalizedSenderUserId !== ""
     && thread?.senderUserId.trim() === normalizedSenderUserId
@@ -136,8 +151,14 @@ export function MessageBox({
   return (
     <>
       <section className="panel">
-        <h2>メッセージ送信 (メールボックス)</h2>
-        <p className="meta">現在の送信者: {senderLabel}</p>
+        <div className="mailbox-compose-heading">
+          <span className={`mailbox-service-badge ${mailboxServiceStarted ? "mailbox-service-badge--started" : "mailbox-service-badge--stopped"}`}>
+            {mailboxServiceStarted ? "起動中" : "停止中"}
+          </span>
+          <h2>
+            送信 <span className="mailbox-compose-sender">({senderLabel})</span>
+          </h2>
+        </div>
         {!senderProfileReady && (
           <p className="meta meta-attention">
             送信不可: 設定タブで「送信者名」「8桁ユーザーID」「自分のIP」を保存すると、スレッド開始・返信・DQ申請が可能になります。
@@ -148,9 +169,8 @@ export function MessageBox({
             ローカル通信OFF: 閲覧のみ可能です（スレッド開始・返信・DQ申請・解決・削除は無効）。
           </p>
         )}
-        <p className="meta">受信サービス: {mailboxServiceStarted ? "起動中" : "未起動"}</p>
 
-        <div className="form" style={{ marginTop: "0.6rem" }}>
+        <div className="mailbox-compose-row">
           <input value={getMailboxMethodLabel(mailboxMethodDraft)} placeholder="メッセージ属性" readOnly />
           <input
             value={mailboxSubjectDraft}
@@ -158,8 +178,6 @@ export function MessageBox({
             placeholder="件名"
             disabled={disableLocalCommunication}
           />
-        </div>
-        <div className="form" style={{ marginTop: "0.6rem" }}>
           <select
             value={messageDeliveryMode}
             onChange={(e) => onMessageDeliveryModeChange(e.currentTarget.value as MailboxDeliveryMode)}
@@ -174,6 +192,9 @@ export function MessageBox({
             placeholder="送信先IP (例: 192.168.1.20)"
             disabled={disableLocalCommunication || messageDeliveryMode !== "direct"}
           />
+          <button type="button" onClick={onPostGenericMessage} disabled={!canSendGenericMessage}>
+            スレッド開始
+          </button>
         </div>
         <p className="meta">返信は、スレッド主ならブロードキャスト、それ以外は返信先の送信者IPへ送信します。</p>
 
@@ -185,36 +206,30 @@ export function MessageBox({
         )}
 
         <div style={{ marginTop: "0.6rem" }}>
-          <p className="meta">{composeFixedBodyDraft ? "補足メッセージ" : "メッセージ本文"}</p>
+          {composeFixedBodyDraft && <p className="meta">補足メッセージ</p>}
           <textarea
             value={genericMessageBodyDraft}
             onChange={(e) => onGenericMessageBodyChange(e.currentTarget.value)}
-            rows={5}
+            rows={4}
             placeholder={composeFixedBodyDraft ? "補足を入力" : "メッセージ本文"}
             style={{ width: "100%" }}
             disabled={disableLocalCommunication}
           />
         </div>
 
-        <div className="panel-toolbar compact">
-          <p className="meta">この送信で新規スレッドが作成されます。</p>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            {composeFixedBodyDraft && (
+        {composeFixedBodyDraft && (
+          <div className="panel-toolbar compact">
               <button type="button" className="ghost" onClick={onCancelFixedMessage} disabled={disableLocalCommunication}>
                 呼び出しをキャンセル
               </button>
-            )}
-            <button type="button" onClick={onPostGenericMessage} disabled={!canSendGenericMessage}>
-              スレッド開始
-            </button>
           </div>
-        </div>
+        )}
       </section>
 
       <section className="panel">
-        <h2>メールボックス</h2>
+        <h2>受信</h2>
         <div className="panel-toolbar compact">
-          <div style={{ display: "flex", gap: "0.8rem", flexWrap: "wrap" }}>
+          <div className="mailbox-filter-row">
             <label className="checkbox-row">
               <input
                 type="checkbox"
@@ -231,11 +246,16 @@ export function MessageBox({
               />
               未読メッセージがあるスレッドのみ
             </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={mailboxFilterSetting.externalEditRequestsOnly}
+                onChange={(e) => onMailboxFilterChange("externalEditRequestsOnly", e.currentTarget.checked)}
+              />
+              外部報告申請スレッドのみ
+            </label>
           </div>
         </div>
-        <p className="meta">
-          「自分起点・解決担当」の表示があるスレッドは、自分が開始し、解決処理を担当するスレッドです。
-        </p>
         <div className="mailbox-layout">
           <section className="mailbox-thread-list">
             <h3>スレッド ({mailboxThreads.length})</h3>
@@ -248,6 +268,7 @@ export function MessageBox({
                   const unreadCount = summary?.unreadCount ?? 0;
                   const resolved = summary?.resolved ?? false;
                   const ownsResolutionResponsibility = isResolutionOwner(thread);
+                  const requestStatus = getExternalEditRequestStatus(thread, summary?.messages ?? []);
 
                   return (
                     <article
@@ -265,21 +286,31 @@ export function MessageBox({
                     >
                       <div className="event-list-head">
                         <div>
-                          <div className="mailbox-thread-heading">
+                          <div className="mailbox-thread-heading mailbox-thread-list-heading">
                             <h4>{thread.subject}</h4>
-                            {ownsResolutionResponsibility && (
-                              <span className="mailbox-resolution-owner-badge">自分起点・解決担当</span>
+                            {(ownsResolutionResponsibility || requestStatus) && (
+                              <div className="mailbox-thread-list-status">
+                                {ownsResolutionResponsibility && (
+                                  <span className="mailbox-resolution-owner-badge">スレッド主</span>
+                                )}
+                                {requestStatus && (
+                                  <span className={`mailbox-request-status mailbox-request-status--${requestStatus}`}>
+                                    {externalEditRequestStatusLabels[requestStatus]}
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </div>
-                          <p className="meta">属性: {getMailboxMethodLabel(thread.method)}</p>
                         </div>
-                        <p className="meta">{new Date(thread.createdAt).toLocaleString()}</p>
                       </div>
                       <p className="meta">from: {thread.senderName} ({thread.senderUserId})</p>
-                      <p className="meta">
-                        {resolved ? "解決済み" : "未解決"}
-                        {unreadCount > 0 ? ` / 未読 ${unreadCount}` : " / 未読 0"}
-                      </p>
+                      <div className="mailbox-thread-time-status">
+                        <p className="meta">{new Date(thread.createdAt).toLocaleString()}</p>
+                        <p className="meta">
+                          {resolved ? "解決済み" : "未解決"}
+                          {unreadCount > 0 ? ` / 未読 ${unreadCount}` : " / 未読 0"}
+                        </p>
+                      </div>
                     </article>
                   );
                 })}
@@ -295,11 +326,18 @@ export function MessageBox({
                 <div className="mailbox-thread-heading">
                   <h3>{activeThread.subject}</h3>
                   {isResolutionOwner(activeThread) && (
-                    <span className="mailbox-resolution-owner-badge">自分起点・解決担当</span>
+                    <span className="mailbox-resolution-owner-badge">スレッド主</span>
+                  )}
+                  {activeThreadRequestStatus && (
+                    <span className={`mailbox-request-status mailbox-request-status--${activeThreadRequestStatus}`}>
+                      {externalEditRequestStatusLabels[activeThreadRequestStatus]}
+                    </span>
                   )}
                 </div>
-                <p className="meta">属性: {getMailboxMethodLabel(activeThread.method)} / threadId: {activeThread.threadId}</p>
-                <p className="meta">状態: {activeThreadResolved ? "解決済み" : "未解決"}</p>
+                <div className="mailbox-thread-detail-meta">
+                  <p className="meta">状態: {activeThreadResolved ? "解決済み" : "未解決"}</p>
+                  <p className="meta">属性: {getMailboxMethodLabel(activeThread.method)} / threadId: {activeThread.threadId}</p>
+                </div>
 
                 <div className="mailbox-message-list">
                   {activeThreadMessages.map((item) => {
@@ -312,18 +350,22 @@ export function MessageBox({
                       className={`event-list-item mailbox-message ${item.parentMessageId ? "reply" : "root"} ${isResolutionOwnerRoot ? "mailbox-message--resolution-owner" : ""}`}
                     >
                       <div className="event-list-head">
-                        <div>
-                          <h4>{item.senderName}</h4>
-                          <p className="meta">ID: {item.senderUserId} / IP: {item.senderIp || "-"}</p>
+                        <div className="mailbox-message-sender-line">
+                          <h4>
+                            {item.senderName}{" "}
+                            <span className="mailbox-message-sender-info">
+                              (ID: {item.senderUserId} / IP: {item.senderIp || "-"})
+                            </span>
+                          </h4>
+                          <p className="meta mailbox-message-type">
+                            type: {item.messageType === "resolve" ? "解決" : item.messageType === "dq_request" ? "DQ申請" : "通常"}
+                          </p>
                         </div>
                         <p className="meta">{new Date(item.createdAt).toLocaleString()}</p>
                       </div>
                       {item.parentMessageId && <p className="meta">reply to: {item.parentMessageId}</p>}
-                      <p className="meta">
-                        type: {item.messageType === "resolve" ? "解決" : item.messageType === "dq_request" ? "DQ申請" : "通常"}
-                      </p>
                       {isResolutionOwnerRoot && (
-                        <span className="mailbox-resolution-owner-badge">自分起点・解決担当</span>
+                        <span className="mailbox-resolution-owner-badge">スレッド主</span>
                       )}
                       {isDqRequestMessage(item) && (
                         <div style={{ marginTop: "0.45rem", display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
@@ -338,6 +380,11 @@ export function MessageBox({
                             外部報告申請: {externalEditRequest.eventName} / {externalEditRequest.phaseName}
                             {" / Pool "}{externalEditRequest.phaseGroupName}
                           </p>
+                          {activeThreadRequestStatus && (
+                            <span className={`mailbox-request-status mailbox-request-status--${activeThreadRequestStatus}`}>
+                              処理状態: {externalEditRequestStatusLabels[activeThreadRequestStatus]}
+                            </span>
+                          )}
                           <p className="meta">
                             受理は申請元イベントのスナップショット選択時のみ可能です。受理すると対象プールをロックし、申請者を外部報告者に設定します。
                           </p>
@@ -411,14 +458,16 @@ export function MessageBox({
                         <button type="button" onClick={onReplyToThread} disabled={!canReplyToThread}>
                           返信
                         </button>
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={onOpenDqDialog}
-                          disabled={!canOpenDqDialog}
-                        >
-                          DQ申請
-                        </button>
+                        {activeThread.method === "call_player" && !isResolutionOwner(activeThread) && (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={onOpenDqDialog}
+                            disabled={!canOpenDqDialog}
+                          >
+                            DQ申請
+                          </button>
+                        )}
                       </div>
                     </div>
                   </>

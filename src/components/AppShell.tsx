@@ -147,7 +147,7 @@ export function AppShell({
         </nav>
       </aside>
 
-      <main className={`content ${activeTab === "call-list" ? "call-list-mode" : ""}`}>
+      <main className={`content ${activeTab === "call-list" ? "call-list-mode" : ""} ${activeTab === "message" ? "message-mode" : ""}`}>
         <section className="hero">
           {activeTab === "call-list" ? (
             headerContent
