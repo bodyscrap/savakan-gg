@@ -6,6 +6,7 @@ export type CallListPlayer = {
   entrantName: string;
   createdAt: string;
   senderName: string;
+  isOwn: boolean;
 };
 
 export type CallListEventGroup = {
@@ -200,7 +201,11 @@ export function StatusBoard({
                     const chipStyle = buildCallListPlayerChipStyle(elapsedSeconds, colorToRedSeconds);
 
                     return (
-                      <span className="call-list-player-chip" key={`${group.key}-${player.threadId}`} style={chipStyle}>
+                      <span
+                        className={`call-list-player-chip${player.isOwn ? " call-list-player-chip--own" : ""}`}
+                        key={`${group.key}-${player.threadId}`}
+                        style={chipStyle}
+                      >
                         <span className="call-list-player-chip-name">{resolvePlayerName(group, player)}</span>
                         <span className="call-list-player-chip-elapsed">
                           {formatCallElapsedTime(player.createdAt, pageSwitchedAtMs)}

@@ -645,6 +645,28 @@ button:disabled {
   font-weight: 600;
 }
 
+.call-list-player-chip--own {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  border-style: double;
+  border-width: 4px;
+  border-radius: 1rem;
+  padding: 0.5rem 0.95rem 0.55rem;
+}
+
+.call-list-player-chip--own .call-list-player-chip-name {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  font-size: 3.1rem;
+}
+
+.call-list-player-chip--own .call-list-player-chip-elapsed {
+  grid-column: 1;
+  grid-row: 2;
+  justify-self: end;
+  font-size: 0.98rem;
+}
+
 .call-list-player-chip-name {
   font-size: 3.2rem;
   line-height: 1;

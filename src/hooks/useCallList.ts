@@ -189,6 +189,7 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
           entrantName,
           createdAt: root.createdAt,
           senderName: root.senderName,
+          isOwn: senderUserId.trim() !== "" && root.senderUserId.trim() === senderUserId.trim(),
         });
       } else {
         groups.set(groupKey, {
@@ -206,6 +207,7 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
             entrantName,
             createdAt: root.createdAt,
             senderName: root.senderName,
+            isOwn: senderUserId.trim() !== "" && root.senderUserId.trim() === senderUserId.trim(),
           }],
         });
       }
