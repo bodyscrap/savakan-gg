@@ -548,6 +548,14 @@ button:disabled {
   overflow: hidden;
 }
 
+.call-list-player-entry {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+
 .call-list-player-chip {
   display: inline-grid;
   gap: 0.18rem;
@@ -635,6 +643,18 @@ button:disabled {
   line-height: 1.1;
   font-weight: 500;
   color: currentColor;
+}
+
+.call-list-playing-badge {
+  padding: 0.3rem 0.55rem;
+  border: 1px solid #15803d;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #14532d;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
 }
 
 .event-toolbar {

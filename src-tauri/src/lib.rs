@@ -214,6 +214,115 @@ struct MobileSetListItem {
     entrant_ids: Vec<Option<String>>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MobileSetCallStatus {
+    own_call_count: usize,
+    other_call_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MobileResolvedCallCount {
+    resolved_count: usize,
+}
+
+fn active_call_matches_set(message: &FeatureMessage, event_id: &str, set_id: &str) -> bool {
+    message.method == "call_player"
+        && message.message_type == "normal"
+        && message.parent_message_id.is_none()
+        && meta_string(message.message_meta.as_ref(), "eventId").as_deref() == Some(event_id)
+        && meta_string(message.message_meta.as_ref(), "setId").as_deref() == Some(set_id)
+}
+
+fn load_active_calls_for_set(
+    app: &tauri::AppHandle,
+    event_id: &str,
+    set_id: &str,
+) -> Result<Vec<call_list::PlayerCall>, String> {
+    Ok(call_list::load_player_calls(app.clone())?
+        .into_iter()
+        .filter(|call| active_call_matches_set(&call.message, event_id, set_id))
+        .collect())
+}
+
+fn mobile_set_call_status(
+    app: &tauri::AppHandle,
+    event_id: &str,
+    set_id: &str,
+) -> Result<MobileSetCallStatus, String> {
+    let sender_user_id = storage::load_sender_profile(app)?
+        .map(|profile| profile.sender_user_id)
+        .unwrap_or_default();
+    let calls = load_active_calls_for_set(app, event_id, set_id)?;
+    let (own_calls, other_calls): (Vec<_>, Vec<_>) = calls
+        .iter()
+        .partition(|call| call.message.sender_user_id == sender_user_id && !sender_user_id.is_empty());
+    Ok(MobileSetCallStatus {
+        own_call_count: own_calls.len(),
+        other_call_count: other_calls.len(),
+    })
+}
+
+fn ensure_mobile_set_has_no_active_calls(
+    app: &tauri::AppHandle,
+    event_id: &str,
+    set_id: &str,
+) -> Result<(), String> {
+    let status = mobile_set_call_status(app, event_id, set_id)?;
+    if status.other_call_count > 0 {
+        return Err(
+            "他端末が発行した未解決の呼び出しがあります。発行端末で解決してください。"
+                .to_owned(),
+        );
+    }
+    if status.own_call_count > 0 {
+        return Err("このSetに未解決の呼び出しがあります。解決してから操作してください。".to_owned());
+    }
+    Ok(())
+}
+
+fn resolve_mobile_calls_for_set(
+    app: &tauri::AppHandle,
+    event_id: &str,
+    set_id: &str,
+) -> Result<usize, String> {
+    let profile = storage::load_sender_profile(app)?
+        .ok_or("送信者設定を読み込めないため、呼び出しを解決できません。")?;
+    let calls = load_active_calls_for_set(app, event_id, set_id)?;
+    if calls
+        .iter()
+        .any(|call| call.message.sender_user_id != profile.sender_user_id)
+    {
+        return Err("他端末が発行した呼び出しがあります。発行端末で解決してください。".to_owned());
+    }
+
+    let mut resolved_count = 0;
+    for call in calls {
+        let input = SendMailboxMessageInput {
+            destination: Some(call_list::DESTINATION.to_owned()),
+            profile: profile.clone(),
+            method: "call_player".to_owned(),
+            subject: format!("Resolved: {}", call.message.subject),
+            body: "呼び出しを解決しました。".to_owned(),
+            delivery_target_mode: "broadcast".to_owned(),
+            delivery_target_ip: None,
+            message_type: Some("resolve".to_owned()),
+            message_meta: call.message.message_meta.clone(),
+            thread_id: None,
+            parent_message_id: None,
+        };
+        let message = build_message_from_input(&input)?;
+        call_list::send(app, &input, message)?;
+        resolved_count += 1;
+    }
+
+    if !load_active_calls_for_set(app, event_id, set_id)?.is_empty() {
+        return Err("このSetの呼び出しがまだ解決されていません。".to_owned());
+    }
+    Ok(resolved_count)
+}
+
 fn mobile_set_has_matchup(slots: &[models::SetSlotSnapshot]) -> bool {
     slots.len() >= 2
         && slots.iter().take(2).all(|slot| {
@@ -490,6 +599,57 @@ fn sort_pending_set_results_by_phase_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_call_message(
+        event_id: &str,
+        set_id: &str,
+        message_type: &str,
+        parent_message_id: Option<&str>,
+        method: &str,
+    ) -> FeatureMessage {
+        FeatureMessage {
+            destination: Some(call_list::DESTINATION.to_owned()),
+            message_id: "call-id".to_owned(),
+            thread_id: "call-id".to_owned(),
+            parent_message_id: parent_message_id.map(str::to_owned),
+            message_type: message_type.to_owned(),
+            message_meta: Some(serde_json::json!({
+                "eventId": event_id,
+                "setId": set_id,
+            })),
+            method: method.to_owned(),
+            subject: "Call".to_owned(),
+            sender_name: "Player".to_owned(),
+            sender_user_id: "12345678".to_owned(),
+            sender_ip: "127.0.0.1".to_owned(),
+            body: String::new(),
+            created_at: "2025-01-01T00:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn active_call_matches_only_unresolved_root_calls_for_the_exact_set() {
+        let call = make_call_message("event-1", "set-1", "normal", None, "call_player");
+
+        assert!(active_call_matches_set(&call, "event-1", "set-1"));
+        assert!(!active_call_matches_set(&call, "event-2", "set-1"));
+        assert!(!active_call_matches_set(&call, "event-1", "set-2"));
+        assert!(!active_call_matches_set(
+            &make_call_message("event-1", "set-1", "resolve", None, "call_player"),
+            "event-1",
+            "set-1"
+        ));
+        assert!(!active_call_matches_set(
+            &make_call_message("event-1", "set-1", "normal", Some("parent"), "call_player"),
+            "event-1",
+            "set-1"
+        ));
+        assert!(!active_call_matches_set(
+            &make_call_message("event-1", "set-1", "normal", None, "other_method"),
+            "event-1",
+            "set-1"
+        ));
+    }
 
     fn make_set(set_id: &str, full_round_text: &str, round: Option<i64>) -> SetSnapshot {
         SetSnapshot {
@@ -2000,6 +2160,7 @@ fn mobile_input_html() -> &'static str {
                 <p id="overlayStatus" class="meta"></p>
                 <div class="overlay-button-row">
                     <button id="overlayToggleBtn" type="button">配信開始</button>
+                    <button id="resolveCallsBtn" type="button">呼び出しを解決</button>
                     <button id="overlayStopBtn" type="button" style="background: #e2e8f0; color: #0f172a; border-color: #cbd5e1;">完全停止</button>
                 </div>
             </div>
@@ -2107,6 +2268,7 @@ fn mobile_input_html() -> &'static str {
         const overlayStatus = document.getElementById('overlayStatus');
         const overlayToggleBtn = document.getElementById('overlayToggleBtn');
         const overlayStopBtn = document.getElementById('overlayStopBtn');
+        const resolveCallsBtn = document.getElementById('resolveCallsBtn');
         const slotRows = document.getElementById('slotRows');
         const discardBtn = document.getElementById('discardBtn');
         const updateBtn = document.getElementById('updateBtn');
@@ -2115,6 +2277,7 @@ fn mobile_input_html() -> &'static str {
         const randomActionTime = document.getElementById('randomActionTime');
         let selectedSet = null;
         let overlayState = null;
+        let selectedSetCallStatus = null;
         let mobileEventAlias = '';
         let eventInfoPromise = Promise.resolve();
         let displayOnePOnTop = true;
@@ -2179,6 +2342,159 @@ fn mobile_input_html() -> &'static str {
             }
             if (overlayBox) {
                 overlayBox.hidden = false;
+            }
+        }
+
+        async function fetchSetCallStatus() {
+            if (!selectedSet) {
+                throw new Error('先にsetを選択してください。');
+            }
+            const url = `/mobile/api/sets/${encodeURIComponent(selectedSet.setId)}/calls?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&token=${encodeURIComponent(token)}`;
+            const response = await fetch(url, { cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error(await response.text());
+            }
+            return await response.json();
+        }
+
+        function updateSetCallControls() {
+            const hasActiveCalls = selectedSetCallStatus
+                && (selectedSetCallStatus.ownCallCount > 0 || selectedSetCallStatus.otherCallCount > 0);
+            if (resolveCallsBtn) {
+                const completed = isCompletedSet(selectedSet);
+                resolveCallsBtn.hidden = completed || Boolean(selectedSetCallStatus && !hasActiveCalls);
+                resolveCallsBtn.disabled = !selectedSetCallStatus || !hasActiveCalls || completed;
+                resolveCallsBtn.title = completed
+                    ? '確定済みSetの呼び出しは呼び出しリストから解決してください。'
+                    : selectedSetCallStatus && selectedSetCallStatus.otherCallCount > 0
+                        ? '他端末発行の呼び出しは発行端末で解決してください。'
+                        : '';
+            }
+            if (detailMeta && isCompletedSet(selectedSet) && hasActiveCalls) {
+                detailMeta.textContent = '確定済みSetの呼び出しは呼び出しリストから解決してください。';
+            }
+
+            if (!overlayToggleBtn || !selectedSet) {
+                return;
+            }
+            const currentSetId = overlayState && overlayState.currentSetId
+                ? String(overlayState.currentSetId)
+                : '';
+            const isCurrent = Boolean(overlayState && overlayState.active
+                && currentSetId === String(selectedSet.setId));
+            if (!isCurrent) {
+                overlayToggleBtn.disabled = !selectedSetCallStatus || Boolean(hasActiveCalls);
+            }
+        }
+
+        async function refreshSetCallStatus() {
+            selectedSetCallStatus = null;
+            updateSetCallControls();
+            try {
+                selectedSetCallStatus = await fetchSetCallStatus();
+                updateSetCallControls();
+                return selectedSetCallStatus;
+            } catch (error) {
+                updateSetCallControls();
+                submitStatus.textContent = `呼び出し状態の確認に失敗しました: ${error && error.message ? error.message : String(error)}`;
+                return null;
+            }
+        }
+
+        async function resolveSetCallsFromDetail() {
+            if (!selectedSet) {
+                return;
+            }
+            if (isCompletedSet(selectedSet)) {
+                submitStatus.textContent = '確定済みSetの呼び出しは呼び出しリストから解決してください。';
+                return;
+            }
+            try {
+                const callStatus = await refreshSetCallStatus();
+                if (!callStatus) {
+                    return;
+                }
+                if (callStatus.otherCallCount > 0) {
+                    const message = '他端末が発行した未解決の呼び出しがあります。発行端末で解決してください。';
+                    submitStatus.textContent = message;
+                    window.alert(message);
+                    return;
+                }
+                if (callStatus.ownCallCount === 0) {
+                    submitStatus.textContent = 'このsetに未解決の呼び出しはありません。';
+                    return;
+                }
+                if (!window.confirm(`このsetの呼び出し${callStatus.ownCallCount}件を解決しますか？`)) {
+                    return;
+                }
+
+                const resolveUrl = `/mobile/api/sets/${encodeURIComponent(selectedSet.setId)}/resolve-calls?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&token=${encodeURIComponent(token)}`;
+                const response = await fetch(resolveUrl, { method: 'POST' });
+                if (!response.ok) {
+                    const text = await response.text();
+                    submitStatus.textContent = `呼び出しの解決に失敗しました: ${text}`;
+                    return;
+                }
+
+                const latestStatus = await refreshSetCallStatus();
+                if (latestStatus && latestStatus.ownCallCount === 0 && latestStatus.otherCallCount === 0) {
+                    submitStatus.textContent = '呼び出しを解決しました。スコア更新や配信開始は別途操作してください。';
+                } else if (latestStatus) {
+                    submitStatus.textContent = latestStatus.otherCallCount > 0
+                        ? '他端末が発行した未解決の呼び出しがあります。発行端末で解決してください。'
+                        : 'このsetの呼び出しがまだ解決されていません。';
+                }
+            } catch (error) {
+                submitStatus.textContent = `呼び出しの解決に失敗しました: ${error && error.message ? error.message : String(error)}`;
+            }
+        }
+
+        async function resolveCallsBeforeSetAction(actionLabel) {
+            if (!selectedSet) {
+                submitStatus.textContent = '先にsetを選択してください。';
+                return false;
+            }
+
+            try {
+                const callStatus = await fetchSetCallStatus();
+                if (callStatus.otherCallCount > 0) {
+                    const message = `他端末が発行した未解決の呼び出しがあります。発行端末で解決するまで「${actionLabel}」はできません。`;
+                    submitStatus.textContent = message;
+                    window.alert(message);
+                    return false;
+                }
+                if (callStatus.ownCallCount === 0) {
+                    return true;
+                }
+
+                const shouldResolve = window.confirm(
+                    `このsetには未解決の呼び出しが${callStatus.ownCallCount}件あります。\n「${actionLabel}」の前に呼び出しを解決して続行しますか？`,
+                );
+                if (!shouldResolve) {
+                    return false;
+                }
+
+                const resolveUrl = `/mobile/api/sets/${encodeURIComponent(selectedSet.setId)}/resolve-calls?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&token=${encodeURIComponent(token)}`;
+                const resolveResponse = await fetch(resolveUrl, { method: 'POST' });
+                if (!resolveResponse.ok) {
+                    throw new Error(await resolveResponse.text());
+                }
+
+                const latestStatus = await fetchSetCallStatus();
+                selectedSetCallStatus = latestStatus;
+                updateSetCallControls();
+                if (latestStatus.ownCallCount > 0 || latestStatus.otherCallCount > 0) {
+                    const message = latestStatus.otherCallCount > 0
+                        ? '他端末が発行した未解決の呼び出しがあります。発行端末で解決してください。'
+                        : 'このsetの呼び出しがまだ解決されていません。';
+                    submitStatus.textContent = message;
+                    window.alert(message);
+                    return false;
+                }
+                return true;
+            } catch (error) {
+                submitStatus.textContent = `${actionLabel}の前の呼び出し確認に失敗しました: ${error && error.message ? error.message : String(error)}`;
+                return false;
             }
         }
 
@@ -2789,6 +3105,7 @@ fn mobile_input_html() -> &'static str {
                 if (overlayStopBtn) {
                     overlayStopBtn.disabled = Boolean(overlayState && overlayState.fullyStopped);
                 }
+                updateSetCallControls();
                 return;
             }
 
@@ -2799,6 +3116,7 @@ fn mobile_input_html() -> &'static str {
                 if (overlayStopBtn) {
                     overlayStopBtn.disabled = false;
                 }
+                updateSetCallControls();
                 return;
             }
 
@@ -2808,6 +3126,7 @@ fn mobile_input_html() -> &'static str {
             if (overlayStopBtn) {
                 overlayStopBtn.disabled = false;
             }
+            updateSetCallControls();
         }
 
         async function stopOverlayCompletely() {
@@ -2839,6 +3158,20 @@ fn mobile_input_html() -> &'static str {
 
             const enabled = !active || !isCurrent;
             const forceSwitch = active && !isCurrent;
+            if (enabled) {
+                const callStatus = await refreshSetCallStatus();
+                if (!callStatus) {
+                    return;
+                }
+                if (callStatus.ownCallCount > 0 || callStatus.otherCallCount > 0) {
+                    const message = isCompletedSet(selectedSet)
+                        ? '確定済みSetの呼び出しは呼び出しリストから解決してください。'
+                        : '未解決の呼び出しがあるため配信を開始できません。先に呼び出しを解決してください。';
+                    submitStatus.textContent = message;
+                    window.alert(message);
+                    return;
+                }
+            }
 
             if (forceSwitch) {
                 const currentSetLabel = getOverlaySetLabelFromState(overlayState);
@@ -2990,6 +3323,7 @@ fn mobile_input_html() -> &'static str {
                 sideActions.hidden = false;
             }
             await refreshOverlayState();
+            await refreshSetCallStatus();
             renderDetailSlots(detail);
         }
 
@@ -3040,7 +3374,7 @@ fn mobile_input_html() -> &'static str {
             return sideAssignments;
         }
 
-        async function saveSetFromDetail(confirmed) {
+        async function saveSetFromDetail(confirmed, callsAlreadyResolved = false) {
             if (!selectedSet) {
                 submitStatus.textContent = '先にsetを選択してください。';
                 return;
@@ -3053,6 +3387,10 @@ fn mobile_input_html() -> &'static str {
 
             if (confirmed && !isMatchupReady(selectedSet)) {
                 submitStatus.textContent = '対戦カードが確定していないsetは確定できません。';
+                return;
+            }
+            if (!callsAlreadyResolved
+                && !(await resolveCallsBeforeSetAction(confirmed ? '結果確定' : '結果更新'))) {
                 return;
             }
 
@@ -3151,8 +3489,11 @@ fn mobile_input_html() -> &'static str {
             }
         });
         updateBtn.addEventListener('click', () => { void saveSetFromDetail(false); });
-        confirmBtn.addEventListener('click', () => {
+        confirmBtn.addEventListener('click', async () => {
             if (!selectedSet) {
+                return;
+            }
+            if (!(await resolveCallsBeforeSetAction('結果確定'))) {
                 return;
             }
 
@@ -3172,12 +3513,17 @@ fn mobile_input_html() -> &'static str {
                 `結果を確定しますか？\n\n${setLabel}\n${scoreSummary || '対戦者未確定'}\n\n確定後は通常の下書き破棄では取り消せません。内容を確認してください。`,
             );
             if (ok) {
-                void saveSetFromDetail(true);
+                void saveSetFromDetail(true, true);
             }
         });
         overlayToggleBtn.addEventListener('click', () => {
             void toggleOverlayFromDetail();
         });
+        if (resolveCallsBtn) {
+            resolveCallsBtn.addEventListener('click', () => {
+                void resolveSetCallsFromDetail();
+            });
+        }
 
         if (overlayStopBtn) {
             overlayStopBtn.addEventListener('click', () => {
@@ -4057,6 +4403,128 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
         return;
     }
 
+    if path.starts_with("/mobile/api/sets/")
+        && path.ends_with("/calls")
+        && request.method() == &tiny_http::Method::Get
+    {
+        let slug = query_param_from_url(&url, "slug").unwrap_or_default();
+        let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
+        let set_id = percent_decode(
+            path.trim_start_matches("/mobile/api/sets/")
+                .trim_end_matches("/calls")
+                .trim_end_matches('/'),
+        );
+        if slug.trim().is_empty() || event_id.trim().is_empty() || set_id.trim().is_empty() {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
+            );
+            return;
+        }
+        let workspace = match load_target_workspace(app, &slug, &event_id) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    400,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+        if !workspace
+            .snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == event_id)
+            .is_some_and(|event| resolve_mobile_set_entrants(event, &set_id).is_some())
+        {
+            respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
+            return;
+        }
+        let status = match mobile_set_call_status(app, &event_id, &set_id) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+        respond_json(
+            request,
+            200,
+            serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_owned()),
+        );
+        return;
+    }
+
+    if path.starts_with("/mobile/api/sets/")
+        && path.ends_with("/resolve-calls")
+        && request.method() == &tiny_http::Method::Post
+    {
+        let slug = query_param_from_url(&url, "slug").unwrap_or_default();
+        let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
+        let set_id = percent_decode(
+            path.trim_start_matches("/mobile/api/sets/")
+                .trim_end_matches("/resolve-calls")
+                .trim_end_matches('/'),
+        );
+        if slug.trim().is_empty() || event_id.trim().is_empty() || set_id.trim().is_empty() {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
+            );
+            return;
+        }
+        let workspace = match load_target_workspace(app, &slug, &event_id) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    400,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+        let Some(detail) = build_mobile_set_detail_local_only(&workspace, &event_id, &set_id) else {
+            respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
+            return;
+        };
+        if detail.state == 3 {
+            respond_json(
+                request,
+                409,
+                "{\"error\":\"確定済みSetの呼び出しは呼び出しリストから解決してください。\"}"
+                    .to_owned(),
+            );
+            return;
+        }
+        let resolved_count = match resolve_mobile_calls_for_set(app, &event_id, &set_id) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    409,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+        respond_json(
+            request,
+            200,
+            serde_json::to_string(&MobileResolvedCallCount { resolved_count })
+                .unwrap_or_else(|_| "{}".to_owned()),
+        );
+        return;
+    }
+
     if path.starts_with("/mobile/api/sets/") && request.method() == &tiny_http::Method::Get {
         let slug = query_param_from_url(&url, "slug").unwrap_or_default();
         let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
@@ -4170,6 +4638,15 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
             return;
         };
+
+        if let Err(err) = ensure_mobile_set_has_no_active_calls(app, &event_id, &set_id) {
+            respond_json(
+                request,
+                409,
+                format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+            );
+            return;
+        }
 
         if storage::is_set_score_edit_locked(&workspace_before, &event_id, &set_id) {
             respond_json(
@@ -4480,6 +4957,19 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
             );
             return;
+        }
+
+        if payload.enabled {
+            if let Err(err) =
+                ensure_mobile_set_has_no_active_calls(app, &payload.event_id, &payload.set_id)
+            {
+                respond_json(
+                    request,
+                    409,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
         }
 
         let input = ObsOverlaySetInput {

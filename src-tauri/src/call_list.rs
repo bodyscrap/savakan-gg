@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::sync::{Mutex, OnceLock};
 
@@ -11,6 +12,8 @@ use crate::{meta_string, send_udp_mailbox_packet, storage, SendMailboxMessageInp
 pub const DESTINATION: &str = "call_list";
 pub const CHANGED_EVENT: &str = "player_calls_changed";
 pub const ERROR_EVENT: &str = "message_delivery_error";
+const PLAYING_METHOD: &str = "call_player_playing";
+const PLAYING_RELEASE_METHOD: &str = "call_player_playing_release";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,7 +54,11 @@ fn key(message: &FeatureMessage) -> Result<CallKey, String> {
 
 pub fn destination_for_method(method: &str) -> &str {
     match method {
-        "call_player" | "call_player_sync" | "call_player_sync_request" => DESTINATION,
+        "call_player"
+        | "call_player_sync"
+        | "call_player_sync_request"
+        | PLAYING_METHOD
+        | PLAYING_RELEASE_METHOD => DESTINATION,
         "external_edit_request"
         | "external_edit_request_response"
         | "external_score_report"
@@ -117,6 +124,13 @@ fn same_call(
 ) -> bool {
     (call.message.sender_user_id == own_sender_user_id)
         == (message.sender_user_id == own_sender_user_id)
+        && key(&call.message)
+            .map(|other| same_target(&other, target))
+            .unwrap_or(false)
+}
+
+fn same_issued_call(call: &PlayerCall, message: &FeatureMessage, target: &CallKey) -> bool {
+    call.message.sender_user_id == message.sender_user_id
         && key(&call.message)
             .map(|other| same_target(&other, target))
             .unwrap_or(false)
@@ -228,6 +242,228 @@ fn validate_incoming_dq_calls(
     validate_dq_identity(call, message)
 }
 
+fn is_playing_message(method: &str) -> bool {
+    matches!(method, PLAYING_METHOD | PLAYING_RELEASE_METHOD)
+}
+
+fn playing_call_index(calls: &[PlayerCall], message: &FeatureMessage) -> Result<usize, String> {
+    let call_message_id = meta_string(message.message_meta.as_ref(), "callMessageId")
+        .ok_or("プレイ中通知に呼び出し元メッセージIDがありません。")?;
+    let target = key(message)?;
+    calls
+        .iter()
+        .position(|call| {
+            call.message.message_id == call_message_id
+                && key(&call.message)
+                    .map(|call_target| same_target(&call_target, &target))
+                    .unwrap_or(false)
+        })
+        .ok_or_else(|| "プレイ中通知に対応する未解決の呼び出しがありません。".to_owned())
+}
+
+fn validate_playing_message(message: &FeatureMessage) -> Result<(), String> {
+    if message.message_type != "normal" || message.parent_message_id.is_some() {
+        return Err("プレイ中通知のメッセージ形式が不正です。".to_owned());
+    }
+    if chrono::DateTime::parse_from_rfc3339(&message.created_at).is_err() {
+        return Err("プレイ中通知の発行時刻が不正です。".to_owned());
+    }
+    if message.method == PLAYING_METHOD {
+        let until = message
+            .message_meta
+            .as_ref()
+            .and_then(|meta| meta.get("callPlayerPlayingUntil"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or("プレイ中通知の解除予定時刻がありません。")?;
+        if !until.is_empty() && chrono::DateTime::parse_from_rfc3339(until).is_err() {
+            return Err("プレイ中通知の解除予定時刻が不正です。".to_owned());
+        }
+    } else {
+        meta_string(message.message_meta.as_ref(), "callPlayerPlayingNoticeId")
+            .ok_or("プレイ中解除通知の対象がありません。")?;
+    }
+    Ok(())
+}
+
+fn validate_playing_sequence(call: &PlayerCall, message: &FeatureMessage) -> Result<(), String> {
+    if message.method != PLAYING_METHOD
+        || meta_string(
+            call.message.message_meta.as_ref(),
+            "callPlayerPlayingSenderUserId",
+        )
+        .as_deref()
+            != Some(message.sender_user_id.as_str())
+    {
+        return Ok(());
+    }
+    let previous_notice_id = meta_string(
+        call.message.message_meta.as_ref(),
+        "callPlayerPlayingNoticeId",
+    );
+    if previous_notice_id.as_deref() == Some(message.message_id.as_str()) {
+        return Ok(());
+    }
+    let Some(previous_at) = call
+        .message
+        .message_meta
+        .as_ref()
+        .and_then(|meta| meta.get("callPlayerPlayingUpdatedAt"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+    else {
+        return Ok(());
+    };
+    let incoming_at = chrono::DateTime::parse_from_rfc3339(&message.created_at)
+        .map_err(|_| "プレイ中通知の発行時刻が不正です。")?;
+    if incoming_at <= previous_at {
+        return Err("古いプレイ中通知は適用できません。".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_outgoing_playing(
+    calls: &[PlayerCall],
+    input: &SendMailboxMessageInput,
+    message: &FeatureMessage,
+) -> Result<usize, String> {
+    validate_playing_message(message)?;
+    if input.delivery_target_mode != "direct"
+        || crate::split_delivery_target_ips(input.delivery_target_ip.as_deref()).len() != 1
+    {
+        return Err("プレイ中通知は呼び出し元の端末1台へ直接送信してください。".to_owned());
+    }
+    let index = playing_call_index(calls, message)?;
+    let call = &calls[index];
+    if message.sender_user_id != input.profile.sender_user_id.trim()
+        || message.sender_ip != input.profile.bind_ip.trim()
+        || call.message.sender_user_id == input.profile.sender_user_id.trim()
+        || input.delivery_target_ip.as_deref().map(str::trim) != Some(call.message.sender_ip.trim())
+    {
+        return Err("プレイ中通知の呼び出し元または送信先が一致しません。".to_owned());
+    }
+    let current_sender = meta_string(
+        call.message.message_meta.as_ref(),
+        "callPlayerPlayingSenderUserId",
+    );
+    let is_playing = call
+        .message
+        .message_meta
+        .as_ref()
+        .and_then(|meta| meta.get("callPlayerPlaying"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    if message.method == PLAYING_RELEASE_METHOD {
+        if current_sender.as_deref() != Some(input.profile.sender_user_id.trim())
+            || meta_string(message.message_meta.as_ref(), "callPlayerPlayingNoticeId")
+                != meta_string(
+                    call.message.message_meta.as_ref(),
+                    "callPlayerPlayingNoticeId",
+                )
+        {
+            return Err("この端末が発行した有効なプレイ中通知がありません。".to_owned());
+        }
+    } else if is_playing && current_sender.as_deref() != Some(input.profile.sender_user_id.trim()) {
+        return Err("別端末からのプレイ中通知がすでに有効です。".to_owned());
+    }
+    validate_playing_sequence(call, message)?;
+    Ok(index)
+}
+
+fn validate_incoming_playing(
+    calls: &[PlayerCall],
+    own_sender_user_id: &str,
+    message: &FeatureMessage,
+) -> Result<usize, String> {
+    validate_playing_message(message)?;
+    let index = playing_call_index(calls, message)?;
+    let call = &calls[index];
+    if call.message.sender_user_id != own_sender_user_id
+        || message.sender_user_id == own_sender_user_id
+    {
+        return Err("自端末が発行した未解決の呼び出しに対する通知ではありません。".to_owned());
+    }
+    let current_sender = meta_string(
+        call.message.message_meta.as_ref(),
+        "callPlayerPlayingSenderUserId",
+    );
+    let is_playing = call
+        .message
+        .message_meta
+        .as_ref()
+        .and_then(|meta| meta.get("callPlayerPlaying"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    if message.method == PLAYING_RELEASE_METHOD {
+        if current_sender.as_deref() != Some(message.sender_user_id.as_str())
+            || meta_string(message.message_meta.as_ref(), "callPlayerPlayingNoticeId")
+                != meta_string(
+                    call.message.message_meta.as_ref(),
+                    "callPlayerPlayingNoticeId",
+                )
+        {
+            return Err("対応するプレイ中通知が見つかりません。".to_owned());
+        }
+    } else if is_playing && current_sender.as_deref() != Some(message.sender_user_id.as_str()) {
+        return Err("別端末からのプレイ中通知がすでに有効です。".to_owned());
+    }
+    validate_playing_sequence(call, message)?;
+    Ok(index)
+}
+
+fn apply_playing_message(
+    calls: &mut [PlayerCall],
+    index: usize,
+    message: &FeatureMessage,
+) -> Result<(), String> {
+    let active = message.method == PLAYING_METHOD;
+    let meta = calls[index]
+        .message
+        .message_meta
+        .get_or_insert_with(|| serde_json::json!({}));
+    let meta = meta
+        .as_object_mut()
+        .ok_or("呼び出しメタデータの形式が不正です。")?;
+    let until = if active {
+        message
+            .message_meta
+            .as_ref()
+            .and_then(|meta| meta.get("callPlayerPlayingUntil"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or("プレイ中通知の解除予定時刻がありません。")?
+            .to_owned()
+    } else {
+        String::new()
+    };
+    let is_active = active
+        && (until.is_empty()
+            || chrono::DateTime::parse_from_rfc3339(&until)
+                .map(|date| date > Utc::now())
+                .unwrap_or(false));
+    meta.insert(
+        "callPlayerPlaying".to_owned(),
+        serde_json::Value::Bool(is_active),
+    );
+    meta.insert(
+        "callPlayerPlayingUntil".to_owned(),
+        serde_json::Value::String(until),
+    );
+    meta.insert(
+        "callPlayerPlayingSenderUserId".to_owned(),
+        serde_json::Value::String(message.sender_user_id.clone()),
+    );
+    if active {
+        meta.insert(
+            "callPlayerPlayingNoticeId".to_owned(),
+            serde_json::Value::String(message.message_id.clone()),
+        );
+        meta.insert(
+            "callPlayerPlayingUpdatedAt".to_owned(),
+            serde_json::Value::String(message.created_at.clone()),
+        );
+    }
+    Ok(())
+}
+
 fn apply(
     calls: &mut Vec<PlayerCall>,
     message: &FeatureMessage,
@@ -236,7 +472,7 @@ fn apply(
 ) -> Result<(), String> {
     let target = key(message)?;
     if message.message_type == "resolve" {
-        calls.retain(|call| !same_call(call, message, &target, own_sender_user_id));
+        calls.retain(|call| !same_issued_call(call, message, &target));
     } else if message.message_type == "normal" && message.parent_message_id.is_none() {
         let next = PlayerCall {
             message: message.clone(),
@@ -270,6 +506,12 @@ fn own_calls<'a>(
         .filter(move |call| call.message.sender_user_id == sender_user_id)
 }
 
+fn owned_call_message_ids(calls: &[PlayerCall], sender_user_id: &str) -> HashSet<String> {
+    own_calls(calls, sender_user_id)
+        .map(|call| call.message.message_id.clone())
+        .collect()
+}
+
 fn resend_message(call: &PlayerCall, profile: &crate::models::SenderProfile) -> FeatureMessage {
     let mut reply = call.message.clone();
     reply.destination = Some(DESTINATION.to_owned());
@@ -298,17 +540,25 @@ pub fn send(
         if input.delivery_target_mode != "broadcast" {
             return Err("呼び出しの同期要求はブロードキャストで送信してください。".to_owned());
         }
-        calls = own_calls(&calls, &input.profile.sender_user_id)
-            .cloned()
-            .collect();
-        let active_call_message_ids = calls
-            .iter()
-            .map(|call| call.message.message_id.clone())
-            .collect();
+        let active_call_message_ids =
+            owned_call_message_ids(&calls, &input.profile.sender_user_id);
         crate::bracket_messages::discard_stale_dq_requests(app, &active_call_message_ids)?;
         save(app, &calls)?;
         notify(app)?;
         send_udp_mailbox_packet(&input.profile, "broadcast", None, &message)?;
+        return Ok(message);
+    }
+    if is_playing_message(&message.method) {
+        let call_index = validate_outgoing_playing(&calls, input, &message)?;
+        apply_playing_message(&mut calls, call_index, &message)?;
+        send_udp_mailbox_packet(
+            &input.profile,
+            "direct",
+            input.delivery_target_ip.as_deref(),
+            &message,
+        )?;
+        save(app, &calls)?;
+        notify(app)?;
         return Ok(message);
     }
     if message.method != "call_player" {
@@ -319,9 +569,10 @@ pub fn send(
     }
     let target = key(&message)?;
     if message.message_type == "resolve"
-        && !calls
-            .iter()
-            .any(|call| same_call(call, &message, &target, &input.profile.sender_user_id))
+        && (message.sender_user_id != input.profile.sender_user_id.trim()
+            || !calls
+                .iter()
+                .any(|call| same_issued_call(call, &message, &target)))
     {
         return Err("自分が発行した未解決の呼び出しのみ解決できます。".to_owned());
     }
@@ -344,9 +595,7 @@ pub fn receive(
         .map_err(|e| format!("呼び出しリストのロックに失敗しました: {e}"))?;
     let mut calls = load(app)?;
     if crate::is_call_sync_method(&message.method) {
-        let active_call_message_ids = own_calls(&calls, &profile.sender_user_id)
-            .map(|call| call.message.message_id.clone())
-            .collect();
+        let active_call_message_ids = owned_call_message_ids(&calls, &profile.sender_user_id);
         crate::bracket_messages::discard_stale_dq_requests(app, &active_call_message_ids)?;
         for call in own_calls(&calls, &profile.sender_user_id) {
             // Preserve the original issue time, but use the current reply address.
@@ -354,6 +603,12 @@ pub fn receive(
             send_udp_mailbox_packet(profile, "direct", Some(sender_ip), &reply)?;
         }
         return Ok(());
+    }
+    if is_playing_message(&message.method) {
+        let call_index = validate_incoming_playing(&calls, &profile.sender_user_id, message)?;
+        apply_playing_message(&mut calls, call_index, message)?;
+        save(app, &calls)?;
+        return notify(app);
     }
     if message.method != "call_player" {
         return Err("呼び出しリストで未対応のメソッドです。".to_owned());
@@ -435,6 +690,140 @@ mod tests {
             request,
             input,
         )
+    }
+
+    fn playing_fixture() -> (Vec<PlayerCall>, FeatureMessage, SendMailboxMessageInput) {
+        let root = message("12345678", "normal");
+        let mut notice = root.clone();
+        notice.message_id = "playing-notice".to_owned();
+        notice.method = PLAYING_METHOD.to_owned();
+        notice.sender_name = "Requester".to_owned();
+        notice.sender_user_id = "87654321".to_owned();
+        notice.sender_ip = "192.168.1.20".to_owned();
+        notice.message_meta.as_mut().unwrap()["callMessageId"] = json!(root.message_id);
+        notice.message_meta.as_mut().unwrap()["callPlayerPlayingUntil"] =
+            json!((Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+        let input = SendMailboxMessageInput {
+            destination: Some(DESTINATION.to_owned()),
+            profile: crate::models::SenderProfile {
+                sender_name: "Requester".to_owned(),
+                sender_user_id: notice.sender_user_id.clone(),
+                bind_ip: notice.sender_ip.clone(),
+                broadcast_subnet_mask: "255.255.255.0".to_owned(),
+            },
+            method: notice.method.clone(),
+            subject: notice.subject.clone(),
+            body: notice.body.clone(),
+            delivery_target_mode: "direct".to_owned(),
+            delivery_target_ip: Some(root.sender_ip.clone()),
+            message_type: Some(notice.message_type.clone()),
+            message_meta: notice.message_meta.clone(),
+            thread_id: None,
+            parent_message_id: None,
+        };
+        (
+            vec![PlayerCall {
+                message: root,
+                received_at: "now".to_owned(),
+            }],
+            notice,
+            input,
+        )
+    }
+
+    #[test]
+    fn playing_notice_is_authenticated_applied_and_released_on_both_devices() {
+        let (mut sender_calls, notice, mut input) = playing_fixture();
+        let index = validate_outgoing_playing(&sender_calls, &input, &notice).unwrap();
+        apply_playing_message(&mut sender_calls, index, &notice).unwrap();
+
+        let root = &sender_calls[0].message;
+        assert_eq!(
+            root.message_meta.as_ref().unwrap()["callPlayerPlaying"],
+            true
+        );
+        assert_eq!(
+            root.message_meta.as_ref().unwrap()["callPlayerPlayingSenderUserId"],
+            "87654321"
+        );
+        assert_eq!(
+            root.message_meta.as_ref().unwrap()["callPlayerPlayingNoticeId"],
+            "playing-notice"
+        );
+
+        let mut receiver_calls = vec![PlayerCall {
+            message: message("12345678", "normal"),
+            received_at: "now".to_owned(),
+        }];
+        let index = validate_incoming_playing(&receiver_calls, "12345678", &notice).unwrap();
+        apply_playing_message(&mut receiver_calls, index, &notice).unwrap();
+        assert_eq!(
+            receiver_calls[0].message.message_meta.as_ref().unwrap()["callPlayerPlaying"],
+            true
+        );
+
+        let mut release = notice.clone();
+        release.message_id = "playing-release".to_owned();
+        release.method = PLAYING_RELEASE_METHOD.to_owned();
+        release.message_meta.as_mut().unwrap()["callPlayerPlayingNoticeId"] =
+            json!("playing-notice");
+        input.method = release.method.clone();
+        input.message_meta = release.message_meta.clone();
+        let index = validate_outgoing_playing(&sender_calls, &input, &release).unwrap();
+        apply_playing_message(&mut sender_calls, index, &release).unwrap();
+        let index = validate_incoming_playing(&receiver_calls, "12345678", &release).unwrap();
+        apply_playing_message(&mut receiver_calls, index, &release).unwrap();
+        assert_eq!(
+            sender_calls[0].message.message_meta.as_ref().unwrap()["callPlayerPlaying"],
+            false
+        );
+        assert_eq!(
+            receiver_calls[0].message.message_meta.as_ref().unwrap()["callPlayerPlaying"],
+            false
+        );
+    }
+
+    #[test]
+    fn playing_notice_rejects_wrong_target_sender_and_stale_release() {
+        let (calls, notice, mut input) = playing_fixture();
+        input.delivery_target_ip = Some("192.168.1.99".to_owned());
+        assert!(validate_outgoing_playing(&calls, &input, &notice).is_err());
+        input.delivery_target_ip = Some(calls[0].message.sender_ip.clone());
+        input.profile.sender_user_id = calls[0].message.sender_user_id.clone();
+        assert!(validate_outgoing_playing(&calls, &input, &notice).is_err());
+        assert!(validate_incoming_playing(&calls, "87654321", &notice).is_err());
+
+        let (mut calls, notice, mut input) = playing_fixture();
+        let index = validate_outgoing_playing(&calls, &input, &notice).unwrap();
+        apply_playing_message(&mut calls, index, &notice).unwrap();
+        let mut stale_release = notice;
+        stale_release.method = PLAYING_RELEASE_METHOD.to_owned();
+        stale_release.message_meta.as_mut().unwrap()["callPlayerPlayingNoticeId"] =
+            json!("older-notice");
+        input.method = stale_release.method.clone();
+        input.message_meta = stale_release.message_meta.clone();
+        assert!(validate_outgoing_playing(&calls, &input, &stale_release).is_err());
+        assert!(validate_incoming_playing(&calls, "12345678", &stale_release).is_err());
+    }
+
+    #[test]
+    fn expired_playing_notice_is_saved_as_inactive_and_unlimited_notice_stays_active() {
+        let (mut calls, mut notice, _) = playing_fixture();
+        notice.message_meta.as_mut().unwrap()["callPlayerPlayingUntil"] =
+            json!("2000-01-01T00:00:00Z");
+        apply_playing_message(&mut calls, 0, &notice).unwrap();
+        assert_eq!(
+            calls[0].message.message_meta.as_ref().unwrap()["callPlayerPlaying"],
+            false
+        );
+
+        notice.message_id = "unlimited-notice".to_owned();
+        notice.message_meta.as_mut().unwrap()["callPlayerPlayingUntil"] = json!("");
+        apply_playing_message(&mut calls, 0, &notice).unwrap();
+        assert_eq!(
+            calls[0].message.message_meta.as_ref().unwrap()["callPlayerPlaying"],
+            true
+        );
     }
 
     #[test]
@@ -622,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_senders_share_one_target_entry_and_either_can_resolve_it() {
+    fn remote_senders_share_one_target_entry_but_only_the_issuer_can_resolve_it() {
         let mut calls = Vec::new();
         apply(
             &mut calls,
@@ -659,8 +1048,48 @@ mod tests {
             "12345678",
         )
         .unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            calls
+                .iter()
+                .find(|call| call.message.sender_user_id != "12345678")
+                .unwrap()
+                .message
+                .sender_user_id,
+            "11111111"
+        );
+        apply(
+            &mut calls,
+            &message("11111111", "resolve"),
+            "resolved",
+            "12345678",
+        )
+        .unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].message.sender_user_id, "12345678");
+    }
+
+    #[test]
+    fn sync_cleanup_tracks_owned_calls_without_discarding_remote_calls() {
+        let own_call = PlayerCall {
+            message: message("12345678", "normal"),
+            received_at: "own".to_owned(),
+        };
+        let mut remote_message = message("87654321", "normal");
+        remote_message.message_id = "remote-call".to_owned();
+        let remote_call = PlayerCall {
+            message: remote_message,
+            received_at: "remote".to_owned(),
+        };
+        let calls = vec![own_call, remote_call];
+
+        let active_call_ids = owned_call_message_ids(&calls, "12345678");
+
+        assert_eq!(active_call_ids, HashSet::from(["call-1".to_owned()]));
+        assert_eq!(calls.len(), 2);
+        assert!(calls
+            .iter()
+            .any(|call| call.message.message_id == "remote-call"));
     }
 
     #[test]

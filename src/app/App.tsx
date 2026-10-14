@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { save as saveFile } from "@tauri-apps/plugin-dialog";
 import { CreateSnapshot } from "../components/CreateSnapshot";
@@ -7,7 +8,7 @@ import { useDqCameraScan } from "../hooks/useDqCameraScan";
 import { useSenderProfile } from "../hooks/useSenderProfile";
 import { useMobileInputPortal } from "../hooks/useMobileInputPortal";
 import { useCallSync } from "../hooks/useCallSync";
-import { usePlayerCalls } from "../hooks/usePlayerCalls";
+import { usePlayerCalls, type PlayerCall } from "../hooks/usePlayerCalls";
 import { useBracketMessages } from "../hooks/useBracketMessages";
 import { getExternalReportRejectionReason, getLatestPoolExternalRequest } from "../domain/externalReportProcessing";
 import { resolveCallPhaseName, useCallMessage } from "../hooks/useCallMessage";
@@ -24,6 +25,7 @@ import { toApiSlug, toEventApiSlug } from "../domain/slugUtils";
 import { SettingsScreen } from "../components/SettingMenu";
 import type { FeatureMessage } from "../domain/messages";
 import {
+  CallReactionDialog,
   StatusBoard,
   StatusBoardHero,
   type CallListEventGroup,
@@ -125,9 +127,38 @@ import "./App.css";
 const STARTGG_FETCH_PER_PAGE = 50;
 const EMPTY_PLAYER_ALIAS_MAP: Record<string, string> = {};
 type ConfirmedExternalScoreReport = Omit<ExternalScoreReport, "tournamentId" | "slug">;
+type SetCallAction = {
+  set: SetSnapshot;
+  operationLabel: string;
+  run: () => void | Promise<void>;
+};
+type SetCallResolutionDialogState = {
+  set: SetSnapshot;
+  setLabel: string;
+  operationLabel: string;
+  ownCalls: FeatureMessage[];
+  otherCalls: FeatureMessage[];
+  continueAfterResolution: boolean;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function getActiveCallsForSet(
+  calls: PlayerCall[],
+  eventId: string,
+  setId: string,
+): FeatureMessage[] {
+  return calls
+    .map(({ message }) => message)
+    .filter((message) =>
+      message.method === "call_player"
+      && message.messageType === "normal"
+      && message.parentMessageId === null
+      && extractMetaString(message.messageMeta, "eventId") === eventId
+      && extractMetaString(message.messageMeta, "setId") === setId
+    );
 }
 
 function readSnapshotArchiveIdentity(archiveJson: string) {
@@ -541,7 +572,14 @@ function App() {
     onMessage: setMessage,
   });
 
-  const { calls: playerCalls, displayMessages: playerCallMessages, refresh: refreshPlayerCalls, resolveCall } = usePlayerCalls({
+  const {
+    calls: playerCalls,
+    displayMessages: playerCallMessages,
+    refresh: refreshPlayerCalls,
+    resolveCall,
+    notifyPlaying,
+    releasePlaying,
+  } = usePlayerCalls({
     senderProfile,
     communicationDisabled: disableLocalCommunication,
     onError: setError,
@@ -587,6 +625,21 @@ function App() {
     afterDqConfirmation?: boolean;
   } | null>(null);
   const [callListResolveSubmitting, setCallListResolveSubmitting] = useState(false);
+  const pendingSetCallActionRef = useRef<SetCallAction | null>(null);
+  const [setCallResolutionDialog, setSetCallResolutionDialog] =
+    useState<SetCallResolutionDialogState | null>(null);
+  const [setCallResolutionBusy, setSetCallResolutionBusy] = useState(false);
+  const [callReactionDialog, setCallReactionDialog] = useState<{
+    group: CallListEventGroup;
+    player: CallListPlayer;
+    playerName: string;
+  } | null>(null);
+  const [playingNoticeDialog, setPlayingNoticeDialog] = useState<{
+    messageId: string;
+    playerName: string;
+  } | null>(null);
+  const [playingMinutesDraft, setPlayingMinutesDraft] = useState("0");
+  const [playingNoticeSubmitting, setPlayingNoticeSubmitting] = useState(false);
   const {
     hasCallListMessages,
     eventGroups: unresolvedCallEventGroups,
@@ -616,6 +669,213 @@ function App() {
     senderUserId: senderProfile.senderUserId,
   });
 
+  useEffect(() => {
+    if (
+      callReactionDialog
+      && !playerCallMessages.some((message) => message.messageId === callReactionDialog.player.messageId)
+    ) {
+      setCallReactionDialog(null);
+      pauseCallListPageRotation(false);
+      setMessage("呼び出しは解決または更新されています。");
+    }
+  }, [callReactionDialog, playerCallMessages, pauseCallListPageRotation]);
+
+  function executeSetAction(action: () => void | Promise<void>) {
+    void Promise.resolve().then(action).catch((error: unknown) => setError(String(error)));
+  }
+
+  function showSetCallResolutionDialog(
+    set: SetSnapshot,
+    operationLabel: string,
+    ownCalls: FeatureMessage[],
+    otherCalls: FeatureMessage[],
+    continueAfterResolution: boolean,
+  ) {
+    setSetCallResolutionDialog({
+      set,
+      setLabel: set.fullRoundText.trim() || `Set ${set.setId}`,
+      operationLabel,
+      ownCalls,
+      otherCalls,
+      continueAfterResolution,
+    });
+  }
+
+  function getSetCalls(set: SetSnapshot) {
+    return getActiveCallsForSet(playerCalls, selectedEvent?.eventId ?? "", set.setId);
+  }
+
+  function splitSetCalls(calls: FeatureMessage[]) {
+    const senderUserId = senderProfile.senderUserId.trim();
+    const ownCalls = calls.filter((call) =>
+      senderUserId !== "" && call.senderUserId.trim() === senderUserId
+    );
+    return {
+      ownCalls,
+      otherCalls: calls.filter((call) => !ownCalls.includes(call)),
+    };
+  }
+
+  function runSetActionAfterCallResolution(
+    set: SetSnapshot,
+    operationLabel: string,
+    run: () => void | Promise<void>,
+  ) {
+    const calls = getSetCalls(set);
+    if (calls.length === 0) {
+      executeSetAction(run);
+      return;
+    }
+
+    const { ownCalls, otherCalls } = splitSetCalls(calls);
+    pendingSetCallActionRef.current = ownCalls.length > 0 && otherCalls.length === 0
+      ? {
+        set,
+        operationLabel,
+        run,
+      }
+      : null;
+    showSetCallResolutionDialog(
+      set,
+      operationLabel,
+      ownCalls,
+      otherCalls,
+      pendingSetCallActionRef.current !== null,
+    );
+  }
+
+  function requestSetCallResolution(set: SetSnapshot) {
+    if (isCompletedSet(set)) {
+      setMessage("確定済みSetの呼び出しは呼び出しリストから解決してください。");
+      return;
+    }
+    const calls = getSetCalls(set);
+    if (calls.length === 0) {
+      return;
+    }
+    const { ownCalls, otherCalls } = splitSetCalls(calls);
+    pendingSetCallActionRef.current = null;
+    showSetCallResolutionDialog(set, "呼び出しの解決", ownCalls, otherCalls, false);
+  }
+
+  function startOverlayOnlyWithoutActiveCalls(set: SetSnapshot, run: () => void | Promise<void>) {
+    const calls = getSetCalls(set);
+    if (calls.length > 0) {
+      if (isCompletedSet(set)) {
+        setMessage("確定済みSetの呼び出しは呼び出しリストから解決してください。");
+        return;
+      }
+      const { ownCalls, otherCalls } = splitSetCalls(calls);
+      pendingSetCallActionRef.current = null;
+      showSetCallResolutionDialog(set, "配信開始", ownCalls, otherCalls, false);
+      return;
+    }
+    executeSetAction(run);
+  }
+
+  function closeSetCallResolutionDialog() {
+    if (setCallResolutionBusy) {
+      return;
+    }
+    pendingSetCallActionRef.current = null;
+    setSetCallResolutionDialog(null);
+  }
+
+  async function resolveSetCalls() {
+    const pending = pendingSetCallActionRef.current;
+    const dialog = setCallResolutionDialog;
+    if (!dialog || setCallResolutionBusy) {
+      return;
+    }
+    setSetCallResolutionBusy(true);
+    try {
+      const currentCalls = await invoke<PlayerCall[]>("load_player_calls");
+      const activeCalls = getActiveCallsForSet(
+        currentCalls,
+        selectedEvent?.eventId ?? "",
+        dialog.set.setId,
+      );
+      const otherCalls = activeCalls.filter(
+        (call) => call.senderUserId.trim() !== senderProfile.senderUserId.trim(),
+      );
+      const ownCalls = activeCalls.filter((call) => !otherCalls.includes(call));
+      if (otherCalls.length > 0) {
+        pendingSetCallActionRef.current = null;
+        showSetCallResolutionDialog(
+          dialog.set,
+          dialog.operationLabel,
+          ownCalls,
+          otherCalls,
+          false,
+        );
+        return;
+      }
+
+      if (ownCalls.length === 0) {
+        pendingSetCallActionRef.current = null;
+        setSetCallResolutionDialog(null);
+        if (pending) {
+          executeSetAction(pending.run);
+        }
+        return;
+      }
+
+      const visibleCallIds = new Set(playerCalls.map(({ message }) => message.messageId));
+      if (ownCalls.some((call) => !visibleCallIds.has(call.messageId))) {
+        showSetCallResolutionDialog(
+          dialog.set,
+          dialog.operationLabel,
+          ownCalls,
+          [],
+          dialog.continueAfterResolution,
+        );
+        await refreshPlayerCalls();
+        return;
+      }
+
+      for (const call of ownCalls) {
+        if (!(await resolveCall(call.messageId))) {
+          return;
+        }
+      }
+
+      await refreshPlayerCalls();
+      const remainingCalls = getActiveCallsForSet(
+        await invoke<PlayerCall[]>("load_player_calls"),
+        selectedEvent?.eventId ?? "",
+        dialog.set.setId,
+      );
+      const remainingOtherCalls = remainingCalls.filter(
+        (call) => call.senderUserId.trim() !== senderProfile.senderUserId.trim(),
+      );
+      const remainingOwnCalls = remainingCalls.filter((call) => !remainingOtherCalls.includes(call));
+      if (remainingOtherCalls.length > 0 || remainingOwnCalls.length > 0) {
+        if (remainingOtherCalls.length > 0) {
+          pendingSetCallActionRef.current = null;
+        }
+        showSetCallResolutionDialog(
+          dialog.set,
+          dialog.operationLabel,
+          remainingOwnCalls,
+          remainingOtherCalls,
+          pendingSetCallActionRef.current !== null,
+        );
+        await refreshPlayerCalls();
+        return;
+      }
+
+      pendingSetCallActionRef.current = null;
+      setSetCallResolutionDialog(null);
+      if (pending) {
+        executeSetAction(pending.run);
+      }
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setSetCallResolutionBusy(false);
+    }
+  }
+
   function openCallListResolveDialog(group: CallListEventGroup, player: CallListPlayer) {
     setCallListResolveDialog({
       messageId: player.messageId,
@@ -623,6 +883,98 @@ function App() {
       dqRequest: player.dqRequest ?? undefined,
     });
     pauseCallListPageRotation(true);
+  }
+
+  function openCallReactionDialog(group: CallListEventGroup, player: CallListPlayer) {
+    setCallReactionDialog({
+      group,
+      player,
+      playerName: resolveCallListPlayerName(group, player),
+    });
+    pauseCallListPageRotation(true);
+  }
+
+  function closeCallReactionDialog() {
+    setCallReactionDialog(null);
+    pauseCallListPageRotation(false);
+  }
+
+  function requestDqFromCallReaction() {
+    if (!callReactionDialog) {
+      return;
+    }
+    const messageId = callReactionDialog.player.messageId;
+    closeCallReactionDialog();
+    openDqRequestDialog(messageId);
+  }
+
+  function notifyPlayingFromCallReaction() {
+    if (!callReactionDialog) {
+      return;
+    }
+    const { group, player } = callReactionDialog;
+    setCallReactionDialog(null);
+    openPlayingNoticeDialog(group, player);
+  }
+
+  async function releasePlayingFromCallReaction() {
+    if (!callReactionDialog) {
+      return;
+    }
+    const messageId = callReactionDialog.player.messageId;
+    closeCallReactionDialog();
+    await handleReleasePlaying(messageId);
+  }
+
+  function openPlayingNoticeDialog(group: CallListEventGroup, player: CallListPlayer) {
+    setPlayingNoticeDialog({
+      messageId: player.messageId,
+      playerName: resolveCallListPlayerName(group, player),
+    });
+    setPlayingMinutesDraft("0");
+    pauseCallListPageRotation(true);
+  }
+
+  function closePlayingNoticeDialog() {
+    if (playingNoticeSubmitting) {
+      return;
+    }
+    setPlayingNoticeDialog(null);
+    pauseCallListPageRotation(false);
+  }
+
+  async function submitPlayingNotice() {
+    if (!playingNoticeDialog || playingNoticeSubmitting) {
+      return;
+    }
+    const minutes = Number(playingMinutesDraft.trim());
+    if (
+      playingMinutesDraft.trim() === ""
+      || !Number.isSafeInteger(minutes)
+      || minutes < 0
+    ) {
+      setError("終了見込み時間は0以上の整数で入力してください。");
+      return;
+    }
+    setPlayingNoticeSubmitting(true);
+    try {
+      const sent = await notifyPlaying(playingNoticeDialog.messageId, minutes);
+      if (sent) {
+        setMessage(minutes === 0
+          ? "終了時刻未定のプレイ中通知を送信しました。"
+          : `約${minutes}分後に解除するプレイ中通知を送信しました。`);
+        setPlayingNoticeDialog(null);
+        pauseCallListPageRotation(false);
+      }
+    } finally {
+      setPlayingNoticeSubmitting(false);
+    }
+  }
+
+  async function handleReleasePlaying(messageId: string) {
+    if (await releasePlaying(messageId)) {
+      setMessage("プレイ中通知の解除を送信しました。");
+    }
   }
 
   function closeCallListResolveDialog() {
@@ -1809,7 +2161,13 @@ function App() {
     busy,
     overlayBusy: obsOverlayBusy,
     stopOverlay: setObsOverlayFullyStopped,
-    toggleOverlay: toggleActiveMatchOverlay,
+    toggleOverlay: async (set) => {
+      if (isOverlayActiveForSet(obsOverlayState, set.setId)) {
+        await toggleActiveMatchOverlay(set);
+        return;
+      }
+      startOverlayOnlyWithoutActiveCalls(set, () => toggleActiveMatchOverlay(set));
+    },
   });
 
   const { processDqRequestFromMessage } = useDqRequestNavigation({
@@ -1839,15 +2197,17 @@ function App() {
       return;
     }
 
-    await persistMatchResult({
-      slug: toApiSlug(slug),
-      event: selectedEvent,
-      set,
-      confirmed,
-      directWinnerId: confirmation ? confirmation.directWinnerId : directWinnerId,
-      scoreDrafts: confirmation?.scoreDrafts ?? scoreDrafts,
-      sideDrafts: activeMatchSideDrafts,
-    });
+    runSetActionAfterCallResolution(set, confirmed ? "結果確定" : "結果更新", () =>
+      persistMatchResult({
+        slug: toApiSlug(slug),
+        event: selectedEvent,
+        set,
+        confirmed,
+        directWinnerId: confirmation ? confirmation.directWinnerId : directWinnerId,
+        scoreDrafts: confirmation?.scoreDrafts ?? scoreDrafts,
+        sideDrafts: activeMatchSideDrafts,
+      }),
+    );
   }
 
   async function saveMatchSidesIfNeeded(
@@ -1890,6 +2250,12 @@ function App() {
       ariaLabel: "報告後スナップショット更新の進捗",
     });
   }
+
+  const activeMatchCalls = activeMatch && selectedEvent
+    ? getActiveCallsForSet(playerCalls, selectedEvent.eventId, activeMatch.setId)
+    : [];
+  const { ownCalls: activeMatchOwnCalls, otherCalls: activeMatchOtherCalls } =
+    splitSetCalls(activeMatchCalls);
 
   return (
     <AppShell
@@ -2036,12 +2402,39 @@ function App() {
           colorToRedSeconds={callListColorToRedSeconds}
           resolvePlayerName={resolveCallListPlayerName}
           onResolveOwnCall={openCallListResolveDialog}
-          onRequestDq={openDqRequestDialog}
+          onOpenCallReaction={openCallReactionDialog}
           communicationDisabled={disableLocalCommunication}
           disableOwnCallActions={disableOwnCallActions}
           disableOtherCallActions={disableOtherCallActions}
         />
       )}
+
+      {callReactionDialog && (() => {
+        const call = playerCallMessages.find(
+          (message) => message.messageId === callReactionDialog.player.messageId,
+        );
+        return call ? (
+          <CallReactionDialog
+            playerName={callReactionDialog.playerName}
+            senderName={call.senderName}
+            senderUserId={call.senderUserId}
+            senderIp={call.senderIp}
+            isPlaying={call.messageMeta?.callPlayerPlaying === true}
+            playingUntil={typeof call.messageMeta?.callPlayerPlayingUntil === "string"
+              ? call.messageMeta.callPlayerPlayingUntil
+              : ""}
+            playingByMe={
+              call.messageMeta?.callPlayerPlayingSenderUserId === senderProfile.senderUserId
+            }
+            referenceMs={callListPageSwitchedAtMs}
+            disabled={disableLocalCommunication || disableOtherCallActions}
+            onRequestDq={requestDqFromCallReaction}
+            onNotifyPlaying={notifyPlayingFromCallReaction}
+            onReleasePlaying={() => void releasePlayingFromCallReaction()}
+            onClose={closeCallReactionDialog}
+          />
+        ) : null;
+      })()}
 
       {callListResolveDialog && (
         <div className="dialog-backdrop" onClick={closeCallListResolveDialog}>
@@ -2102,6 +2495,58 @@ function App() {
                 onClick={() => void confirmCallListResolution()}
               >
                 {callListResolveSubmitting ? "解決中..." : "呼び出しを解決"}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {playingNoticeDialog && (
+        <div className="dialog-backdrop" onClick={closePlayingNoticeDialog}>
+          <section
+            className="dialog-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="プレイ中通知"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="dialog-head">
+              <h3>プレイ中通知</h3>
+            </div>
+            <div className="dialog-body">
+              <div className="dialog-summary-box">
+                <p className="dialog-summary-title">{playingNoticeDialog.playerName}</p>
+              </div>
+              <label className="field" style={{ marginTop: "0.75rem" }}>
+                <span>終了見込み時間（分）</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputMode="numeric"
+                  value={playingMinutesDraft}
+                  onChange={(event) => setPlayingMinutesDraft(event.currentTarget.value)}
+                  disabled={playingNoticeSubmitting}
+                  aria-label="終了見込み時間（分）"
+                />
+              </label>
+              <p className="meta">0を指定すると解除予定なしになります。1以上の場合は指定時間後に自動で解除を通知します。</p>
+            </div>
+            <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                className="ghost"
+                disabled={playingNoticeSubmitting}
+                onClick={closePlayingNoticeDialog}
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                disabled={playingNoticeSubmitting}
+                onClick={() => void submitPlayingNotice()}
+              >
+                {playingNoticeSubmitting ? "送信中..." : "プレイ中を通知"}
               </button>
             </div>
           </section>
@@ -2353,7 +2798,7 @@ function App() {
                 || isCompletedSet(activeMatch)
                 || !isMatchupReady(activeMatch)
                 || directWinnerId !== null
-                || selectedPoolScoreEditLocked
+                || activeMatchCalls.length > 0
               }
               scoreEditLocked={selectedPoolScoreEditLocked}
               directWinnerId={directWinnerId}
@@ -2373,20 +2818,24 @@ function App() {
                 useAliasName: currentPlayerDisplayAliasSnapshot?.enabled,
               })}
               callingEntrantId={callingEntrantId}
-              callNotices={playerCalls.flatMap(({ message }) => {
-                const metadata = message.messageMeta;
+              callNotices={activeMatchCalls.flatMap((callMessage) => {
+                const metadata = callMessage.messageMeta;
                 const entrantName = metadata?.callEntrantName;
-                return message.method === "call_player"
+                return callMessage.method === "call_player"
+                  && callMessage.messageType === "normal"
+                  && callMessage.parentMessageId === null
                   && metadata?.eventId === selectedEvent.eventId
                   && metadata?.setId === activeMatch.setId
                   && typeof entrantName === "string"
                   ? [{
-                    messageId: message.messageId,
+                    messageId: callMessage.messageId,
                     entrantName,
-                    calledAt: message.createdAt,
+                    calledAt: callMessage.createdAt,
                   }]
                   : [];
               })}
+              hasUnresolvedCalls={activeMatchCalls.length > 0}
+              canResolveCalls={activeMatchOwnCalls.length > 0 && activeMatchOtherCalls.length === 0}
               isDqDraft={isActiveMatchDqDraft}
               overlayActive={isOverlayActiveForSet(obsOverlayState, activeMatch.setId)}
               onClose={closeMatchDialog}
@@ -2405,8 +2854,19 @@ function App() {
                 perPage: STARTGG_FETCH_PER_PAGE,
               })}
               onSaveDraft={() => void saveLocalResultForMatch(false)}
-              onToggleOverlay={() => requestToggleActiveMatchOverlay(activeMatch)}
-              onConfirm={() => requestResultConfirmation(activeMatch)}
+              onResolveCalls={() => requestSetCallResolution(activeMatch)}
+              onToggleOverlay={() => {
+                if (isOverlayActiveForSet(obsOverlayState, activeMatch.setId)) {
+                  requestToggleActiveMatchOverlay(activeMatch);
+                } else {
+                  startOverlayOnlyWithoutActiveCalls(activeMatch, () =>
+                    requestToggleActiveMatchOverlay(activeMatch),
+                  );
+                }
+              }}
+              onConfirm={() => runSetActionAfterCallResolution(activeMatch, "結果確定", () =>
+                requestResultConfirmation(activeMatch),
+              )}
             />
           )}
           <BracketDialogs
@@ -2466,7 +2926,13 @@ function App() {
             } : null}
             overlayBusy={obsOverlayBusy}
             onCancelOverlaySwitch={cancelOverlaySwitch}
-            onConfirmOverlaySwitch={() => confirmOverlaySwitch(activeMatch)}
+            onConfirmOverlaySwitch={() => {
+              if (activeMatch) {
+                startOverlayOnlyWithoutActiveCalls(activeMatch, () =>
+                  confirmOverlaySwitch(activeMatch),
+                );
+              }
+            }}
             mobileInputOpen={mobileInputPortalOpen}
             mobileInputCandidates={mobileInputPortalCandidates}
             mobileInputBusy={mobileInputPortalBusy}
@@ -2484,6 +2950,93 @@ function App() {
             onForceOverwriteRemainingChange={bracketReport.setForceOverwriteRemaining}
             onContinueConflict={() => void bracketReport.continueWithForceOverwrite()}
           />
+          {setCallResolutionDialog && (
+            <div className="dialog-backdrop" onClick={closeSetCallResolutionDialog}>
+              <section
+                className="dialog-panel"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Setの呼び出し解決"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="dialog-head">
+                  <h3>{setCallResolutionDialog.otherCalls.length > 0
+                    ? "他端末の呼び出しが未解決です"
+                    : setCallResolutionDialog.continueAfterResolution
+                      ? "呼び出しを解決して続行しますか？"
+                      : "このSetの呼び出しを解決しますか？"}</h3>
+                </div>
+                <div className="dialog-body">
+                  <div className="dialog-summary-box">
+                    <p className="dialog-summary-title">{setCallResolutionDialog.setLabel}</p>
+                    <p className="meta">
+                      {setCallResolutionDialog.continueAfterResolution
+                        ? `呼び出しを解決するまで「${setCallResolutionDialog.operationLabel}」は行えません。`
+                        : setCallResolutionDialog.operationLabel === "配信開始"
+                          ? "呼び出しを解決すると、配信は開始せずにこのダイアログを閉じます。"
+                          : "呼び出しの解決後、スコア更新や配信開始は自動で行われません。"}
+                    </p>
+                  </div>
+                  {setCallResolutionDialog.ownCalls.length > 0 && (
+                    <div className="dialog-summary-box" style={{ marginTop: "0.75rem" }}>
+                      <p className="dialog-summary-title">自端末発行: {setCallResolutionDialog.ownCalls.length}件</p>
+                      {setCallResolutionDialog.ownCalls.map((call) => (
+                        <p className="meta" key={call.messageId}>
+                          {extractMetaString(call.messageMeta, "callEntrantName") || call.subject}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {setCallResolutionDialog.otherCalls.length > 0 && (
+                    <div className="dialog-summary-box" style={{ marginTop: "0.75rem" }}>
+                      <p className="dialog-summary-title">
+                        他端末発行: {setCallResolutionDialog.otherCalls.length}件
+                      </p>
+                      {setCallResolutionDialog.otherCalls.map((call) => (
+                        <p className="meta" key={call.messageId}>
+                          {extractMetaString(call.messageMeta, "callEntrantName") || call.subject}
+                          {" / 発行元: "}{call.senderName}{" ("}{call.senderUserId}{")"}
+                        </p>
+                      ))}
+                      <p className="meta">
+                        呼び出しを発行した端末で解決してから、この操作をやり直してください。
+                      </p>
+                    </div>
+                  )}
+                  {setCallResolutionDialog.otherCalls.length === 0
+                    && setCallResolutionDialog.continueAfterResolution && (
+                    <p className="meta">
+                      解決を選ぶと、このSetの自端末発行呼び出しをすべて解決して操作を続けます。
+                    </p>
+                  )}
+                </div>
+                <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={setCallResolutionBusy}
+                    onClick={closeSetCallResolutionDialog}
+                  >
+                    キャンセル
+                  </button>
+                  {setCallResolutionDialog.otherCalls.length === 0
+                    && setCallResolutionDialog.ownCalls.length > 0 && (
+                      <button
+                        type="button"
+                        disabled={setCallResolutionBusy}
+                        onClick={() => void resolveSetCalls()}
+                      >
+                        {setCallResolutionBusy
+                          ? "呼び出しを解決中..."
+                          : setCallResolutionDialog.continueAfterResolution
+                            ? "呼び出しを解決して続行"
+                            : "呼び出しを解決"}
+                      </button>
+                    )}
+                </div>
+              </section>
+            </div>
+          )}
         </>
       )}
     </AppShell>

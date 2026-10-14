@@ -42,6 +42,8 @@ type MatchDetailDialogProps = {
   randomNotice: MatchSideRandomNotice | null;
   players: MatchDialogPlayerView[];
   callNotices: MatchCallNotice[];
+  hasUnresolvedCalls: boolean;
+  canResolveCalls: boolean;
   callingEntrantId: string;
   isDqDraft: boolean;
   overlayActive: boolean;
@@ -56,6 +58,7 @@ type MatchDetailDialogProps = {
   onDiscardDraft: () => void;
   onResetSet: () => void;
   onSaveDraft: () => void;
+  onResolveCalls: () => void;
   onToggleOverlay: () => void;
   onConfirm: () => void;
 };
@@ -76,6 +79,8 @@ export function MatchDetailDialog({
   randomNotice,
   players,
   callNotices,
+  hasUnresolvedCalls,
+  canResolveCalls,
   callingEntrantId,
   isDqDraft,
   overlayActive,
@@ -90,6 +95,7 @@ export function MatchDetailDialog({
   onDiscardDraft,
   onResetSet,
   onSaveDraft,
+  onResolveCalls,
   onToggleOverlay,
   onConfirm,
 }: MatchDetailDialogProps) {
@@ -116,7 +122,6 @@ export function MatchDetailDialog({
         {completed && (
           <p className="meta">確定済みsetのスコアは変更できません。修正する場合は「影響setを取消」からやり直してください。</p>
         )}
-        {scoreEditLocked && <p className="meta">このプールは編集ロック中です。スコア入力・結果更新はできません。</p>}
         {!matchupReady && <p className="meta">対戦カード確定後にプレイヤーサイドを変更できます。</p>}
         {randomNotice && randomNotice.setId === match.setId && (
           <p className={`meta side-random-notice ${randomNotice.changed ? "changed" : "unchanged"}`}>
@@ -130,6 +135,13 @@ export function MatchDetailDialog({
             {notice.entrantName}の呼び出しを行いました（{new Date(notice.calledAt).toLocaleTimeString("ja-JP", { hour12: false })}）
           </p>
         ))}
+        {hasUnresolvedCalls && (
+          <p className="meta">
+            {completed
+              ? "確定済みSetの呼び出しは呼び出しリストから解決してください。"
+              : "このSetに未解決の呼び出しがあるため、スコア入力は呼び出し解決後に行えます。"}
+          </p>
+        )}
         <label className="checkbox-row" style={{ marginTop: "0.4rem" }}>
           <input
             type="checkbox"
@@ -204,7 +216,7 @@ export function MatchDetailDialog({
                       <button
                         type="button"
                         className="ghost tiny"
-                        disabled={busy || completed || scoreEditLocked}
+                        disabled={scoreInputDisabled}
                         onClick={() => onToggleWinner(entrantId, otherEntrantId)}
                       >
                         {directWinnerId === entrantId ? "解除" : "Win"}
@@ -214,7 +226,7 @@ export function MatchDetailDialog({
                       <button
                         type="button"
                         className="ghost tiny"
-                        disabled={busy || completed || scoreEditLocked}
+                        disabled={scoreInputDisabled}
                         onClick={() => onSetDq(entrantId, otherEntrantId)}
                       >
                         DQ
@@ -247,15 +259,32 @@ export function MatchDetailDialog({
           <div className="dialog-primary-actions">
             <button
               type="button"
-              disabled={busy || completed || !matchupReady || isDqDraft || scoreEditLocked}
+              disabled={busy || completed || !matchupReady || isDqDraft}
               onClick={onSaveDraft}
             >
               更新
             </button>
-            <button type="button" className="ghost" disabled={busy || overlayBusy} onClick={onToggleOverlay}>
-              {overlayActive ? "配信停止" : "配信開始"}
+            {hasUnresolvedCalls && !completed && (
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy || !canResolveCalls}
+                onClick={onResolveCalls}
+                title={canResolveCalls ? undefined : "他端末発行の呼び出しは発行端末で解決してください。"}
+              >
+                呼び出しを解決
+              </button>
+            )}
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy || overlayBusy || (!overlayActive && hasUnresolvedCalls)}
+              onClick={onToggleOverlay}
+              title={!overlayActive && hasUnresolvedCalls ? "呼び出しを解決してから配信を開始してください。" : undefined}
+            >
+              {overlayActive ? "配信停止" : hasUnresolvedCalls ? "未解決呼び出しあり" : "配信開始"}
             </button>
-            <button type="button" disabled={busy || completed || !matchupReady || scoreEditLocked} onClick={onConfirm}>
+            <button type="button" disabled={busy || completed || !matchupReady} onClick={onConfirm}>
               確定
             </button>
           </div>

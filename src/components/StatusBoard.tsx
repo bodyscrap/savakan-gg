@@ -8,6 +8,8 @@ export type CallListPlayer = {
   createdAt: string;
   senderName: string;
   isOwn: boolean;
+  isPlaying: boolean;
+  playingUntil: string;
   dqRequest: FeatureMessage | null;
 };
 
@@ -47,6 +49,20 @@ export function callElapsedSeconds(createdAt: string, referenceMs: number): numb
   return Math.max(0, (referenceMs - createdMs) / 1000);
 }
 
+function formatPlayingStatus(until: string, referenceMs: number): string {
+  if (until === "") {
+    return "プレイ中（終了時間未定）";
+  }
+  const untilMs = Date.parse(until);
+  if (!Number.isFinite(untilMs)) {
+    return "プレイ中（終了時間不明）";
+  }
+  if (untilMs <= referenceMs) {
+    return "プレイ中（解除通知待ち）";
+  }
+  return `プレイ中（あと約${Math.ceil((untilMs - referenceMs) / 60_000)}分）`;
+}
+
 function buildCallListPlayerChipStyle(elapsedSeconds: number, redAfterSeconds: number): CSSProperties {
   const threshold = Math.max(1, redAfterSeconds);
   const progress = Math.min(Math.max(elapsedSeconds / threshold, 0), 1);
@@ -57,6 +73,85 @@ function buildCallListPlayerChipStyle(elapsedSeconds: number, redAfterSeconds: n
     borderColor: `hsl(${hue} 74% 43%)`,
     color: `hsl(${hue} 66% 20%)`,
   };
+}
+
+type CallReactionDialogProps = {
+  playerName: string;
+  senderName: string;
+  senderUserId: string;
+  senderIp: string;
+  isPlaying: boolean;
+  playingUntil: string;
+  playingByMe: boolean;
+  referenceMs: number;
+  disabled: boolean;
+  onRequestDq: () => void;
+  onNotifyPlaying: () => void;
+  onReleasePlaying: () => void;
+  onClose: () => void;
+};
+
+export function CallReactionDialog({
+  playerName,
+  senderName,
+  senderUserId,
+  senderIp,
+  isPlaying,
+  playingUntil,
+  playingByMe,
+  referenceMs,
+  disabled,
+  onRequestDq,
+  onNotifyPlaying,
+  onReleasePlaying,
+  onClose,
+}: CallReactionDialogProps) {
+  return (
+    <div className="dialog-backdrop" onClick={onClose}>
+      <section
+        className="dialog-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="呼び出しへのリアクション"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-head">
+          <h3>呼び出しへのリアクション</h3>
+        </div>
+        <div className="dialog-body">
+          <div className="dialog-summary-box">
+            <p className="dialog-summary-title">{playerName}</p>
+            <p className="meta">
+              呼び出し元: {senderName} / ID: {senderUserId} / IP: {senderIp}
+            </p>
+          </div>
+          {isPlaying && (
+            <p className="call-list-playing-badge" style={{ marginTop: "0.75rem" }}>
+              {formatPlayingStatus(playingUntil, referenceMs)}
+            </p>
+          )}
+        </div>
+        <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
+          <button type="button" className="ghost" onClick={onClose}>
+            閉じる
+          </button>
+          <button type="button" disabled={disabled} onClick={onRequestDq}>
+            DQ申請
+          </button>
+          {!isPlaying && (
+            <button type="button" disabled={disabled} onClick={onNotifyPlaying}>
+              プレイ中通知
+            </button>
+          )}
+          {isPlaying && playingByMe && (
+            <button type="button" disabled={disabled} onClick={onReleasePlaying}>
+              プレイ中通知を解除
+            </button>
+          )}
+        </div>
+      </section>
+    </div>
+  );
 }
 
 type StatusBoardHeroProps = {
@@ -130,7 +225,7 @@ type StatusBoardProps = {
   colorToRedSeconds: number;
   resolvePlayerName: (group: CallListEventGroup, player: CallListPlayer) => string;
   onResolveOwnCall: (group: CallListEventGroup, player: CallListPlayer) => void;
-  onRequestDq: (messageId: string) => void;
+  onOpenCallReaction: (group: CallListEventGroup, player: CallListPlayer) => void;
   communicationDisabled: boolean;
   disableOwnCallActions: boolean;
   disableOtherCallActions: boolean;
@@ -147,7 +242,7 @@ export function StatusBoard({
   colorToRedSeconds,
   resolvePlayerName,
   onResolveOwnCall,
-  onRequestDq,
+  onOpenCallReaction,
   communicationDisabled,
   disableOwnCallActions,
   disableOtherCallActions,
@@ -218,11 +313,10 @@ export function StatusBoard({
                     const name = resolvePlayerName(group, player);
                     const elapsed = formatCallElapsedTime(player.createdAt, pageSwitchedAtMs);
 
-                    return player.isOwn ? (
+                    const chip = player.isOwn ? (
                       <button
                         type="button"
                         className={className}
-                        key={`${group.key}-${player.messageId}`}
                         style={chipStyle}
                         onClick={() => onResolveOwnCall(group, player)}
                         disabled={communicationDisabled || disableOwnCallActions}
@@ -245,18 +339,30 @@ export function StatusBoard({
                       <button
                         type="button"
                         className={className}
-                        key={`${group.key}-${player.messageId}`}
                         style={chipStyle}
                         disabled={communicationDisabled || disableOtherCallActions}
-                        onClick={() => onRequestDq(player.messageId)}
-                        aria-label={`${name} のDQ申請`}
+                        onClick={() => onOpenCallReaction(group, player)}
+                        aria-label={`${name} への呼び出しリアクション`}
                         title={disableOtherCallActions
                           ? "設定で他端末呼び出しへの操作が禁止されています"
-                          : "クリックしてPLAYER ID認証付きDQ申請"}
+                          : "クリックして呼び出しへのリアクションを選択"}
                       >
                         <span className="call-list-player-chip-name">{name}</span>
                         <span className="call-list-player-chip-elapsed">{elapsed}</span>
                       </button>
+                    );
+
+                    const playingStatus = player.isPlaying
+                      ? formatPlayingStatus(player.playingUntil, pageSwitchedAtMs)
+                      : "";
+
+                    return (
+                      <div className="call-list-player-entry" key={`${group.key}-${player.messageId}`}>
+                        {chip}
+                        {player.isPlaying && (
+                          <span className="call-list-playing-badge">{playingStatus}</span>
+                        )}
+                      </div>
                     );
                   })}
               </div>

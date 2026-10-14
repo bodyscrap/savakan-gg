@@ -188,6 +188,10 @@ export function useCallList({ activeTab, calls, dqRequests, senderUserId }: UseC
           createdAt: root.createdAt,
           senderName: root.senderName,
           isOwn: senderUserId.trim() !== "" && root.senderUserId.trim() === senderUserId.trim(),
+          isPlaying: root.messageMeta?.callPlayerPlaying === true,
+          playingUntil: typeof root.messageMeta?.callPlayerPlayingUntil === "string"
+            ? root.messageMeta.callPlayerPlayingUntil
+            : "",
           dqRequest: dqRequestsByCallId.get(root.messageId) ?? null,
         });
       } else {
@@ -207,6 +211,10 @@ export function useCallList({ activeTab, calls, dqRequests, senderUserId }: UseC
             createdAt: root.createdAt,
             senderName: root.senderName,
             isOwn: senderUserId.trim() !== "" && root.senderUserId.trim() === senderUserId.trim(),
+            isPlaying: root.messageMeta?.callPlayerPlaying === true,
+            playingUntil: typeof root.messageMeta?.callPlayerPlayingUntil === "string"
+              ? root.messageMeta.callPlayerPlayingUntil
+              : "",
             dqRequest: dqRequestsByCallId.get(root.messageId) ?? null,
           }],
         });
