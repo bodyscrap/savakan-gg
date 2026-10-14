@@ -512,6 +512,10 @@ fn owned_call_message_ids(calls: &[PlayerCall], sender_user_id: &str) -> HashSet
         .collect()
 }
 
+fn calls_for_sync(calls: &[PlayerCall], sender_user_id: &str) -> Vec<PlayerCall> {
+    own_calls(calls, sender_user_id).cloned().collect()
+}
+
 fn resend_message(call: &PlayerCall, profile: &crate::models::SenderProfile) -> FeatureMessage {
     let mut reply = call.message.clone();
     reply.destination = Some(DESTINATION.to_owned());
@@ -540,12 +544,13 @@ pub fn send(
         if input.delivery_target_mode != "broadcast" {
             return Err("呼び出しの同期要求はブロードキャストで送信してください。".to_owned());
         }
-        let active_call_message_ids =
-            owned_call_message_ids(&calls, &input.profile.sender_user_id);
-        crate::bracket_messages::discard_stale_dq_requests(app, &active_call_message_ids)?;
-        save(app, &calls)?;
-        notify(app)?;
+        let own_calls = calls_for_sync(&calls, &input.profile.sender_user_id);
         send_udp_mailbox_packet(&input.profile, "broadcast", None, &message)?;
+        let active_call_message_ids =
+            owned_call_message_ids(&own_calls, &input.profile.sender_user_id);
+        crate::bracket_messages::discard_stale_dq_requests(app, &active_call_message_ids)?;
+        save(app, &own_calls)?;
+        notify(app)?;
         return Ok(message);
     }
     if is_playing_message(&message.method) {
@@ -1070,7 +1075,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_cleanup_tracks_owned_calls_without_discarding_remote_calls() {
+    fn sync_snapshot_keeps_owned_calls_and_clears_remote_calls() {
         let own_call = PlayerCall {
             message: message("12345678", "normal"),
             received_at: "own".to_owned(),
@@ -1083,13 +1088,15 @@ mod tests {
         };
         let calls = vec![own_call, remote_call];
 
-        let active_call_ids = owned_call_message_ids(&calls, "12345678");
+        let synced_calls = calls_for_sync(&calls, "12345678");
+        let active_call_ids = owned_call_message_ids(&synced_calls, "12345678");
 
         assert_eq!(active_call_ids, HashSet::from(["call-1".to_owned()]));
-        assert_eq!(calls.len(), 2);
-        assert!(calls
+        assert_eq!(synced_calls.len(), 1);
+        assert!(synced_calls
             .iter()
-            .any(|call| call.message.message_id == "remote-call"));
+            .all(|call| call.message.sender_user_id == "12345678"));
+        assert_eq!(calls.len(), 2);
     }
 
     #[test]
