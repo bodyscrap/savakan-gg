@@ -25,6 +25,7 @@ import { toApiSlug, toEventApiSlug } from "../domain/slugUtils";
 import { SettingsScreen } from "../components/SettingMenu";
 import type { FeatureMessage } from "../domain/messages";
 import {
+  CallListPlayingCommunication,
   CallReactionDialog,
   StatusBoard,
   StatusBoardHero,
@@ -621,6 +622,7 @@ function App() {
   const [callListResolveDialog, setCallListResolveDialog] = useState<{
     messageId: string;
     playerName: string;
+    playingCommunication?: string;
     dqRequest?: FeatureMessage;
     afterDqConfirmation?: boolean;
   } | null>(null);
@@ -881,6 +883,7 @@ function App() {
     setCallListResolveDialog({
       messageId: player.messageId,
       playerName: resolveCallListPlayerName(group, player),
+      playingCommunication: player.playingCommunication,
       dqRequest: player.dqRequest ?? undefined,
     });
     pauseCallListPageRotation(true);
@@ -2480,6 +2483,9 @@ function App() {
               <div className="dialog-summary-box">
                 <p className="dialog-summary-title">{callListResolveDialog.playerName}</p>
               </div>
+              <CallListPlayingCommunication
+                communication={callListResolveDialog.playingCommunication ?? ""}
+              />
               {callListResolveDialog.dqRequest && (
                 <div className="dialog-summary-box" style={{ marginTop: "0.75rem" }}>
                   <p className="meta">

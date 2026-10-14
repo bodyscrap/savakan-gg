@@ -64,6 +64,19 @@ function formatPlayingStatus(until: string, referenceMs: number): string {
   return `プレイ中（あと約${Math.ceil((untilMs - referenceMs) / 60_000)}分）`;
 }
 
+export function CallListPlayingCommunication({ communication }: { communication: string }) {
+  if (communication.trim() === "") {
+    return null;
+  }
+
+  return (
+    <div className="call-list-playing-communication">
+      <span>通信欄</span>
+      <p>{communication}</p>
+    </div>
+  );
+}
+
 function buildCallListPlayerChipStyle(elapsedSeconds: number, redAfterSeconds: number): CSSProperties {
   const threshold = Math.max(1, redAfterSeconds);
   const progress = Math.min(Math.max(elapsedSeconds / threshold, 0), 1);
@@ -133,12 +146,7 @@ export function CallReactionDialog({
               {formatPlayingStatus(playingUntil, referenceMs)}
             </p>
           )}
-          {playingCommunication.trim() !== "" && (
-            <div className="call-list-playing-communication">
-              <span>通信欄</span>
-              <p>{playingCommunication}</p>
-            </div>
-          )}
+          <CallListPlayingCommunication communication={playingCommunication} />
         </div>
         <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
           <button type="button" className="ghost" onClick={onClose}>

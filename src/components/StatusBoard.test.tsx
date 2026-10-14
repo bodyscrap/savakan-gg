@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
+  CallListPlayingCommunication,
   CallReactionDialog,
   StatusBoard,
   StatusBoardHero,
@@ -133,6 +134,14 @@ describe("feature-only navigation and call cards", () => {
     expect(html).toContain(">プレイ中通知を解除</button>");
     expect(html).not.toContain(">プレイ中通知</button>");
     expect(html).toContain("少し遅れます");
+  });
+  it("renders received playing communication for call-card details", () => {
+    const html = renderToStaticMarkup(
+      <CallListPlayingCommunication communication={"20分ほど遅れます\n先に開始してください"} />,
+    );
+    expect(html).toContain("通信欄");
+    expect(html).toContain("20分ほど遅れます");
+    expect(html).toContain("先に開始してください");
   });
   it("does not offer a generic message tab or unread badge", () => {
     const html = renderToStaticMarkup(
