@@ -56,7 +56,6 @@ export function useSenderProfile(
   const [networkCandidates, setNetworkCandidates] = useState<LocalNetworkSettingsCandidate[]>([]);
   const [selectedNetworkCandidateKey, setSelectedNetworkCandidateKey] = useState("");
   const [networkCandidatesLoading, setNetworkCandidatesLoading] = useState(false);
-  const [identityChangedSinceMailboxClear, setIdentityChangedSinceMailboxClear] = useState(false);
   const autoIpFillTriedRef = useRef(false);
 
   const selectedNetworkCandidate = networkCandidates.find(
@@ -74,7 +73,6 @@ export function useSenderProfile(
   const currentSenderName = senderProfile.senderName.trim();
   const senderIdentityChanged = (currentSenderId !== "" || currentSenderName !== "")
     && (normalizedSenderUserIdDraft !== currentSenderId || normalizedSenderNameDraft !== currentSenderName);
-  const shouldRecommendMailboxClearForIdentityChange = senderIdentityChanged || identityChangedSinceMailboxClear;
 
   useEffect(() => {
     let alive = true;
@@ -281,14 +279,14 @@ export function useSenderProfile(
     }
 
     if (senderIdCollision) {
-      onError("既存メッセージ内で同じユーザーIDが別名義に使われています。別のIDを設定してください。");
+      onError("呼び出し・通信相手の情報で同じユーザーIDが別名義に使われています。別のIDを設定してください。");
       return;
     }
 
     if (senderIdentityChanged) {
       const confirmed = window.confirm(
         "送信者名またはユーザーIDを変更して保存しようとしています。\n"
-        + "状態不整合を防ぐため、先に設定タブ下部の「メッセージボックスを強制クリア」を実行することを推奨します。\n"
+        + "先に自分の呼び出しを解決し、他端末の外部報告者設定を解除してください。\n"
         + "このまま保存しますか？",
       );
       if (!confirmed) {
@@ -314,12 +312,6 @@ export function useSenderProfile(
     }
 
     setSenderProfile(nextProfile);
-    if (senderIdentityChanged) {
-      setIdentityChangedSinceMailboxClear(true);
-      onMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK) / 注意: 状態整合のため、可能なタイミングでメッセージボックス強制クリアを実行してください。`);
-      return;
-    }
-
     onMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK)`);
   }
 
@@ -344,8 +336,7 @@ export function useSenderProfile(
     normalizedSenderUserIdDraft,
     normalizedBindIpDraft,
     normalizedSubnetMaskDraft,
-    shouldRecommendMailboxClearForIdentityChange,
-    setIdentityChangedSinceMailboxClear,
+    senderIdentityChanged,
     fillRandomSenderUserId,
     canSaveSenderProfile,
     saveSenderProfile,

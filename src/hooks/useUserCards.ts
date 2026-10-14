@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { resolveEntrantDisplayName } from "../domain/bracketDisplay";
 import {
   buildPlayerCardFileName,
   buildPrintedPlayerCardPageFileName,
@@ -18,6 +19,8 @@ export type UseUserCardsOptions = {
   eventName: string;
   eventAlias: string | null;
   entrants: Array<{ entrantId: string; entrantName: string }>;
+  aliasNamesByEntrantId: Record<string, string>;
+  useAliasName: boolean;
   disableLocalCommunication: boolean;
   onError: (error: string) => void;
   onMessage: (message: string) => void;
@@ -30,15 +33,25 @@ export function useUserCards({
   eventName,
   eventAlias,
   entrants,
+  aliasNamesByEntrantId,
+  useAliasName,
   disableLocalCommunication,
   onError,
   onMessage,
 }: UseUserCardsOptions) {
-  const [players, setPlayers] = useState<UserCardPlayer[]>([]);
+  const [sourcePlayers, setPlayers] = useState<UserCardPlayer[]>([]);
   const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([]);
   const [selectedPlayerId, setSelectedPlayerId] = useState("");
   const [selectedPlayerPreviewUrl, setSelectedPlayerPreviewUrl] = useState("");
   const [busy, setBusy] = useState(false);
+  const players = useMemo(() => sourcePlayers.map((player) => ({
+    ...player,
+    entrantName: resolveEntrantDisplayName(
+      player.entrantName,
+      aliasNamesByEntrantId[player.entrantId],
+      useAliasName,
+    ),
+  })), [aliasNamesByEntrantId, sourcePlayers, useAliasName]);
 
   useEffect(() => {
     let alive = true;

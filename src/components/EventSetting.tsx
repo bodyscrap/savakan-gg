@@ -293,7 +293,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                     checked={useAliasName}
                     onChange={(e) => onUseAliasNameChange(e.currentTarget.checked)}
                   />
-                  ブラケット表示にエイリアス名を使う
+                  エイリアス名を使う
                 </label>
                 <button type="button" className="ghost" disabled={busy} onClick={onRefreshPlayerDisplay}>
                   プレイヤー表示を更新

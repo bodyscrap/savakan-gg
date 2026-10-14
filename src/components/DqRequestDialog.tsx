@@ -1,5 +1,5 @@
 import type { Ref } from "react";
-import type { DqRequestDialogState } from "../hooks/useMailbox";
+import type { DqRequestDialogState } from "../hooks/usePlayerDqRequest";
 
 type DqRequestDialogProps = {
   dialog: DqRequestDialogState;

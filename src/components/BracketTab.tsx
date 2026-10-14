@@ -10,6 +10,7 @@ import { EliminationBracket, type EliminationBracketSectionView } from "./Elimin
 import { getBracketProgressionModel } from "../domain/bracketProgression";
 import { RoundRobinBracket } from "./RoundRobinBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
+import type { FeatureMessage } from "../domain/messages";
 
 type RoundRobinDiagnostics = {
   candidateSetCount: number;
@@ -45,6 +46,15 @@ type BracketTabProps = {
   selectedPoolScoreEditLocked: boolean;
   selectedPoolExternalScoreBroadcastEnabled: boolean;
   externalEditor: PhaseGroupExternalEditor | null;
+  externalRequest: FeatureMessage | null;
+  dqRequests: FeatureMessage[];
+  pendingDqPoolIds: string[];
+  onProcessDqRequest: (message: FeatureMessage) => void;
+  pendingExternalRequestPoolIds: string[];
+  canAcceptExternalRequest: boolean;
+  canRespondExternalRequest: boolean;
+  onAcceptExternalRequest: () => void;
+  onRejectExternalRequest: () => void;
   canSyncExternalEditor: boolean;
   onSyncExternalEditor: () => void;
   canRequestExternalEditor: boolean;
@@ -86,6 +96,15 @@ export function BracketTab({
   selectedPoolScoreEditLocked,
   selectedPoolExternalScoreBroadcastEnabled,
   externalEditor,
+  externalRequest,
+  dqRequests,
+  pendingDqPoolIds,
+  onProcessDqRequest,
+  pendingExternalRequestPoolIds,
+  canAcceptExternalRequest,
+  canRespondExternalRequest,
+  onAcceptExternalRequest,
+  onRejectExternalRequest,
   canSyncExternalEditor,
   onSyncExternalEditor,
   canRequestExternalEditor,
@@ -166,6 +185,9 @@ export function BracketTab({
                     phaseScopedPoolGroups.map((group) => (
                       <option key={group.key} value={group.key}>
                         Pool {group.phaseGroupName}
+                        {group.phaseGroupId && pendingExternalRequestPoolIds.includes(group.phaseGroupId)
+                          ? " (外部報告申請あり)" : ""}
+                        {group.phaseGroupId && pendingDqPoolIds.includes(group.phaseGroupId) ? " (DQ申請あり)" : ""}
                       </option>
                     ))
                   )}
@@ -208,7 +230,15 @@ export function BracketTab({
               <p className="meta">選択中イベントにフェーズ/プール情報がありません。</p>
             ) : (
               <section className="phase-group" key={selectedPhasePoolGroup.key}>
+                <ExternalReportRequestPanel
+                  request={externalRequest}
+                  canAccept={canAcceptExternalRequest}
+                  canRespond={canRespondExternalRequest}
+                  onAccept={onAcceptExternalRequest}
+                  onReject={onRejectExternalRequest}
+                />
                 <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
+                <PlayerDqRequestPanel requests={dqRequests} busy={busy} onProcess={onProcessDqRequest} />
                 <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
                   <label className="checkbox-row">
                     <input
@@ -306,5 +336,51 @@ export function BracketTab({
         </section>
       )}
     </>
+  );
+}
+
+export function PlayerDqRequestPanel({
+  requests, busy, onProcess,
+}: {
+  requests: FeatureMessage[];
+  busy: boolean;
+  onProcess: (request: FeatureMessage) => void;
+}) {
+  if (requests.length === 0) return null;
+  return (
+    <section className="panel" aria-label="受信したDQ申請">
+      <h3>DQ申請が届いています</h3>
+      <p className="meta">対象の試合を開き、DQ内容を確認して「確定」を押してください。開くだけでは申請は処理済みになりません。</p>
+      {requests.map((request) => (
+        <div key={request.messageId}>
+          <p>{request.body}</p>
+          <p className="meta">{request.senderName} ({request.senderUserId}) / {request.createdAt}</p>
+          <button type="button" disabled={busy} onClick={() => onProcess(request)}>DQ内容を確認</button>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+export function ExternalReportRequestPanel({
+  request, canAccept, canRespond, onAccept, onReject,
+}: {
+  request: FeatureMessage | null;
+  canAccept: boolean;
+  canRespond: boolean;
+  onAccept: () => void;
+  onReject: () => void;
+}) {
+  if (!request) return null;
+  return (
+    <section className="panel" aria-label="受信した外部報告申請">
+      <h3>外部報告申請が届いています</h3>
+      <p>{request.senderName} ({request.senderUserId})</p>
+      <p className="meta">このプールの最新の申請を表示しています。</p>
+      <div className="panel-toolbar compact">
+        <button type="button" disabled={!canAccept} onClick={onAccept}>受理</button>
+        <button type="button" className="ghost" disabled={!canRespond} onClick={onReject}>拒否</button>
+      </div>
+    </section>
   );
 }

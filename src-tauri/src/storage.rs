@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager};
 use crate::models::{
     ApplyExternalScoreReportInput, BracketGraphEdge, BracketGraphSnapshot,
     ClearPhaseGroupExternalEditorInput, EventEntrantMeta, EventLocalMeta, EventManagementMeta,
-    EventSnapshot, GenericMessage, ItemListConfig, LocalGrandFinalResetResultMeta,
+    EventSnapshot, FeatureMessage, ItemListConfig, LocalGrandFinalResetResultMeta,
     LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetResultMeta,
     LocalSetScoreMeta, LocalSetScoreUpdateInput, LocalSnapshotEventListItem,
     MobileResultRequestInput, MobileResultRequestItem, PhaseGroupExternalEditor,
@@ -231,6 +231,14 @@ fn sender_profile_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn generic_messages_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(settings_dir(app)?.join(GENERIC_MESSAGES_FILE))
+}
+
+pub fn call_list_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(settings_dir(app)?.join("call-list.json"))
+}
+
+pub fn bracket_messages_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(settings_dir(app)?.join("bracket-messages.json"))
 }
 
 fn last_snapshot_selection_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1135,165 +1143,7 @@ pub fn load_sender_profile(app: &AppHandle) -> Result<Option<SenderProfile>, Str
     Ok(Some(profile))
 }
 
-pub fn save_generic_messages(app: &AppHandle, messages: &[GenericMessage]) -> Result<(), String> {
-    let path = generic_messages_path(app)?;
-    let json = serde_json::to_string_pretty(messages)
-        .map_err(|e| format!("メッセージのJSON変換に失敗しました: {e}"))?;
-    fs::write(path, json).map_err(|e| format!("メッセージ保存に失敗しました: {e}"))
-}
-
-#[derive(Debug, Clone)]
-struct CallMessageIdentity {
-    event_id: String,
-    set_id: String,
-    player_id: String,
-}
-
-fn message_meta_string(meta: &serde_json::Value, key: &str) -> String {
-    meta.get(key)
-        .and_then(|value| value.as_str())
-        .map(|value| value.trim().to_owned())
-        .unwrap_or_default()
-}
-
-fn call_message_identity(message: &GenericMessage) -> Option<CallMessageIdentity> {
-    let meta = message.message_meta.as_ref()?;
-
-    let set_id = message_meta_string(meta, "setId");
-    let player_id = message_meta_string(meta, "playerId").to_ascii_uppercase();
-    let event_id = {
-        let scoped = message_meta_string(meta, "scopeEventId");
-        if !scoped.is_empty() {
-            scoped
-        } else {
-            message_meta_string(meta, "eventId")
-        }
-    };
-
-    if event_id.is_empty() || set_id.is_empty() || player_id.is_empty() {
-        return None;
-    }
-
-    Some(CallMessageIdentity {
-        event_id,
-        set_id,
-        player_id,
-    })
-}
-
-fn call_identity_matches(left: &CallMessageIdentity, right: &CallMessageIdentity) -> bool {
-    left.event_id == right.event_id
-        && left.set_id == right.set_id
-        && left.player_id == right.player_id
-}
-
-fn build_forced_resolve_message(root: &GenericMessage) -> GenericMessage {
-    let message_id = format!(
-        "{}-forced-resolve-{}",
-        root.message_id,
-        Utc::now().timestamp_millis()
-    );
-
-    GenericMessage {
-        message_id,
-        thread_id: root.thread_id.clone(),
-        parent_message_id: Some(root.message_id.clone()),
-        message_type: "resolve".to_owned(),
-        message_meta: root.message_meta.clone(),
-        method: root.method.clone(),
-        subject: format!("Resolved: {}", root.subject),
-        sender_name: root.sender_name.clone(),
-        sender_user_id: root.sender_user_id.clone(),
-        sender_ip: root.sender_ip.clone(),
-        body: "同一呼び出しを再受信したため、自動的に解決しました。".to_owned(),
-        created_at: Utc::now().to_rfc3339(),
-    }
-}
-
-fn is_same_message_identity(left: &GenericMessage, right: &GenericMessage) -> bool {
-    // Message identity is message_id only; sender IP changes must not affect equality.
-    left.message_id == right.message_id
-}
-
-fn collect_duplicate_unresolved_call_roots(
-    messages: &[GenericMessage],
-    identity: &CallMessageIdentity,
-) -> Vec<GenericMessage> {
-    messages
-        .iter()
-        .filter(|item| {
-            item.parent_message_id.is_none()
-                && item.method == "call_player"
-                && call_message_identity(item)
-                    .map(|item_identity| call_identity_matches(&item_identity, identity))
-                    .unwrap_or(false)
-        })
-        .filter(|root| {
-            !messages
-                .iter()
-                .any(|item| item.thread_id == root.thread_id && item.message_type == "resolve")
-        })
-        .cloned()
-        .collect()
-}
-
-pub fn append_generic_message(app: &AppHandle, message: &GenericMessage) -> Result<(), String> {
-    let mut messages = load_generic_messages(app)?.unwrap_or_default();
-
-    if message.message_type == "resolve" && message.method == "call_player" {
-        let root = messages.iter().find(|item| {
-            item.thread_id == message.thread_id
-                && item.parent_message_id.is_none()
-                && item.method == "call_player"
-        });
-
-        let Some(root) = root else {
-            // 未知の呼び出しスレッドに対する解決メッセージは取り込まない。
-            return Ok(());
-        };
-
-        let Some(root_identity) = call_message_identity(root) else {
-            return Ok(());
-        };
-        let Some(resolve_identity) = call_message_identity(message) else {
-            return Ok(());
-        };
-        if !call_identity_matches(&root_identity, &resolve_identity) {
-            return Ok(());
-        }
-    }
-
-    if message.message_type == "normal"
-        && message.parent_message_id.is_none()
-        && message.method == "call_player"
-    {
-        if let Some(call_identity) = call_message_identity(message) {
-            let matching_roots = collect_duplicate_unresolved_call_roots(&messages, &call_identity);
-
-            for root in matching_roots {
-                messages.push(build_forced_resolve_message(&root));
-            }
-        }
-    }
-
-    if let Some(index) = messages
-        .iter()
-        .position(|item| is_same_message_identity(item, message))
-    {
-        messages[index] = message.clone();
-    } else {
-        messages.push(message.clone());
-    }
-
-    messages.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-    save_generic_messages(app, &messages)
-}
-
-#[cfg(test)]
-#[path = "storage/tests/call_message_identity_tests.rs"]
-mod call_message_identity_tests;
-
-pub fn load_generic_messages(app: &AppHandle) -> Result<Option<Vec<GenericMessage>>, String> {
+pub fn load_generic_messages(app: &AppHandle) -> Result<Option<Vec<FeatureMessage>>, String> {
     let path = generic_messages_path(app)?;
     if !path.exists() {
         return Ok(None);
@@ -1402,7 +1252,8 @@ pub fn load_generic_messages(app: &AppHandle) -> Result<Option<Vec<GenericMessag
             thread_id
         };
 
-        messages.push(GenericMessage {
+        messages.push(FeatureMessage {
+            destination: item.get("destination").and_then(|v| v.as_str()).map(str::to_owned),
             message_id,
             thread_id: resolved_thread_id,
             parent_message_id,

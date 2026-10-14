@@ -1,4 +1,4 @@
-import type { GenericMessage, MailboxFilterSetting } from "../components/MessageBox";
+import type { FeatureMessage } from "./messages";
 import { callElapsedSeconds, type CallListEventGroup } from "../components/StatusBoard";
 
 export type MessageScope = {
@@ -42,16 +42,16 @@ export function formatSenderProfileLabel(profile: SenderMessagingProfile): strin
 
 export function resolveSenderSettingsStatus(input: {
   senderIdCollision: boolean;
-  shouldRecommendMailboxClear: boolean;
+  senderIdentityChanged: boolean;
   hasSelectedNetworkDevice: boolean;
   bindIp: string;
   broadcastSubnetMask: string;
 }): string {
   if (input.senderIdCollision) {
-    return "既存履歴で同一IDが別名義に使われています。";
+    return "呼び出し・通信相手の情報で同一IDが別名義に使われています。";
   }
-  if (input.shouldRecommendMailboxClear) {
-    return "履歴メッセージあり: 送信者名/ID変更前にメッセージボックス強制クリアを推奨します。";
+  if (input.senderIdentityChanged) {
+    return "送信者名/ID変更前に呼び出しを解決し、他端末の外部報告者設定を解除してください。";
   }
   if (!input.hasSelectedNetworkDevice) {
     return "ネットワークデバイスを選択してください。";
@@ -66,7 +66,7 @@ export function resolveSenderSettingsStatus(input: {
 }
 
 export function hasSenderIdCollision(
-  messages: Array<Pick<GenericMessage, "senderName" | "senderUserId">>,
+  messages: Array<Pick<FeatureMessage, "senderName" | "senderUserId">>,
   senderUserId: string,
   senderName: string,
 ): boolean {
@@ -74,17 +74,11 @@ export function hasSenderIdCollision(
     && messages.some((item) => item.senderUserId === senderUserId && item.senderName !== senderName);
 }
 
-export type CallThreadIdentity = {
+export type PlayerCallIdentity = {
   expectedPlayerId: string;
   callEntrantId: string;
   callEntrantName: string;
   setId: string;
-};
-
-export type CallTargetIdentity = {
-  eventId: string;
-  setId: string;
-  playerId: string;
 };
 
 export type ExternalEditRequest = {
@@ -97,8 +91,6 @@ export type ExternalEditRequest = {
   phaseGroupName: string;
   phaseGroupDisplayIdentifier: string | null;
 };
-
-export type ExternalEditRequestStatus = "pending" | "accepted" | "rejected";
 
 export type ExternalScoreReport = {
   tournamentId: string;
@@ -129,17 +121,9 @@ export type ExternalScoreSyncRequest = {
   resetPool: boolean;
 };
 
-export type CallSyncStatusTarget = {
-  threadId: string;
-  senderUserId: string;
-  eventId: string;
-  setId: string;
-  playerId: string;
-};
-
-export function normalizeGenericMessage(rawValue: unknown): GenericMessage | null {
+export function normalizeFeatureMessage(rawValue: unknown): FeatureMessage | null {
   const source = rawValue && typeof rawValue === "object"
-    ? (rawValue as Partial<GenericMessage>)
+    ? (rawValue as Partial<FeatureMessage>)
     : null;
   if (!source) {
     return null;
@@ -182,6 +166,9 @@ export function normalizeGenericMessage(rawValue: unknown): GenericMessage | nul
   }
 
   return {
+    destination: typeof source.destination === "string" && source.destination.trim()
+      ? source.destination.trim()
+      : getMessageDestination(method),
     messageId,
     threadId,
     parentMessageId,
@@ -197,33 +184,37 @@ export function normalizeGenericMessage(rawValue: unknown): GenericMessage | nul
   };
 }
 
-export function normalizeMailboxFilterSetting(rawValue: unknown): MailboxFilterSetting {
-  const source = rawValue && typeof rawValue === "object"
-    ? (rawValue as Partial<MailboxFilterSetting>)
-    : {};
-
-  return {
-    unresolvedOnly: Boolean(source.unresolvedOnly),
-    unreadOnly: Boolean(source.unreadOnly),
-    externalEditRequestsOnly: Boolean(source.externalEditRequestsOnly),
-  };
-}
-
-export function normalizeGenericMessages(rawValue: unknown): GenericMessage[] {
-  if (!Array.isArray(rawValue)) {
-    return [];
+export function getMessageDestination(method: string): string {
+  switch (method) {
+    case "call_player":
+    case "call_player_sync":
+    case "call_player_sync_request":
+      return "call_list";
+    case "external_edit_request":
+    case "external_edit_request_response":
+    case "external_score_report":
+    case "external_score_report_response":
+    case "external_score_sync_request":
+    case "player_dq_request":
+      return "bracket";
+    default:
+      return "message";
   }
-
-  return rawValue
-    .map((item) => normalizeGenericMessage(item))
-    .filter((item): item is GenericMessage => item !== null)
-    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
 }
 
-export function getExternalEditRequest(message: GenericMessage): ExternalEditRequest | null {
+export function isExternalBracketMessage(message: FeatureMessage): boolean {
+  return [
+    "external_edit_request", "external_edit_request_response",
+    "external_score_report", "external_score_report_response", "external_score_sync_request",
+  ].includes(message.method)
+    && (message.destination ?? getMessageDestination(message.method)) === "bracket";
+}
+
+export function getExternalEditRequest(message: FeatureMessage): ExternalEditRequest | null {
   const meta = message.messageMeta;
   if (
     message.messageType !== "normal"
+    || (message.destination ?? getMessageDestination(message.method)) !== "bracket"
     || message.parentMessageId !== null
     || message.method !== "external_edit_request"
     || !meta
@@ -337,10 +328,11 @@ function parseExternalScoreReport(raw: Record<string, unknown>): ExternalScoreRe
   return report;
 }
 
-export function getExternalScoreReportBatch(message: GenericMessage): ExternalScoreReportBatch | null {
+export function getExternalScoreReportBatch(message: FeatureMessage): ExternalScoreReportBatch | null {
   const meta = message.messageMeta;
   if (
     message.messageType !== "normal"
+    || (message.destination ?? getMessageDestination(message.method)) !== "bracket"
     || message.parentMessageId !== null
     || message.method !== "external_score_report"
     || !meta
@@ -386,46 +378,15 @@ export function getExternalScoreReportBatch(message: GenericMessage): ExternalSc
   return report ? { reports: [report], resetPool: false } : null;
 }
 
-export function getExternalEditRequestStatus(
-  requestMessage: GenericMessage,
-  threadMessages: GenericMessage[],
-): ExternalEditRequestStatus | null {
-  if (!getExternalEditRequest(requestMessage)) {
-    return null;
-  }
-
-  const responses = threadMessages
-    .filter((message) => (
-      message.threadId === requestMessage.threadId
-      && message.parentMessageId === requestMessage.messageId
-      && message.senderUserId.trim() !== requestMessage.senderUserId.trim()
-    ))
-    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
-
-  for (const response of responses) {
-    const responseStatus = response.messageMeta?.externalEditRequestResponse;
-    if (responseStatus === "accepted" || responseStatus === "rejected") {
-      return responseStatus;
-    }
-    if (response.body.startsWith("外部報告申請を受理しました。")) {
-      return "accepted";
-    }
-    if (response.body.startsWith("外部報告申請を却下しました。")) {
-      return "rejected";
-    }
-  }
-
-  return "pending";
-}
-
-export function getExternalScoreReport(message: GenericMessage): ExternalScoreReport | null {
+export function getExternalScoreReport(message: FeatureMessage): ExternalScoreReport | null {
   return getExternalScoreReportBatch(message)?.reports[0] ?? null;
 }
 
-export function getExternalScoreSyncRequest(message: GenericMessage): ExternalScoreSyncRequest | null {
+export function getExternalScoreSyncRequest(message: FeatureMessage): ExternalScoreSyncRequest | null {
   const meta = message.messageMeta;
   if (
     message.messageType !== "normal"
+    || (message.destination ?? getMessageDestination(message.method)) !== "bracket"
     || message.parentMessageId !== null
     || message.method !== "external_score_sync_request"
     || !meta
@@ -453,20 +414,6 @@ export function getExternalScoreSyncRequest(message: GenericMessage): ExternalSc
     return null;
   }
   return request;
-}
-
-export function hasSameGenericMessageOrder(left: GenericMessage[], right: GenericMessage[]): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index].messageId !== right[index].messageId) {
-      return false;
-    }
-  }
-
-  return true;
 }
 
 export function normalizeSenderUserId(value: string): string {
@@ -505,20 +452,6 @@ export function isValidIpv4List(value: string): boolean {
   return values.length > 0 && values.every((item) => isValidIpv4(item));
 }
 
-export function getMailboxMethodLabel(method: string): string {
-  const normalized = method.trim().toLowerCase();
-  if (normalized === "generic") {
-    return "汎用";
-  }
-  if (normalized === "call_player") {
-    return "プレイヤー呼び出し";
-  }
-  if (normalized === "call_player_sync" || normalized === "call_player_sync_request") {
-    return "呼び出しの同期";
-  }
-  return normalized === "" ? "不明" : normalized;
-}
-
 export function buildScopedMessageMeta(
   baseMeta: Record<string, unknown> | null,
   scope: MessageScope | null,
@@ -536,7 +469,7 @@ export function buildScopedMessageMeta(
   return Object.keys(merged).length > 0 ? merged : null;
 }
 
-export function isMessageForScope(message: GenericMessage, scope: MessageScope | null): boolean {
+export function isMessageForScope(message: FeatureMessage, scope: MessageScope | null): boolean {
   if (!scope) {
     return true;
   }
@@ -654,7 +587,7 @@ export function extractCallPhasePoolMeta(meta: Record<string, unknown> | null): 
   };
 }
 
-export function extractCallThreadIdentity(rootMessage: GenericMessage | null): CallThreadIdentity | null {
+export function extractPlayerCallIdentity(rootMessage: FeatureMessage | null): PlayerCallIdentity | null {
   if (!rootMessage || rootMessage.method !== "call_player") {
     return null;
   }
@@ -671,7 +604,7 @@ export function extractCallThreadIdentity(rootMessage: GenericMessage | null): C
   return { expectedPlayerId, callEntrantId, callEntrantName, setId };
 }
 
-export function extractCallEventMeta(rootMessage: GenericMessage): {
+export function extractCallEventMeta(rootMessage: FeatureMessage): {
   tournamentId: string;
   tournamentName: string;
   eventId: string;
@@ -688,76 +621,6 @@ export function extractCallEventMeta(rootMessage: GenericMessage): {
   const { phaseName, phaseGroupName } = extractCallPhasePoolMeta(rootMessage.messageMeta);
 
   return { tournamentId, tournamentName, eventId, eventName, eventAlias, phaseName, phaseGroupName };
-}
-
-export function buildCallListDedupKey(rootMessage: GenericMessage): string {
-  const targetIdentity = extractCallTargetIdentityFromMeta(rootMessage.messageMeta);
-  if (!targetIdentity) {
-    return rootMessage.threadId;
-  }
-
-  return buildCallTargetId(targetIdentity.eventId, targetIdentity.setId, targetIdentity.playerId);
-}
-
-export function buildCallTargetId(eventId: string, setId: string, playerId: string): string {
-  return `${eventId.trim()}::${setId.trim()}::${normalizePlayerId(playerId)}`;
-}
-
-export function extractCallTargetIdentityFromMeta(meta: Record<string, unknown> | null): CallTargetIdentity | null {
-  const eventId = extractMetaString(meta, "scopeEventId") || extractMetaString(meta, "eventId");
-  const setId = extractMetaString(meta, "setId");
-  const playerId = normalizePlayerId(extractMetaString(meta, "playerId"));
-
-  if (eventId === "" || setId === "" || playerId === "") {
-    return null;
-  }
-
-  return { eventId, setId, playerId };
-}
-
-export function buildCallSyncStatusTargets(
-  displayGroups: CallListEventGroup[],
-  messages: GenericMessage[],
-): CallSyncStatusTarget[] {
-  const rootByThreadId = new Map(
-    messages
-      .filter((item) => item.parentMessageId === null && item.method === "call_player" && item.messageType === "normal")
-      .map((item) => [item.threadId, item] as const),
-  );
-  const dedupMap = new Map<string, CallSyncStatusTarget>();
-
-  for (const group of displayGroups) {
-    for (const player of group.players) {
-      const root = rootByThreadId.get(player.threadId);
-      if (!root) {
-        continue;
-      }
-
-      const identity = extractCallTargetIdentityFromMeta(root.messageMeta);
-      if (!identity) {
-        continue;
-      }
-
-      const dedupKey = `${root.senderUserId}::${buildCallTargetId(identity.eventId, identity.setId, identity.playerId)}`;
-      if (dedupMap.has(dedupKey)) {
-        continue;
-      }
-
-      dedupMap.set(dedupKey, {
-        threadId: root.threadId,
-        senderUserId: root.senderUserId,
-        ...identity,
-      });
-    }
-  }
-
-  return [...dedupMap.values()];
-}
-
-export function isSameCallTargetIdentity(left: CallTargetIdentity, right: CallTargetIdentity): boolean {
-  return left.eventId === right.eventId
-    && left.setId === right.setId
-    && left.playerId === right.playerId;
 }
 
 export function compareCallListEventGroup(left: CallListEventGroup, right: CallListEventGroup): number {
@@ -805,22 +668,21 @@ export function compareCallListEventGroupByMaxElapsed(
   return compareCallListEventGroup(left, right);
 }
 
-export function isDqRequestMessage(message: GenericMessage): boolean {
-  if (message.messageType === "dq_request") {
-    return true;
-  }
+export function isDqRequestMessage(message: FeatureMessage): boolean {
+  return message.method === "player_dq_request" && message.messageType === "dq_request"
+    && message.destination === "bracket";
+}
 
-  if (message.method !== "call_player") {
-    return false;
-  }
-
-  const hasLegacyMeta = extractMetaString(message.messageMeta, "dqCallEntrantId") !== ""
-    || extractMetaString(message.messageMeta, "dqSetId") !== "";
-  if (hasLegacyMeta) {
-    return true;
-  }
-
-  return message.body.includes("DQ申請");
+export function isDqRequestConfirmed(
+  message: FeatureMessage,
+  result: Pick<ExternalScoreReport, "eventId" | "phaseGroupId" | "setId" | "slotScores">,
+): boolean {
+  return isDqRequestMessage(message)
+    && extractCallEventMeta(message).eventId === result.eventId
+    && extractMetaString(message.messageMeta, "phaseGroupId") === result.phaseGroupId
+    && extractMetaString(message.messageMeta, "dqSetId") === result.setId
+    && result.slotScores.some((score) => score.score < 0
+      && score.entrantId === extractMetaString(message.messageMeta, "dqCallEntrantId"));
 }
 
 export function extractPlayerIdFromQrRawValue(rawValue: string): string {
@@ -854,8 +716,4 @@ export function extractPlayerIdFromBarcodeResults(results: Array<{ rawValue?: st
   }
 
   return "";
-}
-
-export function isSameGenericMessageIdentity(left: GenericMessage, right: GenericMessage): boolean {
-  return left.messageId === right.messageId;
 }

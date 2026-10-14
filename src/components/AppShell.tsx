@@ -25,7 +25,7 @@ export function useAppVersion(): string {
   return appVersion;
 }
 
-export type AppTab = "create" | "tournament" | "message" | "call-list" | "bracket" | "item-list" | "users" | "settings" | "overlay";
+export type AppTab = "create" | "tournament" | "call-list" | "bracket" | "item-list" | "users" | "settings" | "overlay";
 
 type AppTabDefinition = {
   id: AppTab;
@@ -40,7 +40,6 @@ const APP_TABS: AppTabDefinition[] = [
   { id: "bracket", label: "ブラケット", icon: "🏆", implemented: true },
   { id: "overlay", label: "オーバーレイ", icon: "📺", implemented: true },
   { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
-  { id: "message", label: "メッセージ", icon: "💬", implemented: true },
   { id: "call-list", label: "呼び出しリスト", icon: "📣", implemented: true },
   { id: "users", label: "プレイヤーリスト", icon: "👥", implemented: true },
   { id: "settings", label: "設定", icon: "🔧", implemented: true },
@@ -65,7 +64,6 @@ type AppShellProps = {
   appVersion: string;
   activeTab: AppTab;
   onTabSelect: (tab: AppTab) => void;
-  unreadMessageCount: number;
   unresolvedCallCount: number;
   sidebarSummary: SidebarSummary;
   headerContent?: ReactNode;
@@ -79,7 +77,6 @@ export function AppShell({
   appVersion,
   activeTab,
   onTabSelect,
-  unreadMessageCount,
   unresolvedCallCount,
   sidebarSummary,
   headerContent,
@@ -132,11 +129,6 @@ export function AppShell({
             >
               <span aria-hidden="true">{tab.icon}</span>
               <span>{tab.label}</span>
-              {tab.id === "message" && unreadMessageCount > 0 && (
-                <span className="tab-count-badge" aria-label={`未読メッセージ ${unreadMessageCount}件`}>
-                  {unreadMessageCount >= 10 ? "9+" : unreadMessageCount}
-                </span>
-              )}
               {tab.id === "call-list" && unresolvedCallCount > 0 && (
                 <span className="tab-count-badge" aria-label={`未解決の呼び出し ${unresolvedCallCount}件`}>
                   {unresolvedCallCount >= 10 ? "9+" : unresolvedCallCount}
@@ -147,7 +139,7 @@ export function AppShell({
         </nav>
       </aside>
 
-      <main className={`content ${activeTab === "call-list" ? "call-list-mode" : ""} ${activeTab === "message" ? "message-mode" : ""}`}>
+      <main className={`content ${activeTab === "call-list" ? "call-list-mode" : ""}`}>
         <section className="hero">
           {activeTab === "call-list" ? (
             headerContent

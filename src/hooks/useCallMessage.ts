@@ -1,18 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppTab } from "../components/AppShell";
 import type { EventSnapshot } from "../domain/bracketDisplay";
-import type { MailboxDeliveryMode } from "../components/MessageBox";
-import {
-  buildCallTargetId,
-  isValidIpv4,
-  isValidSenderUserId,
-  normalizeCallPhaseGroupName,
-  normalizeCallPhaseName,
-} from "../domain/messageUtils";
+import { canBroadcastCallListSync, normalizeCallPhaseGroupName, normalizeCallPhaseName } from "../domain/messageUtils";
 import type { SetSlot, SetSnapshot } from "../domain/bracketProgression";
 import type { SenderProfile } from "./useSenderProfile";
 
-type UseCallMessageDraftOptions = {
+type UseCallMessageOptions = {
   tournament: { tournamentId: string; name: string } | null;
   event: EventSnapshot | null;
   activeMatch: SetSnapshot | null;
@@ -20,15 +12,7 @@ type UseCallMessageDraftOptions = {
   senderProfile: SenderProfile;
   communicationDisabled: boolean;
   setCallingEntrantId: (entrantId: string) => void;
-  setComposeMessageMeta: (meta: Record<string, unknown> | null) => void;
-  setMailboxMethodDraft: (method: string) => void;
-  setMailboxSubjectDraft: (subject: string) => void;
-  setMessageDeliveryMode: (mode: MailboxDeliveryMode) => void;
-  setMessageDeliveryIpDraft: (ip: string) => void;
-  setComposeFixedBodyDraft: (body: string | null) => void;
-  setGenericMessageBodyDraft: (body: string) => void;
-  closeMatchDialog: () => void;
-  setActiveTab: (tab: AppTab) => void;
+  refreshCalls: () => Promise<void>;
   onError: (error: string) => void;
   onMessage: (message: string) => void;
 };
@@ -52,7 +36,7 @@ export function resolveCallPhaseName(event: EventSnapshot | null, rawValue: stri
   return set?.phaseName?.trim() || normalized;
 }
 
-export function useCallMessageDraft({
+export function useCallMessage({
   tournament,
   event,
   activeMatch,
@@ -60,24 +44,16 @@ export function useCallMessageDraft({
   senderProfile,
   communicationDisabled,
   setCallingEntrantId,
-  setComposeMessageMeta,
-  setMailboxMethodDraft,
-  setMailboxSubjectDraft,
-  setMessageDeliveryMode,
-  setMessageDeliveryIpDraft,
-  setComposeFixedBodyDraft,
-  setGenericMessageBodyDraft,
-  closeMatchDialog,
-  setActiveTab,
+  refreshCalls,
   onError,
   onMessage,
-}: UseCallMessageDraftOptions) {
+}: UseCallMessageOptions) {
   async function sendCallMessageFromMatch(slot: SetSlot, entrantId: string) {
     onError("");
     onMessage("");
 
     if (communicationDisabled) {
-      onError("ローカル通信を行わない設定のため、プレイヤー呼び出しメッセージは作成できません。設定タブで解除してください。");
+      onError("ローカル通信を行わない設定のため、プレイヤー呼び出しは送信できません。設定タブで解除してください。");
       return;
     }
 
@@ -86,6 +62,13 @@ export function useCallMessageDraft({
       return;
     }
 
+    if (!canBroadcastCallListSync(senderProfile, communicationDisabled)) {
+      onError("設定タブで送信者名・8桁ユーザーID・ネットワークデバイスを保存してから送信してください。");
+      return;
+    }
+    if (!window.confirm(`${slot.entrantName} を呼び出しますか？\n宛先機能: 呼び出しリスト\n送信先: ブロードキャスト`)) {
+      return;
+    }
     setCallingEntrantId(entrantId);
 
     try {
@@ -101,11 +84,12 @@ export function useCallMessageDraft({
       const eventAlias = rawEventAlias.trim() || event.name;
       const phaseName = resolveCallPhaseName(event, activeMatch.phaseName ?? "", activeMatch.phaseOrder);
       const phaseGroupName = normalizeCallPhaseGroupName(activeMatch.phaseGroupName ?? "");
-      const senderLine = senderProfile.senderName.trim() !== ""
-        && isValidSenderUserId(senderProfile.senderUserId)
-        && isValidIpv4(senderProfile.bindIp)
-        ? `${senderProfile.senderName} (${senderProfile.senderUserId}) / ${senderProfile.bindIp}`
-        : "未設定 (設定タブで送信者情報を設定してください)";
+      const phase = event.phases?.find((candidate) => candidate.name === phaseName)
+        ?? event.phases?.find((candidate) => activeMatch.phaseOrder !== null
+          && candidate.phaseOrder === activeMatch.phaseOrder);
+      const group = event.phaseGroups?.find((candidate) =>
+        candidate.phaseGroupId === activeMatch.phaseGroupId || candidate.setIds?.includes(targetSetId));
+      const senderLine = `${senderProfile.senderName} (${senderProfile.senderUserId}) / ${senderProfile.bindIp}`;
 
       const fixedBody = [
         "【呼び出しメッセージ】",
@@ -117,27 +101,37 @@ export function useCallMessageDraft({
         `呼び出し元 phase/pool: ${phaseName} / ${phaseGroupName}`,
       ].join("\n");
 
-      setComposeMessageMeta({
-        callId: buildCallTargetId(event.eventId, targetSetId, playerId),
-        playerId,
-        callEntrantId: entrantId,
-        callEntrantName: slot.entrantName,
-        tournamentId: tournament.tournamentId,
-        tournamentName: tournament.name,
-        eventId: event.eventId,
-        eventName: event.name,
-        eventAlias,
-        phaseName,
-        phaseGroupName,
-        setId: targetSetId,
+      await invoke("send_mailbox_message", {
+        input: {
+          destination: "call_list",
+          profile: senderProfile,
+          messageType: "normal",
+          method: "call_player",
+          subject: `${slot.entrantName}(${eventAlias})`,
+          body: fixedBody,
+          messageMeta: {
+            playerId,
+            callEntrantId: entrantId,
+            callEntrantName: slot.entrantName,
+            tournamentId: tournament.tournamentId,
+            tournamentName: tournament.name,
+            eventId: event.eventId,
+            eventName: event.name,
+            eventAlias,
+            phaseId: phase?.phaseId ?? "",
+            phaseName,
+            phaseGroupId: activeMatch.phaseGroupId ?? group?.phaseGroupId ?? "",
+            phaseGroupName,
+            setId: targetSetId,
+          },
+          deliveryTargetMode: "broadcast",
+          deliveryTargetIp: null,
+          threadId: null,
+          parentMessageId: null,
+        },
       });
-      setMailboxMethodDraft("call_player");
-      setMailboxSubjectDraft(`${slot.entrantName}(${eventAlias})`);
-      setComposeFixedBodyDraft(fixedBody);
-      setGenericMessageBodyDraft("");
-      closeMatchDialog();
-      setActiveTab("message");
-      onMessage(`呼び出しメッセージの下書きを作成しました: ${slot.entrantName} / 補足入力後に「スレッド開始」で送信してください。`);
+      await refreshCalls();
+      onMessage(`プレイヤー呼び出しを送信しました: ${slot.entrantName}`);
     } catch (error) {
       onError(String(error));
     } finally {
@@ -145,16 +139,5 @@ export function useCallMessageDraft({
     }
   }
 
-  function cancelCallMessageDraft() {
-    setComposeFixedBodyDraft(null);
-    setComposeMessageMeta(null);
-    setMailboxMethodDraft("generic");
-    setMailboxSubjectDraft("");
-    setMessageDeliveryMode("broadcast");
-    setMessageDeliveryIpDraft("");
-    setGenericMessageBodyDraft("");
-    onMessage("呼び出しメッセージをキャンセルしました。汎用メッセージ入力に戻りました。");
-  }
-
-  return { sendCallMessageFromMatch, cancelCallMessageDraft };
+  return { sendCallMessageFromMatch };
 }

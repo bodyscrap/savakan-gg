@@ -40,8 +40,6 @@ type SettingsScreenProps = {
   callListColorToRedSeconds: number;
   hasCallListMessages: boolean;
   onClearCallList: () => void;
-  hasMessages: boolean;
-  onForceClearMessages: () => void;
 };
 
 export function SettingsScreen({
@@ -81,8 +79,6 @@ export function SettingsScreen({
   callListColorToRedSeconds,
   hasCallListMessages,
   onClearCallList,
-  hasMessages,
-  onForceClearMessages,
 }: SettingsScreenProps) {
   return (
     <>
@@ -91,7 +87,7 @@ export function SettingsScreen({
         <p className="meta">各クライアントを識別するための送信者名と8桁ユーザーIDを設定します。</p>
         <p className="meta">IPとサブネットマスクは選択したネットワークデバイスから自動反映されます。個別調整はOS側のネットワーク設定で行ってください。</p>
         <p className="meta">ユーザーIDはクライアント間で重複しないよう運用してください。ランダム決定ボタンで簡単に採番できます。</p>
-        <p className="meta">注意: 運用開始後（メッセージ履歴あり）に送信者名/IDを変更する場合は、先にメッセージボックスの強制クリア実行を推奨します（最終実行はユーザー操作）。</p>
+        <p className="meta">注意: 送信者名/IDの変更前に自分の呼び出しを解決し、他端末の外部報告者設定を解除してください。</p>
 
         <label className="checkbox-row" style={{ marginTop: "0.6rem" }}>
           <input
@@ -102,7 +98,7 @@ export function SettingsScreen({
           ローカル通信を行わない
         </label>
         <p className="meta">
-          ON中はメッセージ機能とプレイヤーリストの送受信系操作を無効化します。既存データの閲覧は可能です。解決・スレッド削除は不可ですが、下部の「メッセージボックスを強制クリア」は実行できます。
+          ON中は呼び出し・DQ申請・外部報告とプレイヤーリストの送受信を無効化します。既存データの閲覧は可能ですが、呼び出しの解決や申請への応答はできません。
         </p>
 
         <div className="form" style={{ marginTop: "0.65rem" }}>
@@ -232,29 +228,17 @@ export function SettingsScreen({
 
       <section className="panel">
         <h2>呼び出しリスト管理</h2>
-        <p className="meta">他PCの切断や大会切替に備えて、表示中の呼び出しリストを初期化できます。</p>
-        <p className="meta">全クリア後は現在保持している呼び出しデータから再描画します（メッセージは削除しません）。</p>
+        <p className="meta">保持中の未解決の呼び出しから表示を再構築します。呼び出し自体は削除しません。</p>
+        <p className="meta">他端末の呼び出しを最新化する場合は、呼び出しリスト画面の「呼び出しの再送要求」を使用してください。</p>
 
         <div className="panel-toolbar compact">
-          <p className="meta">過去大会の呼び出し残りが表示される場合に実行してください。</p>
+          <p className="meta">表示順やページを初期化する場合に実行してください。</p>
           <button type="button" className="ghost" onClick={onClearCallList} disabled={!hasCallListMessages}>
-            呼び出し一覧を全クリア
+            呼び出しリストの表示を初期化
           </button>
         </div>
       </section>
 
-      <section className="panel">
-        <h2>メッセージボックス管理</h2>
-        <p className="meta">危険操作: 保存済みメッセージを含む全メッセージを強制削除します。</p>
-        <p className="meta">確認ダイアログと確認文字入力の後に実行され、元に戻せません。</p>
-
-        <div className="panel-toolbar compact">
-          <p className="meta">不整合解消や初期化が必要な場合のみ実行してください。</p>
-          <button type="button" className="ghost" onClick={onForceClearMessages} disabled={!hasMessages}>
-            メッセージボックスを強制クリア
-          </button>
-        </div>
-      </section>
     </>
   );
 }

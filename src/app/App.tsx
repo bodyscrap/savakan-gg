@@ -7,7 +7,10 @@ import { useDqCameraScan } from "../hooks/useDqCameraScan";
 import { useSenderProfile } from "../hooks/useSenderProfile";
 import { useMobileInputPortal } from "../hooks/useMobileInputPortal";
 import { useCallSync } from "../hooks/useCallSync";
-import { resolveCallPhaseName, useCallMessageDraft } from "../hooks/useCallMessageDraft";
+import { usePlayerCalls } from "../hooks/usePlayerCalls";
+import { useBracketMessages } from "../hooks/useBracketMessages";
+import { getExternalReportRejectionReason, getLatestPoolExternalRequest } from "../domain/externalReportProcessing";
+import { resolveCallPhaseName, useCallMessage } from "../hooks/useCallMessage";
 import { useDqRequestNavigation } from "../hooks/useDqRequestNavigation";
 import {
   BRACKET_ZOOM_LEVELS,
@@ -26,7 +29,6 @@ import {
   type CallListPlayer,
 } from "../components/StatusBoard";
 import { PlayerListInfo } from "../components/PlayerListInfo";
-import { MessageBox } from "../components/MessageBox";
 import { ItemListEditor } from "../components/ItemListEditor";
 import { EventSelector, type LocalSnapshotEventListItem } from "../components/EventSelector";
 import { EventSetting } from "../components/EventSetting";
@@ -66,7 +68,8 @@ import { useMatchDialogActions } from "../hooks/useMatchDialogActions";
 import { useTournamentCreation } from "../hooks/useTournamentCreation";
 import { useUserCards } from "../hooks/useUserCards";
 import { useItemLists } from "../hooks/useItemLists";
-import { useMailbox } from "../hooks/useMailbox";
+import { usePlayerDqRequest } from "../hooks/usePlayerDqRequest";
+import { useLocalMessageService } from "../hooks/useLocalMessageService";
 import {
   CALL_LIST_COLOR_SECONDS_MAX,
   CALL_LIST_COLOR_SECONDS_MIN,
@@ -99,12 +102,11 @@ import {
   type EventSnapshot,
 } from "../domain/bracketDisplay";
 import {
-  getMailboxMethodLabel,
   canBroadcastCallListSync as resolveCanBroadcastCallListSync,
-  formatSenderProfileLabel,
   hasSenderIdCollision,
-  isSenderProfileReadyForMessaging as resolveSenderProfileReadiness,
   isDqRequestMessage,
+  isDqRequestConfirmed,
+  extractMetaString,
   getExternalEditRequest,
   getExternalScoreReport,
   getExternalScoreReportBatch,
@@ -194,6 +196,7 @@ function App() {
     ((report: ConfirmedExternalScoreReport) => Promise<boolean>) | null
   >(null);
   const handledExternalScoreReportsRef = useRef(new Set<string>());
+  const confirmedDqRequestsRef = useRef<((report: ConfirmedExternalScoreReport) => Promise<void>) | null>(null);
   const handledExternalScoreSyncRequestsRef = useRef(new Set<string>());
   const [playerDisplayAliasSnapshot, setPlayerDisplayAliasSnapshot] = useState<{
     eventId: string;
@@ -228,8 +231,7 @@ function App() {
     networkCandidatesLoading: senderNetworkCandidatesLoading,
     selectedNetworkCandidate: selectedSenderNetworkCandidate,
     refreshNetworkCandidates: refreshLocalNetworkSettingsCandidates,
-    shouldRecommendMailboxClearForIdentityChange,
-    setIdentityChangedSinceMailboxClear: setSenderIdentityChangedSinceMailboxClear,
+    senderIdentityChanged,
     fillRandomSenderUserId,
     canSaveSenderProfile,
     saveSenderProfile,
@@ -344,6 +346,11 @@ function App() {
     refreshSnapshotEvents: refreshLocalSnapshotEvents,
     closeMatchDialog,
     onConfirmedResult: async (report, savedWorkspace) => {
+      try {
+        await confirmedDqRequestsRef.current?.(report);
+      } catch (dqError) {
+        setError(`試合結果は確定済みですが、DQ申請の処理済み保存に失敗しました: ${String(dqError)}`);
+      }
       const confirmation = [...(savedWorkspace.localMeta.setConfirmationHistory ?? [])]
         .reverse()
         .find((item) => (
@@ -495,92 +502,74 @@ function App() {
     clearSnapshotProgress: () => setCreateSnapshotProgress(null),
   });
 
-  const { selectedMessageScope, selectedMailboxScope } = useMessageScopes({
+  const { selectedMessageScope, selectedEventMessageScope } = useMessageScopes({
     snapshot,
     selectedEvent,
     selectedPhaseName,
     selectedPhasePoolKey,
   });
 
+  useLocalMessageService({
+    senderProfile,
+    senderProfileReady,
+    communicationDisabled: disableLocalCommunication,
+    onError: setError,
+  });
+
   const {
-    genericMessages,
-    genericMessagesReady,
-    mailboxMethodDraft,
-    setMailboxMethodDraft,
-    mailboxSubjectDraft,
-    setMailboxSubjectDraft,
-    messageDeliveryMode,
-    setMessageDeliveryMode,
-    messageDeliveryIpDraft,
-    setMessageDeliveryIpDraft,
-    composeFixedBodyDraft,
-    setComposeFixedBodyDraft,
-    genericMessageBodyDraft,
-    setGenericMessageBodyDraft,
-    replyBodyDraft,
-    setReplyBodyDraft,
-    setSelectedThreadId,
-    mailboxServiceStarted,
-    setComposeMessageMeta,
-    mailboxFilterSetting,
-    updateMailboxFilter,
-    mailboxThreadSummaries,
-    unreadMessageCount,
-    mailboxThreads,
-    activeThread,
-    activeThreadMessages,
-    activeThreadResolved,
-    canResolveActiveThread,
-    resolveActiveThread: resolveMailboxThread,
-    resolveThread: resolveMailboxThreadById,
-    canSendGenericMessage,
-    canReplyToThread,
-    canReplyToExternalEditRequest,
-    canDeleteActiveThread,
-    canOpenDqDialog,
-    postGenericMessage,
+    messages: bracketMessages,
+    senderContacts,
+    ready: bracketMessagesReady,
+    markProcessed: markBracketMessageProcessed,
     sendExternalEditRequest,
     sendExternalScoreReport,
     sendExternalScoreReports,
     sendExternalScoreSyncRequest,
-    replyToThread,
     replyToExternalEditRequest,
     replyToExternalScoreReport,
-    openDqRequestDialog,
-    closeDqRequestDialog,
-    submitDqRequest,
-    deleteActiveThread,
-    forceClearMessages: forceClearMailboxMessages,
-    dqDialog,
-    dqPlayerIdDraft,
-    setDqPlayerIdDraft,
-    dqReasonDraft,
-    setDqReasonDraft,
-    dqDialogError,
-    setDqDialogError,
-    dqSubmitting,
-  } = useMailbox({
-    activeTab,
-    scope: selectedMailboxScope,
+    canReplyToExternalEditRequest,
+  } = useBracketMessages({
+    scope: selectedEventMessageScope,
     senderProfile,
-    senderProfileReady,
-    disableLocalCommunication,
+    communicationDisabled: disableLocalCommunication,
     onError: setError,
     onMessage: setMessage,
-    onStopDqCameraScan: stopDqCameraScan,
-    onForceClearComplete: () => {
-      resetCallListDisplay({ clearOwnOnly: true });
-      setSenderIdentityChangedSinceMailboxClear(false);
-    },
   });
 
+  const { displayMessages: playerCallMessages, refresh: refreshPlayerCalls, resolveCall } = usePlayerCalls({
+    senderProfile,
+    communicationDisabled: disableLocalCommunication,
+    onError: setError,
+  });
+
+  const {
+    dqDialog, dqPlayerIdDraft, setDqPlayerIdDraft, dqReasonDraft, setDqReasonDraft,
+    dqDialogError, setDqDialogError, dqSubmitting, openDqRequestDialog,
+    closeDqRequestDialog, submitDqRequest,
+  } = usePlayerDqRequest({
+    calls: playerCallMessages,
+    senderProfile,
+    communicationDisabled: disableLocalCommunication,
+    onError: setError,
+    onMessage: setMessage,
+    stopCamera: stopDqCameraScan,
+  });
+
+  const pendingDqRequests = bracketMessages.filter(isDqRequestMessage);
+  confirmedDqRequestsRef.current = async (report) => {
+    for (const request of pendingDqRequests) {
+      if (isDqRequestConfirmed(request, report)) {
+        await markBracketMessageProcessed(request.messageId);
+      }
+    }
+  };
+
   const [callListResolveDialog, setCallListResolveDialog] = useState<{
-    threadId: string;
+    messageId: string;
     playerName: string;
   } | null>(null);
   const [callListResolveSubmitting, setCallListResolveSubmitting] = useState(false);
   const {
-    displayGroups: callListDisplayGroups,
     hasCallListMessages,
     eventGroups: unresolvedCallEventGroups,
     activePage: activeUnresolvedCallEventPage,
@@ -604,13 +593,13 @@ function App() {
     pausePageRotation: pauseCallListPageRotation,
   } = useCallList({
     activeTab,
-    genericMessages,
+    calls: playerCallMessages,
     senderUserId: senderProfile.senderUserId,
   });
 
   function openCallListResolveDialog(group: CallListEventGroup, player: CallListPlayer) {
     setCallListResolveDialog({
-      threadId: player.threadId,
+      messageId: player.messageId,
       playerName: resolveCallListPlayerName(group, player),
     });
     pauseCallListPageRotation(true);
@@ -624,14 +613,15 @@ function App() {
     pauseCallListPageRotation(false);
   }
 
-  async function confirmCallListThreadResolution() {
+  async function confirmCallListResolution() {
     if (!callListResolveDialog || callListResolveSubmitting) {
       return;
     }
     setCallListResolveSubmitting(true);
     try {
-      const resolved = await resolveMailboxThreadById(callListResolveDialog.threadId);
+      const resolved = await resolveCall(callListResolveDialog.messageId);
       if (resolved) {
+        setMessage("呼び出しの解決をブロードキャストで送信しました。");
         setCallListResolveDialog(null);
         pauseCallListPageRotation(false);
       }
@@ -916,6 +906,10 @@ function App() {
     setMessage,
   });
 
+  const currentPlayerDisplayAliasSnapshot = selectedEvent
+    && playerDisplayAliasSnapshot?.eventId === selectedEvent.eventId
+    ? playerDisplayAliasSnapshot
+    : null;
   const {
     players: userCardPlayers,
     selectedPlayerIds: selectedUserCardPlayerIds,
@@ -934,6 +928,8 @@ function App() {
     eventName: selectedEvent?.name ?? "",
     eventAlias: selectedEventMeta?.eventAlias ?? null,
     entrants: selectedEventEntrants,
+    aliasNamesByEntrantId: currentPlayerDisplayAliasSnapshot?.aliasesByEntrantId ?? EMPTY_PLAYER_ALIAS_MAP,
+    useAliasName: currentPlayerDisplayAliasSnapshot?.enabled ?? false,
     disableLocalCommunication,
     onError: setError,
     onMessage: setMessage,
@@ -947,25 +943,23 @@ function App() {
 
   const hasSelectedSenderNetworkDevice = selectedSenderNetworkCandidate !== null;
   const senderIdCollision = useMemo(() => hasSenderIdCollision(
-    genericMessages,
+    [...playerCallMessages, ...senderContacts],
     normalizedSenderUserIdDraft,
     normalizedSenderNameDraft,
-  ), [genericMessages, normalizedSenderNameDraft, normalizedSenderUserIdDraft]);
+  ), [playerCallMessages, senderContacts, normalizedSenderNameDraft, normalizedSenderUserIdDraft]);
 
-  const isSenderProfileReadyForMessaging = resolveSenderProfileReadiness(senderProfile);
   const canBroadcastCallListSync = resolveCanBroadcastCallListSync(senderProfile, disableLocalCommunication);
 
   const {
     requestUnresolvedCallSyncBroadcast,
-    clearCallListThreads,
+    initializeCallListDisplay,
   } = useCallSync({
-    messages: genericMessages,
-    displayGroups: callListDisplayGroups,
     senderProfile,
     communicationDisabled: disableLocalCommunication,
     canBroadcastSync: canBroadcastCallListSync,
-    shouldWarnIdentityChange: shouldRecommendMailboxClearForIdentityChange,
+    shouldWarnIdentityChange: senderIdentityChanged,
     resetDisplay: resetCallListDisplay,
+    refreshCalls: refreshPlayerCalls,
     onError: setError,
     onMessage: setMessage,
   });
@@ -1118,6 +1112,7 @@ function App() {
     const request = getExternalEditRequest(message);
     if (
       !request
+      || !canReplyToExternalEditRequest(message)
       || busy
       || !snapshot
       || !selectedEvent
@@ -1141,59 +1136,25 @@ function App() {
   }
 
   function getExternalScoreReportRejectionReason(message: Parameters<typeof getExternalScoreReport>[0]) {
-    const report = getExternalScoreReport(message);
-    if (!report || !snapshot || !selectedEvent) {
-      return "対象のスナップショットまたはイベントを選択できません。";
-    }
-    if (
-      selectedEventMeta?.eventId !== selectedEvent.eventId
-      || report.tournamentId !== snapshot.tournamentId
-      || report.eventId !== selectedEvent.eventId
-      || message.senderName.trim() === ""
-    ) {
-      return "対象イベントまたは送信者情報が一致しません。";
-    }
-    const set = selectedEventSetsById.get(report.setId);
-    if (!set?.phaseGroupId) {
-      return "対象setまたはプールをsnapshot内で特定できません。";
-    }
-    if (report.phaseGroupId && report.phaseGroupId !== set.phaseGroupId) {
-      return "報告されたPoolと対象setのPoolが一致しません。";
-    }
-    const scoreEditLocked = !(selectedEventMeta.scoreEditEnabledPhaseGroupIds ?? [])
-      .includes(set.phaseGroupId);
-    if (!scoreEditLocked) {
-      return "対象プールのスコア編集がロックされていません。";
-    }
-    const authorizedEditor = (selectedEventMeta.externalEditors ?? []).some(
-      (editor) => editor.phaseGroupId === set.phaseGroupId
-        && editor.senderUserId === message.senderUserId,
+    return getExternalReportRejectionReason(
+      message, snapshot?.tournamentId ?? null, selectedEvent, selectedEventMeta, selectedEventSetsById,
     );
-    if (!authorizedEditor) {
-      return "送信者は対象プールの承認済み外部報告者ではありません。";
-    }
-    if (report.sequence !== undefined) {
-      return null;
-    }
-    const setEntrantIds = set.slots
-      .map((slot) => slot.entrantId)
-      .filter((entrantId): entrantId is string => entrantId !== null)
-      .sort();
-    const reportEntrantIds = report.slotScores.map((score) => score.entrantId).sort();
-    if (
-      setEntrantIds.length !== 2
-      || setEntrantIds.length !== reportEntrantIds.length
-      || !setEntrantIds.every((entrantId, index) => entrantId === reportEntrantIds[index])
-      || !report.slotScores.some((score) => score.entrantId === report.winnerId)
-    ) {
-      return "報告内容と対象setの参加者または勝者が一致しません。";
-    }
-    return null;
   }
+
+  const selectedPoolExternalRequest = useMemo(() => getLatestPoolExternalRequest(
+    bracketMessages, snapshot?.tournamentId ?? "", selectedEvent?.eventId ?? "",
+    selectedPhasePoolGroup?.phaseGroupId ?? "",
+  ), [bracketMessages, snapshot?.tournamentId, selectedEvent?.eventId, selectedPhasePoolGroup?.phaseGroupId]);
+
+  const pendingExternalRequestPoolIds = useMemo(() => bracketMessages.flatMap((message) => {
+    const request = getExternalEditRequest(message);
+    return request && request.tournamentId === snapshot?.tournamentId && request.eventId === selectedEvent?.eventId
+      ? [request.phaseGroupId] : [];
+  }), [bracketMessages, snapshot?.tournamentId, selectedEvent?.eventId]);
 
   useEffect(() => {
     if (
-      !genericMessagesReady
+      !bracketMessagesReady
       || busy
       || disableLocalCommunication
       || !senderProfileReady
@@ -1201,16 +1162,9 @@ function App() {
       return;
     }
 
-    const repliedToMessageIds = new Set(
-      genericMessages
-        .filter((item) => item.senderUserId === senderProfile.senderUserId)
-        .map((item) => item.parentMessageId)
-        .filter((messageId): messageId is string => messageId !== null),
-    );
-    const pendingReports = genericMessages.filter((item) =>
+    const pendingReports = bracketMessages.filter((item) =>
       getExternalScoreReportBatch(item) !== null
       && item.senderUserId !== senderProfile.senderUserId
-      && !repliedToMessageIds.has(item.messageId)
       && !handledExternalScoreReportsRef.current.has(item.messageId),
     );
     if (pendingReports.length === 0) {
@@ -1336,6 +1290,7 @@ function App() {
         }
 
         if (deferredForSync) {
+          await markBracketMessageProcessed(item.messageId);
           continue;
         }
         await replyToExternalScoreReport(
@@ -1344,7 +1299,9 @@ function App() {
           rejectionReason ? `理由: ${rejectionReason}` : "",
         );
       }
-    })();
+    })().catch((processingError) => {
+      setError(`外部報告の処理に失敗しました: ${String(processingError)}`);
+    });
 
     return () => {
       cancelled = true;
@@ -1352,8 +1309,9 @@ function App() {
   }, [
     busy,
     disableLocalCommunication,
-    genericMessages,
-    genericMessagesReady,
+    bracketMessages,
+    bracketMessagesReady,
+    markBracketMessageProcessed,
     persistIncomingExternalScoreReport,
     replyToExternalScoreReport,
     selectedEvent,
@@ -1368,10 +1326,10 @@ function App() {
   ]);
 
   useEffect(() => {
-    if (!genericMessagesReady || disableLocalCommunication || !senderProfileReady || !snapshot) {
+    if (!bracketMessagesReady || disableLocalCommunication || !senderProfileReady || !snapshot) {
       return;
     }
-    const requests = genericMessages.filter((item) => (
+    const requests = bracketMessages.filter((item) => (
       getExternalScoreSyncRequest(item) !== null
       && item.senderUserId !== senderProfile.senderUserId
       && !handledExternalScoreSyncRequestsRef.current.has(item.messageId)
@@ -1419,14 +1377,16 @@ function App() {
           slotScores: record.slotScores ?? [],
         }];
       });
-      void sendExternalScoreReports(reports, item.senderIp, request.resetPool).catch((sendError) => {
+      void sendExternalScoreReports(reports, item.senderIp, request.resetPool)
+        .then(() => markBracketMessageProcessed(item.messageId)).catch((sendError) => {
         setError(`外部報告の同期返信に失敗しました: ${String(sendError)}`);
       });
     }
   }, [
     disableLocalCommunication,
-    genericMessages,
-    genericMessagesReady,
+    bracketMessages,
+    bracketMessagesReady,
+    markBracketMessageProcessed,
     selectedEvent,
     selectedEventSetsById,
     sendExternalScoreReports,
@@ -1449,7 +1409,7 @@ function App() {
       const scoreEditEnabledPhaseGroupIds = selectedEventMeta?.eventId === selectedEvent.eventId
         ? (selectedEventMeta.scoreEditEnabledPhaseGroupIds ?? [])
         : [];
-      if (!scoreEditEnabledPhaseGroupIds.includes(request.phaseGroupId)) {
+      if (scoreEditEnabledPhaseGroupIds.includes(request.phaseGroupId)) {
         await savePhaseGroupScoreEditLock({
           slug: snapshot.slug,
           eventId: selectedEvent.eventId,
@@ -1480,8 +1440,16 @@ function App() {
     }
   }
 
-  function rejectExternalEditRequest(message: Parameters<typeof getExternalEditRequest>[0]) {
-    void replyToExternalEditRequest(message, false);
+  async function rejectExternalEditRequest(message: Parameters<typeof getExternalEditRequest>[0]) {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await replyToExternalEditRequest(message, false);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function requestExternalEditor() {
@@ -1596,12 +1564,12 @@ function App() {
       setError("同期対象の外部報告者またはPoolが選択されていません。");
       return;
     }
-    const reporterMessage = genericMessages.find((item) => (
+    const reporterMessage = senderContacts.find((item) => (
       item.senderUserId === selectedPoolExternalEditor.senderUserId
       && isValidIpv4(item.senderIp)
     ));
     if (!reporterMessage) {
-      setError("外部報告者の送信元IPがメールボックスにありません。外部報告者からの通信を受信後に同期してください。");
+      setError("外部報告者の送信元IPがありません。外部報告者からの通信を受信後に同期してください。");
       return;
     }
     setBusy(true);
@@ -1624,10 +1592,6 @@ function App() {
     }
   }
 
-  const currentPlayerDisplayAliasSnapshot = selectedEvent
-    && playerDisplayAliasSnapshot?.eventId === selectedEvent.eventId
-    ? playerDisplayAliasSnapshot
-    : null;
   const {
     overlaySwitchConfirm,
     requestToggleActiveMatchOverlay,
@@ -1741,7 +1705,7 @@ function App() {
     }
   }
 
-  const { sendCallMessageFromMatch, cancelCallMessageDraft } = useCallMessageDraft({
+  const { sendCallMessageFromMatch } = useCallMessage({
     tournament: snapshot ? { tournamentId: snapshot.tournamentId, name: snapshot.name } : null,
     event: selectedEvent,
     activeMatch,
@@ -1749,15 +1713,7 @@ function App() {
     senderProfile,
     communicationDisabled: disableLocalCommunication,
     setCallingEntrantId,
-    setComposeMessageMeta,
-    setMailboxMethodDraft,
-    setMailboxSubjectDraft,
-    setMessageDeliveryMode,
-    setMessageDeliveryIpDraft,
-    setComposeFixedBodyDraft,
-    setGenericMessageBodyDraft,
-    closeMatchDialog,
-    setActiveTab,
+    refreshCalls: refreshPlayerCalls,
     onError: setError,
     onMessage: setMessage,
   });
@@ -1829,7 +1785,6 @@ function App() {
 
   const { processDqRequestFromMessage } = useDqRequestNavigation({
     event: selectedEvent,
-    mailboxThreadSummaries,
     resolvedSetsById: resolvedEventSetsById,
     setSelectedPhaseName,
     setSelectedPhasePoolKey,
@@ -1912,7 +1867,6 @@ function App() {
       appVersion={appVersion}
       activeTab={activeTab}
       onTabSelect={setActiveTab}
-      unreadMessageCount={unreadMessageCount}
       unresolvedCallCount={unresolvedCallRootCounts.total}
       sidebarSummary={snapshot
         ? { name: selectedSummaryName, slug: snapshot.slug, eventCount: snapshot.events.length }
@@ -2034,56 +1988,6 @@ function App() {
             }}
           />
         )}
-        {activeTab === "message" && (
-          <MessageBox
-            senderLabel={formatSenderProfileLabel(senderProfile)}
-            senderUserId={senderProfile.senderUserId}
-            senderProfileReady={isSenderProfileReadyForMessaging}
-            disableLocalCommunication={disableLocalCommunication}
-            mailboxServiceStarted={mailboxServiceStarted}
-            mailboxMethodDraft={mailboxMethodDraft}
-            getMailboxMethodLabel={getMailboxMethodLabel}
-            mailboxSubjectDraft={mailboxSubjectDraft}
-            onMailboxSubjectChange={setMailboxSubjectDraft}
-            messageDeliveryMode={messageDeliveryMode}
-            onMessageDeliveryModeChange={setMessageDeliveryMode}
-            messageDeliveryIpDraft={messageDeliveryIpDraft}
-            onMessageDeliveryIpChange={setMessageDeliveryIpDraft}
-            composeFixedBodyDraft={composeFixedBodyDraft}
-            genericMessageBodyDraft={genericMessageBodyDraft}
-            onGenericMessageBodyChange={setGenericMessageBodyDraft}
-            onCancelFixedMessage={cancelCallMessageDraft}
-            canSendGenericMessage={canSendGenericMessage}
-            onPostGenericMessage={() => void postGenericMessage()}
-            mailboxFilterSetting={mailboxFilterSetting}
-            onMailboxFilterChange={updateMailboxFilter}
-            mailboxThreads={mailboxThreads}
-            mailboxThreadSummaries={mailboxThreadSummaries}
-            activeThread={activeThread}
-            activeThreadMessages={activeThreadMessages}
-            activeThreadResolved={activeThreadResolved}
-            onSelectThread={setSelectedThreadId}
-            onProcessDqRequest={processDqRequestFromMessage}
-            isDqRequestMessage={isDqRequestMessage}
-            getExternalEditRequest={getExternalEditRequest}
-            canAcceptExternalEditRequest={canAcceptExternalEditRequest}
-            onAcceptExternalEditRequest={(item) => void acceptExternalEditRequest(item)}
-            canReplyToExternalEditRequest={canReplyToExternalEditRequest}
-            onRejectExternalEditRequest={rejectExternalEditRequest}
-            getExternalScoreReport={getExternalScoreReport}
-            canResolveActiveThread={canResolveActiveThread}
-            onResolveActiveThread={resolveMailboxThread}
-            canDeleteActiveThread={canDeleteActiveThread}
-            onDeleteActiveThread={deleteActiveThread}
-            replyBodyDraft={replyBodyDraft}
-            onReplyBodyChange={setReplyBodyDraft}
-            canReplyToThread={canReplyToThread}
-            onReplyToThread={() => void replyToThread()}
-            canOpenDqDialog={canOpenDqDialog}
-            onOpenDqDialog={openDqRequestDialog}
-          />
-      )}
-
       {activeTab === "call-list" && (
         <StatusBoard
           eventGroups={unresolvedCallEventGroups}
@@ -2103,6 +2007,8 @@ function App() {
           colorToRedSeconds={callListColorToRedSeconds}
           resolvePlayerName={resolveCallListPlayerName}
           onResolveOwnCall={openCallListResolveDialog}
+          onRequestDq={openDqRequestDialog}
+          communicationDisabled={disableLocalCommunication}
         />
       )}
 
@@ -2138,7 +2044,7 @@ function App() {
               <button
                 type="button"
                 disabled={callListResolveSubmitting}
-                onClick={() => void confirmCallListThreadResolution()}
+                onClick={() => void confirmCallListResolution()}
               >
                 {callListResolveSubmitting ? "解決中..." : "解決"}
               </button>
@@ -2247,14 +2153,14 @@ function App() {
             normalizedSubnetMask={normalizedBroadcastSubnetMaskDraft}
             senderSettingsStatus={resolveSenderSettingsStatus({
               senderIdCollision,
-              shouldRecommendMailboxClear: shouldRecommendMailboxClearForIdentityChange,
+              senderIdentityChanged,
               hasSelectedNetworkDevice: hasSelectedSenderNetworkDevice,
               bindIp: normalizedSenderBindIpDraft,
               broadcastSubnetMask: normalizedBroadcastSubnetMaskDraft,
             })}
             onRefreshNetworkCandidates={() => void refreshLocalNetworkSettingsCandidates(true)}
             onRandomizeSenderUserId={() => fillRandomSenderUserId(
-              genericMessages.map((item) => item.senderUserId),
+              [...playerCallMessages, ...senderContacts].map((item) => item.senderUserId),
             )}
             onSaveSenderProfile={() => void saveSenderProfile(senderIdCollision)}
             canSaveSenderProfile={canSaveSenderProfile(senderIdCollision)}
@@ -2276,9 +2182,7 @@ function App() {
             callListRotateSecondsDisplay={normalizeCallListRotateSeconds(callListPageRotateSeconds)}
             callListColorToRedSeconds={callListColorToRedSeconds}
             hasCallListMessages={hasCallListMessages}
-            onClearCallList={clearCallListThreads}
-            hasMessages={genericMessages.length > 0}
-            onForceClearMessages={forceClearMailboxMessages}
+            onClearCallList={initializeCallListDisplay}
           />
         )}
 
@@ -2318,6 +2222,23 @@ function App() {
             selectedPoolScoreEditLocked={selectedPoolScoreEditLocked}
             selectedPoolExternalScoreBroadcastEnabled={selectedPoolExternalScoreBroadcastEnabled}
             externalEditor={selectedPoolExternalEditor}
+            externalRequest={selectedPoolExternalRequest}
+            dqRequests={pendingDqRequests.filter((request) =>
+              extractMetaString(request.messageMeta, "scopeEventId") === selectedEvent?.eventId
+              && extractMetaString(request.messageMeta, "phaseGroupId") === selectedPhasePoolGroup?.phaseGroupId)}
+            pendingDqPoolIds={pendingDqRequests
+              .filter((request) => extractMetaString(request.messageMeta, "scopeEventId") === selectedEvent?.eventId)
+              .map((request) => extractMetaString(request.messageMeta, "phaseGroupId"))}
+            onProcessDqRequest={processDqRequestFromMessage}
+            pendingExternalRequestPoolIds={pendingExternalRequestPoolIds}
+            canAcceptExternalRequest={Boolean(selectedPoolExternalRequest && canAcceptExternalEditRequest(selectedPoolExternalRequest))}
+            canRespondExternalRequest={Boolean(!busy && selectedPoolExternalRequest && canReplyToExternalEditRequest(selectedPoolExternalRequest))}
+            onAcceptExternalRequest={() => {
+              if (selectedPoolExternalRequest) void acceptExternalEditRequest(selectedPoolExternalRequest);
+            }}
+            onRejectExternalRequest={() => {
+              if (selectedPoolExternalRequest) void rejectExternalEditRequest(selectedPoolExternalRequest);
+            }}
             canSyncExternalEditor={!busy && senderProfileReady && !disableLocalCommunication}
             onSyncExternalEditor={() => void syncSelectedPoolExternalEditor()}
             canRequestExternalEditor={canBroadcastCallListSync}

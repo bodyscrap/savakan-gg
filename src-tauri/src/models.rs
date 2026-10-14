@@ -83,7 +83,9 @@ pub struct SenderProfile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GenericMessage {
+pub struct FeatureMessage {
+    #[serde(default)]
+    pub destination: Option<String>,
     pub message_id: String,
     pub thread_id: String,
     #[serde(default)]

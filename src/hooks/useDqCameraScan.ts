@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import jsQR from "jsqr";
 import {
   extractPlayerIdFromBarcodeResults,
@@ -38,7 +38,7 @@ export function useDqCameraScan() {
   const detectingRef = useRef(false);
   const detectorRef = useRef<BarcodeDetectorLike | null>(null);
 
-  function stopDqCameraScan() {
+  const stopDqCameraScan = useCallback(() => {
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
@@ -53,7 +53,7 @@ export function useDqCameraScan() {
     }
     detectorRef.current = null;
     setCameraActive(false);
-  }
+  }, []);
 
   async function startDqCameraScan({
     dialogOpen,

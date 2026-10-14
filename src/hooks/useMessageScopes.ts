@@ -37,7 +37,7 @@ export function useMessageScopes({
     };
   }, [selectedEvent, selectedPhaseName, selectedPhasePoolKey, snapshot]);
 
-  const selectedMailboxScope = useMemo<MessageScope | null>(() => {
+  const selectedEventMessageScope = useMemo<MessageScope | null>(() => {
     if (!selectedMessageScope) {
       return null;
     }
@@ -49,5 +49,5 @@ export function useMessageScopes({
     };
   }, [selectedMessageScope]);
 
-  return { selectedMessageScope, selectedMailboxScope };
+  return { selectedMessageScope, selectedEventMessageScope };
 }

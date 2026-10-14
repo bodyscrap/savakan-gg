@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import type { GenericMessage } from "../components/MessageBox";
+import type { FeatureMessage } from "../domain/messages";
 import type { CallListEventGroup, CallListEventSortStrategy } from "../components/StatusBoard";
 import {
-  buildCallListDedupKey,
   compareCallListEventGroup,
   compareCallListEventGroupByMaxElapsed,
   extractCallEventMeta,
-  extractCallThreadIdentity,
+  extractPlayerCallIdentity,
   extractMetaString,
 } from "../domain/messageUtils";
 
@@ -57,7 +56,7 @@ export function normalizeCallListColorSeconds(rawValue: unknown, fallback = CALL
 
 type UseCallListOptions = {
   activeTab: string;
-  genericMessages: GenericMessage[];
+  calls: FeatureMessage[];
   senderUserId: string;
 };
 
@@ -66,7 +65,7 @@ type ResetCallListDisplayOptions = {
   rebuild?: boolean;
 };
 
-export function useCallList({ activeTab, genericMessages, senderUserId }: UseCallListOptions) {
+export function useCallList({ activeTab, calls, senderUserId }: UseCallListOptions) {
   const [pageIndex, setPageIndex] = useState(0);
   const [pageRotateSeconds, setPageRotateSeconds] = useState(CALL_LIST_ROTATE_SECONDS_DEFAULT);
   const [colorSeconds, setColorSeconds] = useState(CALL_LIST_COLOR_SECONDS_DEFAULT);
@@ -140,7 +139,7 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
   }, [colorSeconds]);
 
   const latestGroups = useMemo(() => {
-    const roots = genericMessages.filter((item) =>
+    const roots = calls.filter((item) =>
       item.parentMessageId === null
       && item.method === "call_player"
       && item.messageType === "normal"
@@ -148,23 +147,8 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
     );
 
     const groups = new Map<string, CallListEventGroup>();
-    const dedupKeys = new Set<string>();
-
     for (const root of roots) {
-      const resolved = genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve");
-      if (resolved) {
-        continue;
-      }
-
-      const dedupKey = buildCallListDedupKey(root);
-      if (!focusOwnUnresolved) {
-        if (dedupKeys.has(dedupKey)) {
-          continue;
-        }
-        dedupKeys.add(dedupKey);
-      }
-
-      const callIdentity = extractCallThreadIdentity(root);
+      const callIdentity = extractPlayerCallIdentity(root);
       const entrantId = callIdentity?.callEntrantId
         || extractMetaString(root.messageMeta, "callEntrantId");
       const entrantName = callIdentity?.callEntrantName
@@ -180,12 +164,13 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
         eventMeta.eventAlias,
         eventMeta.phaseName,
         eventMeta.phaseGroupName,
+        root.senderUserId.trim() === senderUserId.trim() ? "own" : "remote",
       ].join("::") || "__unknown__";
       const found = groups.get(groupKey);
 
       if (found) {
         found.players.push({
-          threadId: root.threadId,
+          messageId: root.messageId,
           entrantId,
           entrantName,
           createdAt: root.createdAt,
@@ -203,7 +188,7 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
           phaseName: eventMeta.phaseName,
           phaseGroupName: eventMeta.phaseGroupName,
           players: [{
-            threadId: root.threadId,
+            messageId: root.messageId,
             entrantId,
             entrantName,
             createdAt: root.createdAt,
@@ -220,7 +205,7 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
         .slice()
         .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
     }));
-  }, [focusOwnUnresolved, genericMessages, senderUserId]);
+  }, [focusOwnUnresolved, calls, senderUserId]);
 
   const eventGroupComparator = useMemo(() => {
     if (eventSortStrategy === "max-elapsed") {
@@ -262,11 +247,10 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
   }, [eventGroupComparator]);
 
   const rootCounts = useMemo(() => {
-    const unresolvedRoots = genericMessages.filter((root) =>
+    const unresolvedRoots = calls.filter((root) =>
       root.parentMessageId === null
       && root.method === "call_player"
       && root.messageType === "normal"
-      && !genericMessages.some((item) => item.threadId === root.threadId && item.messageType === "resolve")
     );
     const own = unresolvedRoots.filter((root) => root.senderUserId.trim() === senderUserId.trim()).length;
 
@@ -275,9 +259,9 @@ export function useCallList({ activeTab, genericMessages, senderUserId }: UseCal
       own,
       hidden: Math.max(0, unresolvedRoots.length - own),
     };
-  }, [genericMessages, senderUserId]);
+  }, [calls, senderUserId]);
 
-  const hasCallListMessages = displayGroups.length > 0 || genericMessages.some(
+  const hasCallListMessages = displayGroups.length > 0 || calls.some(
     (item) => item.parentMessageId === null && item.method === "call_player",
   );
 

@@ -1,25 +1,22 @@
 import { describe, expect, it } from "vitest";
-import type { GenericMessage } from "../components/MessageBox";
+import type { FeatureMessage } from "./messages";
 import {
-	buildCallTargetId,
 	canBroadcastCallListSync,
-	extractCallTargetIdentityFromMeta,
 	getExternalEditRequest,
 	getExternalScoreReport,
 	getExternalScoreReportBatch,
 	getExternalScoreSyncRequest,
 	isMessageForScope,
 	formatSenderProfileLabel,
-	getExternalEditRequestStatus,
 	hasSenderIdCollision,
-	isSameCallTargetIdentity,
 	isSenderProfileReadyForMessaging,
-	normalizeMailboxFilterSetting,
 	normalizeSenderUserId,
 	resolveSenderSettingsStatus,
+  getMessageDestination,
+  normalizeFeatureMessage,
 } from "./messageUtils";
 
-const externalEditRequestMessage: GenericMessage = {
+const externalEditRequestMessage: FeatureMessage = {
   messageId: "message-1",
   threadId: "thread-1",
   parentMessageId: null,
@@ -53,63 +50,25 @@ const validProfile = {
 	broadcastSubnetMask: "255.255.255.0",
 };
 
-describe("mailbox filter settings", () => {
-	it("defaults missing filters to false and preserves configured filters", () => {
-		expect(normalizeMailboxFilterSetting({ unresolvedOnly: true, unreadOnly: true })).toEqual({
-			unresolvedOnly: true,
-			unreadOnly: true,
-			externalEditRequestsOnly: false,
-		});
-		expect(normalizeMailboxFilterSetting({ externalEditRequestsOnly: true }).externalEditRequestsOnly)
-			.toBe(true);
-	});
+describe("feature destinations", () => {
+  it("infers destinations for legacy messages and preserves explicit destinations", () => {
+    expect(getMessageDestination("call_player")).toBe("call_list");
+    expect(getMessageDestination("call_player_sync_request")).toBe("call_list");
+    expect(getMessageDestination("generic")).toBe("message");
+    expect(normalizeFeatureMessage(externalEditRequestMessage)?.destination).toBe("bracket");
+    expect(normalizeFeatureMessage({
+      ...externalEditRequestMessage, destination: " custom_feature ",
+    })?.destination).toBe("custom_feature");
+  });
+
+  it("does not process a bracket operation addressed to another feature", () => {
+    expect(getExternalEditRequest(externalEditRequestMessage)).not.toBeNull();
+    expect(getExternalEditRequest({
+      ...externalEditRequestMessage, destination: "message",
+    })).toBeNull();
+  });
 });
 
-describe("call target identity", () => {
-	it("uses event, set, and normalized player ID as the complete call ID", () => {
-		const identity = extractCallTargetIdentityFromMeta({
-			scopeEventId: "event-1",
-			scopeTournamentId: "tournament-1",
-			scopePhaseName: "Phase 1",
-			scopePhaseGroupName: "Pool A",
-			setId: "set-1",
-			playerId: " pg-player ",
-			callEntrantId: "entrant-1",
-		});
-
-		expect(identity).toEqual({
-			eventId: "event-1",
-			setId: "set-1",
-			playerId: "PG-PLAYER",
-		});
-		if (!identity) {
-			throw new Error("Expected a call target identity");
-		}
-		expect(buildCallTargetId(" event-1 ", " set-1 ", "pg-player")).toBe("event-1::set-1::PG-PLAYER");
-		expect(isSameCallTargetIdentity(identity, {
-			eventId: "event-1",
-			setId: "set-1",
-			playerId: "PG-PLAYER",
-		})).toBe(true);
-	});
-
-	it("does not match calls for another event, set, or player", () => {
-		const identity = {
-			eventId: "event-1",
-			setId: "set-1",
-			playerId: "PG-PLAYER",
-		};
-
-		expect(isSameCallTargetIdentity(identity, { ...identity, eventId: "event-2" })).toBe(false);
-		expect(isSameCallTargetIdentity(identity, { ...identity, setId: "set-2" })).toBe(false);
-		expect(isSameCallTargetIdentity(identity, { ...identity, playerId: "PG-OTHER" })).toBe(false);
-		expect(extractCallTargetIdentityFromMeta({
-			eventId: "event-1",
-			setId: "set-1",
-			callEntrantId: "entrant-1",
-		})).toBeNull();
-	});
-});
 
 describe("sender messaging readiness", () => {
 	it("normalizes sender IDs to at most eight digits", () => {
@@ -146,18 +105,18 @@ describe("sender messaging readiness", () => {
 	it("prioritizes collision, identity warning, network selection, and IP validation", () => {
 		const valid = {
 			senderIdCollision: false,
-			shouldRecommendMailboxClear: false,
+			senderIdentityChanged: false,
 			hasSelectedNetworkDevice: true,
 			bindIp: "192.168.1.20",
 			broadcastSubnetMask: "255.255.255.0",
 		};
 
 		expect(resolveSenderSettingsStatus({ ...valid, senderIdCollision: true }))
-			.toBe("既存履歴で同一IDが別名義に使われています。");
-		expect(resolveSenderSettingsStatus({ ...valid, senderIdCollision: true, shouldRecommendMailboxClear: true }))
-			.toBe("既存履歴で同一IDが別名義に使われています。");
-		expect(resolveSenderSettingsStatus({ ...valid, shouldRecommendMailboxClear: true }))
-			.toContain("強制クリアを推奨");
+			.toBe("呼び出し・通信相手の情報で同一IDが別名義に使われています。");
+		expect(resolveSenderSettingsStatus({ ...valid, senderIdCollision: true, senderIdentityChanged: true }))
+			.toBe("呼び出し・通信相手の情報で同一IDが別名義に使われています。");
+		expect(resolveSenderSettingsStatus({ ...valid, senderIdentityChanged: true }))
+			.toContain("呼び出しを解決");
 		expect(resolveSenderSettingsStatus({ ...valid, hasSelectedNetworkDevice: false }))
 			.toBe("ネットワークデバイスを選択してください。");
 		expect(resolveSenderSettingsStatus({ ...valid, bindIp: "invalid" }))
@@ -197,39 +156,10 @@ describe("external edit requests", () => {
 		})).toBeNull();
 	});
 
-	it("reports request status from explicit metadata or legacy reply text", () => {
-		const acceptedReply: GenericMessage = {
-		  ...externalEditRequestMessage,
-		  messageId: "accepted-reply",
-		  parentMessageId: externalEditRequestMessage.messageId,
-		  senderUserId: "87654321",
-		  messageMeta: { externalEditRequestResponse: "accepted" },
-		  createdAt: "2025-01-02T00:00:00.000Z",
-		};
-		const rejectedReply: GenericMessage = {
-		  ...acceptedReply,
-		  messageId: "rejected-reply",
-		  messageMeta: null,
-		  body: "外部報告申請を却下しました。",
-		  createdAt: "2025-01-03T00:00:00.000Z",
-		};
-
-		expect(getExternalEditRequestStatus(externalEditRequestMessage, [externalEditRequestMessage]))
-		  .toBe("pending");
-		expect(getExternalEditRequestStatus(externalEditRequestMessage, [
-		  externalEditRequestMessage,
-		  acceptedReply,
-		])).toBe("accepted");
-		expect(getExternalEditRequestStatus(externalEditRequestMessage, [
-		  externalEditRequestMessage,
-		  acceptedReply,
-		  rejectedReply,
-		])).toBe("rejected");
-	});
 });
 
 describe("external score reports", () => {
-	const reportMessage: GenericMessage = {
+	const reportMessage: FeatureMessage = {
 		...externalEditRequestMessage,
 		messageMeta: {
 			externalScoreReport: true,

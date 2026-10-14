@@ -130,7 +130,6 @@ export function useSnapshotTabAutoLoad({
 
     const requiresSelectedEvent = activeTab === "tournament"
       || activeTab === "bracket"
-      || activeTab === "message"
       || activeTab === "users";
     if (!requiresSelectedEvent || !selectedSidebarItem) {
       return;

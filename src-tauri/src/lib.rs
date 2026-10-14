@@ -1,4 +1,6 @@
 mod models;
+mod call_list;
+mod bracket_messages;
 mod reporting;
 mod startgg;
 mod startgg_scalars;
@@ -15,7 +17,7 @@ use if_addrs::get_if_addrs;
 use models::{
     ApplyExternalScoreReportInput, BracketBatchReportInput, BracketBatchReportResult,
     ClearLocalSetResultDraftInput, ClearPhaseGroupExternalEditorInput,
-    CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, GenericMessage, ItemListConfig,
+    CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, FeatureMessage, ItemListConfig,
     LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetScoreInput,
     LocalSetScoreUpdateInput, LocalSnapshotEventListItem, MobileResultRequestInput,
     MobileResultRequestItem, PlaySide, ReportSetResultInput, ResetSetResultCascadeInput,
@@ -37,8 +39,6 @@ const MAILBOX_PROTOCOL: &str = "savakan-mailbox-v1";
 const MAILBOX_METHOD_CALL_PLAYER: &str = "call_player";
 const MAILBOX_METHOD_CALL_SYNC: &str = "call_player_sync";
 const MAILBOX_METHOD_CALL_SYNC_REQUEST: &str = "call_player_sync_request";
-const CALL_SYNC_PHASE_COLLECT_UNRESOLVED: &str = "collect_unresolved";
-const CALL_SYNC_PHASE_CHECK_PUBLISHED_STATUS: &str = "check_published_status";
 const EVENT_SNAPSHOT_PROGRESS_EVENT: &str = "event_snapshot_progress";
 const EVENT_BRACKET_REPORT_PROGRESS_EVENT: &str = "bracket_report_progress";
 const EVENT_WORKSPACE_UPDATED: &str = "workspace_updated";
@@ -5081,12 +5081,13 @@ struct UdpMailboxPacket {
     protocol: String,
     delivery_target_mode: String,
     delivery_target_ip: Option<String>,
-    message: GenericMessage,
+    message: FeatureMessage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SendMailboxMessageInput {
+    destination: Option<String>,
     profile: SenderProfile,
     method: String,
     subject: String,
@@ -5225,7 +5226,7 @@ fn create_message_id(profile: &SenderProfile, method: &str, body: &str) -> Strin
     )
 }
 
-fn build_message_from_input(input: &SendMailboxMessageInput) -> Result<GenericMessage, String> {
+fn build_message_from_input(input: &SendMailboxMessageInput) -> Result<FeatureMessage, String> {
     validate_sender_profile(&input.profile)?;
     validate_delivery_target(
         &input.delivery_target_mode,
@@ -5273,7 +5274,18 @@ fn build_message_from_input(input: &SendMailboxMessageInput) -> Result<GenericMe
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| message_id.clone());
 
-    Ok(GenericMessage {
+    Ok(FeatureMessage {
+        destination: Some(
+            input.destination.as_deref().map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| {
+                    if parent_message_id.is_some() && method == MAILBOX_METHOD_CALL_PLAYER {
+                        if message_type == "dq_request" { "bracket" } else { "message" }
+                    } else {
+                        call_list::destination_for_method(&method)
+                    }
+                }).to_owned(),
+        ),
         message_id,
         thread_id,
         parent_message_id,
@@ -5289,36 +5301,6 @@ fn build_message_from_input(input: &SendMailboxMessageInput) -> Result<GenericMe
     })
 }
 
-fn collect_unresolved_call_roots_for_sender(
-    app: &tauri::AppHandle,
-    sender_user_id: &str,
-) -> Vec<GenericMessage> {
-    let Ok(messages) = storage::load_generic_messages(app) else {
-        return Vec::new();
-    };
-    let Some(messages) = messages else {
-        return Vec::new();
-    };
-
-    messages
-        .iter()
-        .filter(|item| {
-            item.parent_message_id.is_none()
-                && item
-                    .method
-                    .trim()
-                    .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
-                && item.sender_user_id.trim() == sender_user_id.trim()
-        })
-        .filter(|root| {
-            !messages
-                .iter()
-                .any(|item| item.thread_id == root.thread_id && item.message_type == "resolve")
-        })
-        .cloned()
-        .collect()
-}
-
 fn is_call_sync_method(method: &str) -> bool {
     method.trim().eq_ignore_ascii_case(MAILBOX_METHOD_CALL_SYNC)
         || method
@@ -5326,89 +5308,11 @@ fn is_call_sync_method(method: &str) -> bool {
             .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_SYNC_REQUEST)
 }
 
-fn call_sync_phase(meta: Option<&serde_json::Value>) -> String {
-    meta_string(meta, "syncPhase").unwrap_or_else(|| CALL_SYNC_PHASE_COLLECT_UNRESOLVED.to_owned())
-}
-
-#[derive(Debug, Clone)]
-struct CallSyncStatusTarget {
-    thread_id: String,
-    sender_user_id: String,
-    identity: CallTargetIdentity,
-}
-
-fn parse_call_sync_status_targets(meta: Option<&serde_json::Value>) -> Vec<CallSyncStatusTarget> {
-    let Some(meta_obj) = meta.and_then(|value| value.as_object()) else {
-        return Vec::new();
-    };
-    let Some(targets) = meta_obj.get("targets").and_then(|value| value.as_array()) else {
-        return Vec::new();
-    };
-
-    targets
-        .iter()
-        .filter_map(|target| {
-            let obj = target.as_object()?;
-
-            let get_str = |key: &str| {
-                obj.get(key)
-                    .and_then(|value| value.as_str())
-                    .map(|value| value.trim().to_owned())
-                    .filter(|value| !value.is_empty())
-            };
-
-            let thread_id = get_str("threadId")?;
-            let sender_user_id = get_str("senderUserId")?;
-            let event_id = get_str("scopeEventId").or_else(|| get_str("eventId"))?;
-            let set_id = get_str("setId")?;
-            let player_id = get_str("playerId")?.to_ascii_uppercase();
-
-            Some(CallSyncStatusTarget {
-                thread_id,
-                sender_user_id,
-                identity: CallTargetIdentity {
-                    event_id,
-                    set_id,
-                    player_id,
-                },
-            })
-        })
-        .collect()
-}
-
-fn build_call_sync_resolved_message(
-    profile: &SenderProfile,
-    target_thread_id: &str,
-    latest_root: &GenericMessage,
-    latest_resolve: &GenericMessage,
-) -> GenericMessage {
-    let body = "呼び出し同期で解決済みを確認しました。";
-
-    GenericMessage {
-        message_id: create_message_id(profile, MAILBOX_METHOD_CALL_PLAYER, body),
-        thread_id: target_thread_id.to_owned(),
-        parent_message_id: None,
-        message_type: "resolve".to_owned(),
-        message_meta: latest_root.message_meta.clone(),
-        method: MAILBOX_METHOD_CALL_PLAYER.to_owned(),
-        subject: format!("Resolved: {}", latest_root.subject),
-        sender_name: profile.sender_name.trim().to_owned(),
-        sender_user_id: profile.sender_user_id.trim().to_owned(),
-        sender_ip: profile.bind_ip.trim().to_owned(),
-        body: if latest_resolve.body.trim().is_empty() {
-            body.to_owned()
-        } else {
-            latest_resolve.body.clone()
-        },
-        created_at: chrono::Utc::now().to_rfc3339(),
-    }
-}
-
 fn send_udp_mailbox_packet(
     profile: &SenderProfile,
     mode: &str,
     target_ip: Option<&str>,
-    message: &GenericMessage,
+    message: &FeatureMessage,
 ) -> Result<(), String> {
     let normalized_target_mode = normalize_delivery_target_mode(mode);
     let target_ips = resolve_delivery_target_ips(profile, &normalized_target_mode, target_ip)?;
@@ -5457,6 +5361,13 @@ fn meta_string(meta: Option<&serde_json::Value>, key: &str) -> Option<String> {
     }
 }
 
+fn report_mailbox_error(app: &tauri::AppHandle, error: &str) {
+    eprintln!("[mailbox] {error}");
+    if let Err(emit_error) = app.emit(call_list::ERROR_EVENT, error) {
+        eprintln!("[mailbox] {emit_error}");
+    }
+}
+
 fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(), String> {
     let bind_addr = format!("{}:{}", bind_ip.trim(), UDP_MAILBOX_PORT);
     let socket = UdpSocket::bind(&bind_addr)
@@ -5477,7 +5388,7 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
             }
 
             match socket.recv_from(&mut buf) {
-                Ok((size, _)) => {
+                Ok((size, source_addr)) => {
                     let raw = match std::str::from_utf8(&buf[..size]) {
                         Ok(value) => value,
                         Err(_) => continue,
@@ -5492,7 +5403,13 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
                         continue;
                     }
 
-                    let my_profile = storage::load_sender_profile(&app).ok().flatten();
+                    let my_profile = match storage::load_sender_profile(&app) {
+                        Ok(profile) => profile,
+                        Err(error) => {
+                            report_mailbox_error(&app, &error);
+                            continue;
+                        }
+                    };
                     if let Some(my_profile) = my_profile {
                         if my_profile.sender_user_id.trim() == packet.message.sender_user_id.trim()
                         {
@@ -5520,108 +5437,30 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
                             continue;
                         }
 
-                        if is_call_sync_method(&packet.message.method) {
-                            let sender_ip = packet.message.sender_ip.trim();
-                            if sender_ip.parse::<Ipv4Addr>().is_ok() {
-                                let phase = call_sync_phase(packet.message.message_meta.as_ref());
-
-                                if phase == CALL_SYNC_PHASE_CHECK_PUBLISHED_STATUS {
-                                    let targets = parse_call_sync_status_targets(
-                                        packet.message.message_meta.as_ref(),
-                                    );
-                                    let messages = storage::load_generic_messages(&app)
-                                        .ok()
-                                        .flatten()
-                                        .unwrap_or_default();
-
-                                    for target in targets {
-                                        if target.sender_user_id.trim()
-                                            != my_profile.sender_user_id.trim()
-                                        {
-                                            continue;
-                                        }
-
-                                        let latest_root = messages
-                                            .iter()
-                                            .filter(|item| {
-                                                item.parent_message_id.is_none()
-                                                    && item.message_type == "normal"
-                                                    && item.method.trim().eq_ignore_ascii_case(
-                                                        MAILBOX_METHOD_CALL_PLAYER,
-                                                    )
-                                                    && item.sender_user_id.trim()
-                                                        == my_profile.sender_user_id.trim()
-                                            })
-                                            .filter(|root| {
-                                                extract_call_target_identity(
-                                                    root.message_meta.as_ref(),
-                                                )
-                                                .map(|identity| {
-                                                    call_target_identity_matches(
-                                                        &identity,
-                                                        &target.identity,
-                                                    )
-                                                })
-                                                .unwrap_or(false)
-                                            })
-                                            .max_by(|left, right| {
-                                                left.created_at.cmp(&right.created_at)
-                                            })
-                                            .cloned();
-
-                                        let Some(latest_root) = latest_root else {
-                                            continue;
-                                        };
-
-                                        let latest_resolve = messages
-                                            .iter()
-                                            .filter(|item| {
-                                                item.thread_id == latest_root.thread_id
-                                                    && item.message_type == "resolve"
-                                            })
-                                            .max_by(|left, right| {
-                                                left.created_at.cmp(&right.created_at)
-                                            })
-                                            .cloned();
-
-                                        let Some(latest_resolve) = latest_resolve else {
-                                            continue;
-                                        };
-
-                                        let resolved = build_call_sync_resolved_message(
-                                            &my_profile,
-                                            &target.thread_id,
-                                            &latest_root,
-                                            &latest_resolve,
-                                        );
-                                        let _ = send_udp_mailbox_packet(
-                                            &my_profile,
-                                            "direct",
-                                            Some(sender_ip),
-                                            &resolved,
-                                        );
-                                    }
-                                } else {
-                                    let unresolved_calls = collect_unresolved_call_roots_for_sender(
-                                        &app,
-                                        &my_profile.sender_user_id,
-                                    );
-                                    for unresolved in unresolved_calls {
-                                        let _ = send_udp_mailbox_packet(
-                                            &my_profile,
-                                            "direct",
-                                            Some(sender_ip),
-                                            &unresolved,
-                                        );
-                                    }
-                                }
+                        if call_list::is_call_list_message(&packet.message) {
+                            if let Err(error) = call_list::receive(
+                                &app,
+                                &my_profile,
+                                &packet.message,
+                                &source_addr.ip().to_string(),
+                            ) {
+                                report_mailbox_error(&app, &error);
                             }
-
                             continue;
                         }
+
+                        if bracket_messages::is_bracket_message(&packet.message) {
+                            let mut message = packet.message.clone();
+                            message.sender_ip = source_addr.ip().to_string();
+                            if let Err(error) = bracket_messages::receive(&app, &my_profile.sender_user_id, &message) {
+                                report_mailbox_error(&app, &error);
+                            }
+                            continue;
+                        }
+
                     }
 
-                    let _ = storage::append_generic_message(&app, &packet.message);
+                    report_mailbox_error(&app, "送信者設定がないか、未対応の機能宛先です。汎用メッセージは受信しません。");
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(80));
@@ -5632,256 +5471,6 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
             }
         }
     });
-
-    Ok(())
-}
-
-fn validate_resolve_permission(
-    app: &tauri::AppHandle,
-    sender_user_id: &str,
-    thread_id: &str,
-    resolve_meta: Option<&serde_json::Value>,
-) -> Result<(), String> {
-    let messages = storage::load_generic_messages(app)?.unwrap_or_default();
-    let root = messages
-        .iter()
-        .find(|item| item.thread_id == thread_id && item.parent_message_id.is_none())
-        .ok_or_else(|| "対象スレッドが見つかりません。".to_owned())?;
-
-    if root.sender_user_id.trim() != sender_user_id.trim() {
-        return Err("スレッド作成者のみが解決メッセージを送信できます。".to_owned());
-    }
-
-    if root
-        .method
-        .trim()
-        .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
-    {
-        let root_identity = extract_call_target_identity(root.message_meta.as_ref())
-            .ok_or_else(|| "呼び出しID情報がないため、この呼び出しを解決できません。".to_owned())?;
-        let resolve_identity = extract_call_target_identity(resolve_meta)
-            .ok_or_else(|| "解決メッセージに呼び出しIDがありません。".to_owned())?;
-        if !call_target_identity_matches(&root_identity, &resolve_identity) {
-            return Err("解決対象の呼び出しIDが一致しません。".to_owned());
-        }
-    }
-
-    let already_resolved = messages
-        .iter()
-        .any(|item| item.thread_id == thread_id && item.message_type == "resolve");
-    if already_resolved {
-        return Err("このスレッドはすでに解決済みです。".to_owned());
-    }
-
-    Ok(())
-}
-
-fn validate_thread_open_for_reply(app: &tauri::AppHandle, thread_id: &str) -> Result<(), String> {
-    let messages = storage::load_generic_messages(app)?.unwrap_or_default();
-    let _root = messages
-        .iter()
-        .find(|item| item.thread_id == thread_id && item.parent_message_id.is_none())
-        .ok_or_else(|| "対象スレッドが見つかりません。".to_owned())?;
-
-    let already_resolved = messages
-        .iter()
-        .any(|item| item.thread_id == thread_id && item.message_type == "resolve");
-    if already_resolved {
-        return Err(
-            "解決済みスレッドには返信できません。必要な連絡は汎用メッセージで送信してください。"
-                .to_owned(),
-        );
-    }
-
-    Ok(())
-}
-
-#[derive(Debug, Clone)]
-struct CallTargetIdentity {
-    event_id: String,
-    set_id: String,
-    player_id: String,
-}
-
-fn extract_call_target_identity(meta: Option<&serde_json::Value>) -> Option<CallTargetIdentity> {
-    let event_id = meta_string(meta, "scopeEventId").or_else(|| meta_string(meta, "eventId"))?;
-    let set_id = meta_string(meta, "setId")?;
-    let player_id = meta_string(meta, "playerId")?.to_ascii_uppercase();
-
-    Some(CallTargetIdentity {
-        event_id,
-        set_id,
-        player_id,
-    })
-}
-
-fn call_target_identity_matches(left: &CallTargetIdentity, right: &CallTargetIdentity) -> bool {
-    left.event_id == right.event_id
-        && left.set_id == right.set_id
-        && left.player_id == right.player_id
-}
-
-#[cfg(test)]
-mod call_target_identity_tests {
-    use super::{
-        call_target_identity_matches, extract_call_target_identity, parse_call_sync_status_targets,
-    };
-    use serde_json::json;
-
-    #[test]
-    fn call_identity_uses_only_event_set_and_player() {
-        let left_meta = json!({
-            "scopeEventId": "event-1",
-            "scopeTournamentId": "tournament-1",
-            "scopePhaseName": "Phase 1",
-            "scopePhaseGroupName": "Pool A",
-            "setId": "set-1",
-            "playerId": "pg-player",
-            "callEntrantId": "entrant-1",
-        });
-        let same_call_meta = json!({
-            "eventId": "event-1",
-            "tournamentId": "tournament-2",
-            "phaseName": "Phase 2",
-            "phaseGroupName": "Pool B",
-            "setId": "set-1",
-            "playerId": "PG-PLAYER",
-            "callEntrantId": "entrant-2",
-        });
-        let left = extract_call_target_identity(Some(&left_meta)).unwrap();
-        let same_call = extract_call_target_identity(Some(&same_call_meta)).unwrap();
-
-        assert!(call_target_identity_matches(&left, &same_call));
-        assert!(!call_target_identity_matches(
-            &left,
-            &extract_call_target_identity(Some(&json!({
-                "eventId": "event-2",
-                "setId": "set-1",
-                "playerId": "PG-PLAYER",
-            })))
-            .unwrap(),
-        ));
-        assert!(!call_target_identity_matches(
-            &left,
-            &extract_call_target_identity(Some(&json!({
-                "eventId": "event-1",
-                "setId": "set-2",
-                "playerId": "PG-PLAYER",
-            })))
-            .unwrap(),
-        ));
-        assert!(!call_target_identity_matches(
-            &left,
-            &extract_call_target_identity(Some(&json!({
-                "eventId": "event-1",
-                "setId": "set-1",
-                "playerId": "PG-OTHER",
-            })))
-            .unwrap(),
-        ));
-    }
-
-    #[test]
-    fn call_sync_targets_use_the_same_composite_identity() {
-        let meta = json!({
-            "targets": [{
-                "threadId": "thread-1",
-                "senderUserId": "12345678",
-                "eventId": "event-1",
-                "setId": "set-1",
-                "playerId": "PG-PLAYER",
-            }]
-        });
-
-        let targets = parse_call_sync_status_targets(Some(&meta));
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].identity.event_id, "event-1");
-        assert_eq!(targets[0].identity.set_id, "set-1");
-        assert_eq!(targets[0].identity.player_id, "PG-PLAYER");
-    }
-}
-
-fn build_auto_resolve_message(profile: &SenderProfile, root: &GenericMessage) -> GenericMessage {
-    let body = "同一セット・同一プレイヤーの再呼び出し前に自動解決しました。";
-
-    GenericMessage {
-        message_id: create_message_id(profile, &root.method, body),
-        thread_id: root.thread_id.clone(),
-        parent_message_id: Some(root.message_id.clone()),
-        message_type: "resolve".to_owned(),
-        message_meta: root.message_meta.clone(),
-        method: root.method.clone(),
-        subject: format!("Resolved: {}", root.subject),
-        sender_name: profile.sender_name.trim().to_owned(),
-        sender_user_id: profile.sender_user_id.trim().to_owned(),
-        sender_ip: profile.bind_ip.trim().to_owned(),
-        body: body.to_owned(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-    }
-}
-
-fn collect_duplicate_unresolved_call_roots(
-    app: &tauri::AppHandle,
-    identity: &CallTargetIdentity,
-) -> Result<Vec<GenericMessage>, String> {
-    let messages = storage::load_generic_messages(app)?.unwrap_or_default();
-
-    let roots = messages
-        .iter()
-        .filter(|item| {
-            item.parent_message_id.is_none()
-                && item.message_type == "normal"
-                && item
-                    .method
-                    .trim()
-                    .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
-        })
-        .filter(|root| {
-            let Some(root_identity) = extract_call_target_identity(root.message_meta.as_ref())
-            else {
-                return false;
-            };
-            call_target_identity_matches(&root_identity, identity)
-        })
-        .filter(|root| {
-            !messages
-                .iter()
-                .any(|item| item.thread_id == root.thread_id && item.message_type == "resolve")
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-
-    Ok(roots)
-}
-
-fn validate_dq_request_permission(
-    app: &tauri::AppHandle,
-    thread_id: &str,
-    request_meta: Option<&serde_json::Value>,
-) -> Result<(), String> {
-    let messages = storage::load_generic_messages(app)?.unwrap_or_default();
-    let root = messages
-        .iter()
-        .find(|item| item.thread_id == thread_id && item.parent_message_id.is_none())
-        .ok_or_else(|| "対象スレッドが見つかりません。".to_owned())?;
-
-    if root.method.trim().to_ascii_lowercase() != "call_player" {
-        return Err("DQ申請はプレイヤー呼び出しスレッドでのみ送信できます。".to_owned());
-    }
-
-    let expected_player_id = meta_string(root.message_meta.as_ref(), "playerId")
-        .map(|value| value.to_ascii_uppercase())
-        .ok_or_else(|| "呼び出しスレッドにプレイヤー認証情報がありません。".to_owned())?;
-
-    let supplied_player_id = meta_string(request_meta, "dqPlayerId")
-        .map(|value| value.to_ascii_uppercase())
-        .ok_or_else(|| "DQ申請には認証済みPLAYER IDが必要です。".to_owned())?;
-
-    if expected_player_id != supplied_player_id {
-        return Err(
-            "入力したPLAYER IDが呼び出し対象と一致しないため、DQ申請できません。".to_owned(),
-        );
-    }
 
     Ok(())
 }
@@ -5907,57 +5496,18 @@ fn stop_udp_mailbox_service() -> Result<(), String> {
 fn send_mailbox_message(
     app: tauri::AppHandle,
     input: SendMailboxMessageInput,
-) -> Result<GenericMessage, String> {
+) -> Result<FeatureMessage, String> {
     let message = build_message_from_input(&input)?;
 
-    if message.message_type == "normal"
-        && message.parent_message_id.is_none()
-        && message
-            .method
-            .trim()
-            .eq_ignore_ascii_case(MAILBOX_METHOD_CALL_PLAYER)
-    {
-        if let Some(identity) = extract_call_target_identity(message.message_meta.as_ref()) {
-            let duplicate_roots = collect_duplicate_unresolved_call_roots(&app, &identity)?;
-
-            for root in duplicate_roots {
-                let resolve_message = build_auto_resolve_message(&input.profile, &root);
-                send_udp_mailbox_packet(
-                    &input.profile,
-                    &input.delivery_target_mode,
-                    input.delivery_target_ip.as_deref(),
-                    &resolve_message,
-                )?;
-                storage::append_generic_message(&app, &resolve_message)?;
-            }
-        }
+    if call_list::is_call_list_message(&message) {
+        return call_list::send(&app, &input, message);
     }
 
-    if message.parent_message_id.is_some() {
-        validate_thread_open_for_reply(&app, &message.thread_id)?;
+    if bracket_messages::is_bracket_message(&message) {
+        return bracket_messages::send(&app, &input, message);
     }
 
-    if message.message_type == "resolve" {
-        validate_resolve_permission(
-            &app,
-            &input.profile.sender_user_id,
-            &message.thread_id,
-            message.message_meta.as_ref(),
-        )?;
-    } else if message.message_type == "dq_request" {
-        validate_dq_request_permission(&app, &message.thread_id, input.message_meta.as_ref())?;
-    }
-
-    send_udp_mailbox_packet(
-        &input.profile,
-        &input.delivery_target_mode,
-        input.delivery_target_ip.as_deref(),
-        &message,
-    )?;
-
-    storage::append_generic_message(&app, &message)?;
-
-    Ok(message)
+    Err("未対応の機能宛先またはメソッドです。汎用メッセージは廃止されています。".to_owned())
 }
 
 async fn refresh_workspace_after_remote_report(
@@ -6495,19 +6045,6 @@ fn save_sender_profile(app: tauri::AppHandle, profile: SenderProfile) -> Result<
 #[tauri::command]
 fn load_sender_profile(app: tauri::AppHandle) -> Result<Option<SenderProfile>, String> {
     storage::load_sender_profile(&app)
-}
-
-#[tauri::command]
-fn save_generic_messages(
-    app: tauri::AppHandle,
-    messages: Vec<GenericMessage>,
-) -> Result<(), String> {
-    storage::save_generic_messages(&app, &messages)
-}
-
-#[tauri::command]
-fn load_generic_messages(app: tauri::AppHandle) -> Result<Option<Vec<GenericMessage>>, String> {
-    storage::load_generic_messages(&app)
 }
 
 #[tauri::command]
@@ -7223,11 +6760,12 @@ pub fn run() {
             toggle_obs_overlay_set,
             save_sender_profile,
             load_sender_profile,
-            save_generic_messages,
-            load_generic_messages,
             start_udp_mailbox_service,
             stop_udp_mailbox_service,
             send_mailbox_message,
+            call_list::load_player_calls,
+            bracket_messages::load_bracket_messages,
+            bracket_messages::mark_bracket_message_processed,
             save_event_alias,
             save_event_management_meta,
             load_local_tournament,

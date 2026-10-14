@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 
 export type CallListPlayer = {
-  threadId: string;
+  messageId: string;
   entrantId: string;
   entrantName: string;
   createdAt: string;
@@ -90,7 +90,7 @@ export function StatusBoardHero({
             並び替え: {sortStrategy === "alias" ? "エイリアス順" : "最大経過時間順"}
           </button>
           <button type="button" className="ghost" disabled={!canBroadcastSync} onClick={onBroadcastSync}>
-            呼び出しの同期
+            呼び出しの再送要求
           </button>
           {totalPages > 1 && (
             <button type="button" className="ghost" onClick={onNextPage}>
@@ -128,6 +128,8 @@ type StatusBoardProps = {
   colorToRedSeconds: number;
   resolvePlayerName: (group: CallListEventGroup, player: CallListPlayer) => string;
   onResolveOwnCall: (group: CallListEventGroup, player: CallListPlayer) => void;
+  onRequestDq: (messageId: string) => void;
+  communicationDisabled: boolean;
 };
 
 export function StatusBoard({
@@ -141,6 +143,8 @@ export function StatusBoard({
   colorToRedSeconds,
   resolvePlayerName,
   onResolveOwnCall,
+  onRequestDq,
+  communicationDisabled,
 }: StatusBoardProps) {
   return (
     <section className="panel call-list-panel">
@@ -178,7 +182,9 @@ export function StatusBoard({
                     {")"}
                   </span>
                 </p>
-                <span className="meta">{group.players.length} 件</span>
+                <span className="meta">
+                  {group.players[0]?.isOwn ? "自分の呼び出し" : "他端末の呼び出し"} / {group.players.length} 件
+                </span>
               </div>
               <div className="call-list-player-tags">
                 {group.players
@@ -196,7 +202,7 @@ export function StatusBoard({
                       return leftMs - rightMs;
                     }
 
-                    return left.threadId.localeCompare(right.threadId, "ja");
+                    return left.messageId.localeCompare(right.messageId, "ja");
                   })
                   .map((player) => {
                     const elapsedSeconds = callElapsedSeconds(player.createdAt, pageSwitchedAtMs);
@@ -210,23 +216,29 @@ export function StatusBoard({
                       <button
                         type="button"
                         className={className}
-                        key={`${group.key}-${player.threadId}`}
+                        key={`${group.key}-${player.messageId}`}
                         style={chipStyle}
                         onClick={() => onResolveOwnCall(group, player)}
+                        disabled={communicationDisabled}
                         aria-label={`${name} の呼び出しを解決`}
                       >
                         <span className="call-list-player-chip-name">{name}</span>
                         <span className="call-list-player-chip-elapsed">{elapsed}</span>
                       </button>
                     ) : (
-                      <span
+                      <button
+                        type="button"
                         className={className}
-                        key={`${group.key}-${player.threadId}`}
+                        key={`${group.key}-${player.messageId}`}
                         style={chipStyle}
+                        disabled={communicationDisabled}
+                        onClick={() => onRequestDq(player.messageId)}
+                        aria-label={`${name} のDQ申請`}
+                        title="クリックしてPLAYER ID認証付きDQ申請"
                       >
                         <span className="call-list-player-chip-name">{name}</span>
                         <span className="call-list-player-chip-elapsed">{elapsed}</span>
-                      </span>
+                      </button>
                     );
                   })}
               </div>
