@@ -20,6 +20,12 @@ export type MatchDialogPlayerView = {
   otherEntrantId: string | null;
 };
 
+export type MatchCallNotice = {
+  messageId: string;
+  entrantName: string;
+  calledAt: string;
+};
+
 type MatchDetailDialogProps = {
   match: SetSnapshot;
   setCode?: string;
@@ -35,6 +41,7 @@ type MatchDetailDialogProps = {
   onDisplayPlayersBySideChange: (checked: boolean) => void;
   randomNotice: MatchSideRandomNotice | null;
   players: MatchDialogPlayerView[];
+  callNotices: MatchCallNotice[];
   callingEntrantId: string;
   isDqDraft: boolean;
   overlayActive: boolean;
@@ -68,6 +75,7 @@ export function MatchDetailDialog({
   onDisplayPlayersBySideChange,
   randomNotice,
   players,
+  callNotices,
   callingEntrantId,
   isDqDraft,
   overlayActive,
@@ -117,6 +125,11 @@ export function MatchDetailDialog({
             {!randomNotice.changed ? " (結果は変更なし)" : ""}
           </p>
         )}
+        {callNotices.map((notice) => (
+          <p className="meta match-call-notice" key={notice.messageId}>
+            {notice.entrantName}の呼び出しを行いました（{new Date(notice.calledAt).toLocaleTimeString("ja-JP", { hour12: false })}）
+          </p>
+        ))}
         <label className="checkbox-row" style={{ marginTop: "0.4rem" }}>
           <input
             type="checkbox"

@@ -536,7 +536,7 @@ function App() {
     onMessage: setMessage,
   });
 
-  const { displayMessages: playerCallMessages, refresh: refreshPlayerCalls, resolveCall } = usePlayerCalls({
+  const { calls: playerCalls, displayMessages: playerCallMessages, refresh: refreshPlayerCalls, resolveCall } = usePlayerCalls({
     senderProfile,
     communicationDisabled: disableLocalCommunication,
     onError: setError,
@@ -2024,7 +2024,6 @@ function App() {
             <div className="dialog-head">
               <div>
                 <h3>呼び出しを解決しますか？</h3>
-                <p className="meta">解決すると、このスレッドは未解決の呼び出しリストから削除されます。</p>
               </div>
             </div>
             <div className="dialog-body">
@@ -2314,6 +2313,20 @@ function App() {
                 useAliasName: currentPlayerDisplayAliasSnapshot?.enabled,
               })}
               callingEntrantId={callingEntrantId}
+              callNotices={playerCalls.flatMap(({ message }) => {
+                const metadata = message.messageMeta;
+                const entrantName = metadata?.callEntrantName;
+                return message.method === "call_player"
+                  && metadata?.eventId === selectedEvent.eventId
+                  && metadata?.setId === activeMatch.setId
+                  && typeof entrantName === "string"
+                  ? [{
+                    messageId: message.messageId,
+                    entrantName,
+                    calledAt: message.createdAt,
+                  }]
+                  : [];
+              })}
               isDqDraft={isActiveMatchDqDraft}
               overlayActive={isOverlayActiveForSet(obsOverlayState, activeMatch.setId)}
               onClose={closeMatchDialog}

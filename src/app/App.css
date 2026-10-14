@@ -1802,6 +1802,15 @@ button:disabled {
   color: #92400e;
 }
 
+.match-call-notice {
+  margin-top: 0.4rem;
+  border: 1px dashed #86efac;
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  background: #f0fdf4;
+  color: #166534;
+}
+
 .dialog-result-form {
   margin-top: 0.75rem;
   display: grid;
