@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::sync::{Mutex, OnceLock};
 
@@ -78,6 +79,28 @@ fn mark_processed(inbox: &mut BracketInbox, message_id: &str) {
     {
         inbox.processed_message_ids.push(message_id.to_owned());
     }
+}
+
+fn remove_stale_dq_requests(
+    inbox: &mut BracketInbox,
+    active_call_message_ids: &HashSet<String>,
+) -> usize {
+    let stale_message_ids: Vec<String> = inbox
+        .messages
+        .iter()
+        .filter(|message| message.method == "player_dq_request")
+        .filter(|message| {
+            meta_string(message.message_meta.as_ref(), "dqCallMessageId")
+                .map_or(true, |call_id| !active_call_message_ids.contains(&call_id))
+        })
+        .map(|message| message.message_id.clone())
+        .collect();
+
+    for message_id in &stale_message_ids {
+        mark_processed(inbox, message_id);
+    }
+
+    stale_message_ids.len()
 }
 
 fn apply(
@@ -218,6 +241,21 @@ pub fn mark_bracket_message_processed(
     mark_processed(&mut inbox, &message_id);
     save(&app, &inbox)?;
     notify(&app)
+}
+
+pub fn discard_stale_dq_requests(
+    app: &tauri::AppHandle,
+    active_call_message_ids: &HashSet<String>,
+) -> Result<(), String> {
+    let _guard = lock()
+        .lock()
+        .map_err(|e| format!("ブラケット受信データのロックに失敗しました: {e}"))?;
+    let mut inbox = load(app)?;
+    if remove_stale_dq_requests(&mut inbox, active_call_message_ids) == 0 {
+        return Ok(());
+    }
+    save(app, &inbox)?;
+    notify(app)
 }
 
 fn validate_delivery(
@@ -394,6 +432,45 @@ mod tests {
         mark_processed(&mut restored, "dq");
         apply(&mut restored, &dq, "12345678").unwrap();
         assert!(restored.messages.is_empty());
+    }
+
+    #[test]
+    fn resend_cleanup_discards_only_dq_requests_without_an_active_own_call() {
+        let mut inbox = BracketInbox::default();
+        let mut active_dq = request("active-dq", "pool");
+        active_dq.method = "player_dq_request".to_owned();
+        active_dq.message_type = "dq_request".to_owned();
+        active_dq.message_meta = Some(json!({"dqCallMessageId": "active-call"}));
+        let mut stale_dq = active_dq.clone();
+        stale_dq.message_id = "stale-dq".to_owned();
+        stale_dq.message_meta = Some(json!({"dqCallMessageId": "resolved-call"}));
+        let mut malformed_dq = active_dq.clone();
+        malformed_dq.message_id = "malformed-dq".to_owned();
+        malformed_dq.message_meta = None;
+        let external_request = request("external", "pool");
+        for message in [&active_dq, &stale_dq, &malformed_dq, &external_request] {
+            apply(&mut inbox, message, "12345678").unwrap();
+        }
+
+        let active_call_ids = HashSet::from(["active-call".to_owned()]);
+        assert_eq!(remove_stale_dq_requests(&mut inbox, &active_call_ids), 2);
+        assert_eq!(
+            inbox
+                .messages
+                .iter()
+                .map(|message| message.message_id.as_str())
+                .collect::<Vec<_>>(),
+            ["active-dq", "external"]
+        );
+        assert!(inbox.processed_message_ids.contains(&"stale-dq".to_owned()));
+        assert!(inbox
+            .processed_message_ids
+            .contains(&"malformed-dq".to_owned()));
+        apply(&mut inbox, &stale_dq, "12345678").unwrap();
+        assert!(!inbox
+            .messages
+            .iter()
+            .any(|message| message.message_id == "stale-dq"));
     }
 
     #[test]

@@ -301,6 +301,11 @@ pub fn send(
         calls = own_calls(&calls, &input.profile.sender_user_id)
             .cloned()
             .collect();
+        let active_call_message_ids = calls
+            .iter()
+            .map(|call| call.message.message_id.clone())
+            .collect();
+        crate::bracket_messages::discard_stale_dq_requests(app, &active_call_message_ids)?;
         save(app, &calls)?;
         notify(app)?;
         send_udp_mailbox_packet(&input.profile, "broadcast", None, &message)?;
@@ -339,6 +344,10 @@ pub fn receive(
         .map_err(|e| format!("呼び出しリストのロックに失敗しました: {e}"))?;
     let mut calls = load(app)?;
     if crate::is_call_sync_method(&message.method) {
+        let active_call_message_ids = own_calls(&calls, &profile.sender_user_id)
+            .map(|call| call.message.message_id.clone())
+            .collect();
+        crate::bracket_messages::discard_stale_dq_requests(app, &active_call_message_ids)?;
         for call in own_calls(&calls, &profile.sender_user_id) {
             // Preserve the original issue time, but use the current reply address.
             let reply = resend_message(call, profile);

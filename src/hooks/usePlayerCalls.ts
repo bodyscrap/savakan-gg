@@ -9,6 +9,13 @@ export type PlayerCall = {
   receivedAt: string;
 };
 
+export function buildPlayerCallDisplayMessages(calls: PlayerCall[]): FeatureMessage[] {
+  return calls.map(({ message, receivedAt }) => ({
+    ...message,
+    createdAt: message.createdAt.trim() !== "" ? message.createdAt : receivedAt,
+  }));
+}
+
 type Options = {
   senderProfile: SenderProfile;
   communicationDisabled: boolean;
@@ -20,10 +27,7 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
     "load_player_calls", "player_calls_changed", [], onError,
   );
 
-  const displayMessages = useMemo(() => calls.map(({ message, receivedAt }) => ({
-    ...message,
-    createdAt: receivedAt,
-  })), [calls]);
+  const displayMessages = useMemo(() => buildPlayerCallDisplayMessages(calls), [calls]);
 
   async function resolveCall(messageId: string): Promise<boolean> {
     onError("");
