@@ -195,10 +195,7 @@ export function StatusBoardHero({
     <>
       <div className="hero-call-list-head">
         <h2 className="call-list-hero-title">プレイヤー呼び出し(イベント名/フェーズ名/プール名)</h2>
-        <p className="call-list-page-big">{currentPage}/{totalPages}</p>
-      </div>
-      <div className="hero-call-list-toolbar">
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+        <div className="hero-call-list-toolbar">
           <button type="button" className="ghost" onClick={onToggleSort}>
             並び替え: {sortStrategy === "alias" ? "エイリアス順" : "最大経過時間順"}
           </button>
@@ -211,6 +208,7 @@ export function StatusBoardHero({
             </button>
           )}
         </div>
+        <p className="call-list-page-big">{currentPage}/{totalPages}</p>
       </div>
       {totalPages > 1 && (
         <div

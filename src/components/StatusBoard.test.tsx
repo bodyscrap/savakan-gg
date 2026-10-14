@@ -51,6 +51,7 @@ describe("feature-only navigation and call cards", () => {
       <StatusBoardHero currentPage={1} totalPages={1} sortStrategy="alias" onToggleSort={vi.fn()}
         canBroadcastSync onBroadcastSync={vi.fn()} onNextPage={vi.fn()} pageProgressPercent={0} />,
     );
+    expect(html).toMatch(/hero-call-list-head[\s\S]*call-list-hero-title[\s\S]*hero-call-list-toolbar[\s\S]*並び替え:[\s\S]*呼び出しの同期[\s\S]*call-list-page-big/);
     expect(html).toContain(">呼び出しの同期</button>");
   });
   it("disables remote reaction cards when communication is disabled", () => {
