@@ -2059,6 +2059,42 @@ button:disabled {
   width: min(620px, 100%);
 }
 
+.dq-request-dialog {
+  width: min(520px, 100%);
+}
+
+.dq-request-dialog .dialog-head h3 {
+  margin: 0;
+}
+
+.dq-request-field {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.dq-request-field input,
+.dq-request-field textarea {
+  width: 100%;
+}
+
+.dq-request-camera {
+  display: grid;
+  justify-items: start;
+  gap: 0.55rem;
+}
+
+.dq-request-camera-preview {
+  width: 100%;
+  max-width: 420px;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0f172a;
+}
+
 .mobile-input-dialog {
   width: min(700px, 100%);
 }
