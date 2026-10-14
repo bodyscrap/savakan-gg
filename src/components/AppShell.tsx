@@ -40,7 +40,7 @@ const APP_TABS: AppTabDefinition[] = [
   { id: "bracket", label: "ブラケット", icon: "🏆", implemented: true },
   { id: "overlay", label: "オーバーレイ", icon: "📺", implemented: true },
   { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
-  { id: "call-list", label: "呼び出しリスト", icon: "📣", implemented: true },
+  { id: "call-list", label: "呼出リスト", icon: "📣", implemented: true },
   { id: "users", label: "プレイヤーリスト", icon: "👥", implemented: true },
   { id: "settings", label: "設定", icon: "🔧", implemented: true },
 ];
@@ -64,7 +64,8 @@ type AppShellProps = {
   appVersion: string;
   activeTab: AppTab;
   onTabSelect: (tab: AppTab) => void;
-  unresolvedCallCount: number;
+  otherDeviceCallCount: number;
+  receivedPlayingCount: number;
   sidebarSummary: SidebarSummary;
   headerContent?: ReactNode;
   message: string;
@@ -77,7 +78,8 @@ export function AppShell({
   appVersion,
   activeTab,
   onTabSelect,
-  unresolvedCallCount,
+  otherDeviceCallCount,
+  receivedPlayingCount,
   sidebarSummary,
   headerContent,
   message,
@@ -129,9 +131,26 @@ export function AppShell({
             >
               <span aria-hidden="true">{tab.icon}</span>
               <span>{tab.label}</span>
-              {tab.id === "call-list" && unresolvedCallCount > 0 && (
-                <span className="tab-count-badge" aria-label={`未解決の呼び出し ${unresolvedCallCount}件`}>
-                  {unresolvedCallCount >= 10 ? "9+" : unresolvedCallCount}
+              {tab.id === "call-list" && (
+                <span className="tab-count-badges">
+                  {otherDeviceCallCount > 0 && (
+                    <span
+                      className="tab-count-badge tab-count-badge--calls"
+                      aria-label={`他端末呼び出し ${otherDeviceCallCount}件`}
+                      title={`他端末呼び出し ${otherDeviceCallCount}件`}
+                    >
+                      {otherDeviceCallCount >= 10 ? "9+" : otherDeviceCallCount}
+                    </span>
+                  )}
+                  {receivedPlayingCount > 0 && (
+                    <span
+                      className="tab-count-badge tab-count-badge--playing"
+                      aria-label={`受信したプレイ中通知 ${receivedPlayingCount}件`}
+                      title={`受信したプレイ中通知 ${receivedPlayingCount}件`}
+                    >
+                      {receivedPlayingCount >= 10 ? "9+" : receivedPlayingCount}
+                    </span>
+                  )}
                 </span>
               )}
             </button>

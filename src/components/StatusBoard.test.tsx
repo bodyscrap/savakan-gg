@@ -120,7 +120,8 @@ describe("feature-only navigation and call cards", () => {
         playingUntil="" playingCommunication="" playingByMe={false} referenceMs={0} disabled={false}
         onRequestDq={vi.fn()} onNotifyPlaying={vi.fn()} onReleasePlaying={vi.fn()} onClose={vi.fn()} />,
     );
-    expect(html).toContain('aria-label="呼び出しへのリアクション"');
+    expect(html).toContain('aria-label="呼び出しへのリアクション(Remote Player)"');
+    expect(html).not.toContain('<p class="dialog-summary-title">Remote Player</p>');
     expect(html).toContain(">DQ申請</button>");
     expect(html).toContain(">プレイ中通知</button>");
   });
@@ -143,12 +144,17 @@ describe("feature-only navigation and call cards", () => {
     expect(html).toContain("20分ほど遅れます");
     expect(html).toContain("先に開始してください");
   });
-  it("does not offer a generic message tab or unread badge", () => {
+  it("shows separate call and received playing counts in the sidebar", () => {
     const html = renderToStaticMarkup(
-      <AppShell appVersion="" activeTab="bracket" onTabSelect={vi.fn()} unresolvedCallCount={1}
+      <AppShell appVersion="" activeTab="bracket" onTabSelect={vi.fn()}
+        otherDeviceCallCount={3} receivedPlayingCount={2}
         sidebarSummary={null} message="" error="" statusProgresses={[]}><span /></AppShell>,
     );
-    expect(html).toContain("呼び出しリスト");
+    expect(html).toContain("呼出リスト");
+    expect(html).toContain('aria-label="他端末呼び出し 3件"');
+    expect(html).toContain('aria-label="受信したプレイ中通知 2件"');
+    expect(html).toContain("tab-count-badge--calls");
+    expect(html).toContain("tab-count-badge--playing");
     expect(html).not.toContain("メッセージ");
     expect(html).not.toContain("message-mode");
   });

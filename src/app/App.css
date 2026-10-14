@@ -170,14 +170,27 @@ body {
   justify-content: center;
   min-width: 1.35rem;
   height: 1.35rem;
-  margin-left: auto;
   padding: 0 0.3rem;
   border-radius: 999px;
-  background: #ef4444;
   color: #ffffff;
   font-size: 0.7rem;
   font-weight: 700;
   line-height: 1;
+}
+
+.tab-count-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.tab-count-badge--calls {
+  background: #ef4444;
+}
+
+.tab-count-badge--playing {
+  background: #16a34a;
 }
 
 .tab-trigger:hover {

@@ -190,6 +190,20 @@ function readSnapshotArchiveIdentity(archiveJson: string) {
   };
 }
 
+function getCallListResolveDialogTitle(dialog: {
+  playerName: string;
+  dqRequest?: FeatureMessage;
+  afterDqConfirmation?: boolean;
+}) {
+  if (dialog.dqRequest) {
+    return `DQ申請受信(${dialog.playerName})`;
+  }
+  if (dialog.afterDqConfirmation) {
+    return `DQ確定後の呼び出し解決(${dialog.playerName})`;
+  }
+  return `呼び出し解決(${dialog.playerName})`;
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<AppTab>("create");
   const appVersion = useAppVersion();
@@ -2284,7 +2298,8 @@ function App() {
       appVersion={appVersion}
       activeTab={activeTab}
       onTabSelect={setActiveTab}
-      unresolvedCallCount={unresolvedCallRootCounts.total}
+      otherDeviceCallCount={unresolvedCallRootCounts.otherDeviceCalls}
+      receivedPlayingCount={unresolvedCallRootCounts.receivedPlaying}
       sidebarSummary={snapshot
         ? { name: selectedSummaryName, slug: snapshot.slug, eventCount: snapshot.events.length }
         : selectedSidebarItem
@@ -2467,22 +2482,15 @@ function App() {
             className="dialog-panel"
             role="dialog"
             aria-modal="true"
-            aria-label="呼び出し解決確認"
+            aria-label={getCallListResolveDialogTitle(callListResolveDialog)}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="dialog-head">
               <div>
-                <h3>{callListResolveDialog.dqRequest
-                  ? "DQ申請を受信しました"
-                  : callListResolveDialog.afterDqConfirmation
-                    ? "DQを確定しました。呼び出しを解決しますか？"
-                    : "呼び出しを解決しますか？"}</h3>
+                <h3>{getCallListResolveDialogTitle(callListResolveDialog)}</h3>
               </div>
             </div>
             <div className="dialog-body">
-              <div className="dialog-summary-box">
-                <p className="dialog-summary-title">{callListResolveDialog.playerName}</p>
-              </div>
               <CallListPlayingCommunication
                 communication={callListResolveDialog.playingCommunication ?? ""}
               />
@@ -2535,16 +2543,13 @@ function App() {
             className="dialog-panel"
             role="dialog"
             aria-modal="true"
-            aria-label="プレイ中通知"
+            aria-label={`プレイ中通知(${playingNoticeDialog.playerName})`}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="dialog-head">
-              <h3>プレイ中通知</h3>
+              <h3>{`プレイ中通知(${playingNoticeDialog.playerName})`}</h3>
             </div>
             <div className="dialog-body">
-              <div className="dialog-summary-box">
-                <p className="dialog-summary-title">{playingNoticeDialog.playerName}</p>
-              </div>
               <label className="field" style={{ marginTop: "0.75rem" }}>
                 <span>終了見込み時間（分）</span>
                 <input

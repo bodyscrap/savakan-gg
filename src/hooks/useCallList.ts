@@ -20,6 +20,29 @@ const CALL_LIST_EVENT_PAGE_SIZE = 4;
 const CALL_LIST_ROTATE_SECONDS_STORAGE_KEY = "savakan-gg.call-list-rotate-seconds.v1";
 const CALL_LIST_COLOR_SECONDS_STORAGE_KEY = "savakan-gg.call-list-color-seconds.v1";
 
+export function countCallListRootCounts(calls: FeatureMessage[], senderUserId: string) {
+  const unresolvedRoots = calls.filter((root) =>
+    root.parentMessageId === null
+    && root.method === "call_player"
+    && root.messageType === "normal"
+  );
+  const ownRoots = unresolvedRoots.filter((root) => root.senderUserId.trim() === senderUserId.trim());
+  const otherDeviceCalls = unresolvedRoots.length - ownRoots.length;
+  const receivedPlaying = unresolvedRoots.filter((root) =>
+    root.messageMeta?.callPlayerPlaying === true
+    && typeof root.messageMeta.callPlayerPlayingSenderUserId === "string"
+    && root.messageMeta.callPlayerPlayingSenderUserId.trim() !== senderUserId.trim()
+  ).length;
+
+  return {
+    total: unresolvedRoots.length,
+    own: ownRoots.length,
+    hidden: otherDeviceCalls,
+    otherDeviceCalls,
+    receivedPlaying,
+  };
+}
+
 export function normalizeCallListRotateSeconds(rawValue: unknown, fallback = CALL_LIST_ROTATE_SECONDS_DEFAULT): number {
   const numeric = Number(rawValue);
   if (!Number.isFinite(numeric)) {
@@ -274,20 +297,10 @@ export function useCallList({ activeTab, calls, dqRequests, senderUserId }: UseC
     setDisplayGroups((current) => current.slice().sort(eventGroupComparator));
   }, [eventGroupComparator]);
 
-  const rootCounts = useMemo(() => {
-    const unresolvedRoots = calls.filter((root) =>
-      root.parentMessageId === null
-      && root.method === "call_player"
-      && root.messageType === "normal"
-    );
-    const own = unresolvedRoots.filter((root) => root.senderUserId.trim() === senderUserId.trim()).length;
-
-    return {
-      total: unresolvedRoots.length,
-      own,
-      hidden: Math.max(0, unresolvedRoots.length - own),
-    };
-  }, [calls, senderUserId]);
+  const rootCounts = useMemo(
+    () => countCallListRootCounts(calls, senderUserId),
+    [calls, senderUserId],
+  );
 
   const hasCallListMessages = displayGroups.length > 0 || calls.some(
     (item) => item.parentMessageId === null && item.method === "call_player",

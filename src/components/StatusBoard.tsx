@@ -128,15 +128,14 @@ export function CallReactionDialog({
         className="dialog-panel"
         role="dialog"
         aria-modal="true"
-        aria-label="呼び出しへのリアクション"
+        aria-label={`呼び出しへのリアクション(${playerName})`}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="dialog-head">
-          <h3>呼び出しへのリアクション</h3>
+          <h3>{`呼び出しへのリアクション(${playerName})`}</h3>
         </div>
         <div className="dialog-body">
           <div className="dialog-summary-box">
-            <p className="dialog-summary-title">{playerName}</p>
             <p className="meta">
               呼び出し元: {senderName} / ID: {senderUserId} / IP: {senderIp}
             </p>
