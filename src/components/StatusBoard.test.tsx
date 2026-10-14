@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { StatusBoard, type CallListEventGroup } from "./StatusBoard";
+import { StatusBoard, StatusBoardHero, type CallListEventGroup } from "./StatusBoard";
 import type { FeatureMessage } from "../domain/messages";
 import { AppShell } from "./AppShell";
 
@@ -24,12 +24,13 @@ const groupWithDqRequest: CallListEventGroup = {
   ...group,
   players: [{ ...group.players[0], dqRequest }, group.players[1]],
 };
-function board(disabled: boolean) {
+function board(disabled: boolean, disableOwnCallActions = false, disableOtherCallActions = false) {
   return renderToStaticMarkup(
     <StatusBoard eventGroups={[group]} activePage={[group]} hiddenUnresolvedCount={0}
       focusOwnUnresolved={false} onShowAllUnresolved={vi.fn()} resolvePhaseName={(_, phase) => phase}
       pageSwitchedAtMs={0} colorToRedSeconds={60} resolvePlayerName={(_, player) => player.entrantName}
-      onResolveOwnCall={vi.fn()} onRequestDq={vi.fn()} communicationDisabled={disabled} />,
+      onResolveOwnCall={vi.fn()} onRequestDq={vi.fn()} communicationDisabled={disabled}
+      disableOwnCallActions={disableOwnCallActions} disableOtherCallActions={disableOtherCallActions} />,
   );
 }
 describe("feature-only navigation and call cards", () => {
@@ -39,8 +40,24 @@ describe("feature-only navigation and call cards", () => {
     expect(html).toContain("クリックしてPLAYER ID認証付きDQ申請");
     expect(html).not.toContain('aria-label="Own Player のDQ申請"');
   });
+  it("labels the call-list broadcast control as sync", () => {
+    const html = renderToStaticMarkup(
+      <StatusBoardHero currentPage={1} totalPages={1} sortStrategy="alias" onToggleSort={vi.fn()}
+        canBroadcastSync onBroadcastSync={vi.fn()} onNextPage={vi.fn()} pageProgressPercent={0} />,
+    );
+    expect(html).toContain(">呼び出しの同期</button>");
+  });
   it("disables remote DQ cards when communication is disabled", () => {
     expect(board(true)).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Remote Player のDQ申請"/);
+  });
+  it("locks own and remote call actions independently", () => {
+    const ownLocked = board(false, true, false);
+    expect(ownLocked).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Own Player の呼び出しを解決"/);
+    expect(ownLocked).not.toMatch(/<button[^>]*disabled=""[^>]*aria-label="Remote Player のDQ申請"/);
+
+    const remoteLocked = board(false, false, true);
+    expect(remoteLocked).not.toMatch(/<button[^>]*disabled=""[^>]*aria-label="Own Player の呼び出しを解決"/);
+    expect(remoteLocked).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Remote Player のDQ申請"/);
   });
   it("shows a DQ request badge on the corresponding own call card", () => {
     const html = renderToStaticMarkup(
@@ -48,7 +65,8 @@ describe("feature-only navigation and call cards", () => {
         hiddenUnresolvedCount={0} focusOwnUnresolved={false} onShowAllUnresolved={vi.fn()}
         resolvePhaseName={(_, phase) => phase} pageSwitchedAtMs={0} colorToRedSeconds={60}
         resolvePlayerName={(_, player) => player.entrantName} onResolveOwnCall={vi.fn()}
-        onRequestDq={vi.fn()} communicationDisabled={false} />,
+        onRequestDq={vi.fn()} communicationDisabled={false}
+        disableOwnCallActions={false} disableOtherCallActions={false} />,
     );
     expect(html).toContain("DQ申請あり");
     expect(html).toContain('aria-label="Own Player のDQ申請を確認"');

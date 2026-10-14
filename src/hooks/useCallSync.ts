@@ -37,8 +37,8 @@ export function useCallSync({
           profile: senderProfile,
           messageType: "normal",
           method: "call_player_sync_request",
-          subject: "プレイヤー呼び出しの再送要求",
-          body: "自身が発行した未解決の呼び出しを、この端末に再送してください。",
+          subject: "プレイヤー呼び出しの同期",
+          body: "自身が発行した未解決の呼び出しを、この端末に同期してください。",
           messageMeta: null,
           deliveryTargetMode: "broadcast",
           deliveryTargetIp: null,
@@ -48,7 +48,7 @@ export function useCallSync({
       });
       await refreshCalls();
       resetDisplay({ rebuild: true });
-      onMessage("他端末の呼び出しをクリアして再送を要求しました。返信を受け取り次第、リストを再構築します。");
+      onMessage("他端末の呼び出しをクリアして同期を要求しました。返信を受け取り次第、リストを再構築します。");
     } catch (error) {
       await refreshCalls().catch((refreshError) => onError(String(refreshError)));
       onError(String(error));

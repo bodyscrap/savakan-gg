@@ -214,6 +214,10 @@ function App() {
     commitMobileInputPollingMs,
     disableLocalCommunication,
     setDisableLocalCommunication,
+    disableOwnCallActions,
+    setDisableOwnCallActions,
+    disableOtherCallActions,
+    setDisableOtherCallActions,
   } = useAppPreferences();
   const {
     senderProfile,
@@ -2034,6 +2038,8 @@ function App() {
           onResolveOwnCall={openCallListResolveDialog}
           onRequestDq={openDqRequestDialog}
           communicationDisabled={disableLocalCommunication}
+          disableOwnCallActions={disableOwnCallActions}
+          disableOtherCallActions={disableOtherCallActions}
         />
       )}
 
@@ -2232,6 +2238,10 @@ function App() {
             callListColorToRedSeconds={callListColorToRedSeconds}
             hasCallListMessages={hasCallListMessages}
             onClearCallList={initializeCallListDisplay}
+            disableOwnCallActions={disableOwnCallActions}
+            onDisableOwnCallActionsChange={setDisableOwnCallActions}
+            disableOtherCallActions={disableOtherCallActions}
+            onDisableOtherCallActionsChange={setDisableOtherCallActions}
           />
         )}
 

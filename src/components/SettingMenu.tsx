@@ -40,6 +40,10 @@ type SettingsScreenProps = {
   callListColorToRedSeconds: number;
   hasCallListMessages: boolean;
   onClearCallList: () => void;
+  disableOwnCallActions: boolean;
+  onDisableOwnCallActionsChange: (checked: boolean) => void;
+  disableOtherCallActions: boolean;
+  onDisableOtherCallActionsChange: (checked: boolean) => void;
 };
 
 export function SettingsScreen({
@@ -79,6 +83,10 @@ export function SettingsScreen({
   callListColorToRedSeconds,
   hasCallListMessages,
   onClearCallList,
+  disableOwnCallActions,
+  onDisableOwnCallActionsChange,
+  disableOtherCallActions,
+  onDisableOtherCallActionsChange,
 }: SettingsScreenProps) {
   return (
     <>
@@ -229,7 +237,25 @@ export function SettingsScreen({
       <section className="panel">
         <h2>呼び出しリスト管理</h2>
         <p className="meta">保持中の未解決の呼び出しから表示を再構築します。呼び出し自体は削除しません。</p>
-        <p className="meta">他端末の呼び出しを最新化する場合は、呼び出しリスト画面の「呼び出しの再送要求」を使用してください。</p>
+        <p className="meta">他端末の呼び出しを最新化する場合は、呼び出しリスト画面の「呼び出しの同期」を使用してください。</p>
+
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={disableOwnCallActions}
+            onChange={(event) => onDisableOwnCallActionsChange(event.currentTarget.checked)}
+          />
+          自端末呼び出しへのアクション禁止
+        </label>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={disableOtherCallActions}
+            onChange={(event) => onDisableOtherCallActionsChange(event.currentTarget.checked)}
+          />
+          他端末呼び出しへのアクション禁止
+        </label>
+        <p className="meta">有効にすると、該当する呼び出しカードをクリックしても操作できません。掲示専用端末での誤操作防止に使用してください。</p>
 
         <div className="panel-toolbar compact">
           <p className="meta">表示順やページを初期化する場合に実行してください。</p>

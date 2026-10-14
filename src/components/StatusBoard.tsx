@@ -92,7 +92,7 @@ export function StatusBoardHero({
             並び替え: {sortStrategy === "alias" ? "エイリアス順" : "最大経過時間順"}
           </button>
           <button type="button" className="ghost" disabled={!canBroadcastSync} onClick={onBroadcastSync}>
-            呼び出しの再送要求
+            呼び出しの同期
           </button>
           {totalPages > 1 && (
             <button type="button" className="ghost" onClick={onNextPage}>
@@ -132,6 +132,8 @@ type StatusBoardProps = {
   onResolveOwnCall: (group: CallListEventGroup, player: CallListPlayer) => void;
   onRequestDq: (messageId: string) => void;
   communicationDisabled: boolean;
+  disableOwnCallActions: boolean;
+  disableOtherCallActions: boolean;
 };
 
 export function StatusBoard({
@@ -147,6 +149,8 @@ export function StatusBoard({
   onResolveOwnCall,
   onRequestDq,
   communicationDisabled,
+  disableOwnCallActions,
+  disableOtherCallActions,
 }: StatusBoardProps) {
   return (
     <section className="panel call-list-panel">
@@ -221,10 +225,11 @@ export function StatusBoard({
                         key={`${group.key}-${player.messageId}`}
                         style={chipStyle}
                         onClick={() => onResolveOwnCall(group, player)}
-                        disabled={communicationDisabled}
+                        disabled={communicationDisabled || disableOwnCallActions}
                         aria-label={player.dqRequest
                           ? `${name} のDQ申請を確認`
                           : `${name} の呼び出しを解決`}
+                        title={disableOwnCallActions ? "設定で自端末呼び出しへの操作が禁止されています" : undefined}
                       >
                         <span className="call-list-player-chip-name">
                           {name}
@@ -242,10 +247,12 @@ export function StatusBoard({
                         className={className}
                         key={`${group.key}-${player.messageId}`}
                         style={chipStyle}
-                        disabled={communicationDisabled}
+                        disabled={communicationDisabled || disableOtherCallActions}
                         onClick={() => onRequestDq(player.messageId)}
                         aria-label={`${name} のDQ申請`}
-                        title="クリックしてPLAYER ID認証付きDQ申請"
+                        title={disableOtherCallActions
+                          ? "設定で他端末呼び出しへの操作が禁止されています"
+                          : "クリックしてPLAYER ID認証付きDQ申請"}
                       >
                         <span className="call-list-player-chip-name">{name}</span>
                         <span className="call-list-player-chip-elapsed">{elapsed}</span>

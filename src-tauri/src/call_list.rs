@@ -296,7 +296,7 @@ pub fn send(
     let mut calls = load(app)?;
     if crate::is_call_sync_method(&message.method) {
         if input.delivery_target_mode != "broadcast" {
-            return Err("呼び出しの再送要求はブロードキャストで送信してください。".to_owned());
+            return Err("呼び出しの同期要求はブロードキャストで送信してください。".to_owned());
         }
         calls = own_calls(&calls, &input.profile.sender_user_id)
             .cloned()

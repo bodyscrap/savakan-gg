@@ -9,6 +9,20 @@ const BRACKET_SIDE_ORDER_DISPLAY_STORAGE_KEY = "savakan-gg.bracket-side-order-di
 const BRACKET_ZOOM_LEVEL_STORAGE_KEY = "savakan-gg.bracket-zoom-level.v1";
 const MOBILE_INPUT_POLLING_MS_STORAGE_KEY = "savakan-gg.mobile-input-polling-ms.v1";
 const LOCAL_COMMUNICATION_DISABLED_STORAGE_KEY = "savakan-gg.local-communication-disabled.v1";
+const CALL_LIST_OWN_ACTIONS_DISABLED_STORAGE_KEY = "savakan-gg.call-list-own-actions-disabled.v1";
+const CALL_LIST_OTHER_ACTIONS_DISABLED_STORAGE_KEY = "savakan-gg.call-list-other-actions-disabled.v1";
+
+function readStoredBoolean(key: string, fallback = false): boolean {
+  try {
+    if (typeof window === "undefined") {
+      return fallback;
+    }
+    const rawValue = window.localStorage.getItem(key);
+    return rawValue === null ? fallback : rawValue === "true";
+  } catch {
+    return fallback;
+  }
+}
 
 export function normalizeMobileInputPollingMs(
   rawValue: unknown,
@@ -52,6 +66,12 @@ export function useAppPreferences() {
   const [bracketZoomLevel, setBracketZoomLevel] = useState<number>(Number(BRACKET_ZOOM_LEVELS[0]));
   const [mobileInputPollingMs, setMobileInputPollingMs] = useState(MOBILE_INPUT_POLLING_MS_DEFAULT);
   const [disableLocalCommunication, setDisableLocalCommunication] = useState(false);
+  const [disableOwnCallActions, setDisableOwnCallActions] = useState(
+    () => readStoredBoolean(CALL_LIST_OWN_ACTIONS_DISABLED_STORAGE_KEY),
+  );
+  const [disableOtherCallActions, setDisableOtherCallActions] = useState(
+    () => readStoredBoolean(CALL_LIST_OTHER_ACTIONS_DISABLED_STORAGE_KEY),
+  );
 
   function changeMobileInputPollingMs(value: unknown) {
     setMobileInputPollingMs((current) => normalizeMobileInputPollingMs(value, current));
@@ -124,6 +144,26 @@ export function useAppPreferences() {
   useEffect(() => {
     try {
       window.localStorage.setItem(
+        CALL_LIST_OWN_ACTIONS_DISABLED_STORAGE_KEY,
+        disableOwnCallActions ? "true" : "false",
+      );
+    } catch {
+    }
+  }, [disableOwnCallActions]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        CALL_LIST_OTHER_ACTIONS_DISABLED_STORAGE_KEY,
+        disableOtherCallActions ? "true" : "false",
+      );
+    } catch {
+    }
+  }, [disableOtherCallActions]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
         MOBILE_INPUT_POLLING_MS_STORAGE_KEY,
         String(normalizeMobileInputPollingMs(mobileInputPollingMs)),
       );
@@ -142,5 +182,9 @@ export function useAppPreferences() {
     commitMobileInputPollingMs,
     disableLocalCommunication,
     setDisableLocalCommunication,
+    disableOwnCallActions,
+    setDisableOwnCallActions,
+    disableOtherCallActions,
+    setDisableOtherCallActions,
   };
 }
