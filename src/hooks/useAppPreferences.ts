@@ -24,6 +24,15 @@ function readStoredBoolean(key: string, fallback = false): boolean {
   }
 }
 
+export function writeStoredBooleanPreference(key: string, value: boolean): void {
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(key, value ? "true" : "false");
+    }
+  } catch {
+  }
+}
+
 export function normalizeMobileInputPollingMs(
   rawValue: unknown,
   fallback = MOBILE_INPUT_POLLING_MS_DEFAULT,
@@ -72,6 +81,16 @@ export function useAppPreferences() {
   const [disableOtherCallActions, setDisableOtherCallActions] = useState(
     () => readStoredBoolean(CALL_LIST_OTHER_ACTIONS_DISABLED_STORAGE_KEY),
   );
+
+  function updateDisableOwnCallActions(value: boolean) {
+    setDisableOwnCallActions(value);
+    writeStoredBooleanPreference(CALL_LIST_OWN_ACTIONS_DISABLED_STORAGE_KEY, value);
+  }
+
+  function updateDisableOtherCallActions(value: boolean) {
+    setDisableOtherCallActions(value);
+    writeStoredBooleanPreference(CALL_LIST_OTHER_ACTIONS_DISABLED_STORAGE_KEY, value);
+  }
 
   function changeMobileInputPollingMs(value: unknown) {
     setMobileInputPollingMs((current) => normalizeMobileInputPollingMs(value, current));
@@ -144,26 +163,6 @@ export function useAppPreferences() {
   useEffect(() => {
     try {
       window.localStorage.setItem(
-        CALL_LIST_OWN_ACTIONS_DISABLED_STORAGE_KEY,
-        disableOwnCallActions ? "true" : "false",
-      );
-    } catch {
-    }
-  }, [disableOwnCallActions]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        CALL_LIST_OTHER_ACTIONS_DISABLED_STORAGE_KEY,
-        disableOtherCallActions ? "true" : "false",
-      );
-    } catch {
-    }
-  }, [disableOtherCallActions]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
         MOBILE_INPUT_POLLING_MS_STORAGE_KEY,
         String(normalizeMobileInputPollingMs(mobileInputPollingMs)),
       );
@@ -183,8 +182,8 @@ export function useAppPreferences() {
     disableLocalCommunication,
     setDisableLocalCommunication,
     disableOwnCallActions,
-    setDisableOwnCallActions,
+    setDisableOwnCallActions: updateDisableOwnCallActions,
     disableOtherCallActions,
-    setDisableOtherCallActions,
+    setDisableOtherCallActions: updateDisableOtherCallActions,
   };
 }

@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeBracketZoomLevel,
   normalizeMobileInputPollingMs,
+  writeStoredBooleanPreference,
 } from "./useAppPreferences";
 
 describe("application preference normalization", () => {
@@ -17,4 +18,16 @@ describe("application preference normalization", () => {
     expect(normalizeBracketZoomLevel(0.42)).toBe(0.5);
     expect(normalizeBracketZoomLevel("invalid")).toBe(1);
   });
+
+  it("writes boolean preferences synchronously", () => {
+    const setItem = vi.fn();
+    vi.stubGlobal("window", { localStorage: { setItem } });
+
+    writeStoredBooleanPreference("call-lock", true);
+
+    expect(setItem).toHaveBeenCalledWith("call-lock", "true");
+    vi.unstubAllGlobals();
+  });
 });
+
+afterEach(() => vi.unstubAllGlobals());
