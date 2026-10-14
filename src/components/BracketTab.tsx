@@ -381,12 +381,14 @@ export function ExternalReportRequestPanel({
   if (!request) return null;
   return (
     <section className="panel" aria-label="受信した外部報告申請">
-      <h3>外部報告申請が届いています</h3>
-      <p>{request.senderName} ({request.senderUserId})</p>
-      <p className="meta">このプールの最新の申請を表示しています。</p>
-      <div className="panel-toolbar compact">
-        <button type="button" disabled={!canAccept} onClick={onAccept}>受理</button>
-        <button type="button" className="ghost" disabled={!canRespond} onClick={onReject}>拒否</button>
+      <div className="external-report-request-row">
+        <h3>外部報告申請が届いています</h3>
+        <p>{request.senderName} ({request.senderUserId})</p>
+        <p className="meta">このプールの最新の申請を表示しています。</p>
+        <div className="external-report-request-actions">
+          <button type="button" disabled={!canAccept} onClick={onAccept}>受理</button>
+          <button type="button" className="ghost" disabled={!canRespond} onClick={onReject}>拒否</button>
+        </div>
       </div>
     </section>
   );

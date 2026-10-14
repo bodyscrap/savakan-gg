@@ -16,6 +16,8 @@ describe("pool external report request panel", () => {
       <ExternalReportRequestPanel request={request} canAccept canRespond onAccept={vi.fn()} onReject={vi.fn()} />,
     );
     expect(html).toContain("外部報告申請が届いています");
+    expect(html).toContain('class="external-report-request-row"');
+    expect(html).toContain('class="external-report-request-actions"');
     expect(html).toContain("Latest Reporter");
     expect(html).toContain("87654321");
     expect(html).toContain(">受理</button>");

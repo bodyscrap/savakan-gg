@@ -327,6 +327,26 @@ body {
   margin: 0.7rem 0;
 }
 
+.external-report-request-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+}
+
+.external-report-request-row > h3,
+.external-report-request-row > p {
+  margin: 0;
+}
+
+.external-report-request-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 .panel-toolbar h2 {
   margin-bottom: 0;
 }

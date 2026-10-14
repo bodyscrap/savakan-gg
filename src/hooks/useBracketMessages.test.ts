@@ -111,6 +111,26 @@ describe("feature-routed external report messaging", () => {
     });
   });
 
+  it("requests a full pool sync directly from the external reporter", async () => {
+    await setup().sendExternalScoreSyncRequest({
+      tournamentId: "tournament", slug: "slug", eventId: "event", phaseGroupId: "pool",
+      fromSequence: 1, resetPool: true,
+    }, "192.168.1.20");
+    expect(invoke).toHaveBeenCalledWith("send_mailbox_message", {
+      input: expect.objectContaining({
+        destination: "bracket", method: "external_score_sync_request",
+        deliveryTargetMode: "direct", deliveryTargetIp: "192.168.1.20",
+        messageMeta: expect.objectContaining({
+          externalScoreSyncTournamentId: "tournament",
+          externalScoreSyncEventId: "event",
+          externalScoreSyncPhaseGroupId: "pool",
+          externalScoreSyncFromSequence: 1,
+          externalScoreSyncResetPool: true,
+        }),
+      }),
+    });
+  });
+
   it("correlates report acknowledgements without a thread", async () => {
     expect(await setup().replyToExternalScoreReport({ ...request, method: "external_score_report" }, false, "reason")).toBe(true);
     expect(invoke).toHaveBeenCalledWith("send_mailbox_message", {

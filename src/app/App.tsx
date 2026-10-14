@@ -1813,7 +1813,20 @@ function App() {
       setSelectedPhaseName(request.phaseName);
       setSelectedPhasePoolKey(`id:${request.phaseGroupId}`);
       setActiveTab("bracket");
-      setMessage(`外部報告申請を受理し、返信しました: ${request.phaseName} / ${request.phaseGroupName}`);
+      try {
+        await sendExternalScoreSyncRequest({
+          tournamentId: request.tournamentId,
+          slug: request.slug,
+          eventId: request.eventId,
+          phaseGroupId: request.phaseGroupId,
+          fromSequence: 1,
+          resetPool: true,
+        }, message.senderIp);
+        setMessage(`外部報告申請を受理し、返信しました: ${request.phaseName} / ${request.phaseGroupName}。Pool全同期を要求しました。`);
+      } catch (syncError) {
+        setMessage("");
+        setError(`外部報告申請は受理しましたが、Pool全同期の要求に失敗しました: ${String(syncError)}`);
+      }
     } catch (error) {
       setError(String(error));
     } finally {
