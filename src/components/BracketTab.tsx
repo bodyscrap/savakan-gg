@@ -351,13 +351,20 @@ export function PlayerDqRequestPanel({
     <section className="panel" aria-label="受信したDQ申請">
       <h3>DQ申請が届いています</h3>
       <p className="meta">対象の試合を開き、DQ内容を確認して「確定」を押してください。開くだけでは申請は処理済みになりません。</p>
-      {requests.map((request) => (
-        <div key={request.messageId}>
-          <p>{request.body}</p>
-          <p className="meta">{request.senderName} ({request.senderUserId}) / {request.createdAt}</p>
-          <button type="button" disabled={busy} onClick={() => onProcess(request)}>DQ内容を確認</button>
-        </div>
-      ))}
+      <div className="dq-request-list">
+        {requests.map((request) => (
+          <div className="dq-request-row" key={request.messageId}>
+            <p className="dq-request-row-body" title={request.body}>{request.body}</p>
+            <p
+              className="meta dq-request-row-meta"
+              title={`${request.senderName} (${request.senderUserId}) / ${request.createdAt}`}
+            >
+              {request.senderName} ({request.senderUserId}) / {request.createdAt}
+            </p>
+            <button type="button" disabled={busy} onClick={() => onProcess(request)}>DQ内容を確認</button>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }

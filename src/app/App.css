@@ -593,6 +593,31 @@ button:disabled {
   vertical-align: middle;
 }
 
+.dq-request-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.dq-request-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.7fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.dq-request-row-body,
+.dq-request-row-meta {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .call-list-player-chip--own .call-list-player-chip-elapsed {
   grid-column: 1;
   grid-row: 2;

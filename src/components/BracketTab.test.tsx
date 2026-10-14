@@ -25,11 +25,18 @@ describe("pool external report request panel", () => {
 
   describe("pool DQ request panel", () => {
     it("offers explicit confirmation instead of applying or hiding the request on opening", () => {
+      const secondRequest = { ...request, messageId: "request-2", body: "Second DQ reason" };
       const html = renderToStaticMarkup(
-        <PlayerDqRequestPanel requests={[{ ...request, body: "DQ reason" }]} busy={false} onProcess={vi.fn()} />,
+        <PlayerDqRequestPanel
+          requests={[{ ...request, body: "DQ reason" }, secondRequest]}
+          busy={false}
+          onProcess={vi.fn()}
+        />,
       );
       expect(html).toContain("DQ申請が届いています");
       expect(html).toContain("DQ reason");
+      expect(html).toContain("Second DQ reason");
+      expect(html.match(/class="dq-request-row"/g)).toHaveLength(2);
       expect(html).toContain("Latest Reporter");
       expect(html).toContain(">DQ内容を確認</button>");
       expect(html).toContain("開くだけでは申請は処理済みになりません");
