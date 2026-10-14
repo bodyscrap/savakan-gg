@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import type { FeatureMessage } from "../domain/messages";
 
 export type CallListPlayer = {
   messageId: string;
@@ -7,6 +8,7 @@ export type CallListPlayer = {
   createdAt: string;
   senderName: string;
   isOwn: boolean;
+  dqRequest: FeatureMessage | null;
 };
 
 export type CallListEventGroup = {
@@ -220,9 +222,18 @@ export function StatusBoard({
                         style={chipStyle}
                         onClick={() => onResolveOwnCall(group, player)}
                         disabled={communicationDisabled}
-                        aria-label={`${name} の呼び出しを解決`}
+                        aria-label={player.dqRequest
+                          ? `${name} のDQ申請を確認`
+                          : `${name} の呼び出しを解決`}
                       >
-                        <span className="call-list-player-chip-name">{name}</span>
+                        <span className="call-list-player-chip-name">
+                          {name}
+                          {player.dqRequest && (
+                            <span className="call-list-dq-request-badge" aria-label="DQ申請あり">
+                              DQ申請
+                            </span>
+                          )}
+                        </span>
                         <span className="call-list-player-chip-elapsed">{elapsed}</span>
                       </button>
                     ) : (

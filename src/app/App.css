@@ -579,6 +579,20 @@ button:disabled {
   font-size: 3.1rem;
 }
 
+.call-list-dq-request-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.45rem;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid #b45309;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #78350f;
+  font-size: 0.78rem;
+  line-height: 1;
+  vertical-align: middle;
+}
+
 .call-list-player-chip--own .call-list-player-chip-elapsed {
   grid-column: 1;
   grid-row: 2;

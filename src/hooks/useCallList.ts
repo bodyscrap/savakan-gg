@@ -5,8 +5,8 @@ import {
   compareCallListEventGroup,
   compareCallListEventGroupByMaxElapsed,
   extractCallEventMeta,
-  extractPlayerCallIdentity,
   extractMetaString,
+  extractPlayerCallIdentity,
 } from "../domain/messageUtils";
 
 export const CALL_LIST_ROTATE_SECONDS_MIN = 1;
@@ -57,6 +57,7 @@ export function normalizeCallListColorSeconds(rawValue: unknown, fallback = CALL
 type UseCallListOptions = {
   activeTab: string;
   calls: FeatureMessage[];
+  dqRequests: FeatureMessage[];
   senderUserId: string;
 };
 
@@ -65,7 +66,7 @@ type ResetCallListDisplayOptions = {
   rebuild?: boolean;
 };
 
-export function useCallList({ activeTab, calls, senderUserId }: UseCallListOptions) {
+export function useCallList({ activeTab, calls, dqRequests, senderUserId }: UseCallListOptions) {
   const [pageIndex, setPageIndex] = useState(0);
   const [pageRotateSeconds, setPageRotateSeconds] = useState(CALL_LIST_ROTATE_SECONDS_DEFAULT);
   const [colorSeconds, setColorSeconds] = useState(CALL_LIST_COLOR_SECONDS_DEFAULT);
@@ -77,6 +78,17 @@ export function useCallList({ activeTab, calls, senderUserId }: UseCallListOptio
   const [displayGroups, setDisplayGroups] = useState<CallListEventGroup[]>([]);
   const [rebuildToken, setRebuildToken] = useState(0);
   const [cycleCount, setCycleCount] = useState(0);
+
+  const dqRequestsByCallId = useMemo(() => {
+    const requests = new Map<string, FeatureMessage>();
+    for (const request of dqRequests) {
+      const callMessageId = extractMetaString(request.messageMeta, "dqCallMessageId");
+      if (callMessageId !== "") {
+        requests.set(callMessageId, request);
+      }
+    }
+    return requests;
+  }, [dqRequests]);
 
   function changePageRotateSeconds(value: unknown) {
     setPageRotateSeconds((current) => normalizeCallListRotateSeconds(value, current));
@@ -176,6 +188,7 @@ export function useCallList({ activeTab, calls, senderUserId }: UseCallListOptio
           createdAt: root.createdAt,
           senderName: root.senderName,
           isOwn: senderUserId.trim() !== "" && root.senderUserId.trim() === senderUserId.trim(),
+          dqRequest: dqRequestsByCallId.get(root.messageId) ?? null,
         });
       } else {
         groups.set(groupKey, {
@@ -194,6 +207,7 @@ export function useCallList({ activeTab, calls, senderUserId }: UseCallListOptio
             createdAt: root.createdAt,
             senderName: root.senderName,
             isOwn: senderUserId.trim() !== "" && root.senderUserId.trim() === senderUserId.trim(),
+            dqRequest: dqRequestsByCallId.get(root.messageId) ?? null,
           }],
         });
       }
@@ -205,7 +219,7 @@ export function useCallList({ activeTab, calls, senderUserId }: UseCallListOptio
         .slice()
         .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
     }));
-  }, [focusOwnUnresolved, calls, senderUserId]);
+  }, [dqRequestsByCallId, focusOwnUnresolved, calls, senderUserId]);
 
   const eventGroupComparator = useMemo(() => {
     if (eventSortStrategy === "max-elapsed") {

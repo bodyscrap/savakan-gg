@@ -22,6 +22,7 @@ import {
 } from "../hooks/useAppPreferences";
 import { toApiSlug, toEventApiSlug } from "../domain/slugUtils";
 import { SettingsScreen } from "../components/SettingMenu";
+import type { FeatureMessage } from "../domain/messages";
 import {
   StatusBoard,
   StatusBoardHero,
@@ -557,16 +558,29 @@ function App() {
 
   const pendingDqRequests = bracketMessages.filter(isDqRequestMessage);
   confirmedDqRequestsRef.current = async (report) => {
-    for (const request of pendingDqRequests) {
-      if (isDqRequestConfirmed(request, report)) {
-        await markBracketMessageProcessed(request.messageId);
-      }
+    const confirmedRequests = pendingDqRequests.filter((request) => isDqRequestConfirmed(request, report));
+    const confirmedRequest = confirmedRequests[0];
+    if (confirmedRequest) {
+      const callMessageId = extractMetaString(confirmedRequest.messageMeta, "dqCallMessageId");
+      const call = playerCallMessages.find((message) => message.messageId === callMessageId);
+      setCallListResolveDialog({
+        messageId: callMessageId,
+        playerName: call
+          ? extractMetaString(call.messageMeta, "callEntrantName") || call.subject
+          : extractMetaString(confirmedRequest.messageMeta, "dqCallEntrantName") || "DQ対象プレイヤー",
+        afterDqConfirmation: true,
+      });
+    }
+    for (const request of confirmedRequests) {
+      await markBracketMessageProcessed(request.messageId);
     }
   };
 
   const [callListResolveDialog, setCallListResolveDialog] = useState<{
     messageId: string;
     playerName: string;
+    dqRequest?: FeatureMessage;
+    afterDqConfirmation?: boolean;
   } | null>(null);
   const [callListResolveSubmitting, setCallListResolveSubmitting] = useState(false);
   const {
@@ -594,6 +608,7 @@ function App() {
   } = useCallList({
     activeTab,
     calls: playerCallMessages,
+    dqRequests: pendingDqRequests,
     senderUserId: senderProfile.senderUserId,
   });
 
@@ -601,6 +616,7 @@ function App() {
     setCallListResolveDialog({
       messageId: player.messageId,
       playerName: resolveCallListPlayerName(group, player),
+      dqRequest: player.dqRequest ?? undefined,
     });
     pauseCallListPageRotation(true);
   }
@@ -628,6 +644,15 @@ function App() {
     } finally {
       setCallListResolveSubmitting(false);
     }
+  }
+
+  function acceptCallListDqRequest() {
+    const request = callListResolveDialog?.dqRequest;
+    if (!request || !processDqRequestFromMessage(request)) {
+      return;
+    }
+    setCallListResolveDialog(null);
+    pauseCallListPageRotation(false);
   }
 
   const callListAliasSettingsByEvent = useMemo(() => {
@@ -2023,13 +2048,29 @@ function App() {
           >
             <div className="dialog-head">
               <div>
-                <h3>呼び出しを解決しますか？</h3>
+                <h3>{callListResolveDialog.dqRequest
+                  ? "DQ申請を受信しました"
+                  : callListResolveDialog.afterDqConfirmation
+                    ? "DQを確定しました。呼び出しを解決しますか？"
+                    : "呼び出しを解決しますか？"}</h3>
               </div>
             </div>
             <div className="dialog-body">
               <div className="dialog-summary-box">
                 <p className="dialog-summary-title">{callListResolveDialog.playerName}</p>
               </div>
+              {callListResolveDialog.dqRequest && (
+                <div className="dialog-summary-box" style={{ marginTop: "0.75rem" }}>
+                  <p className="meta">
+                    申請元: {callListResolveDialog.dqRequest.senderName}
+                    {" / ID: "}{callListResolveDialog.dqRequest.senderUserId}
+                    {" / IP: "}{callListResolveDialog.dqRequest.senderIp}
+                  </p>
+                  <p className="meta">
+                    申請理由: {extractMetaString(callListResolveDialog.dqRequest.messageMeta, "dqReason") || "（理由なし）"}
+                  </p>
+                </div>
+              )}
             </div>
             <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
               <button
@@ -2040,12 +2081,21 @@ function App() {
               >
                 キャンセル
               </button>
+              {callListResolveDialog.dqRequest && (
+                <button
+                  type="button"
+                  disabled={callListResolveSubmitting}
+                  onClick={acceptCallListDqRequest}
+                >
+                  DQ申請受理
+                </button>
+              )}
               <button
                 type="button"
                 disabled={callListResolveSubmitting}
                 onClick={() => void confirmCallListResolution()}
               >
-                {callListResolveSubmitting ? "解決中..." : "解決"}
+                {callListResolveSubmitting ? "解決中..." : "呼び出しを解決"}
               </button>
             </div>
           </section>

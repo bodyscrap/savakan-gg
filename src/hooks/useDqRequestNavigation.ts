@@ -45,40 +45,40 @@ export function useDqRequestNavigation({
   onError,
   onMessage,
 }: UseDqRequestNavigationOptions) {
-  function processDqRequestFromMessage(message: FeatureMessage) {
+  function processDqRequestFromMessage(message: FeatureMessage): boolean {
     onError("");
     onMessage("");
 
     if (!event) {
       onError("先にイベントを選択してください。DQ処理先を開けません。");
-      return;
+      return false;
     }
     if (extractMetaString(message.messageMeta, "scopeEventId") !== event.eventId) {
       onError("DQ申請のイベントが現在のイベントと一致しません。");
-      return;
+      return false;
     }
 
     const context = resolveDqRequestContext(message);
     if (!context) {
       onError("DQ申請メッセージから対象setを特定できませんでした。");
-      return;
+      return false;
     }
 
     const targetSet = event.sets.find((set) => set.setId === context.setId);
     if (!targetSet) {
       onError(`対象setが現在のイベント内に見つかりません: ${context.setId}`);
-      return;
+      return false;
     }
     if (extractMetaString(message.messageMeta, "phaseGroupId") !== targetSet.phaseGroupId) {
       onError("DQ申請のPoolが対象の試合と一致しません。");
-      return;
+      return false;
     }
 
     const resolvedTargetSet = resolvedSetsById.get(targetSet.setId) ?? targetSet;
     const draftState = buildDqDraftStateForEntrant(resolvedTargetSet, context.dqEntrantId);
     if (!draftState) {
       onError("DQ入力の自動設定に失敗しました。対象プレイヤーまたは対戦カードを確認してください。");
-      return;
+      return false;
     }
 
     const phaseName = targetSet.phaseName && targetSet.phaseName.trim() !== "" ? targetSet.phaseName : "Phase 未設定";
@@ -88,6 +88,7 @@ export function useDqRequestNavigation({
     setActiveTab("bracket");
     openMatchDialog(targetSet, draftState);
     onMessage("DQ申請から対象setを開きました。DQ入力済みなので「確定」を押すと反映できます。");
+    return true;
   }
 
   return { processDqRequestFromMessage };
