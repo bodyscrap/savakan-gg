@@ -639,6 +639,7 @@ function App() {
     playerName: string;
   } | null>(null);
   const [playingMinutesDraft, setPlayingMinutesDraft] = useState("0");
+  const [playingCommunicationDraft, setPlayingCommunicationDraft] = useState("");
   const [playingNoticeSubmitting, setPlayingNoticeSubmitting] = useState(false);
   const {
     hasCallListMessages,
@@ -932,6 +933,7 @@ function App() {
       playerName: resolveCallListPlayerName(group, player),
     });
     setPlayingMinutesDraft("0");
+    setPlayingCommunicationDraft("");
     pauseCallListPageRotation(true);
   }
 
@@ -958,7 +960,11 @@ function App() {
     }
     setPlayingNoticeSubmitting(true);
     try {
-      const sent = await notifyPlaying(playingNoticeDialog.messageId, minutes);
+      const sent = await notifyPlaying(
+        playingNoticeDialog.messageId,
+        minutes,
+        playingCommunicationDraft,
+      );
       if (sent) {
         setMessage(minutes === 0
           ? "終了時刻未定のプレイ中通知を送信しました。"
@@ -2436,6 +2442,9 @@ function App() {
             playingUntil={typeof call.messageMeta?.callPlayerPlayingUntil === "string"
               ? call.messageMeta.callPlayerPlayingUntil
               : ""}
+            playingCommunication={typeof call.messageMeta?.callPlayerPlayingCommunication === "string"
+              ? call.messageMeta.callPlayerPlayingCommunication
+              : ""}
             playingByMe={
               call.messageMeta?.callPlayerPlayingSenderUserId === senderProfile.senderUserId
             }
@@ -2541,6 +2550,17 @@ function App() {
                   onChange={(event) => setPlayingMinutesDraft(event.currentTarget.value)}
                   disabled={playingNoticeSubmitting}
                   aria-label="終了見込み時間（分）"
+                />
+              </label>
+              <label className="field">
+                <span>通信欄</span>
+                <textarea
+                  value={playingCommunicationDraft}
+                  onChange={(event) => setPlayingCommunicationDraft(event.currentTarget.value)}
+                  disabled={playingNoticeSubmitting}
+                  rows={3}
+                  aria-label="通信欄"
+                  placeholder="相手に伝える内容を入力"
                 />
               </label>
               <p className="meta">0を指定すると解除予定なしになります。1以上の場合は指定時間後に自動で解除を通知します。</p>

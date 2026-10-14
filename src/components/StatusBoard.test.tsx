@@ -14,8 +14,8 @@ const group: CallListEventGroup = {
   eventId: "event", eventName: "Event", eventAlias: "Event",
   phaseName: "Main", phaseGroupName: "A",
   players: [
-    { messageId: "own", entrantId: "own", entrantName: "Own Player", senderName: "Me", isOwn: true, isPlaying: false, playingUntil: "", dqRequest: null, createdAt: "2026-10-14T00:00:00Z" },
-    { messageId: "remote", entrantId: "remote", entrantName: "Remote Player", senderName: "Caller", isOwn: false, isPlaying: false, playingUntil: "", dqRequest: null, createdAt: "2026-10-14T00:00:00Z" },
+    { messageId: "own", entrantId: "own", entrantName: "Own Player", senderName: "Me", isOwn: true, isPlaying: false, playingUntil: "", playingCommunication: "", dqRequest: null, createdAt: "2026-10-14T00:00:00Z" },
+    { messageId: "remote", entrantId: "remote", entrantName: "Remote Player", senderName: "Caller", isOwn: false, isPlaying: false, playingUntil: "", playingCommunication: "", dqRequest: null, createdAt: "2026-10-14T00:00:00Z" },
   ],
 };
 const dqRequest: FeatureMessage = {
@@ -92,7 +92,7 @@ describe("feature-only navigation and call cards", () => {
         onResolveOwnCall={vi.fn()} onOpenCallReaction={vi.fn()}
         communicationDisabled={false} disableOwnCallActions={false} disableOtherCallActions={false} />,
     );
-    expect(html).toContain("プレイ中（終了時間未定）");
+    expect(html).toContain("プレイ中(終了未定)");
   });
   it("shows the estimated remaining minutes for a playing notification", () => {
     const activeGroup: CallListEventGroup = {
@@ -116,7 +116,7 @@ describe("feature-only navigation and call cards", () => {
     const html = renderToStaticMarkup(
       <CallReactionDialog playerName="Remote Player" senderName="Caller"
         senderUserId="87654321" senderIp="192.168.1.20" isPlaying={false}
-        playingUntil="" playingByMe={false} referenceMs={0} disabled={false}
+        playingUntil="" playingCommunication="" playingByMe={false} referenceMs={0} disabled={false}
         onRequestDq={vi.fn()} onNotifyPlaying={vi.fn()} onReleasePlaying={vi.fn()} onClose={vi.fn()} />,
     );
     expect(html).toContain('aria-label="呼び出しへのリアクション"');
@@ -127,11 +127,12 @@ describe("feature-only navigation and call cards", () => {
     const html = renderToStaticMarkup(
       <CallReactionDialog playerName="Remote Player" senderName="Caller"
         senderUserId="87654321" senderIp="192.168.1.20" isPlaying playingUntil=""
-        playingByMe referenceMs={0} disabled={false}
+        playingCommunication="少し遅れます" playingByMe referenceMs={0} disabled={false}
         onRequestDq={vi.fn()} onNotifyPlaying={vi.fn()} onReleasePlaying={vi.fn()} onClose={vi.fn()} />,
     );
     expect(html).toContain(">プレイ中通知を解除</button>");
     expect(html).not.toContain(">プレイ中通知</button>");
+    expect(html).toContain("少し遅れます");
   });
   it("does not offer a generic message tab or unread badge", () => {
     const html = renderToStaticMarkup(

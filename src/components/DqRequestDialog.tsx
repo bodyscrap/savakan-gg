@@ -70,7 +70,7 @@ export function DqRequestDialog({
               disabled={submitting}
               onClick={cameraActive ? onStopCameraScan : onStartCameraScan}
             >
-              {cameraActive ? "カメラ停止" : "カメラ起動"}
+              {cameraActive ? "カメラ停止" : "カメラ入力"}
             </button>
             <video
               ref={videoRef}

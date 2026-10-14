@@ -10,6 +10,7 @@ export type CallListPlayer = {
   isOwn: boolean;
   isPlaying: boolean;
   playingUntil: string;
+  playingCommunication: string;
   dqRequest: FeatureMessage | null;
 };
 
@@ -51,7 +52,7 @@ export function callElapsedSeconds(createdAt: string, referenceMs: number): numb
 
 function formatPlayingStatus(until: string, referenceMs: number): string {
   if (until === "") {
-    return "プレイ中（終了時間未定）";
+    return "プレイ中(終了未定)";
   }
   const untilMs = Date.parse(until);
   if (!Number.isFinite(untilMs)) {
@@ -82,6 +83,7 @@ type CallReactionDialogProps = {
   senderIp: string;
   isPlaying: boolean;
   playingUntil: string;
+  playingCommunication: string;
   playingByMe: boolean;
   referenceMs: number;
   disabled: boolean;
@@ -98,6 +100,7 @@ export function CallReactionDialog({
   senderIp,
   isPlaying,
   playingUntil,
+  playingCommunication,
   playingByMe,
   referenceMs,
   disabled,
@@ -129,6 +132,12 @@ export function CallReactionDialog({
             <p className="call-list-playing-badge" style={{ marginTop: "0.75rem" }}>
               {formatPlayingStatus(playingUntil, referenceMs)}
             </p>
+          )}
+          {playingCommunication.trim() !== "" && (
+            <div className="call-list-playing-communication">
+              <span>通信欄</span>
+              <p>{playingCommunication}</p>
+            </div>
           )}
         </div>
         <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>

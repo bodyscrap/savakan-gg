@@ -301,7 +301,7 @@ body {
 
 .call-list-page-big {
   margin: 0;
-  font-size: 3.3rem;
+  font-size: 2.64rem;
   line-height: 1;
   font-weight: 800;
   color: #1d4ed8;
@@ -675,6 +675,29 @@ button:disabled {
   font-weight: 700;
   line-height: 1.2;
   text-align: center;
+}
+
+.call-list-playing-communication {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.call-list-playing-communication p {
+  margin: 0;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.field textarea {
+  width: 100%;
+  resize: vertical;
 }
 
 .event-toolbar {
@@ -2323,7 +2346,7 @@ li {
   }
 
   .call-list-page-big {
-    font-size: 2.2rem;
+    font-size: 1.76rem;
   }
 
   .call-list-event-summary {

@@ -439,6 +439,22 @@ fn apply_playing_message(
             || chrono::DateTime::parse_from_rfc3339(&until)
                 .map(|date| date > Utc::now())
                 .unwrap_or(false));
+    let communication = if is_active {
+        message
+            .message_meta
+            .as_ref()
+            .and_then(|meta| meta.get("callPlayerPlayingCommunication"))
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or("プレイ中通知の通信欄の形式が不正です。")
+            })
+            .transpose()?
+            .unwrap_or_default()
+            .to_owned()
+    } else {
+        String::new()
+    };
     meta.insert(
         "callPlayerPlaying".to_owned(),
         serde_json::Value::Bool(is_active),
@@ -450,6 +466,10 @@ fn apply_playing_message(
     meta.insert(
         "callPlayerPlayingSenderUserId".to_owned(),
         serde_json::Value::String(message.sender_user_id.clone()),
+    );
+    meta.insert(
+        "callPlayerPlayingCommunication".to_owned(),
+        serde_json::Value::String(communication),
     );
     if active {
         meta.insert(
@@ -708,6 +728,8 @@ mod tests {
         notice.message_meta.as_mut().unwrap()["callMessageId"] = json!(root.message_id);
         notice.message_meta.as_mut().unwrap()["callPlayerPlayingUntil"] =
             json!((Utc::now() + chrono::Duration::hours(1)).to_rfc3339());
+        notice.message_meta.as_mut().unwrap()["callPlayerPlayingCommunication"] =
+            json!("少し遅れます");
         let input = SendMailboxMessageInput {
             destination: Some(DESTINATION.to_owned()),
             profile: crate::models::SenderProfile {
@@ -755,6 +777,10 @@ mod tests {
             root.message_meta.as_ref().unwrap()["callPlayerPlayingNoticeId"],
             "playing-notice"
         );
+        assert_eq!(
+            root.message_meta.as_ref().unwrap()["callPlayerPlayingCommunication"],
+            "少し遅れます"
+        );
 
         let mut receiver_calls = vec![PlayerCall {
             message: message("12345678", "normal"),
@@ -765,6 +791,11 @@ mod tests {
         assert_eq!(
             receiver_calls[0].message.message_meta.as_ref().unwrap()["callPlayerPlaying"],
             true
+        );
+        assert_eq!(
+            receiver_calls[0].message.message_meta.as_ref().unwrap()
+                ["callPlayerPlayingCommunication"],
+            "少し遅れます"
         );
 
         let mut release = notice.clone();
@@ -785,6 +816,11 @@ mod tests {
         assert_eq!(
             receiver_calls[0].message.message_meta.as_ref().unwrap()["callPlayerPlaying"],
             false
+        );
+        assert_eq!(
+            receiver_calls[0].message.message_meta.as_ref().unwrap()
+                ["callPlayerPlayingCommunication"],
+            ""
         );
     }
 

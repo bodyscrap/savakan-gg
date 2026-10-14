@@ -192,6 +192,9 @@ export function useCallList({ activeTab, calls, dqRequests, senderUserId }: UseC
           playingUntil: typeof root.messageMeta?.callPlayerPlayingUntil === "string"
             ? root.messageMeta.callPlayerPlayingUntil
             : "",
+          playingCommunication: typeof root.messageMeta?.callPlayerPlayingCommunication === "string"
+            ? root.messageMeta.callPlayerPlayingCommunication
+            : "",
           dqRequest: dqRequestsByCallId.get(root.messageId) ?? null,
         });
       } else {
@@ -214,6 +217,9 @@ export function useCallList({ activeTab, calls, dqRequests, senderUserId }: UseC
             isPlaying: root.messageMeta?.callPlayerPlaying === true,
             playingUntil: typeof root.messageMeta?.callPlayerPlayingUntil === "string"
               ? root.messageMeta.callPlayerPlayingUntil
+              : "",
+            playingCommunication: typeof root.messageMeta?.callPlayerPlayingCommunication === "string"
+              ? root.messageMeta.callPlayerPlayingCommunication
               : "",
             dqRequest: dqRequestsByCallId.get(root.messageId) ?? null,
           }],

@@ -79,7 +79,7 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
     }
   }, [calls, communicationDisabled, onError, refresh, senderProfile]);
 
-  async function notifyPlaying(messageId: string, minutes: number): Promise<boolean> {
+  async function notifyPlaying(messageId: string, minutes: number, communication: string): Promise<boolean> {
     onError("");
     if (communicationDisabled) {
       onError("ローカル通信を行わない設定のため、プレイ中通知は無効です。");
@@ -119,6 +119,7 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
             ...(call.message.messageMeta ?? {}),
             callMessageId: call.message.messageId,
             callPlayerPlayingUntil: untilDate?.toISOString() ?? "",
+            callPlayerPlayingCommunication: communication.trim(),
           },
           deliveryTargetMode: "direct",
           deliveryTargetIp: call.message.senderIp,
