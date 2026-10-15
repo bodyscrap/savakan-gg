@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import type { ItemListConfig } from "../domain/itemList";
 
 type ItemListEditorProps = {
@@ -15,6 +16,9 @@ type ItemListEditorProps = {
   filteredItemLists: ItemListConfig[];
   onEditItemList: (itemList: ItemListConfig) => void;
   onDeleteItemList: (itemList: ItemListConfig) => void;
+  onImportItemList: (file: File) => void;
+  onExportItemList: (itemList: ItemListConfig) => void;
+  busy: boolean;
 };
 
 export function ItemListEditor({
@@ -32,7 +36,12 @@ export function ItemListEditor({
   filteredItemLists,
   onEditItemList,
   onDeleteItemList,
+  onImportItemList,
+  onExportItemList,
+  busy,
 }: ItemListEditorProps) {
+  const importFileInputRef = useRef<HTMLInputElement>(null);
+
   return (
     <>
       <section className="panel">
@@ -71,6 +80,24 @@ export function ItemListEditor({
 
       <section className="panel">
         <h2>登録済みリスト ({filteredItemLists.length})</h2>
+        <div className="panel-toolbar compact">
+          <button type="button" className="ghost" disabled={busy} onClick={() => importFileInputRef.current?.click()}>
+            インポート
+          </button>
+          <input
+            ref={importFileInputRef}
+            type="file"
+            accept=".json,application/json"
+            hidden
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              if (file) {
+                onImportItemList(file);
+              }
+              event.currentTarget.value = "";
+            }}
+          />
+        </div>
 
         <div className="form" style={{ marginBottom: "0.75rem" }}>
           <input
@@ -100,6 +127,9 @@ export function ItemListEditor({
                     <div style={{ display: "flex", gap: "0.45rem" }}>
                       <button type="button" className="ghost tiny" onClick={() => onEditItemList(itemList)}>
                         編集
+                      </button>
+                      <button type="button" className="ghost tiny" disabled={busy} onClick={() => onExportItemList(itemList)}>
+                        エクスポート
                       </button>
                       <button type="button" className="ghost tiny" onClick={() => onDeleteItemList(itemList)}>
                         削除

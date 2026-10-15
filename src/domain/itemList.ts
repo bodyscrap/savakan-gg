@@ -30,6 +30,39 @@ export function normalizeItemListConfig(rawValue: unknown): ItemListConfig {
   };
 }
 
+export function createImportedItemList(
+  rawValue: unknown,
+  existingLists: readonly ItemListConfig[] = [],
+): ItemListConfig {
+  if (
+    rawValue === null
+    || typeof rawValue !== "object"
+    || Array.isArray(rawValue)
+  ) {
+    throw new Error("インポートするアイテムリストの形式が不正です。");
+  }
+
+  const source = rawValue as Partial<ItemListConfig>;
+  if (
+    typeof source.name !== "string"
+    || source.name.trim() === ""
+    || typeof source.categoryName !== "string"
+    || source.categoryName.trim() === ""
+    || !Array.isArray(source.items)
+    || source.items.some((item) => typeof item !== "string")
+  ) {
+    throw new Error("アイテムリスト名、カテゴリ名、アイテム一覧を含むJSONを指定してください。");
+  }
+
+  const normalized = normalizeItemListConfig(rawValue);
+  return {
+    ...normalized,
+    id: normalized.id === "" || existingLists.some((itemList) => itemList.id === normalized.id)
+      ? crypto.randomUUID()
+      : normalized.id,
+  };
+}
+
 export function parseLinesToUniqueList(value: string): string[] {
   const seen = new Set<string>();
   const items: string[] = [];

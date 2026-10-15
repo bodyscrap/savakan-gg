@@ -145,8 +145,12 @@ export type TournamentWorkspace = {
 
 export type TournamentShareArchive = {
   format: "savakan-gg-event-share";
-  schemaVersion: 2;
+  schemaVersion: 3;
   snapshot: TournamentSnapshot;
+  localInitialPhaseSeedMapping?: Array<{
+    seedId: string;
+    seedNum: number;
+  }> | null;
   eventSettings: {
     eventAlias: string | null;
     eventManagement: EventManagementMeta | null;

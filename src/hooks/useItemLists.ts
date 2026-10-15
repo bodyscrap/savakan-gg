@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { normalizeItemListConfig, parseLinesToUniqueList, type ItemListConfig } from "../domain/itemList";
+import {
+  createImportedItemList,
+  normalizeItemListConfig,
+  parseLinesToUniqueList,
+  type ItemListConfig,
+} from "../domain/itemList";
 
 const ITEM_LIST_STORAGE_KEY = "savakan-gg.item-lists.v1";
 
@@ -150,6 +155,17 @@ export function useItemLists({ onError, onMessage }: UseItemListsOptions) {
     }
   }
 
+  function importItemList(rawValue: unknown) {
+    try {
+      const importedItemList = createImportedItemList(rawValue, itemLists);
+      setItemLists((current) => [...current, importedItemList]);
+      onError("");
+      onMessage(`アイテムリストをインポートしました: ${importedItemList.name}`);
+    } catch (error) {
+      onError(String(error));
+    }
+  }
+
   return {
     itemLists,
     setItemListName,
@@ -166,5 +182,6 @@ export function useItemLists({ onError, onMessage }: UseItemListsOptions) {
     editItemList,
     saveItemList,
     removeItemList,
+    importItemList,
   };
 }

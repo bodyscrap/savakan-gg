@@ -448,6 +448,7 @@ function App() {
     editItemList,
     saveItemList,
     removeItemList,
+    importItemList,
   } = useItemLists({ onError: setError, onMessage: setMessage });
   const refreshLocalSnapshotEventsRef = useRef<() => Promise<void>>(async () => undefined);
   async function refreshLocalSnapshotEvents() {
@@ -1367,6 +1368,43 @@ function App() {
       }
       await fetchLocalSnapshotEvents();
       setMessage(`スナップショットをインポートしました: ${importedWorkspace.snapshot.name} / ${importedEvent.name}`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportItemList(itemList: (typeof itemLists)[number]) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const safeName = itemList.name.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, "-") || "item-list";
+      const path = await saveFile({
+        title: "アイテムリストをエクスポート",
+        defaultPath: `savakan-gg-${safeName}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) {
+        return;
+      }
+
+      await writeSnapshotExportFile(path, JSON.stringify(itemList, null, 2));
+      setMessage(`アイテムリストをエクスポートしました: ${itemList.name}`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importItemListFile(file: File) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      importItemList(JSON.parse(await file.text()));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -2837,6 +2875,9 @@ function App() {
                 deleteItemList(itemList.id);
               }
             }}
+            onImportItemList={(file) => void importItemListFile(file)}
+            onExportItemList={(itemList) => void exportItemList(itemList)}
+            busy={busy}
           />
       )}
 

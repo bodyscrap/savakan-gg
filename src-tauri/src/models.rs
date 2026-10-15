@@ -34,6 +34,8 @@ pub struct TournamentShareArchive {
     pub schema_version: u32,
     pub snapshot: TournamentSnapshot,
     pub event_settings: TournamentShareEventSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_initial_phase_seed_mapping: Option<Vec<InitialPhaseSeedMappingEntry>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
