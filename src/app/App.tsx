@@ -23,6 +23,8 @@ import {
 } from "../hooks/useAppPreferences";
 import { toApiSlug, toEventApiSlug } from "../domain/slugUtils";
 import { SettingsScreen } from "../components/SettingMenu";
+import { SenderUserList } from "../components/SenderUserList";
+import { useSenderUserList } from "../hooks/useSenderUserList";
 import type { FeatureMessage } from "../domain/messages";
 import {
   CallListPlayingCommunication,
@@ -66,6 +68,7 @@ import { useSetResultPersistence } from "../hooks/useSetResultPersistence";
 import { usePlayerMetaDrafts } from "../hooks/usePlayerMetaDrafts";
 import { useEventManagementSettings } from "../hooks/useEventManagementSettings";
 import { buildEventManagementSettingKey } from "../domain/eventManagement";
+import { buildInitialPhaseSeedMapping, canShuffleInitialPhaseSeeds } from "../domain/initialPhaseSeedShuffle";
 import { useEventSnapshotMaintenance } from "../hooks/useEventSnapshotMaintenance";
 import { useSetSideAssignment } from "../hooks/useSetSideAssignment";
 import { useMatchDialogActions } from "../hooks/useMatchDialogActions";
@@ -239,6 +242,11 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [hasUnreportedInitialSeedShuffle, setHasUnreportedInitialSeedShuffle] = useState(false);
+  const [hasLocalInitialSeedShuffle, setHasLocalInitialSeedShuffle] = useState(false);
+  const [seedSnapshotRefreshRequired, setSeedSnapshotRefreshRequired] = useState(false);
+  const [isInitialSeedStatusLoading, setIsInitialSeedStatusLoading] = useState(false);
+  const [seedStatusRefreshRevision, setSeedStatusRefreshRevision] = useState(0);
   const externalScoreReportSenderRef = useRef<
     ((report: ConfirmedExternalScoreReport) => Promise<boolean>) | null
   >(null);
@@ -286,7 +294,14 @@ function App() {
     fillRandomSenderUserId,
     canSaveSenderProfile,
     saveSenderProfile,
+    cancelSenderProfileChanges,
   } = useSenderProfile(setError, setMessage, activeTab);
+  const { senderUsers, refreshSenderUsers } = useSenderUserList({
+    senderProfile,
+    communicationDisabled: disableLocalCommunication,
+    onError: setError,
+    onMessage: setMessage,
+  });
   const {
     obsOverlayState,
     obsOverlayBusy,
@@ -517,6 +532,80 @@ function App() {
     eventAliasDraft,
     setEventAliasDraft,
   } = useSelectedEventData(workspace, selectedEventId);
+  const normalizedSeedSlug = toApiSlug(slug);
+  const firstSeedPhase = [...(selectedEvent?.phases ?? [])]
+    .filter((phase) => typeof phase.phaseOrder === "number")
+    .sort((left, right) => (left.phaseOrder ?? 0) - (right.phaseOrder ?? 0))[0];
+  const initialSeedStatusKey = firstSeedPhase && selectedEvent
+    ? `${firstSeedPhase.phaseId}:${(selectedEvent.phaseGroups ?? [])
+      .filter((group) => group.phaseId === firstSeedPhase.phaseId)
+      .flatMap((group) => group.seeds ?? [])
+      .map((seed) => `${seed.seedId}:${seed.seedNum ?? ""}`)
+      .sort()
+      .join("|")}`
+    : "";
+  useEffect(() => {
+    let active = true;
+    const eventId = selectedEvent?.eventId;
+    if (!eventId || normalizedSeedSlug === "") {
+      setHasUnreportedInitialSeedShuffle(false);
+      setHasLocalInitialSeedShuffle(false);
+      setSeedSnapshotRefreshRequired(false);
+      setIsInitialSeedStatusLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    setHasUnreportedInitialSeedShuffle(false);
+    setHasLocalInitialSeedShuffle(false);
+    setSeedSnapshotRefreshRequired(false);
+    setIsInitialSeedStatusLoading(true);
+    const remoteSeedStatus = token.trim() === ""
+      ? Promise.resolve({ hasUnreported: false, hasLocal: false })
+      : Promise.all([
+        invoke<boolean>("has_unreported_initial_phase_seed_shuffle", {
+          slug: normalizedSeedSlug,
+          eventId,
+        }),
+        invoke<boolean>("has_local_initial_phase_seed_shuffle", {
+          slug: normalizedSeedSlug,
+          eventId,
+        }),
+      ]).then(([hasUnreported, hasLocal]) => ({ hasUnreported, hasLocal }));
+    void Promise.all([
+      remoteSeedStatus,
+      invoke<boolean>("has_seed_update_awaiting_started_snapshot", {
+        slug: normalizedSeedSlug,
+        eventId,
+      }),
+    ])
+      .then(([remoteStatus, refreshRequired]) => {
+        if (active) {
+          setHasUnreportedInitialSeedShuffle(remoteStatus.hasUnreported);
+          setHasLocalInitialSeedShuffle(remoteStatus.hasLocal);
+          setSeedSnapshotRefreshRequired(refreshRequired);
+          setIsInitialSeedStatusLoading(false);
+        }
+      })
+      .catch((checkError) => {
+        if (active) {
+          setIsInitialSeedStatusLoading(false);
+          setError(`初期Seedの状態確認に失敗しました: ${String(checkError)}`);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    initialSeedStatusKey,
+    normalizedSeedSlug,
+    selectedEvent?.eventId,
+    seedStatusRefreshRevision,
+    snapshot?.updatedAt,
+    token,
+  ]);
   const mobileInputPortal = useMobileInputPortal({
     slug,
     selectionKey: selectedEventId,
@@ -545,12 +634,20 @@ function App() {
     eventId: selectedEvent?.eventId ?? null,
     perPage: STARTGG_FETCH_PER_PAGE,
     reportableCount: confirmedReportableCount,
+    hasUnreportedSeedShuffle: hasUnreportedInitialSeedShuffle,
+    seedStatusLoading: isInitialSeedStatusLoading,
+    seedSnapshotRefreshRequired,
     setWorkspace,
     closeMatchDialog,
     setBusy,
     setError,
     setMessage,
     clearSnapshotProgress: () => setCreateSnapshotProgress(null),
+    onSeedShuffleReported: () => {
+      setHasUnreportedInitialSeedShuffle(false);
+      setSeedSnapshotRefreshRequired(true);
+      setSeedStatusRefreshRevision((revision) => revision + 1);
+    },
   });
 
   const { selectedMessageScope, selectedEventMessageScope } = useMessageScopes({
@@ -1191,6 +1288,15 @@ function App() {
     loadWorkspace,
     clearAllDrafts,
     closeMatchDialog,
+    seedSnapshotRefreshRequired,
+    onSeedSnapshotRefreshCompleted: () => {
+      setSeedSnapshotRefreshRequired(false);
+      setSeedStatusRefreshRevision((revision) => revision + 1);
+      bracketReport.dismissSeedSnapshotPrompt();
+    },
+    onSeedStateRefreshRequested: () => {
+      setSeedStatusRefreshRevision((revision) => revision + 1);
+    },
   });
   selectLocalSnapshotEventRef.current = selectLocalSnapshotEvent;
 
@@ -1347,10 +1453,10 @@ function App() {
 
   const hasSelectedSenderNetworkDevice = selectedSenderNetworkCandidate !== null;
   const senderIdCollision = useMemo(() => hasSenderIdCollision(
-    [...playerCallMessages, ...senderContacts],
+    [...playerCallMessages, ...senderContacts, ...senderUsers],
     normalizedSenderUserIdDraft,
     normalizedSenderNameDraft,
-  ), [playerCallMessages, senderContacts, normalizedSenderNameDraft, normalizedSenderUserIdDraft]);
+  ), [playerCallMessages, senderContacts, senderUsers, normalizedSenderNameDraft, normalizedSenderUserIdDraft]);
 
   const canBroadcastCallListSync = resolveCanBroadcastCallListSync(senderProfile, disableLocalCommunication);
 
@@ -2295,6 +2401,74 @@ function App() {
   );
   const { ownCalls: activeMatchOwnCalls, otherCalls: activeMatchOtherCalls } =
     splitSetCalls(activeMatchCalls);
+  const canShuffleSelectedInitialSeeds = selectedEvent !== null
+    && canShuffleInitialPhaseSeeds(selectedEvent)
+    && !pendingSetResults.some((result) => result.eventId === selectedEvent.eventId)
+    && !pendingGrandFinalResetResults.some((result) => result.eventId === selectedEvent.eventId);
+  const canRestoreSelectedInitialSeeds = canShuffleSelectedInitialSeeds
+    && hasLocalInitialSeedShuffle;
+
+  async function shuffleSelectedEventInitialSeeds() {
+    if (!selectedEvent || !canShuffleSelectedInitialSeeds) {
+      setError("試合が開始済み、またはシャッフル可能なSeedがありません。");
+      return;
+    }
+    if (!window.confirm(
+      "最初のPhaseのSeed順をローカルでシャッフルします。Seed設定対象の全PhaseGroupがReset済みであることを確認し、後の報告操作でこのSeed順をstart.ggへ反映します。続行しますか？",
+    )) {
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const seedMapping = buildInitialPhaseSeedMapping(selectedEvent);
+      const result = await invoke<TournamentWorkspace>("shuffle_initial_phase_seeds", {
+        input: {
+          slug: snapshot?.slug ?? slug,
+          eventId: selectedEvent.eventId,
+          seedMapping,
+        },
+      });
+      setWorkspace(result);
+      setSeedStatusRefreshRevision((revision) => revision + 1);
+      setMessage("初期PhaseのSeedをシャッフルしました。ブラケットを更新しました。");
+    } catch (shuffleError) {
+      setError(String(shuffleError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restoreSelectedEventInitialSeeds() {
+    if (!selectedEvent || !canRestoreSelectedInitialSeeds) {
+      setError("スナップショット時のSeed順へ戻せない状態です。");
+      return;
+    }
+    if (!window.confirm(
+      "スナップショット取得時の初期Phase Seed順に戻します。Reset済みの対象Poolを確認後、報告操作でこのSeed順をstart.ggへ反映します。続行しますか？",
+    )) {
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await invoke<TournamentWorkspace>("restore_initial_phase_seeds", {
+        slug: snapshot?.slug ?? slug,
+        eventId: selectedEvent.eventId,
+      });
+      setWorkspace(result);
+      setSeedStatusRefreshRevision((revision) => revision + 1);
+      setMessage("初期PhaseのSeedをスナップショット取得時の順序に戻しました。ブラケットを更新しました。");
+    } catch (restoreError) {
+      setError(String(restoreError));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <AppShell
@@ -2377,6 +2551,22 @@ function App() {
               busy,
               canUpdateSnapshot: toApiSlug(slug) !== "",
               eventAliasDraft,
+              initialSeedPhaseName: selectedEvent?.phases
+                ?.slice()
+                .sort((left, right) => (left.phaseOrder ?? Number.MAX_SAFE_INTEGER) - (right.phaseOrder ?? Number.MAX_SAFE_INTEGER))[0]
+                ?.name ?? "",
+              initialSeedEntrantCount: selectedEvent
+                ? new Set((selectedEvent.phaseGroups ?? [])
+                  .filter((group) => group.phaseId === selectedEvent.phases
+                    ?.slice()
+                    .sort((left, right) => (left.phaseOrder ?? Number.MAX_SAFE_INTEGER) - (right.phaseOrder ?? Number.MAX_SAFE_INTEGER))[0]
+                    ?.phaseId)
+                  .flatMap((group) => group.seeds ?? [])
+                  .map((seed) => seed.entrantId)
+                  .filter((entrantId): entrantId is string => Boolean(entrantId))).size
+                : 0,
+              canShuffleInitialSeeds: canShuffleSelectedInitialSeeds,
+              canRestoreInitialSeeds: canRestoreSelectedInitialSeeds,
             }}
             rules={{
               sideDecisionMethod,
@@ -2403,6 +2593,8 @@ function App() {
             }}
             actions={{
               onUpdateSnapshot: () => void updateSnapshot(),
+              onShuffleInitialSeeds: () => void shuffleSelectedEventInitialSeeds(),
+              onRestoreInitialSeeds: () => void restoreSelectedEventInitialSeeds(),
               onEventAliasDraftChange: setEventAliasDraft,
               onSaveEventAlias: () => void saveSelectedEventAlias(),
               onSideDecisionMethodChange: setSideDecisionMethod,
@@ -2697,8 +2889,6 @@ function App() {
             selectedNetworkCandidateKey={selectedSenderNetworkCandidateKey}
             onNetworkCandidateChange={setSelectedSenderNetworkCandidateKey}
             networkCandidatesLoading={senderNetworkCandidatesLoading}
-            normalizedBindIp={normalizedSenderBindIpDraft}
-            normalizedSubnetMask={normalizedBroadcastSubnetMaskDraft}
             senderSettingsStatus={resolveSenderSettingsStatus({
               senderIdCollision,
               senderIdentityChanged,
@@ -2708,10 +2898,13 @@ function App() {
             })}
             onRefreshNetworkCandidates={() => void refreshLocalNetworkSettingsCandidates(true)}
             onRandomizeSenderUserId={() => fillRandomSenderUserId(
-              [...playerCallMessages, ...senderContacts].map((item) => item.senderUserId),
+              [...playerCallMessages, ...senderContacts, ...senderUsers].map((item) => item.senderUserId),
             )}
+            onOpenSenderUserList={() => setActiveTab("sender-users")}
             onSaveSenderProfile={() => void saveSenderProfile(senderIdCollision)}
+            onCancelSenderProfile={cancelSenderProfileChanges}
             canSaveSenderProfile={canSaveSenderProfile(senderIdCollision)}
+            canCancelSenderProfile={senderProfileReady}
             mobileInputPollingMs={normalizeMobileInputPollingMs(mobileInputPollingMs)}
             mobileInputPollingMsMin={MOBILE_INPUT_POLLING_MS_MIN}
             mobileInputPollingMsMax={MOBILE_INPUT_POLLING_MS_MAX}
@@ -2735,6 +2928,26 @@ function App() {
             onDisableOwnCallActionsChange={setDisableOwnCallActions}
             disableOtherCallActions={disableOtherCallActions}
             onDisableOtherCallActionsChange={setDisableOtherCallActions}
+          />
+        )}
+
+        {activeTab === "sender-users" && (
+          <SenderUserList
+            localUser={{
+              senderName: normalizedSenderNameDraft,
+              senderUserId: normalizedSenderUserIdDraft,
+              senderIp: normalizedSenderBindIpDraft,
+            }}
+            senderUsers={senderUsers}
+            senderUserIdDraft={senderUserIdDraft}
+            onSenderUserIdChange={changeSenderUserIdDraft}
+            onRandomizeSenderUserId={() => fillRandomSenderUserId(
+              [...playerCallMessages, ...senderContacts, ...senderUsers].map((item) => item.senderUserId),
+            )}
+            onSaveSenderProfile={() => void saveSenderProfile(senderIdCollision)}
+            canSaveSenderProfile={canSaveSenderProfile(senderIdCollision)}
+            onRefresh={() => void refreshSenderUsers()}
+            onBackToSettings={() => setActiveTab("settings")}
           />
         )}
 
@@ -2762,6 +2975,9 @@ function App() {
             busy={busy}
             draftPendingCount={draftPendingCount}
             confirmedReportableCount={confirmedReportableCount}
+            hasUnreportedSeedShuffle={hasUnreportedInitialSeedShuffle}
+            seedStatusLoading={isInitialSeedStatusLoading}
+            seedSnapshotRefreshRequired={seedSnapshotRefreshRequired}
             hasSnapshot={Boolean(snapshot)}
             tournamentName={snapshot?.name ?? "-"}
             eventAlias={selectedEventMeta?.eventAlias ?? ""}
@@ -2809,7 +3025,7 @@ function App() {
             onOpenMobileInput={() => void openMobileInputPortalDialog()}
             canRestore={!busy && toApiSlug(slug) !== "" && Boolean(selectedEvent)}
             onOpenRestore={() => setRestoreDialogOpen(true)}
-            canReport={!busy && toApiSlug(slug) !== "" && confirmedReportableCount > 0}
+            canReport={!busy && !isInitialSeedStatusLoading && toApiSlug(slug) !== "" && (confirmedReportableCount > 0 || hasUnreportedInitialSeedShuffle)}
             onReport={() => void bracketReport.startReport()}
             roundRobin={{
               entrantNames: roundRobinEntrantNames,
@@ -2929,6 +3145,14 @@ function App() {
               if (confirmation) {
                 void saveLocalResultForMatch(true, confirmation);
               }
+            }}
+            seedSnapshotPromptOpen={bracketReport.seedSnapshotPromptOpen}
+            canReportWithoutSnapshot={confirmedReportableCount > 0}
+            onCloseSeedSnapshotPrompt={bracketReport.dismissSeedSnapshotPrompt}
+            onUpdateSeedSnapshot={() => void updateSnapshot()}
+            onReportWithoutSnapshot={() => {
+              bracketReport.dismissSeedSnapshotPrompt();
+              void bracketReport.startReport();
             }}
             restoreOpen={restoreDialogOpen}
             selectedEventName={selectedEvent?.name ?? "選択中のイベント"}

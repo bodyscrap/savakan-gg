@@ -34,6 +34,9 @@ type BracketTabProps = {
   busy: boolean;
   draftPendingCount: number;
   confirmedReportableCount: number;
+  hasUnreportedSeedShuffle: boolean;
+  seedStatusLoading: boolean;
+  seedSnapshotRefreshRequired: boolean;
   hasSnapshot: boolean;
   tournamentName: string;
   eventAlias: string;
@@ -84,6 +87,9 @@ export function BracketTab({
   busy,
   draftPendingCount,
   confirmedReportableCount,
+  hasUnreportedSeedShuffle,
+  seedStatusLoading,
+  seedSnapshotRefreshRequired,
   hasSnapshot,
   tournamentName,
   eventAlias,
@@ -140,7 +146,10 @@ export function BracketTab({
         <p className="meta">set(試合)をクリックすると詳細画面がオープン。setを Ctrl+クリックで配信画面のON/OFF、Alt+左クリックで配信を完全停止します。</p>
         <div className="panel-toolbar compact">
           <p className="meta">
-            下書き: {draftPendingCount} / 確定済み: {confirmedReportableCount}   黄枠のsetは、現在のスナップショットから変更があります。
+            下書き: {draftPendingCount} / 確定済み: {confirmedReportableCount}
+            {" / 未報告Seed変更: "}{seedStatusLoading ? "確認中" : hasUnreportedSeedShuffle ? "あり" : "なし"}
+            {seedSnapshotRefreshRequired && " / Seed反映後: スナップショット未更新"}
+            {"   "}黄枠のsetは、現在のスナップショットから変更があります。
           </p>
         </div>
       </section>
@@ -219,8 +228,12 @@ export function BracketTab({
               <button type="button" className="ghost" disabled={!canRestore} onClick={onOpenRestore}>
                 復元
               </button>
-              <button type="button" disabled={!canReport} onClick={onReport}>
-                確定済みを一括報告
+              <button
+                type="button"
+                disabled={!canReport}
+                onClick={onReport}
+              >
+                {hasUnreportedSeedShuffle ? "Seedをstart.ggへ反映" : "確定済みを一括報告"}
               </button>
             </div>
           </div>

@@ -45,12 +45,16 @@ type UseBracketReportOptions<TWorkspace> = {
   eventId: string | null;
   perPage: number;
   reportableCount: number;
+  hasUnreportedSeedShuffle: boolean;
+  seedStatusLoading: boolean;
+  seedSnapshotRefreshRequired: boolean;
   setWorkspace: (workspace: TWorkspace) => void;
   closeMatchDialog: () => void;
   setBusy: (busy: boolean) => void;
   setError: (error: string) => void;
   setMessage: (message: string) => void;
   clearSnapshotProgress: () => void;
+  onSeedShuffleReported: () => void;
 };
 
 const BRACKET_REPORT_PROGRESS_EVENT = "bracket_report_progress";
@@ -60,16 +64,21 @@ export function useBracketReport<TWorkspace>({
   eventId,
   perPage,
   reportableCount,
+  hasUnreportedSeedShuffle,
+  seedStatusLoading,
+  seedSnapshotRefreshRequired,
   setWorkspace,
   closeMatchDialog,
   setBusy,
   setError,
   setMessage,
   clearSnapshotProgress,
+  onSeedShuffleReported,
 }: UseBracketReportOptions<TWorkspace>) {
   const [progress, setProgress] = useState<BracketReportProgressEvent | null>(null);
   const [conflictDialog, setConflictDialog] = useState<BatchConflictDialogState | null>(null);
   const [forceOverwriteRemaining, setForceOverwriteRemaining] = useState(false);
+  const [seedSnapshotPromptOpen, setSeedSnapshotPromptOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -196,12 +205,58 @@ export function useBracketReport<TWorkspace>({
   }
 
   async function startReport() {
+    if (seedStatusLoading) {
+      setMessage("初期Seedの状態確認が終わるまでお待ちください。");
+      return;
+    }
     if (!eventId) {
       setError("先にイベントを選択してください。");
       return;
     }
     if (slug === "") {
       setError("大会IDを入力してください。");
+      return;
+    }
+
+    if (hasUnreportedSeedShuffle) {
+      if (!window.confirm(
+        "Seed設定前に、Seed設定対象のすべてのPhaseGroup（Pool）がReset済みである必要があります。対象PoolをすべてResetしたことを確認しましたか？",
+      )) {
+        setMessage("Seed設定対象のすべてのPhaseGroup（Pool）をResetしてから、再度報告してください。");
+        return;
+      }
+      setBusy(true);
+      setError("");
+      setMessage("");
+      clearSnapshotProgress();
+      setProgress(null);
+      setConflictDialog(null);
+      setForceOverwriteRemaining(false);
+      try {
+        const workspace = await invoke<TWorkspace>("report_initial_phase_seed_shuffle", {
+          slug,
+          eventId,
+        });
+        setWorkspace(workspace);
+        onSeedShuffleReported();
+        setSeedSnapshotPromptOpen(true);
+      } catch (error) {
+        setError(
+          `Seedをstart.ggへ反映できませんでした。Seed設定対象のすべてのPhaseGroup（Pool）をResetした状態か確認し、Start済みのPoolがあればResetしてから再度報告してください。詳細: ${String(error)}`,
+        );
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    setError("");
+    setMessage("");
+    const startConfirmationMessage = seedSnapshotRefreshRequired
+      ? "start.gg側でブラケットをStart済みであることを確認してください。スナップショット未更新のままローカル結果を報告する方法は上級者向けです。Setの対応付けに失敗した場合は報告が停止することがあります。続行しますか？"
+      : "start.gg側でブラケットをStart済みであることを確認してください。確定結果を報告しますか？";
+    if (!window.confirm(startConfirmationMessage)) {
+      setMessage("ブラケットがStart済みであることを確認してから、結果を報告してください。");
       return;
     }
 
@@ -253,6 +308,8 @@ export function useBracketReport<TWorkspace>({
     progress,
     progressPercent,
     progressLabel,
+    seedSnapshotPromptOpen,
+    dismissSeedSnapshotPrompt: () => setSeedSnapshotPromptOpen(false),
     conflictDialog,
     forceOverwriteRemaining,
     setForceOverwriteRemaining,

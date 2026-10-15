@@ -1,6 +1,7 @@
 mod models;
 mod call_list;
 mod bracket_messages;
+mod sender_users;
 mod reporting;
 mod startgg;
 mod startgg_scalars;
@@ -24,7 +25,8 @@ use models::{
     ResetSetResultCascadeResult, RestoreEventGraphInput, RestoreEventGraphResult,
     SaveEventManagementMetaInput, SenderProfile, SetPhaseGroupExternalEditorInput,
     SetPhaseGroupExternalScoreBroadcastInput, SetPhaseGroupScoreEditLockInput, SetSnapshot,
-    TournamentPreview, TournamentShareArchive, TournamentSnapshot, TournamentWorkspace,
+    ShuffleInitialPhaseSeedsInput, TournamentPreview, TournamentShareArchive, TournamentSnapshot,
+    TournamentWorkspace,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1734,7 +1736,7 @@ fn generate_mobile_input_token() -> String {
 fn rotate_mobile_input_token() -> Result<String, String> {
     let mut guard = mobile_input_auth_token()
         .lock()
-        .map_err(|_| "スマホ入力トークンのロック取得に失敗しました。".to_owned())?;
+        .map_err(|_| "スマートフォン入力トークンのロック取得に失敗しました。".to_owned())?;
     let token = generate_mobile_input_token();
     *guard = token.clone();
     Ok(token)
@@ -1743,7 +1745,7 @@ fn rotate_mobile_input_token() -> Result<String, String> {
 fn current_mobile_input_token() -> Result<String, String> {
     let guard = mobile_input_auth_token()
         .lock()
-        .map_err(|_| "スマホ入力トークンのロック取得に失敗しました。".to_owned())?;
+        .map_err(|_| "スマートフォン入力トークンのロック取得に失敗しました。".to_owned())?;
     Ok(guard.clone())
 }
 
@@ -2133,7 +2135,7 @@ fn mobile_input_html() -> &'static str {
 </head>
 <body>
     <section class="card">
-        <h1 id="pageTitle">スマホ結果入力依頼</h1>
+        <h1 id="pageTitle">スマートフォン結果入力依頼</h1>
         <p id="scopeLabel" class="meta">読み込み中...</p>
 
         <div id="searchView">
@@ -2310,7 +2312,7 @@ fn mobile_input_html() -> &'static str {
         let shouldRefreshSetListOnReturn = false;
 
         function updateHeaderInfo(info) {
-            const eventAlias = (info && info.eventAlias && info.eventAlias.trim()) || 'スマホ結果入力依頼';
+            const eventAlias = (info && info.eventAlias && info.eventAlias.trim()) || 'スマートフォン結果入力依頼';
             mobileEventAlias = eventAlias;
             const tournamentName = (info && info.tournamentName && info.tournamentName.trim()) || '-';
             const eventName = (info && info.eventName && info.eventName.trim()) || '-';
@@ -2327,13 +2329,13 @@ fn mobile_input_html() -> &'static str {
             try {
                 const response = await fetch(url, { cache: 'no-store' });
                 if (!response.ok) {
-                    updateHeaderInfo({ eventAlias: 'スマホ結果入力依頼', tournamentName: '-', eventName: '-' });
+                    updateHeaderInfo({ eventAlias: 'スマートフォン結果入力依頼', tournamentName: '-', eventName: '-' });
                     return;
                 }
                 const info = await response.json();
                 updateHeaderInfo(info);
             } catch (error) {
-                updateHeaderInfo({ eventAlias: 'スマホ結果入力依頼', tournamentName: '-', eventName: '-' });
+                updateHeaderInfo({ eventAlias: 'スマートフォン結果入力依頼', tournamentName: '-', eventName: '-' });
             }
         }
 
@@ -4352,7 +4354,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| {
                 if tournament_name.is_empty() && event_name.is_empty() {
-                    "スマホ結果入力依頼".to_owned()
+                    "スマートフォン結果入力依頼".to_owned()
                 } else if tournament_name.is_empty() {
                     event_name.clone()
                 } else if event_name.is_empty() {
@@ -5326,7 +5328,7 @@ fn start_mobile_input_server_if_needed(app: tauri::AppHandle) -> Result<(), Stri
     }
 
     let server = Server::http(format!("0.0.0.0:{MOBILE_INPUT_PORT}"))
-        .map_err(|e| format!("スマホ入力Webサーバーの起動に失敗しました: {e}"))?;
+        .map_err(|e| format!("スマートフォン入力Webサーバーの起動に失敗しました: {e}"))?;
 
     mobile_input_server_running().store(true, Ordering::SeqCst);
 
@@ -5629,7 +5631,7 @@ fn get_mobile_input_portal_info(
         }
     }
 
-    // localhostは同一PC専用のため、スマホ利用向けには最後にフォールバックとして追加する。
+    // localhostは同一PC専用のため、スマートフォン利用向けには最後にフォールバックとして追加する。
     access_urls.push(build_url("127.0.0.1"));
 
     access_urls.dedup();
@@ -6018,7 +6020,11 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
                         }
                     };
                     if let Some(my_profile) = my_profile {
+                        let sender_ip = source_addr.ip().to_string();
+                        let is_sender_users_message =
+                            sender_users::is_sender_users_message(&packet.message);
                         if my_profile.sender_user_id.trim() == packet.message.sender_user_id.trim()
+                            && (!is_sender_users_message || sender_ip == my_profile.bind_ip.trim())
                         {
                             continue;
                         }
@@ -6041,6 +6047,18 @@ fn start_udp_listener_thread(app: tauri::AppHandle, bind_ip: &str) -> Result<(),
                             };
 
                         if !accept_delivery {
+                            continue;
+                        }
+
+                        if is_sender_users_message {
+                            if let Err(error) = sender_users::receive(
+                                &app,
+                                &my_profile,
+                                &packet.message,
+                                &sender_ip,
+                            ) {
+                                report_mailbox_error(&app, &error);
+                            }
                             continue;
                         }
 
@@ -6105,6 +6123,10 @@ fn send_mailbox_message(
     input: SendMailboxMessageInput,
 ) -> Result<FeatureMessage, String> {
     let message = build_message_from_input(&input)?;
+
+    if sender_users::is_sender_users_message(&message) {
+        return sender_users::send(&input, message);
+    }
 
     if call_list::is_call_list_message(&message) {
         return call_list::send(&app, &input, message);
@@ -6417,6 +6439,66 @@ async fn fetch_event_snapshot_with_fallback(
             "対象eventのsetが0件でした。start.gg側のブラケット生成状態と公開状態を確認してください。詳細: {}",
             reasons.join(" / ")
         ));
+    }
+
+    Ok(snapshot)
+}
+
+async fn fetch_event_snapshot_for_manual_refresh(
+    app: &tauri::AppHandle,
+    token: &str,
+    slug: &str,
+    event_id: &str,
+    per_page: u32,
+) -> Result<TournamentSnapshot, String> {
+    emit_event_snapshot_progress(
+        app,
+        startgg::EventSnapshotFetchProgress {
+            phase: "requestingTournamentPreview",
+            completed_sets: 0,
+            total_sets: None,
+            current_page: None,
+            current_set_id: None,
+        },
+    );
+    let preview = startgg::fetch_tournament_preview(token, slug)
+        .await
+        .map_err(|error| {
+            format!("イベント情報を取得できず、スナップショット更新を中止しました: {error}")
+        })?;
+    let event_slug = preview
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .and_then(|event| event.event_slug.clone())
+        .ok_or_else(|| {
+            format!("対象eventのslugを取得できず、スナップショット更新を中止しました: {event_id}")
+        })?;
+
+    let mut snapshot = startgg::fetch_event_snapshot_by_slug_strict(
+        token,
+        &event_slug,
+        per_page,
+        |progress| emit_event_snapshot_progress(app, progress),
+    )
+    .await
+    .map_err(|error| {
+        format!(
+            "Setの取得に失敗したため、スナップショット更新をキャンセルしました。start.ggでブラケットがStart済みか確認してください。詳細: {error}"
+        )
+    })?;
+    snapshot.slug = slug.to_owned();
+
+    let target_event = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("指定eventが取得結果にありません: {event_id}"))?;
+    if target_event.sets.is_empty() {
+        return Err(
+            "対象eventのSetを取得できなかったため、スナップショット更新をキャンセルしました。start.ggでブラケットがStart済みか確認してください。"
+                .to_owned(),
+        );
     }
 
     Ok(snapshot)
@@ -6932,9 +7014,14 @@ async fn refresh_local_event_snapshot_from_remote(
     per_page: Option<u32>,
 ) -> Result<TournamentWorkspace, String> {
     let token = storage::load_token(&app)?;
-    let snapshot =
-        fetch_event_snapshot_with_fallback(&app, &token, &slug, &event_id, per_page.unwrap_or(200))
-            .await?;
+    let snapshot = fetch_event_snapshot_for_manual_refresh(
+        &app,
+        &token,
+        &slug,
+        &event_id,
+        per_page.unwrap_or(200),
+    )
+    .await?;
 
     let existing_alias = storage::load_local_meta(&app, &slug, &event_id)?
         .events
@@ -7181,6 +7268,66 @@ async fn report_confirmed_sets_from_bracket(
 }
 
 #[tauri::command]
+async fn report_initial_phase_seed_shuffle(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+) -> Result<TournamentWorkspace, String> {
+    reporting::report_initial_phase_seed_shuffle(app, &slug, &event_id).await
+}
+
+#[tauri::command]
+fn shuffle_initial_phase_seeds(
+    app: tauri::AppHandle,
+    input: ShuffleInitialPhaseSeedsInput,
+) -> Result<TournamentWorkspace, String> {
+    storage::shuffle_initial_phase_seeds(&app, input)
+}
+
+#[tauri::command]
+async fn has_unreported_initial_phase_seed_shuffle(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+) -> Result<bool, String> {
+    let Some((phase_id, _original, desired, _restore_requested)) =
+        storage::initial_phase_seed_shuffle_for_report(&app, &slug, &event_id)?
+    else {
+        return Ok(false);
+    };
+    let token = storage::load_token(&app)?;
+    let remote_mapping = startgg::current_phase_seed_mapping(&token, &phase_id).await?;
+    Ok(remote_mapping != desired)
+}
+
+#[tauri::command]
+fn restore_initial_phase_seeds(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+) -> Result<TournamentWorkspace, String> {
+    storage::restore_initial_phase_seeds(&app, &slug, &event_id)
+}
+
+#[tauri::command]
+fn has_local_initial_phase_seed_shuffle(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+) -> Result<bool, String> {
+    storage::has_local_initial_phase_seed_shuffle(&app, &slug, &event_id)
+}
+
+#[tauri::command]
+fn has_seed_update_awaiting_started_snapshot(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+) -> Result<bool, String> {
+    storage::has_seed_update_awaiting_started_snapshot(&app, &slug, &event_id)
+}
+
+#[tauri::command]
 async fn sync_tournament(
     app: tauri::AppHandle,
     slug: String,
@@ -7401,6 +7548,12 @@ pub fn run() {
             apply_external_score_report,
             save_local_set_scores,
             report_confirmed_sets_from_bracket,
+            report_initial_phase_seed_shuffle,
+            shuffle_initial_phase_seeds,
+            has_unreported_initial_phase_seed_shuffle,
+            restore_initial_phase_seeds,
+            has_local_initial_phase_seed_shuffle,
+            has_seed_update_awaiting_started_snapshot,
             sync_tournament,
             report_set_result,
             reset_set_result_cascade

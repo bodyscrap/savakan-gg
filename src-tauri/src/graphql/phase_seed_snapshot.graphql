@@ -1,0 +1,12 @@
+query PhaseSeedSnapshot($phaseId: ID!, $page: Int!, $perPage: Int!) {
+  phase(id: $phaseId) {
+    id
+    numSeeds
+    seeds(query: { page: $page, perPage: $perPage }) {
+      nodes {
+        id
+        seedNum
+      }
+    }
+  }
+}

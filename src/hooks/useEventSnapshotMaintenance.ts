@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { EventSnapshot } from "../domain/bracketDisplay";
 import type { EventSnapshotProgress } from "../components/CreateSnapshot";
 import type { EventManagementSetting } from "../domain/eventManagement";
@@ -40,6 +41,9 @@ type UseEventSnapshotMaintenanceOptions = {
   loadWorkspace: (slug: string, eventId: string) => Promise<unknown>;
   clearAllDrafts: () => void;
   closeMatchDialog: () => void;
+  seedSnapshotRefreshRequired: boolean;
+  onSeedSnapshotRefreshCompleted: () => void;
+  onSeedStateRefreshRequested: () => void;
 };
 
 export function useEventSnapshotMaintenance({
@@ -69,6 +73,9 @@ export function useEventSnapshotMaintenance({
   loadWorkspace,
   clearAllDrafts,
   closeMatchDialog,
+  seedSnapshotRefreshRequired,
+  onSeedSnapshotRefreshCompleted,
+  onSeedStateRefreshRequested,
 }: UseEventSnapshotMaintenanceOptions) {
   async function selectLocalSnapshotEvent(item: LocalSnapshotEventListItem) {
     setBusy(true);
@@ -101,6 +108,7 @@ export function useEventSnapshotMaintenance({
         setSelectedPhaseName("");
         setSelectedPhasePoolKey("");
       }
+      onSeedStateRefreshRequested();
       closeMatchDialog();
       setMessage(`イベントを読み込みました: ${item.tournamentName} / ${item.eventName}`);
     } catch (err) {
@@ -199,24 +207,44 @@ export function useEventSnapshotMaintenance({
       return;
     }
 
-    setBusy(true);
     setError("");
     setMessage("");
-    setCreateSnapshotProgress({
-      phase: "starting",
-      completedSets: 0,
-      totalSets: null,
-      currentPage: null,
-      currentSetId: null,
-    });
+    if (seedSnapshotRefreshRequired && !window.confirm(
+      "Seed反映直後はstart.ggのブラケットが未Startのため、まだスナップショットを更新できません。start.ggでブラケットをStartした後であることを確認しましたか？",
+    )) {
+      setMessage("start.ggでブラケットをStartしてから、スナップショットを更新してください。");
+      return;
+    }
+
+    setBusy(true);
 
     try {
+      const hasUnreportedSeedShuffle = await invoke<boolean>(
+        "has_unreported_initial_phase_seed_shuffle",
+        { slug: normalizedSlug, eventId },
+      );
+      if (hasUnreportedSeedShuffle && !window.confirm(
+        "未報告の初期Seed入替があります。スナップショットを更新するとローカルのSeed入替とブラケット表示が失われ、start.gg側の状態に置き換わります。更新を続行しますか？",
+      )) {
+        setMessage("スナップショットの更新をキャンセルしました。");
+        return;
+      }
+      setCreateSnapshotProgress({
+        phase: "starting",
+        completedSets: 0,
+        totalSets: null,
+        currentPage: null,
+        currentSetId: null,
+      });
       await refreshRemoteSnapshot(normalizedSlug, eventId, perPage);
       clearAllDrafts();
       closeMatchDialog();
       setCreateSnapshotProgress(null);
       await refreshLocalSnapshotEvents();
-      setMessage("スナップショットを更新しました。未報告のローカル結果・途中経過は破棄され、start.gg状態に合わせました。");
+      onSeedSnapshotRefreshCompleted();
+      setMessage(seedSnapshotRefreshRequired
+        ? "ブラケットStart後のスナップショットを更新しました。確定済みSetの結果を報告できます。"
+        : "スナップショットを更新しました。未報告のローカル結果・途中経過は破棄され、start.gg状態に合わせました。");
     } catch (err) {
       setError(String(err));
     } finally {
@@ -250,6 +278,7 @@ export function useEventSnapshotMaintenance({
         phaseGroupId,
         phaseName,
       });
+      onSeedStateRefreshRequested();
       if (scope === "all") {
         clearAllDrafts();
       }

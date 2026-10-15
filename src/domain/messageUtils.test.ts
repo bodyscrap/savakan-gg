@@ -122,7 +122,7 @@ describe("sender messaging readiness", () => {
 		expect(resolveSenderSettingsStatus({ ...valid, bindIp: "invalid" }))
 			.toBe("選択デバイスのIPが不正です。");
 		expect(resolveSenderSettingsStatus(valid))
-			.toBe("デバイス選択後、IP/サブネットは自動適用されます。");
+			.toBe("");
 	});
 });
 

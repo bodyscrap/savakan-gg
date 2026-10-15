@@ -18,6 +18,11 @@ type BracketDialogsProps = {
   activeSetId: string | null;
   onCancelResultConfirmation: () => void;
   onConfirmResult: () => void;
+  seedSnapshotPromptOpen: boolean;
+  canReportWithoutSnapshot: boolean;
+  onCloseSeedSnapshotPrompt: () => void;
+  onUpdateSeedSnapshot: () => void;
+  onReportWithoutSnapshot: () => void;
   restoreOpen: boolean;
   selectedEventName: string;
   canRestoreCurrentPool: boolean;
@@ -59,6 +64,11 @@ export function BracketDialogs({
   activeSetId,
   onCancelResultConfirmation,
   onConfirmResult,
+  seedSnapshotPromptOpen,
+  canReportWithoutSnapshot,
+  onCloseSeedSnapshotPrompt,
+  onUpdateSeedSnapshot,
+  onReportWithoutSnapshot,
   restoreOpen,
   selectedEventName,
   canRestoreCurrentPool,
@@ -127,6 +137,65 @@ export function BracketDialogs({
               <button type="button" className="ghost" onClick={onCancelResultConfirmation}>キャンセル</button>
               <button type="button" disabled={busy} onClick={onConfirmResult}>
                 この結果を確定
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {seedSnapshotPromptOpen && (
+        <div
+          className="dialog-backdrop"
+          onClick={() => {
+            if (!busy) {
+              onCloseSeedSnapshotPrompt();
+            }
+          }}
+        >
+          <section
+            className="dialog-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Seed反映後のスナップショット更新"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="dialog-head">
+              <div>
+                <h3>Seedをstart.ggへ反映しました</h3>
+                <p className="meta">次にstart.ggでブラケットをStartしてください。</p>
+              </div>
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy}
+                onClick={onCloseSeedSnapshotPrompt}
+              >
+                後で
+              </button>
+            </div>
+            <div className="dialog-body">
+              <p className="meta">
+                推奨手順は、ブラケットStart後にスナップショットを更新してから結果を報告することです。更新するとローカル状態がstart.gg側に置き換わり、未報告結果や途中経過が失われることがあります。
+              </p>
+              {canReportWithoutSnapshot && (
+                <p className="meta">
+                  すでにローカルで進行済みの場合は、更新せずに報告する方法もありますが、Setの対応付けに失敗して報告が停止する可能性がある上級者向けの手順です。
+                </p>
+              )}
+            </div>
+            <div className="dialog-actions dialog-actions-split">
+              {canReportWithoutSnapshot && (
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={busy}
+                  onClick={onReportWithoutSnapshot}
+                >
+                  更新せずに結果を報告（上級者向け）
+                </button>
+              )}
+              <button type="button" disabled={busy} onClick={onUpdateSeedSnapshot}>
+                Start後にスナップショットを更新
               </button>
             </div>
           </section>
@@ -217,7 +286,7 @@ export function BracketDialogs({
             className="dialog-panel mobile-input-dialog"
             role="dialog"
             aria-modal="true"
-            aria-label="スマホ入力URL"
+            aria-label="スマートフォン入力URL"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="dialog-head">
@@ -248,7 +317,7 @@ export function BracketDialogs({
                     {issuedQrUrl === "" ? (
                       <p className="meta">2次元コードを生成中です...</p>
                     ) : (
-                      <img className="mobile-input-qr" src={issuedQrUrl} alt="スマホ入力URLの2次元コード" />
+                      <img className="mobile-input-qr" src={issuedQrUrl} alt="スマートフォン入力URLの2次元コード" />
                     )}
                   </div>
                   <div className="dialog-summary-box">

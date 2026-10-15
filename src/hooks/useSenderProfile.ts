@@ -247,7 +247,7 @@ export function useSenderProfile(
     };
 
     let nextId = generateSenderUserId();
-    for (let retry = 0; retry < 40 && usedIds.has(nextId); retry += 1) {
+    while (usedIds.has(nextId)) {
       nextId = generateSenderUserId();
     }
 
@@ -315,6 +315,27 @@ export function useSenderProfile(
     onMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK)`);
   }
 
+  function cancelSenderProfileChanges() {
+    if (!senderProfileReady) {
+      return;
+    }
+
+    const savedNetworkCandidate = networkCandidates.find((candidate) =>
+      candidate.bindIp.trim() === senderProfile.bindIp.trim()
+      && candidate.broadcastSubnetMask.trim() === senderProfile.broadcastSubnetMask.trim()
+    );
+
+    setSenderNameDraft(senderProfile.senderName);
+    setSenderUserIdDraft(senderProfile.senderUserId);
+    setSenderBindIpDraft(senderProfile.bindIp);
+    setSenderBroadcastSubnetMaskDraft(senderProfile.broadcastSubnetMask);
+    setSelectedNetworkCandidateKey(
+      savedNetworkCandidate ? localNetworkCandidateKey(savedNetworkCandidate) : "",
+    );
+    onError("");
+    onMessage("送信者設定の変更を破棄しました。");
+  }
+
   return {
     senderProfile,
     setSenderProfile,
@@ -340,5 +361,6 @@ export function useSenderProfile(
     fillRandomSenderUserId,
     canSaveSenderProfile,
     saveSenderProfile,
+    cancelSenderProfileChanges,
   };
 }

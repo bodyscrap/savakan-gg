@@ -3,6 +3,8 @@ export type SettingsNetworkCandidate = {
   label: string;
 };
 
+const REFRESH_NETWORK_CANDIDATES_OPTION = "__refresh_network_candidates__";
+
 type SettingsScreenProps = {
   disableLocalCommunication: boolean;
   onDisableLocalCommunicationChange: (checked: boolean) => void;
@@ -14,13 +16,14 @@ type SettingsScreenProps = {
   selectedNetworkCandidateKey: string;
   onNetworkCandidateChange: (key: string) => void;
   networkCandidatesLoading: boolean;
-  normalizedBindIp: string;
-  normalizedSubnetMask: string;
   senderSettingsStatus: string;
   onRefreshNetworkCandidates: () => void;
   onRandomizeSenderUserId: () => void;
+  onOpenSenderUserList: () => void;
   onSaveSenderProfile: () => void;
+  onCancelSenderProfile: () => void;
   canSaveSenderProfile: boolean;
+  canCancelSenderProfile: boolean;
   mobileInputPollingMs: number;
   mobileInputPollingMsMin: number;
   mobileInputPollingMsMax: number;
@@ -57,13 +60,14 @@ export function SettingsScreen({
   selectedNetworkCandidateKey,
   onNetworkCandidateChange,
   networkCandidatesLoading,
-  normalizedBindIp,
-  normalizedSubnetMask,
   senderSettingsStatus,
   onRefreshNetworkCandidates,
   onRandomizeSenderUserId,
+  onOpenSenderUserList,
   onSaveSenderProfile,
+  onCancelSenderProfile,
   canSaveSenderProfile,
+  canCancelSenderProfile,
   mobileInputPollingMs,
   mobileInputPollingMsMin,
   mobileInputPollingMsMax,
@@ -90,12 +94,10 @@ export function SettingsScreen({
 }: SettingsScreenProps) {
   return (
     <>
-      <section className="panel">
+      <section className="panel sender-profile-panel">
         <h2>送信者設定</h2>
-        <p className="meta">各クライアントを識別するための送信者名と8桁ユーザーIDを設定します。</p>
-        <p className="meta">IPとサブネットマスクは選択したネットワークデバイスから自動反映されます。個別調整はOS側のネットワーク設定で行ってください。</p>
-        <p className="meta">ユーザーIDはクライアント間で重複しないよう運用してください。ランダム決定ボタンで簡単に採番できます。</p>
-        <p className="meta">注意: 送信者名/IDの変更前に自分の呼び出しを解決し、他端末の外部報告者設定を解除してください。</p>
+        <p className="meta">端末ごとに送信者名と重複しないユーザーIDを設定してください。IP・サブネットはデバイス選択から自動反映されます。</p>
+        <p className="meta">送信者名・IDの変更前に、自分の呼び出しを解決し、他端末の外部報告者設定を解除してください。</p>
 
         <label className="checkbox-row" style={{ marginTop: "0.6rem" }}>
           <input
@@ -109,7 +111,7 @@ export function SettingsScreen({
           ON中は呼び出し・DQ申請・外部報告とプレイヤーリストの送受信を無効化します。既存データの閲覧は可能ですが、呼び出しの解決や申請への応答はできません。
         </p>
 
-        <div className="form" style={{ marginTop: "0.65rem" }}>
+        <div className="form sender-profile-form" style={{ marginTop: "0.65rem" }}>
           <label htmlFor="sender-name-input" style={{ display: "grid", gap: "0.3rem" }}>
             <span className="meta">送信者名</span>
             <input
@@ -119,67 +121,83 @@ export function SettingsScreen({
               placeholder="例: 配信PC-A"
             />
           </label>
-          <label htmlFor="sender-user-id-input" style={{ display: "grid", gap: "0.3rem" }}>
-            <span className="meta">ユーザーID (8桁数字)</span>
-            <input
-              id="sender-user-id-input"
-              value={senderUserIdDraft}
-              onChange={(e) => onSenderUserIdChange(e.currentTarget.value)}
-              placeholder="例: 12345678"
-              inputMode="numeric"
-              maxLength={8}
-            />
-          </label>
-          <label htmlFor="sender-network-device-select" style={{ display: "grid", gap: "0.3rem" }}>
-            <span className="meta">ネットワークデバイス</span>
-            <select
-              id="sender-network-device-select"
-              value={selectedNetworkCandidateKey}
-              onChange={(e) => onNetworkCandidateChange(e.currentTarget.value)}
-              disabled={networkCandidatesLoading || networkCandidates.length === 0}
-            >
-              {networkCandidates.length === 0 ? (
-                <option value="">利用可能なデバイスがありません</option>
-              ) : (
-                networkCandidates.map((candidate) => (
-                  <option key={candidate.key} value={candidate.key}>{candidate.label}</option>
-                ))
-              )}
-            </select>
-          </label>
-          <p className="meta" style={{ margin: 0 }}>
-            適用中IP: {normalizedBindIp || "(未選択)"} / サブネット: {normalizedSubnetMask || "(未選択)"}
-          </p>
-        </div>
-
-        <div className="panel-toolbar compact">
-          <p className="meta">{senderSettingsStatus}</p>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button
-              type="button"
-              className="ghost"
-              onClick={onRefreshNetworkCandidates}
-              disabled={networkCandidatesLoading}
-            >
-              {networkCandidatesLoading ? "デバイス検索中..." : "デバイス再検索"}
-            </button>
+          <div className="sender-id-actions">
+            <label htmlFor="sender-user-id-input" style={{ display: "grid", gap: "0.3rem" }}>
+              <span className="meta">ユーザーID (8桁数字)</span>
+              <input
+                id="sender-user-id-input"
+                className="sender-user-id-input"
+                value={senderUserIdDraft}
+                onChange={(e) => onSenderUserIdChange(e.currentTarget.value)}
+                placeholder="例: 12345678"
+                inputMode="numeric"
+                maxLength={8}
+              />
+            </label>
             <button type="button" className="ghost" onClick={onRandomizeSenderUserId}>
               ランダム決定
             </button>
-            <button type="button" onClick={onSaveSenderProfile} disabled={!canSaveSenderProfile}>
-              保存
+            <button type="button" className="ghost" onClick={onOpenSenderUserList}>
+              ユーザー一覧
             </button>
           </div>
+          <div style={{ display: "grid", gap: "0.3rem" }}>
+            <label htmlFor="sender-network-device-select" className="meta">ネットワークデバイス</label>
+            <div className="sender-network-device-row">
+              <select
+                id="sender-network-device-select"
+                value={selectedNetworkCandidateKey}
+                onChange={(e) => {
+                  const selectedValue = e.currentTarget.value;
+                  if (selectedValue === REFRESH_NETWORK_CANDIDATES_OPTION) {
+                    onRefreshNetworkCandidates();
+                    return;
+                  }
+                  onNetworkCandidateChange(selectedValue);
+                }}
+                disabled={networkCandidatesLoading}
+              >
+                <option value={REFRESH_NETWORK_CANDIDATES_OPTION}>
+                  {networkCandidatesLoading ? "デバイス検索中..." : "デバイスの再検索"}
+                </option>
+                {networkCandidates.length === 0 ? (
+                  <option value="">利用可能なデバイスがありません</option>
+                ) : (
+                  networkCandidates.map((candidate) => (
+                    <option key={candidate.key} value={candidate.key}>
+                      {candidate.key === selectedNetworkCandidateKey ? "✓ " : ""}{candidate.label}
+                    </option>
+                  ))
+                )}
+              </select>
+              <button type="button" onClick={onSaveSenderProfile} disabled={!canSaveSenderProfile}>
+                保存
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={onCancelSenderProfile}
+                disabled={!canCancelSenderProfile}
+              >
+                キャンセル
+              </button>
+            </div>
+          </div>
         </div>
+
+        {senderSettingsStatus && <p className="meta">{senderSettingsStatus}</p>}
       </section>
 
       <section className="panel">
-        <h2>スマホ入力同期設定</h2>
-        <p className="meta">スマホ入力画面とブラケット画面の自動更新間隔をミリ秒で設定します。</p>
+        <h2>スマートフォン入力同期設定</h2>
+        <p className="meta">スマートフォン入力画面とブラケット画面の自動更新間隔をミリ秒で設定します。</p>
 
         <div className="form" style={{ marginTop: "0.6rem" }}>
           <label htmlFor="mobile-input-polling-ms-input" style={{ display: "grid", gap: "0.3rem" }}>
-            <span className="meta">ポーリング周期 (ms / 500-10000 / 既定値: 1500)</span>
+            <span className="meta setting-field-title">
+              <span>ポーリング周期 (ms / 500-10000 / 既定値: 1500)</span>
+              <span className="setting-field-current">現在値: {mobileInputPollingMs} ms</span>
+            </span>
             <input
               id="mobile-input-polling-ms-input"
               type="number"
@@ -193,17 +211,19 @@ export function SettingsScreen({
           </label>
         </div>
 
-        <p className="meta">現在値: {mobileInputPollingMs} ms</p>
-        <p className="meta">次回URL発行時にスマホ側へ同じ周期を配布します。</p>
+        <p className="meta">次回URL発行時にスマートフォン側へ同じ周期を配布します。</p>
       </section>
 
       <section className="panel">
-        <h2>呼び出しリスト表示設定</h2>
+        <h2>呼出リスト設定</h2>
         <p className="meta">呼び出しリストのページ切替間隔と、カード色が赤になるまでの時間を秒単位で設定します。</p>
 
         <div className="form" style={{ marginTop: "0.6rem" }}>
           <label htmlFor="call-list-rotate-seconds-input" style={{ display: "grid", gap: "0.3rem" }}>
-            <span className="meta">切替間隔 (秒 / 1-180)</span>
+            <span className="meta setting-field-title">
+              <span>切替間隔 (秒 / 1-180)</span>
+              <span className="setting-field-current">現在値: {callListRotateSecondsDisplay} 秒</span>
+            </span>
             <input
               id="call-list-rotate-seconds-input"
               type="number"
@@ -216,7 +236,10 @@ export function SettingsScreen({
             />
           </label>
           <label htmlFor="call-list-color-seconds-input" style={{ display: "grid", gap: "0.3rem" }}>
-            <span className="meta">赤化までの時間 (秒 / 30-3600)</span>
+            <span className="meta setting-field-title">
+              <span>赤化までの時間 (秒 / 30-3600)</span>
+              <span className="setting-field-current">現在値: {callListColorToRedSeconds} 秒</span>
+            </span>
             <input
               id="call-list-color-seconds-input"
               type="number"
@@ -230,12 +253,6 @@ export function SettingsScreen({
           </label>
         </div>
 
-        <p className="meta">現在値: {callListRotateSecondsDisplay} 秒</p>
-        <p className="meta">赤化まで: {callListColorToRedSeconds} 秒</p>
-      </section>
-
-      <section className="panel">
-        <h2>呼び出しリスト管理</h2>
         <p className="meta">保持中の未解決の呼び出しから表示を再構築します。呼び出し自体は削除しません。</p>
         <p className="meta">他端末の呼び出しを最新化する場合は、呼び出しリスト画面の「呼び出しの同期」を使用してください。</p>
 

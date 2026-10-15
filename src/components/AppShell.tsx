@@ -25,7 +25,7 @@ export function useAppVersion(): string {
   return appVersion;
 }
 
-export type AppTab = "create" | "tournament" | "call-list" | "bracket" | "item-list" | "users" | "settings" | "overlay";
+export type AppTab = "create" | "tournament" | "call-list" | "bracket" | "item-list" | "users" | "sender-users" | "settings" | "overlay";
 
 type AppTabDefinition = {
   id: AppTab;
@@ -42,6 +42,7 @@ const APP_TABS: AppTabDefinition[] = [
   { id: "call-list", label: "呼出リスト", icon: "📣", implemented: true },
   { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
   { id: "users", label: "プレイヤーリスト", icon: "👥", implemented: true },
+  { id: "sender-users", label: "ユーザー一覧", icon: "👤", implemented: true },
   { id: "settings", label: "設定", icon: "🔧", implemented: true },
 ];
 
@@ -120,7 +121,7 @@ export function AppShell({
         )}
 
         <nav className="tab-nav" role="tablist" aria-label="メインタブ">
-          {APP_TABS.filter((tab) => tab.id !== "tournament").map((tab) => (
+          {APP_TABS.filter((tab) => tab.id !== "tournament" && tab.id !== "sender-users").map((tab) => (
             <button
               key={tab.id}
               type="button"

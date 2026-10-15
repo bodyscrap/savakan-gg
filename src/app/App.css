@@ -409,6 +409,129 @@ h4 {
   gap: 0.6rem;
 }
 
+.setting-field-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+}
+
+.setting-field-current {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.form.sender-profile-form {
+  grid-template-columns: minmax(140px, 0.75fr) minmax(260px, 0.9fr) minmax(360px, 1.5fr);
+  align-items: end;
+}
+
+.sender-profile-panel {
+  container-type: inline-size;
+}
+
+.sender-profile-form > * {
+  min-width: 0;
+}
+
+.sender-id-actions {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.sender-id-actions button {
+  padding: 0.5rem 0.55rem;
+  white-space: nowrap;
+}
+
+.sender-id-actions label {
+  min-width: 0;
+}
+
+.sender-user-id-input {
+  width: 9ch;
+}
+
+.sender-network-device-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.sender-network-device-row select {
+  width: 100%;
+  min-width: 0;
+}
+
+.sender-network-device-row button {
+  padding: 0.5rem 0.45rem;
+  white-space: nowrap;
+}
+
+.sender-user-list-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.sender-user-list-panel {
+  overflow: hidden;
+}
+
+.sender-user-list-table-wrap {
+  overflow-x: auto;
+}
+
+.sender-user-list-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sender-user-list-table th,
+.sender-user-list-table td {
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.sender-user-list-table th {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.sender-user-id-editor {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sender-user-id-editor input {
+  flex: 0 0 auto;
+}
+
+.sender-user-id-editor button {
+  white-space: nowrap;
+}
+
+.sender-user-entry-duplicate {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+.sender-user-entry-duplicate .meta {
+  color: inherit;
+}
+
+.sender-user-entry-duplicate input {
+  color: #b91c1c;
+  border-color: #b91c1c;
+}
+
 input,
 select,
 textarea,
@@ -2380,6 +2503,10 @@ li {
     grid-template-columns: 1fr;
   }
 
+  .form.sender-profile-form {
+    grid-template-columns: 1fr;
+  }
+
   .bracket-scope-controls {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2429,7 +2556,19 @@ li {
   .create-layout-full {
     grid-column: auto;
   }
+}
 
+@container (max-width: 800px) {
+  .form.sender-profile-form {
+    grid-template-columns: 1fr;
+  }
+
+  .sender-id-actions {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 700px) {
   .player-list-scroll.enabled {
     max-height: 26rem;
   }

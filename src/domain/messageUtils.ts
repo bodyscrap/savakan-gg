@@ -62,7 +62,7 @@ export function resolveSenderSettingsStatus(input: {
   if (!isValidIpv4(input.broadcastSubnetMask)) {
     return "選択デバイスのサブネットマスクが不正です。";
   }
-  return "デバイス選択後、IP/サブネットは自動適用されます。";
+  return "";
 }
 
 export function hasSenderIdCollision(

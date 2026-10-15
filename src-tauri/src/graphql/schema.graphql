@@ -9,6 +9,7 @@ scalar JSON
 
 type Query {
   tournament(slug: String!): Tournament
+  phase(id: ID!): Phase
   set(id: ID!): Set
   seed(id: ID): Seed
   event(slug: String!): Event
@@ -19,6 +20,12 @@ type Query {
 type Mutation {
   reportBracketSet(setId: ID!, winnerId: ID!, gameData: [BracketSetGameDataInput]): [Set]
   resetSet(setId: ID!, resetDependentSets: Boolean): Set
+  updatePhaseSeeding(phaseId: ID!, seedMapping: [UpdatePhaseSeedInfo]!): Phase
+}
+
+input UpdatePhaseSeedInfo {
+  seedId: ID!
+  seedNum: Int!
 }
 
 input BracketSetGameDataInput {
@@ -127,6 +134,8 @@ type Phase {
   id: GgID!
   name: String
   phaseOrder: Int
+  numSeeds: Int
+  seeds(query: SeedPaginationQuery!): SeedConnection
 }
 
 type SetSlot {

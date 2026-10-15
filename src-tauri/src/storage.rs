@@ -20,8 +20,8 @@ use crate::models::{
     PhaseGroupGraphSeedSnapshot, PhaseGroupSeedSnapshot, RestoreEventGraphInput,
     RestoreEventGraphResult, SaveEventManagementMetaInput, SenderProfile,
     SetPhaseGroupExternalEditorInput, SetPhaseGroupExternalScoreBroadcastInput,
-    SetPhaseGroupScoreEditLockInput, SetPlaySideMeta, SetSnapshot, SnapshotRestoreScope,
-    TournamentEventPreviewItem, TournamentLocalMeta, TournamentShareArchive,
+    SetPhaseGroupScoreEditLockInput, SetPlaySideMeta, SetSnapshot, ShuffleInitialPhaseSeedsInput,
+    SnapshotRestoreScope, TournamentEventPreviewItem, TournamentLocalMeta, TournamentShareArchive,
     TournamentShareEntrantMeta, TournamentShareEventSettings, TournamentSnapshot,
     TournamentWorkspace,
 };
@@ -2300,11 +2300,22 @@ fn record_winners_to_losers_round_mapping(
 fn save_pristine_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(), String> {
     let normalized_slug = normalize_slug_for_storage(&snapshot.slug);
     for event in &snapshot.events {
+        let previous_pristine =
+            load_event_snapshot_from_files(app, &snapshot.slug, &event.event_id, true)?;
+        let mut event_to_save = event.clone();
+        if let Some(previous_event) = previous_pristine.as_ref().and_then(|previous| {
+            previous
+                .events
+                .iter()
+                .find(|item| item.event_id == event.event_id)
+        }) {
+            preserve_snapshot_initial_seed_mapping(previous_event, &mut event_to_save);
+        }
         let event_snapshot = TournamentSnapshot {
             tournament_id: snapshot.tournament_id.clone(),
             slug: snapshot.slug.clone(),
             name: snapshot.name.clone(),
-            events: vec![event.clone()],
+            events: vec![event_to_save],
             updated_at: snapshot.updated_at,
         };
         save_event_snapshot_file(
@@ -2316,6 +2327,66 @@ fn save_pristine_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Res
             &event.name,
             true,
         )?;
+    }
+
+    fn preserve_snapshot_initial_seed_mapping(previous: &EventSnapshot, next: &mut EventSnapshot) {
+        let (Ok((previous_phase_id, previous_mapping)), Ok((next_phase_id, next_mapping))) = (
+            initial_phase_seed_mapping(previous),
+            initial_phase_seed_mapping(next),
+        ) else {
+            return;
+        };
+        if previous_phase_id != next_phase_id
+            || previous_mapping.len() != next_mapping.len()
+            || previous_mapping.iter().any(|entry| {
+                !next_mapping
+                    .iter()
+                    .any(|candidate| candidate.seed_id == entry.seed_id)
+            })
+        {
+            return;
+        }
+
+        let previous_entrants = previous
+            .phase_groups
+            .iter()
+            .filter(|group| group.phase_id.as_deref() == Some(previous_phase_id.as_str()))
+            .flat_map(|group| &group.seeds)
+            .map(|seed| (seed.seed_id.as_str(), seed.entrant_id.as_deref()))
+            .collect::<HashMap<_, _>>();
+        let next_entrants = next
+            .phase_groups
+            .iter()
+            .filter(|group| group.phase_id.as_deref() == Some(next_phase_id.as_str()))
+            .flat_map(|group| &group.seeds)
+            .map(|seed| (seed.seed_id.as_str(), seed.entrant_id.as_deref()))
+            .collect::<HashMap<_, _>>();
+        if previous_entrants != next_entrants {
+            return;
+        }
+
+        let seed_num_by_id = previous_mapping
+            .into_iter()
+            .map(|entry| (entry.seed_id, entry.seed_num))
+            .collect::<HashMap<_, _>>();
+        for group in next
+            .phase_groups
+            .iter_mut()
+            .filter(|group| group.phase_id.as_deref() == Some(next_phase_id.as_str()))
+        {
+            for seed in &mut group.seeds {
+                if let Some(seed_num) = seed_num_by_id.get(&seed.seed_id) {
+                    seed.seed_num = Some(*seed_num);
+                }
+            }
+            let mut ordered = group
+                .seeds
+                .iter()
+                .filter_map(|seed| Some((seed_num_by_id.get(&seed.seed_id)?, seed.seed_id.clone())))
+                .collect::<Vec<_>>();
+            ordered.sort_by_key(|(seed_num, _)| **seed_num);
+            group.seed_order = ordered.into_iter().map(|(_, seed_id)| seed_id).collect();
+        }
     }
 
     remove_stale_event_snapshot_files(
@@ -8318,6 +8389,444 @@ pub fn load_workspace(
     })
 }
 
+pub fn shuffle_initial_phase_seeds(
+    app: &AppHandle,
+    input: ShuffleInitialPhaseSeedsInput,
+) -> Result<TournamentWorkspace, String> {
+    let normalized_slug = normalize_slug_for_storage(&input.slug);
+    let mut workspace = load_workspace(app, &normalized_slug, &input.event_id)?;
+    if workspace
+        .local_meta
+        .pending_set_results
+        .iter()
+        .any(|result| result.event_id == input.event_id)
+        || workspace
+            .local_meta
+            .pending_grand_final_reset_results
+            .iter()
+            .any(|result| result.event_id == input.event_id)
+    {
+        return Err("ローカルに未報告の試合結果があるeventの初期Seedは変更できません。".to_owned());
+    }
+    let event = workspace
+        .snapshot
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == input.event_id)
+        .ok_or_else(|| format!("指定イベントが見つかりません: {}", input.event_id))?;
+    if event
+        .sets
+        .iter()
+        .any(|set| set.state != 1 || set.winner_id.is_some())
+    {
+        return Err("試合が進行したeventの初期Seedはシャッフルできません。".to_owned());
+    }
+
+    let first_phase_order = event
+        .phases
+        .iter()
+        .filter_map(|phase| phase.phase_order)
+        .min()
+        .ok_or_else(|| "eventのPhase情報がありません。".to_owned())?;
+    let first_phase_id = event
+        .phases
+        .iter()
+        .find(|phase| phase.phase_order == Some(first_phase_order))
+        .map(|phase| phase.phase_id.clone())
+        .ok_or_else(|| "最初のPhase IDを取得できません。".to_owned())?;
+    let group_ids = event
+        .phase_groups
+        .iter()
+        .filter(|group| group.phase_id.as_deref() == Some(first_phase_id.as_str()))
+        .map(|group| group.phase_group_id.clone())
+        .collect::<HashSet<_>>();
+    let mut original_seeds = HashMap::<String, PhaseGroupSeedSnapshot>::new();
+    for seed in event
+        .phase_groups
+        .iter()
+        .filter(|group| group.phase_id.as_deref() == Some(first_phase_id.as_str()))
+        .flat_map(|group| &group.seeds)
+    {
+        if let Some(existing) = original_seeds.get(&seed.seed_id) {
+            if existing.entrant_id != seed.entrant_id || existing.seed_num != seed.seed_num {
+                return Err("最初のPhaseに重複または不整合なSeed情報があります。".to_owned());
+            }
+        } else {
+            original_seeds.insert(seed.seed_id.clone(), seed.clone());
+        }
+    }
+    if original_seeds.len() < 2 || input.seed_mapping.len() != original_seeds.len() {
+        return Err(
+            "シャッフル対象のSeed一覧が不足しています。スナップショットを更新してください。"
+                .to_owned(),
+        );
+    }
+    let original_numbers = original_seeds
+        .values()
+        .map(|seed| {
+            seed.seed_num
+                .ok_or_else(|| "Seed番号が取得できません。".to_owned())
+        })
+        .collect::<Result<HashSet<_>, _>>()?;
+    let mut new_by_id = HashMap::new();
+    let mut new_numbers = HashSet::new();
+    for entry in input.seed_mapping {
+        if !original_seeds.contains_key(&entry.seed_id)
+            || !original_numbers.contains(&entry.seed_num)
+            || !new_numbers.insert(entry.seed_num)
+            || new_by_id.insert(entry.seed_id, entry.seed_num).is_some()
+        {
+            return Err("シャッフルSeedの対応が不正です。".to_owned());
+        }
+    }
+    if new_by_id.len() != original_seeds.len() || new_numbers != original_numbers {
+        return Err("シャッフルSeedの対応が不正です。".to_owned());
+    }
+    let entrant_seed_by_num = new_by_id
+        .iter()
+        .map(|(seed_id, seed_num)| {
+            let seed = original_seeds
+                .get(seed_id)
+                .expect("validated seed id must exist");
+            (*seed_num, seed.clone())
+        })
+        .collect::<HashMap<_, _>>();
+
+    for group in event
+        .phase_groups
+        .iter_mut()
+        .filter(|group| group.phase_id.as_deref() == Some(first_phase_id.as_str()))
+    {
+        for seed in &mut group.seeds {
+            if let Some(seed_num) = new_by_id.get(&seed.seed_id) {
+                seed.seed_num = Some(*seed_num);
+            }
+        }
+        let mut ordered_seeds = group
+            .seeds
+            .iter()
+            .filter_map(|seed| Some((seed.seed_num?, seed.seed_id.clone())))
+            .collect::<Vec<_>>();
+        ordered_seeds.sort_by_key(|(seed_num, _)| *seed_num);
+        group.seed_order = ordered_seeds
+            .into_iter()
+            .map(|(_, seed_id)| seed_id)
+            .collect();
+        group.initial_seed_restore_pending = input.restore_to_snapshot;
+        group.seed_update_awaiting_started_snapshot = false;
+    }
+    for set in event.sets.iter_mut().filter(|set| {
+        set.phase_group_id
+            .as_deref()
+            .is_some_and(|id| group_ids.contains(id))
+            || set.phase_order == Some(first_phase_order)
+    }) {
+        for slot in &mut set.slots {
+            let Some(seed_num) = slot.seed_num else {
+                continue;
+            };
+            let Some(seed) = entrant_seed_by_num.get(&seed_num) else {
+                continue;
+            };
+            slot.seed_id = Some(seed.seed_id.clone());
+            slot.entrant_id = seed.entrant_id.clone();
+            slot.entrant_name = seed
+                .entrant_name
+                .clone()
+                .or_else(|| seed.placeholder_name.clone())
+                .unwrap_or_else(|| "TBD".to_owned());
+            slot.seed_placeholder_name = seed.placeholder_name.clone();
+        }
+        for source in [&mut set.entrant1_source, &mut set.entrant2_source]
+            .into_iter()
+            .flatten()
+        {
+            let Some(seed_num) = source.seed_num else {
+                continue;
+            };
+            let Some(seed) = entrant_seed_by_num.get(&seed_num) else {
+                continue;
+            };
+            source.type_id = Some(seed.seed_id.clone());
+        }
+    }
+
+    workspace.snapshot.updated_at = Utc::now();
+    let event_snapshot = workspace
+        .snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == input.event_id)
+        .cloned()
+        .ok_or_else(|| "シャッフル後のeventを取得できません。".to_owned())?;
+    let snapshot_for_event = TournamentSnapshot {
+        tournament_id: workspace.snapshot.tournament_id.clone(),
+        slug: workspace.snapshot.slug.clone(),
+        name: workspace.snapshot.name.clone(),
+        events: vec![event_snapshot.clone()],
+        updated_at: workspace.snapshot.updated_at,
+    };
+    save_event_snapshot_file(
+        app,
+        &snapshot_for_event,
+        &workspace.snapshot.tournament_id,
+        &normalized_slug,
+        &input.event_id,
+        &event_snapshot.name,
+        false,
+    )?;
+    save_event_graph_file(
+        app,
+        &build_bracket_graph(&workspace.snapshot, &event_snapshot),
+        &workspace.snapshot.tournament_id,
+        &normalized_slug,
+        &input.event_id,
+        &event_snapshot.name,
+    )?;
+    Ok(workspace)
+}
+
+pub fn restore_initial_phase_seeds(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentWorkspace, String> {
+    let pristine = load_pristine_event_snapshot(app, slug, event_id)?;
+    let event = pristine
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("原本イベントが見つかりません: {event_id}"))?;
+    let (_, seed_mapping) = initial_phase_seed_mapping(event)?;
+    shuffle_initial_phase_seeds(
+        app,
+        ShuffleInitialPhaseSeedsInput {
+            slug: slug.to_owned(),
+            event_id: event_id.to_owned(),
+            seed_mapping,
+            restore_to_snapshot: true,
+        },
+    )
+}
+
+pub fn mark_seed_update_awaiting_started_snapshot(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentWorkspace, String> {
+    let normalized_slug = normalize_slug_for_storage(slug);
+    let mut workspace = load_workspace(app, &normalized_slug, event_id)?;
+    let event = workspace
+        .snapshot
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
+    let first_phase_order = event
+        .phases
+        .iter()
+        .filter_map(|phase| phase.phase_order)
+        .min()
+        .ok_or_else(|| "eventのPhase情報がありません。".to_owned())?;
+    let first_phase_id = event
+        .phases
+        .iter()
+        .find(|phase| phase.phase_order == Some(first_phase_order))
+        .map(|phase| phase.phase_id.clone())
+        .ok_or_else(|| "最初のPhase IDを取得できません。".to_owned())?;
+    let mut marked_group = false;
+    for group in event
+        .phase_groups
+        .iter_mut()
+        .filter(|group| group.phase_id.as_deref() == Some(first_phase_id.as_str()))
+    {
+        group.seed_update_awaiting_started_snapshot = true;
+        marked_group = true;
+    }
+    if !marked_group {
+        return Err("初期PhaseのPhaseGroupが見つかりません。".to_owned());
+    }
+
+    workspace.snapshot.updated_at = Utc::now();
+    let event_snapshot = workspace
+        .snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .cloned()
+        .ok_or_else(|| "Seed更新後のeventを取得できません。".to_owned())?;
+    let snapshot_for_event = TournamentSnapshot {
+        tournament_id: workspace.snapshot.tournament_id.clone(),
+        slug: workspace.snapshot.slug.clone(),
+        name: workspace.snapshot.name.clone(),
+        events: vec![event_snapshot.clone()],
+        updated_at: workspace.snapshot.updated_at,
+    };
+    save_event_snapshot_file(
+        app,
+        &snapshot_for_event,
+        &workspace.snapshot.tournament_id,
+        &normalized_slug,
+        event_id,
+        &event_snapshot.name,
+        false,
+    )?;
+    save_event_graph_file(
+        app,
+        &build_bracket_graph(&workspace.snapshot, &event_snapshot),
+        &workspace.snapshot.tournament_id,
+        &normalized_slug,
+        event_id,
+        &event_snapshot.name,
+    )?;
+    Ok(workspace)
+}
+
+pub fn has_seed_update_awaiting_started_snapshot(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<bool, String> {
+    let workspace = load_workspace(app, slug, event_id)?;
+    let event = workspace
+        .snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("指定イベントにローカルsnapshotがありません: {event_id}"))?;
+    Ok(event
+        .phase_groups
+        .iter()
+        .any(|group| group.seed_update_awaiting_started_snapshot))
+}
+
+pub fn initial_phase_seed_shuffle_for_report(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<
+    Option<(
+        String,
+        Vec<crate::models::InitialPhaseSeedMappingEntry>,
+        Vec<crate::models::InitialPhaseSeedMappingEntry>,
+        bool,
+    )>,
+    String,
+> {
+    let current = load_workspace(app, slug, event_id)?;
+    let pristine = load_pristine_event_snapshot(app, slug, event_id)?;
+    let current_event = current
+        .snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("指定イベントが見つかりません: {event_id}"))?;
+    let pristine_event = pristine
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("原本イベントが見つかりません: {event_id}"))?;
+    let original = initial_phase_seed_mapping(pristine_event)?;
+    let desired = initial_phase_seed_mapping(current_event)?;
+    let original_seed_ids = original
+        .1
+        .iter()
+        .map(|entry| entry.seed_id.as_str())
+        .collect::<HashSet<_>>();
+    let desired_seed_ids = desired
+        .1
+        .iter()
+        .map(|entry| entry.seed_id.as_str())
+        .collect::<HashSet<_>>();
+    let original_seed_nums = original
+        .1
+        .iter()
+        .map(|entry| entry.seed_num)
+        .collect::<HashSet<_>>();
+    let desired_seed_nums = desired
+        .1
+        .iter()
+        .map(|entry| entry.seed_num)
+        .collect::<HashSet<_>>();
+    if original.0 != desired.0
+        || original_seed_ids != desired_seed_ids
+        || original_seed_nums != desired_seed_nums
+    {
+        return Err("初期PhaseのSeed情報が原本から予期せず変更されています。".to_owned());
+    }
+    let restore_requested = current_event
+        .phase_groups
+        .iter()
+        .any(|group| group.initial_seed_restore_pending);
+    if !restore_requested && original.1 == desired.1 {
+        return Ok(None);
+    }
+    Ok(Some((original.0, original.1, desired.1, restore_requested)))
+}
+
+pub fn has_local_initial_phase_seed_shuffle(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<bool, String> {
+    let current = load_workspace(app, slug, event_id)?;
+    let pristine = load_pristine_event_snapshot(app, slug, event_id)?;
+    let current_event = current
+        .snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("指定イベントがローカルsnapshotに見つかりません: {event_id}"))?;
+    let pristine_event = pristine
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("原本イベントが見つかりません: {event_id}"))?;
+    let current_mapping = initial_phase_seed_mapping(current_event)?;
+    let pristine_mapping = initial_phase_seed_mapping(pristine_event)?;
+    Ok(current_mapping.0 != pristine_mapping.0 || current_mapping.1 != pristine_mapping.1)
+}
+
+fn initial_phase_seed_mapping(
+    event: &EventSnapshot,
+) -> Result<(String, Vec<crate::models::InitialPhaseSeedMappingEntry>), String> {
+    let first_order = event
+        .phases
+        .iter()
+        .filter_map(|phase| phase.phase_order)
+        .min()
+        .ok_or_else(|| "eventのPhase情報がありません。".to_owned())?;
+    let phase_id = event
+        .phases
+        .iter()
+        .find(|phase| phase.phase_order == Some(first_order))
+        .map(|phase| phase.phase_id.clone())
+        .ok_or_else(|| "最初のPhase IDを取得できません。".to_owned())?;
+    let mut entries = HashMap::new();
+    for seed in event
+        .phase_groups
+        .iter()
+        .filter(|group| group.phase_id.as_deref() == Some(phase_id.as_str()))
+        .flat_map(|group| &group.seeds)
+    {
+        let seed_num = seed
+            .seed_num
+            .ok_or_else(|| "初期PhaseにSeed番号がありません。".to_owned())?;
+        let entry = crate::models::InitialPhaseSeedMappingEntry {
+            seed_id: seed.seed_id.clone(),
+            seed_num,
+        };
+        if let Some(previous) = entries.insert(seed.seed_id.clone(), entry.clone()) {
+            if previous.seed_num != entry.seed_num {
+                return Err("初期Phaseに重複または不整合なSeed情報があります。".to_owned());
+            }
+        }
+    }
+    let mut entries = entries.into_values().collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.seed_num);
+    Ok((phase_id, entries))
+}
+
 fn replace_event_with_pristine_snapshot(
     snapshot: &mut TournamentSnapshot,
     pristine_snapshot: &TournamentSnapshot,
@@ -8420,6 +8929,27 @@ pub fn restore_event_graph_from_snapshot(
         })?;
     let mut affected_set_ids = HashSet::new();
     let mut restored_phase_group_ids = HashSet::new();
+    let seed_restore_requested = if input.scope == SnapshotRestoreScope::All {
+        workspace
+            .snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == input.event_id)
+            .is_some_and(|current_event| {
+                current_event.phase_groups.iter().any(|group| {
+                    group.initial_seed_restore_pending
+                        || group.seed_update_awaiting_started_snapshot
+                }) || match (
+                    initial_phase_seed_mapping(current_event),
+                    initial_phase_seed_mapping(&pristine_event),
+                ) {
+                    (Ok(current), Ok(pristine)) => current != pristine,
+                    _ => false,
+                }
+            })
+    } else {
+        false
+    };
 
     match input.scope {
         SnapshotRestoreScope::All => {
@@ -8428,6 +8958,23 @@ pub fn restore_event_graph_from_snapshot(
                 &pristine_snapshot,
                 &input.event_id,
             )?;
+            if seed_restore_requested {
+                let event = workspace
+                    .snapshot
+                    .events
+                    .iter_mut()
+                    .find(|event| event.event_id == input.event_id)
+                    .ok_or_else(|| format!("復元対象イベントが見つかりません: {}", input.event_id))?;
+                let first_phase_id = initial_phase_seed_mapping(event)?.0;
+                for group in event
+                    .phase_groups
+                    .iter_mut()
+                    .filter(|group| group.phase_id.as_deref() == Some(first_phase_id.as_str()))
+                {
+                    group.initial_seed_restore_pending = true;
+                    group.seed_update_awaiting_started_snapshot = false;
+                }
+            }
             affected_set_ids.extend(pristine_event.sets.iter().map(|set| set.set_id.clone()));
         }
         SnapshotRestoreScope::CurrentPool => {

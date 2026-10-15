@@ -31,6 +31,10 @@ export type EventSettingProps = {
     busy: boolean;
     canUpdateSnapshot: boolean;
     eventAliasDraft: string;
+    initialSeedPhaseName: string;
+    initialSeedEntrantCount: number;
+    canShuffleInitialSeeds: boolean;
+    canRestoreInitialSeeds: boolean;
   };
   rules: {
     sideDecisionMethod: SideDecisionMethod;
@@ -57,6 +61,8 @@ export type EventSettingProps = {
   };
   actions: {
     onUpdateSnapshot: () => void;
+    onShuffleInitialSeeds: () => void;
+    onRestoreInitialSeeds: () => void;
     onEventAliasDraftChange: (value: string) => void;
     onSaveEventAlias: () => void;
     onSideDecisionMethodChange: (method: SideDecisionMethod) => void;
@@ -86,6 +92,10 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
     busy,
     canUpdateSnapshot,
     eventAliasDraft,
+    initialSeedPhaseName,
+    initialSeedEntrantCount,
+    canShuffleInitialSeeds,
+    canRestoreInitialSeeds,
   } = event;
   const {
     sideDecisionMethod,
@@ -112,6 +122,8 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
   } = playerMeta;
   const {
     onUpdateSnapshot,
+    onShuffleInitialSeeds,
+    onRestoreInitialSeeds,
     onEventAliasDraftChange,
     onSaveEventAlias,
     onSideDecisionMethodChange,
@@ -308,6 +320,32 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
             </div>
           </div>
           <p className="meta">カテゴリは最大3つまで設定できます。カテゴリ重複は不可で、カテゴリごとの件数条件と全体件数条件を設定します。</p>
+
+          <div className="setting-row" style={{ marginTop: "0.9rem" }}>
+            <p className="setting-row-title">初期PhaseのプレイヤーSeedシャッフル</p>
+            <div className="setting-row-fields single" style={{ gridTemplateColumns: "minmax(220px, 1fr) auto auto" }}>
+              <p className="meta">
+                対象: {initialSeedPhaseName || "-"} / {initialSeedEntrantCount}人。
+                試合開始前のみ実行でき、結果報告時にstart.ggへSeedを反映します。
+              </p>
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy || !canShuffleInitialSeeds}
+                onClick={onShuffleInitialSeeds}
+              >
+                Seedをシャッフル
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy || !canRestoreInitialSeeds}
+                onClick={onRestoreInitialSeeds}
+              >
+                スナップショット時に戻す
+              </button>
+            </div>
+          </div>
 
           {selectedEventEntrants.length === 0 ? (
             <p className="meta" style={{ marginTop: "0.75rem" }}>参加者が見つかりません。</p>

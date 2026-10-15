@@ -445,6 +445,23 @@ pub struct RestoreEventGraphInput {
     pub phase_name: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialPhaseSeedMappingEntry {
+    pub seed_id: String,
+    pub seed_num: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShuffleInitialPhaseSeedsInput {
+    pub slug: String,
+    pub event_id: String,
+    pub seed_mapping: Vec<InitialPhaseSeedMappingEntry>,
+    #[serde(default)]
+    pub restore_to_snapshot: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreEventGraphResult {
@@ -521,6 +538,10 @@ pub struct PhaseGroupSnapshot {
     pub seed_order: Vec<String>,
     #[serde(default)]
     pub seeds: Vec<PhaseGroupSeedSnapshot>,
+    #[serde(default)]
+    pub initial_seed_restore_pending: bool,
+    #[serde(default)]
+    pub seed_update_awaiting_started_snapshot: bool,
     #[serde(default)]
     pub tiebreak_order: Vec<String>,
 }

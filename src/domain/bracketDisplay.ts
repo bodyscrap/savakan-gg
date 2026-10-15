@@ -24,6 +24,7 @@ export type PhaseSnapshot = {
 
 export type PhaseGroupSnapshot = {
   phaseGroupId?: string;
+  phaseId?: string | null;
   setIds?: string[];
   tiebreakOrder?: string[];
   phaseName: string | null;

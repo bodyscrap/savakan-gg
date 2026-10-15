@@ -279,7 +279,7 @@ export function useMobileInputPortal({
         throw new Error("この環境ではクリップボードAPIが使用できません。");
       }
       await navigator.clipboard.writeText(issuedUrl);
-      setMessage("スマホ入力URLをクリップボードへコピーしました。");
+      setMessage("スマートフォン入力URLをクリップボードへコピーしました。");
     } catch {
       setError("URLコピーに失敗しました。URLを手動で共有してください。");
     }

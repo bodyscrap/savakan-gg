@@ -10,9 +10,10 @@ use std::time::Duration;
 use tokio::time::{sleep, Instant};
 
 use crate::models::{
-    EventSnapshot, PhaseGroupProgressionSnapshot, PhaseGroupSeedSnapshot, PhaseGroupSnapshot,
-    PhaseSnapshot, SetEntrantSourceSnapshot, SetSlotSnapshot, SetSnapshot,
-    TournamentEventPreviewItem, TournamentPreview, TournamentSnapshot,
+    EventSnapshot, InitialPhaseSeedMappingEntry, PhaseGroupProgressionSnapshot,
+    PhaseGroupSeedSnapshot, PhaseGroupSnapshot, PhaseSnapshot, SetEntrantSourceSnapshot,
+    SetSlotSnapshot, SetSnapshot, TournamentEventPreviewItem, TournamentPreview,
+    TournamentSnapshot,
 };
 
 const START_GG_GQL_ENDPOINT: &str = "https://api.start.gg/gql/alpha";
@@ -85,6 +86,39 @@ fn split_set_snapshot_batch(set_ids: Vec<String>) -> Option<(Vec<String>, Vec<St
     Some((set_ids[..midpoint].to_vec(), set_ids[midpoint..].to_vec()))
 }
 
+fn same_seed_population(
+    left: &[InitialPhaseSeedMappingEntry],
+    right: &[InitialPhaseSeedMappingEntry],
+) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+
+    let left_seed_ids = left
+        .iter()
+        .map(|entry| entry.seed_id.as_str())
+        .collect::<HashSet<_>>();
+    let right_seed_ids = right
+        .iter()
+        .map(|entry| entry.seed_id.as_str())
+        .collect::<HashSet<_>>();
+    let left_seed_nums = left
+        .iter()
+        .map(|entry| entry.seed_num)
+        .collect::<HashSet<_>>();
+    let right_seed_nums = right
+        .iter()
+        .map(|entry| entry.seed_num)
+        .collect::<HashSet<_>>();
+
+    left_seed_ids.len() == left.len()
+        && right_seed_ids.len() == right.len()
+        && left_seed_nums.len() == left.len()
+        && right_seed_nums.len() == right.len()
+        && left_seed_ids == right_seed_ids
+        && left_seed_nums == right_seed_nums
+}
+
 #[cfg(test)]
 mod event_snapshot_scope_tests {
     use super::*;
@@ -142,6 +176,58 @@ mod event_snapshot_scope_tests {
         assert_eq!(left, ["1"]);
         assert_eq!(right, ["2"]);
     }
+
+    #[test]
+    fn allows_remote_seed_order_changes_with_same_seed_population() {
+        let snapshot = vec![
+            InitialPhaseSeedMappingEntry {
+                seed_id: "seed-1".to_owned(),
+                seed_num: 1,
+            },
+            InitialPhaseSeedMappingEntry {
+                seed_id: "seed-2".to_owned(),
+                seed_num: 2,
+            },
+        ];
+        let remote = vec![
+            InitialPhaseSeedMappingEntry {
+                seed_id: "seed-1".to_owned(),
+                seed_num: 2,
+            },
+            InitialPhaseSeedMappingEntry {
+                seed_id: "seed-2".to_owned(),
+                seed_num: 1,
+            },
+        ];
+
+        assert!(same_seed_population(&snapshot, &remote));
+    }
+
+    #[test]
+    fn rejects_remote_seed_population_changes() {
+        let snapshot = vec![
+            InitialPhaseSeedMappingEntry {
+                seed_id: "seed-1".to_owned(),
+                seed_num: 1,
+            },
+            InitialPhaseSeedMappingEntry {
+                seed_id: "seed-2".to_owned(),
+                seed_num: 2,
+            },
+        ];
+        let remote = vec![
+            InitialPhaseSeedMappingEntry {
+                seed_id: "seed-1".to_owned(),
+                seed_num: 1,
+            },
+            InitialPhaseSeedMappingEntry {
+                seed_id: "seed-3".to_owned(),
+                seed_num: 2,
+            },
+        ];
+
+        assert!(!same_seed_population(&snapshot, &remote));
+    }
 }
 
 #[derive(GraphQLQuery)]
@@ -197,6 +283,24 @@ pub struct SeedSnapshot;
     custom_scalars_module = "crate::startgg_scalars"
 )]
 pub struct ResetSet;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/schema.graphql",
+    query_path = "src/graphql/phase_seed_snapshot.graphql",
+    response_derives = "Debug, Clone",
+    custom_scalars_module = "crate::startgg_scalars"
+)]
+pub struct PhaseSeedSnapshot;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/schema.graphql",
+    query_path = "src/graphql/update_phase_seeding.graphql",
+    response_derives = "Debug, Clone",
+    custom_scalars_module = "crate::startgg_scalars"
+)]
+pub struct UpdatePhaseSeeding;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -343,6 +447,141 @@ async fn post_graphql_with_retry<T: Serialize + ?Sized>(
     Err(format!(
         "{operation_name}リクエストがリトライ上限に達しました。"
     ))
+}
+
+async fn fetch_phase_seed_mapping(
+    client: &Client,
+    token: &str,
+    phase_id: &str,
+) -> Result<Vec<InitialPhaseSeedMappingEntry>, String> {
+    let mut entries = Vec::new();
+    let mut page = 1_i64;
+    let per_page = 200_i64;
+    let expected_count = loop {
+        let body = PhaseSeedSnapshot::build_query(phase_seed_snapshot::Variables {
+            phase_id: phase_id.to_owned(),
+            page,
+            per_page,
+        });
+        let response = post_graphql_with_retry(client, token, &body, "Phase Seed取得").await?;
+        let status = response.status();
+        let raw_body = response
+            .text()
+            .await
+            .map_err(|error| format!("Phase Seedレスポンス読込に失敗しました: {error}"))?;
+        if !status.is_success() {
+            return Err(format!(
+                "start.ggがエラーを返しました: HTTP {status} / body={}",
+                summarize_response_body(&raw_body)
+            ));
+        }
+        let payload: Response<phase_seed_snapshot::ResponseData> = serde_json::from_str(&raw_body)
+            .map_err(|error| format!("Phase Seedレスポンスの解析に失敗しました: {error}"))?;
+        if let Some(errors) = payload.errors {
+            return Err(format!("GraphQLエラー: {}", join_graphql_errors(&errors)));
+        }
+        let phase = payload
+            .data
+            .and_then(|data| data.phase)
+            .ok_or_else(|| format!("指定Phaseが見つかりません: {phase_id}"))?;
+        let expected_count = phase.num_seeds.unwrap_or(0);
+        let page_entries = phase
+            .seeds
+            .and_then(|connection| connection.nodes)
+            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .map(|seed| InitialPhaseSeedMappingEntry {
+                seed_id: seed.id.to_string(),
+                seed_num: seed.seed_num.unwrap_or_default() as i64,
+            })
+            .collect::<Vec<_>>();
+        let page_count = page_entries.len();
+        entries.extend(page_entries);
+        if entries.len() as i64 >= expected_count || page_count == 0 {
+            break expected_count;
+        }
+        page += 1;
+    };
+    entries.sort_by_key(|entry| entry.seed_num);
+    if entries.len() as i64 != expected_count || entries.iter().any(|entry| entry.seed_num <= 0) {
+        return Err(
+            "Phase Seedを全件取得できませんでした。スナップショットを更新してください。".to_owned(),
+        );
+    }
+    Ok(entries)
+}
+
+pub async fn current_phase_seed_mapping(
+    token: &str,
+    phase_id: &str,
+) -> Result<Vec<InitialPhaseSeedMappingEntry>, String> {
+    fetch_phase_seed_mapping(&Client::new(), token, phase_id).await
+}
+
+pub async fn update_phase_seeding_if_unchanged(
+    token: &str,
+    phase_id: &str,
+    original: &[InitialPhaseSeedMappingEntry],
+    desired: &[InitialPhaseSeedMappingEntry],
+    restore_to_snapshot: bool,
+) -> Result<bool, String> {
+    let client = Client::new();
+    let current = fetch_phase_seed_mapping(&client, token, phase_id).await?;
+    if current == desired {
+        return Ok(false);
+    }
+    if restore_to_snapshot && desired != original {
+        return Err("原本Seedへの復元要求が不正です。".to_owned());
+    }
+    if !same_seed_population(&current, original) {
+        return Err(
+            "start.ggの初期Seed IDまたはSeed番号がスナップショット取得後に変更されています。Seed更新を中止しました。"
+                .to_owned(),
+        );
+    }
+    let variables = update_phase_seeding::Variables {
+        phase_id: phase_id.to_owned(),
+        seed_mapping: desired
+            .iter()
+            .map(|entry| {
+                Some(update_phase_seeding::UpdatePhaseSeedInfo {
+                    seed_id: entry.seed_id.clone(),
+                    seed_num: entry.seed_num,
+                })
+            })
+            .collect(),
+    };
+    let body = UpdatePhaseSeeding::build_query(variables);
+    let response = post_graphql_with_retry(&client, token, &body, "初期Seed更新").await?;
+    let status = response.status();
+    let raw_body = response
+        .text()
+        .await
+        .map_err(|error| format!("初期Seed更新レスポンス読込に失敗しました: {error}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "start.ggがSeed更新エラーを返しました: HTTP {status} / body={}",
+            summarize_response_body(&raw_body)
+        ));
+    }
+    let payload: Response<update_phase_seeding::ResponseData> = serde_json::from_str(&raw_body)
+        .map_err(|error| format!("初期Seed更新レスポンスの解析に失敗しました: {error}"))?;
+    if let Some(errors) = payload.errors {
+        return Err(format!("GraphQLエラー: {}", join_graphql_errors(&errors)));
+    }
+    if payload
+        .data
+        .and_then(|data| data.update_phase_seeding)
+        .is_none()
+    {
+        return Err("start.ggから初期Seed更新の確認応答がありません。".to_owned());
+    }
+    let updated = fetch_phase_seed_mapping(&client, token, phase_id).await?;
+    if updated != desired {
+        return Err("start.gg上の初期Seedが要求した順序に更新されませんでした。".to_owned());
+    }
+    Ok(true)
 }
 
 async fn fetch_set_snapshot_detail(token: &str, set_id: &str) -> Result<SetSnapshot, String> {
@@ -1269,6 +1508,8 @@ async fn query_tournament_snapshot(
                             placeholder_name: seed.placeholder_name,
                         })
                         .collect(),
+                    initial_seed_restore_pending: false,
+                    seed_update_awaiting_started_snapshot: false,
                 })
                 .collect::<Vec<PhaseGroupSnapshot>>();
             let sets = event
@@ -1695,6 +1936,25 @@ pub async fn fetch_event_snapshot_by_slug(
     token: &str,
     event_slug: &str,
     per_page: u32,
+    progress_cb: impl FnMut(EventSnapshotFetchProgress),
+) -> Result<TournamentSnapshot, String> {
+    fetch_event_snapshot_by_slug_with_policy(token, event_slug, per_page, false, progress_cb).await
+}
+
+pub async fn fetch_event_snapshot_by_slug_strict(
+    token: &str,
+    event_slug: &str,
+    per_page: u32,
+    progress_cb: impl FnMut(EventSnapshotFetchProgress),
+) -> Result<TournamentSnapshot, String> {
+    fetch_event_snapshot_by_slug_with_policy(token, event_slug, per_page, true, progress_cb).await
+}
+
+async fn fetch_event_snapshot_by_slug_with_policy(
+    token: &str,
+    event_slug: &str,
+    per_page: u32,
+    strict_set_errors: bool,
     mut progress_cb: impl FnMut(EventSnapshotFetchProgress),
 ) -> Result<TournamentSnapshot, String> {
     let client = Client::new();
@@ -1893,6 +2153,8 @@ pub async fn fetch_event_snapshot_by_slug(
                             placeholder_name: seed.placeholder_name,
                         })
                         .collect(),
+                    initial_seed_restore_pending: false,
+                    seed_update_awaiting_started_snapshot: false,
                 })
                 .collect::<Vec<PhaseGroupSnapshot>>();
 
@@ -2004,12 +2266,16 @@ pub async fn fetch_event_snapshot_by_slug(
             current_set_id: batch_set_ids.first().cloned(),
         });
         let details =
-            fetch_set_snapshot_details_adaptive_with_client(&client, token, &batch_set_ids).await?;
+            fetch_set_snapshot_details_adaptive_with_client(&client, token, &batch_set_ids)
+                .await
+                .map_err(|error| format!("Set詳細の取得に失敗しました: {error}"))?;
         for (set_id, set_result) in details {
             let maybe_set = match set_result {
                 Ok(set) => set,
-                Err(_) if !visible_set_ids.contains(&set_id) => None,
-                Err(error) => return Err(error),
+                Err(_) if !strict_set_errors && !visible_set_ids.contains(&set_id) => None,
+                Err(error) => {
+                    return Err(format!("Set {set_id} の取得に失敗しました: {error}"));
+                }
             };
             if let Some(mut set) = maybe_set {
                 let is_visible_set = visible_set_ids.contains(&set_id);
