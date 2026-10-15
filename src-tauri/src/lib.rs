@@ -219,6 +219,8 @@ struct MobileSetListItem {
 struct MobileSetCallStatus {
     own_call_count: usize,
     other_call_count: usize,
+    calling_players: Vec<String>,
+    calling_entrant_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -255,12 +257,23 @@ fn mobile_set_call_status(
         .map(|profile| profile.sender_user_id)
         .unwrap_or_default();
     let calls = load_active_calls_for_set(app, event_id, set_id)?;
-    let (own_calls, other_calls): (Vec<_>, Vec<_>) = calls
-        .iter()
-        .partition(|call| call.message.sender_user_id == sender_user_id && !sender_user_id.is_empty());
+    let (own_calls, other_calls): (Vec<_>, Vec<_>) = calls.iter().partition(|call| {
+        call.message.sender_user_id == sender_user_id && !sender_user_id.is_empty()
+    });
     Ok(MobileSetCallStatus {
         own_call_count: own_calls.len(),
         other_call_count: other_calls.len(),
+        calling_players: calls
+            .iter()
+            .map(|call| {
+                meta_string(call.message.message_meta.as_ref(), "callEntrantName")
+                    .unwrap_or_else(|| call.message.subject.clone())
+            })
+            .collect(),
+        calling_entrant_ids: calls
+            .iter()
+            .filter_map(|call| meta_string(call.message.message_meta.as_ref(), "callEntrantId"))
+            .collect(),
     })
 }
 
@@ -1996,6 +2009,9 @@ fn mobile_input_html() -> &'static str {
             width: 100%;
             min-width: 0;
         }
+        .player-card.call-active {
+            opacity: 0.5;
+        }
         .player-top-head {
             width: 100%;
             display: flex;
@@ -2108,6 +2124,11 @@ fn mobile_input_html() -> &'static str {
             font-size: 0.76rem;
             min-height: 1.2em;
         }
+        button:disabled,
+        input:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -2137,6 +2158,7 @@ fn mobile_input_html() -> &'static str {
             </div>
             <p id="detailPhasePool" class="meta" style="margin-top: 4px;"></p>
             <p id="detailMeta" class="meta" style="margin-top: 4px;"></p>
+            <p id="callStatusLabel" class="meta" style="margin-top: 4px;" role="status" aria-live="polite"></p>
             <label class="checkbox-row">
                 <input id="onePOnTopCheckbox" type="checkbox" checked />
                 <span>1Pを左に表示</span>
@@ -2160,7 +2182,7 @@ fn mobile_input_html() -> &'static str {
                 <p id="overlayStatus" class="meta"></p>
                 <div class="overlay-button-row">
                     <button id="overlayToggleBtn" type="button">配信開始</button>
-                    <button id="resolveCallsBtn" type="button">呼び出しを解決</button>
+                    <button id="resolveCallsBtn" type="button">呼出解決</button>
                     <button id="overlayStopBtn" type="button" style="background: #e2e8f0; color: #0f172a; border-color: #cbd5e1;">完全停止</button>
                 </div>
             </div>
@@ -2260,6 +2282,7 @@ fn mobile_input_html() -> &'static str {
         const detailSetId = document.getElementById('detailSetId');
         const detailPhasePool = document.getElementById('detailPhasePool');
         const detailMeta = document.getElementById('detailMeta');
+        const callStatusLabel = document.getElementById('callStatusLabel');
         const onePOnTopCheckbox = document.getElementById('onePOnTopCheckbox');
         const sideActions = document.getElementById('sideActions');
         const swapSideBtn = document.getElementById('swapSideBtn');
@@ -2280,6 +2303,7 @@ fn mobile_input_html() -> &'static str {
         let selectedSetCallStatus = null;
         let mobileEventAlias = '';
         let eventInfoPromise = Promise.resolve();
+        let callStatusRequestInProgress = false;
         let displayOnePOnTop = true;
         let mobileSideDrafts = {};
         let directWinnerId = null;
@@ -2357,12 +2381,29 @@ fn mobile_input_html() -> &'static str {
             return await response.json();
         }
 
+        function hasActiveSetCalls() {
+            return Boolean(selectedSetCallStatus
+                && (selectedSetCallStatus.ownCallCount > 0 || selectedSetCallStatus.otherCallCount > 0));
+        }
+
+        function isEntrantCalled(entrantId) {
+            const callingEntrantIds = selectedSetCallStatus?.callingEntrantIds || [];
+            return callingEntrantIds.some((calledEntrantId) => String(calledEntrantId) === String(entrantId));
+        }
+
         function updateSetCallControls() {
-            const hasActiveCalls = selectedSetCallStatus
-                && (selectedSetCallStatus.ownCallCount > 0 || selectedSetCallStatus.otherCallCount > 0);
+            const hasActiveCalls = hasActiveSetCalls();
+            if (callStatusLabel) {
+                const callingPlayers = selectedSetCallStatus?.callingPlayers || [];
+                callStatusLabel.textContent = !selectedSetCallStatus && selectedSet
+                    ? '呼び出し状態を確認できないため、入力を停止中'
+                    : hasActiveCalls
+                        ? `呼び出し中: ${callingPlayers.length > 0 ? callingPlayers.join(' / ') : 'プレイヤー名不明'}（入力停止中）`
+                        : '';
+            }
             if (resolveCallsBtn) {
                 const completed = isCompletedSet(selectedSet);
-                resolveCallsBtn.hidden = completed || Boolean(selectedSetCallStatus && !hasActiveCalls);
+                resolveCallsBtn.hidden = completed || !hasActiveCalls;
                 resolveCallsBtn.disabled = !selectedSetCallStatus || !hasActiveCalls || completed;
                 resolveCallsBtn.title = completed
                     ? '確定済みSetの呼び出しは呼び出しリストから解決してください。'
@@ -2370,6 +2411,14 @@ fn mobile_input_html() -> &'static str {
                         ? '他端末発行の呼び出しは発行端末で解決してください。'
                         : '';
             }
+            if (overlayToggleBtn) {
+                overlayToggleBtn.hidden = !selectedSetCallStatus || hasActiveCalls;
+            }
+            if (overlayStopBtn) {
+                overlayStopBtn.hidden = !selectedSetCallStatus || hasActiveCalls;
+            }
+            applySetCallInputLock();
+
             if (detailMeta && isCompletedSet(selectedSet) && hasActiveCalls) {
                 detailMeta.textContent = '確定済みSetの呼び出しは呼び出しリストから解決してください。';
             }
@@ -2387,9 +2436,48 @@ fn mobile_input_html() -> &'static str {
             }
         }
 
+        function applySetCallInputLock() {
+            const callsActive = hasActiveSetCalls();
+            const callStatusUnknown = Boolean(selectedSet && !selectedSetCallStatus);
+            const callInputLocked = callsActive || callStatusUnknown;
+            const completed = isCompletedSet(selectedSet);
+            const scoreEditLocked = Boolean(selectedSet?.scoreEditLocked);
+            const matchupReady = isMatchupReady(selectedSet);
+            if (discardBtn) {
+                discardBtn.disabled = callInputLocked || completed || scoreEditLocked || !matchupReady;
+            }
+            if (updateBtn) {
+                updateBtn.disabled = callInputLocked || completed || scoreEditLocked || !matchupReady;
+            }
+            if (confirmBtn) {
+                confirmBtn.disabled = callInputLocked || completed || scoreEditLocked || !matchupReady;
+            }
+            if (swapSideBtn) {
+                swapSideBtn.disabled = callInputLocked || completed || !matchupReady;
+            }
+            if (randomSideBtn) {
+                randomSideBtn.disabled = callInputLocked || completed || !matchupReady;
+            }
+            if (slotRows) {
+                for (const card of slotRows.querySelectorAll('[data-side-entrant-id]')) {
+                    card.classList.toggle('call-active', isEntrantCalled(card.getAttribute('data-side-entrant-id')));
+                }
+                for (const control of slotRows.querySelectorAll('button, input')) {
+                    if (!Object.prototype.hasOwnProperty.call(control.dataset, 'callBaseDisabled')) {
+                        control.dataset.callBaseDisabled = String(control.disabled);
+                    }
+                    control.disabled = callInputLocked || control.dataset.callBaseDisabled === 'true';
+                }
+            }
+        }
+
         async function refreshSetCallStatus() {
+            if (callStatusRequestInProgress) {
+                return selectedSetCallStatus;
+            }
             selectedSetCallStatus = null;
             updateSetCallControls();
+            callStatusRequestInProgress = true;
             try {
                 selectedSetCallStatus = await fetchSetCallStatus();
                 updateSetCallControls();
@@ -2398,6 +2486,31 @@ fn mobile_input_html() -> &'static str {
                 updateSetCallControls();
                 submitStatus.textContent = `呼び出し状態の確認に失敗しました: ${error && error.message ? error.message : String(error)}`;
                 return null;
+            } finally {
+                callStatusRequestInProgress = false;
+            }
+        }
+
+        async function pollSetCallStatus() {
+            if (!selectedSet || !detailBox || detailBox.hidden || callStatusRequestInProgress) {
+                return;
+            }
+            const pollingSetId = String(selectedSet.setId);
+            callStatusRequestInProgress = true;
+            try {
+                const status = await fetchSetCallStatus();
+                if (selectedSet && String(selectedSet.setId) === pollingSetId) {
+                    selectedSetCallStatus = status;
+                    updateSetCallControls();
+                }
+            } catch (error) {
+                if (selectedSet && String(selectedSet.setId) === pollingSetId) {
+                    selectedSetCallStatus = null;
+                    updateSetCallControls();
+                    submitStatus.textContent = `呼び出し状態の確認に失敗しました: ${error && error.message ? error.message : String(error)}`;
+                }
+            } finally {
+                callStatusRequestInProgress = false;
             }
         }
 
@@ -2748,7 +2861,7 @@ fn mobile_input_html() -> &'static str {
         }
 
         function swapSides() {
-            if (!selectedSet || isCompletedSet(selectedSet)) {
+            if (!selectedSet || isCompletedSet(selectedSet) || hasActiveSetCalls()) {
                 return;
             }
 
@@ -2774,7 +2887,7 @@ fn mobile_input_html() -> &'static str {
         }
 
         function randomizeSides() {
-            if (!selectedSet || isCompletedSet(selectedSet)) {
+            if (!selectedSet || isCompletedSet(selectedSet) || hasActiveSetCalls()) {
                 return;
             }
 
@@ -2813,7 +2926,7 @@ fn mobile_input_html() -> &'static str {
         }
 
         function setEntrantPlaySide(entrantId, playSide) {
-            if (!selectedSet || isCompletedSet(selectedSet) || !entrantId) {
+            if (!selectedSet || isCompletedSet(selectedSet) || hasActiveSetCalls() || !entrantId) {
                 return;
             }
 
@@ -2839,9 +2952,6 @@ fn mobile_input_html() -> &'static str {
                 : completed
                 ? '結果が確定しているため編集できません。修正する場合は「影響setを取消」からやり直してください。'
                 : '';
-            if (discardBtn) {
-                discardBtn.disabled = completed || scoreEditLocked || !matchupReady;
-            }
             const visibleSlots = slots.slice(0, 2);
             const numericScores = matchupReady
                 ? visibleSlots.map((slot) => normalizeScoreValue(slot?.score)).filter((value) => value !== null)
@@ -2889,9 +2999,10 @@ fn mobile_input_html() -> &'static str {
                 const dqButton = matchupReady && hasEntrant
                     ? `<button class="dq-btn" type="button" data-dq-entrant-id="${entrantId}" ${completed || scoreEditLocked ? 'disabled' : ''}>DQ</button>`
                     : '';
+                const callActiveClass = isEntrantCalled(entrantId) ? 'call-active' : '';
                 const sideClass = sideLabel === '1P' ? 'side-1p' : (sideLabel === '2P' ? 'side-2p' : '');
                 const escapedEntrantName = escapeHtml(slot?.entrantName || 'TBD');
-                return `<div class="player-card ${sideClass} ${isHigher ? 'score-high' : ''}" data-slot-order="${index}" data-side-entrant-id="${entrantId}">
+                return `<div class="player-card ${callActiveClass} ${sideClass} ${isHigher ? 'score-high' : ''}" data-slot-order="${index}" data-side-entrant-id="${entrantId}">
                     <div class="player-top">
                         <div class="player-top-head">
                             <span class="slot-side-label">${sideLabel}</span>
@@ -2905,6 +3016,7 @@ fn mobile_input_html() -> &'static str {
 
             slotRows.innerHTML = `<div class="slot-row">${playerCards}</div>`;
             alignSlotPlayerNameLines();
+            applySetCallInputLock();
 
             for (const input of slotRows.querySelectorAll('[data-score-entrant-id]')) {
                 input.addEventListener('input', () => {
@@ -2941,7 +3053,7 @@ fn mobile_input_html() -> &'static str {
                 dqButton.addEventListener('click', (event) => {
                     event.preventDefault();
                     const targetEntrantId = dqButton.getAttribute('data-dq-entrant-id') || '';
-                    if (!targetEntrantId) {
+                    if (!targetEntrantId || hasActiveSetCalls() || !selectedSetCallStatus) {
                         return;
                     }
 
@@ -2968,6 +3080,7 @@ fn mobile_input_html() -> &'static str {
                     }
 
                     updateHigherScoreHighlight();
+                    applySetCallInputLock();
                 });
             }
 
@@ -2992,19 +3105,6 @@ fn mobile_input_html() -> &'static str {
                     const playSide = sideButton.getAttribute('data-set-side') || '';
                     setEntrantPlaySide(entrantId, playSide);
                 });
-            }
-
-            if (confirmBtn) {
-                confirmBtn.disabled = completed || scoreEditLocked || !matchupReady;
-            }
-            if (updateBtn) {
-                updateBtn.disabled = completed || scoreEditLocked || !matchupReady;
-            }
-            if (swapSideBtn) {
-                swapSideBtn.disabled = completed || !matchupReady;
-            }
-            if (randomSideBtn) {
-                randomSideBtn.disabled = completed || !matchupReady;
             }
 
             updateHigherScoreHighlight();
@@ -3304,6 +3404,10 @@ fn mobile_input_html() -> &'static str {
             const detail = await res.json();
             const previousSetId = selectedSet && selectedSet.setId ? String(selectedSet.setId) : '';
             selectedSet = detail;
+            if (previousSetId !== String(detail.setId || '')) {
+                selectedSetCallStatus = null;
+                updateSetCallControls();
+            }
             directWinnerId = detail.directWin && detail.winnerId ? String(detail.winnerId) : null;
             displayOnePOnTop = onePOnTopCheckbox ? Boolean(onePOnTopCheckbox.checked) : true;
             if (onePOnTopCheckbox && previousSetId !== String(detail.setId || '')) {
@@ -3377,6 +3481,10 @@ fn mobile_input_html() -> &'static str {
         async function saveSetFromDetail(confirmed, callsAlreadyResolved = false) {
             if (!selectedSet) {
                 submitStatus.textContent = '先にsetを選択してください。';
+                return;
+            }
+            if (hasActiveSetCalls()) {
+                submitStatus.textContent = '呼び出し中のため結果を入力できません。先に呼出解決してください。';
                 return;
             }
 
@@ -3548,6 +3656,10 @@ fn mobile_input_html() -> &'static str {
                 applyDisplayOrder(Boolean(onePOnTopCheckbox.checked));
             });
         }
+
+        window.setInterval(() => {
+            void pollSetCallStatus();
+        }, autoRefreshMs);
 
         void fetchSets();
     </script>
@@ -5389,6 +5501,11 @@ fn apply_obs_overlay_toggle(
 #[tauri::command]
 fn toggle_obs_overlay_set(input: ObsOverlaySetInput) -> Result<ObsOverlayState, String> {
     apply_obs_overlay_toggle(input, false)
+}
+
+#[tauri::command]
+fn force_toggle_obs_overlay_set(input: ObsOverlaySetInput) -> Result<ObsOverlayState, String> {
+    apply_obs_overlay_toggle(input, true)
 }
 
 fn local_ipv4_score(ip: &std::net::Ipv4Addr) -> i32 {
@@ -7248,6 +7365,7 @@ pub fn run() {
             set_obs_overlay_show_event_alias,
             set_obs_overlay_fully_stopped,
             toggle_obs_overlay_set,
+            force_toggle_obs_overlay_set,
             save_sender_profile,
             load_sender_profile,
             start_udp_mailbox_service,

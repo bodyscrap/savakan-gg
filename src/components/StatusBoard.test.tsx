@@ -145,10 +145,10 @@ describe("feature-only navigation and call cards", () => {
     expect(html).toContain("20分ほど遅れます");
     expect(html).toContain("先に開始してください");
   });
-  it("shows separate call and received playing counts in the sidebar", () => {
+  it("shows call, received playing, and pending DQ request counts in the sidebar", () => {
     const html = renderToStaticMarkup(
       <AppShell appVersion="" activeTab="bracket" onTabSelect={vi.fn()}
-        otherDeviceCallCount={3} receivedPlayingCount={2}
+        otherDeviceCallCount={3} receivedPlayingCount={2} pendingDqRequestCount={4}
         sidebarSummary={null} message="" error="" statusProgresses={[]}><span /></AppShell>,
     );
     expect(html).toContain("呼出リスト");
@@ -156,6 +156,8 @@ describe("feature-only navigation and call cards", () => {
     expect(html).toContain('aria-label="受信したプレイ中通知 2件"');
     expect(html).toContain("tab-count-badge--calls");
     expect(html).toContain("tab-count-badge--playing");
+    expect(html).toContain('aria-label="受信した未処理DQ申請 4件"');
+    expect(html).toContain("tab-count-badge--dq");
     expect(html).not.toContain("メッセージ");
     expect(html).not.toContain("message-mode");
   });

@@ -39,8 +39,8 @@ const APP_TABS: AppTabDefinition[] = [
   { id: "tournament", label: "スナップショット&メタデータ設定", icon: "⚙", implemented: true },
   { id: "bracket", label: "ブラケット", icon: "🏆", implemented: true },
   { id: "overlay", label: "オーバーレイ", icon: "📺", implemented: true },
-  { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
   { id: "call-list", label: "呼出リスト", icon: "📣", implemented: true },
+  { id: "item-list", label: "アイテムリスト", icon: "📚", implemented: true },
   { id: "users", label: "プレイヤーリスト", icon: "👥", implemented: true },
   { id: "settings", label: "設定", icon: "🔧", implemented: true },
 ];
@@ -66,6 +66,7 @@ type AppShellProps = {
   onTabSelect: (tab: AppTab) => void;
   otherDeviceCallCount: number;
   receivedPlayingCount: number;
+  pendingDqRequestCount: number;
   sidebarSummary: SidebarSummary;
   headerContent?: ReactNode;
   message: string;
@@ -80,6 +81,7 @@ export function AppShell({
   onTabSelect,
   otherDeviceCallCount,
   receivedPlayingCount,
+  pendingDqRequestCount,
   sidebarSummary,
   headerContent,
   message,
@@ -151,6 +153,17 @@ export function AppShell({
                       {receivedPlayingCount >= 10 ? "9+" : receivedPlayingCount}
                     </span>
                   )}
+                </span>
+              )}
+              {tab.id === "bracket" && pendingDqRequestCount > 0 && (
+                <span className="tab-count-badges">
+                  <span
+                    className="tab-count-badge tab-count-badge--dq"
+                    aria-label={`受信した未処理DQ申請 ${pendingDqRequestCount}件`}
+                    title={`受信した未処理DQ申請 ${pendingDqRequestCount}件`}
+                  >
+                    {pendingDqRequestCount >= 10 ? "9+" : pendingDqRequestCount}
+                  </span>
                 </span>
               )}
             </button>

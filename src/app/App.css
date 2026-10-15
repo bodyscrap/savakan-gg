@@ -193,6 +193,10 @@ body {
   background: #16a34a;
 }
 
+.tab-count-badge--dq {
+  background: #d97706;
+}
+
 .tab-trigger:hover {
   background: #1f2937;
   color: #ffffff;
@@ -1841,6 +1845,10 @@ button:disabled {
   border-radius: 10px;
   background: #f9fafb;
   padding: 0.6rem;
+}
+
+.dialog-player-card.call-active {
+  opacity: 0.5;
 }
 
 .dialog-player-card.side-card-1p {

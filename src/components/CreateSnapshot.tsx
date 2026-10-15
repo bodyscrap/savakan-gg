@@ -107,7 +107,7 @@ export function CreateSnapshot({
           <input
             value={slug}
             onChange={(e) => onSlugChange(e.currentTarget.value)}
-            placeholder="大会ID (例: sabakan-weekly-1)"
+            placeholder="大会ID (例: savakan-weekly-1)"
             style={{ flex: "1 1 18rem" }}
           />
           <button type="submit" disabled={createBusy || !canLoadPreview}>

@@ -385,10 +385,11 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     }
   }
 
-  async function toggleObsOverlaySet(input: ObsOverlaySetInput): Promise<boolean> {
+  async function toggleObsOverlaySet(input: ObsOverlaySetInput, forceSwitch = false): Promise<boolean> {
     setObsOverlayBusy(true);
     try {
-      applyOverlayState(await invoke<ObsOverlayState>("toggle_obs_overlay_set", {
+      const command = forceSwitch ? "force_toggle_obs_overlay_set" : "toggle_obs_overlay_set";
+      applyOverlayState(await invoke<ObsOverlayState>(command, {
         input: {
           ...input,
           redSetWins: normalizeObsSetWins(input.redSetWins),
@@ -406,7 +407,7 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     }
   }
 
-  async function startTestOverlay() {
+  async function startTestOverlay(forceSwitch = false) {
     if (!obsOverlayState) {
       return;
     }
@@ -421,7 +422,7 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
       redSetWins: testOverlayRedWins,
       blueSetWins: testOverlayBlueWins,
       fontScale: obsOverlayState.fontScale,
-    });
+    }, forceSwitch);
   }
 
   async function stopTestOverlay() {
@@ -439,11 +440,11 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     });
   }
 
-  function toggleTestOverlay() {
+  function toggleTestOverlay(forceSwitch = false) {
     if (isTestOverlayActive) {
       void stopTestOverlay();
     } else {
-      void startTestOverlay();
+      void startTestOverlay(forceSwitch);
     }
   }
 

@@ -42,6 +42,7 @@ type MatchDetailDialogProps = {
   randomNotice: MatchSideRandomNotice | null;
   players: MatchDialogPlayerView[];
   callNotices: MatchCallNotice[];
+  calledEntrantIds: Array<string | null>;
   hasUnresolvedCalls: boolean;
   canResolveCalls: boolean;
   callingEntrantId: string;
@@ -79,6 +80,7 @@ export function MatchDetailDialog({
   randomNotice,
   players,
   callNotices,
+  calledEntrantIds,
   hasUnresolvedCalls,
   canResolveCalls,
   callingEntrantId,
@@ -139,7 +141,7 @@ export function MatchDetailDialog({
           <p className="meta">
             {completed
               ? "確定済みSetの呼び出しは呼び出しリストから解決してください。"
-              : "このSetに未解決の呼び出しがあるため、スコア入力は呼び出し解決後に行えます。"}
+              : "このSetでは呼び出し中のプレイヤーがいるため、呼び出しを解決するまでスコア入力・DQ・確定はできません。"}
           </p>
         )}
         <label className="checkbox-row" style={{ marginTop: "0.4rem" }}>
@@ -154,7 +156,7 @@ export function MatchDetailDialog({
           <button
             type="button"
             className="ghost tiny"
-            disabled={busy || !matchupReady}
+            disabled={busy || !matchupReady || hasUnresolvedCalls}
             onClick={onSwapSides}
           >
             1P/2P入替
@@ -162,7 +164,7 @@ export function MatchDetailDialog({
           <button
             type="button"
             className="ghost tiny side-choice side-choice-random"
-            disabled={busy || !matchupReady}
+            disabled={busy || !matchupReady || hasUnresolvedCalls}
             onClick={onRandomizeSides}
           >
             1P/2Pランダム決定
@@ -175,7 +177,7 @@ export function MatchDetailDialog({
 
             return (
               <article
-                className={`dialog-player-card ${player.side === "1P" ? "side-card-1p" : player.side === "2P" ? "side-card-2p" : ""}`}
+                className={`dialog-player-card ${entrantId && calledEntrantIds.includes(entrantId) ? "call-active" : ""} ${player.side === "1P" ? "side-card-1p" : player.side === "2P" ? "side-card-2p" : ""}`}
                 key={player.key}
               >
                 <p className="dialog-player-name">{player.entrantName}</p>
@@ -226,7 +228,9 @@ export function MatchDetailDialog({
                       <button
                         type="button"
                         className="ghost tiny"
-                        disabled={scoreInputDisabled}
+                        disabled={
+                          scoreInputDisabled || scoreEditLocked
+                        }
                         onClick={() => onSetDq(entrantId, otherEntrantId)}
                       >
                         DQ
@@ -249,17 +253,17 @@ export function MatchDetailDialog({
 
         <div className="dialog-actions dialog-actions-split match-dialog-actions">
           <div className="dialog-danger-actions">
-            <button type="button" className="ghost" disabled={busy || completed || scoreEditLocked} onClick={onDiscardDraft}>
+            <button type="button" className="ghost" disabled={busy || completed || scoreEditLocked || hasUnresolvedCalls} onClick={onDiscardDraft}>
               下書きの破棄
             </button>
-            <button type="button" className="ghost" disabled={busy || scoreEditLocked} onClick={onResetSet}>
+            <button type="button" className="ghost" disabled={busy || scoreEditLocked || hasUnresolvedCalls} onClick={onResetSet}>
               setの取り消し
             </button>
           </div>
           <div className="dialog-primary-actions">
             <button
               type="button"
-              disabled={busy || completed || !matchupReady || isDqDraft}
+              disabled={busy || completed || !matchupReady || isDqDraft || hasUnresolvedCalls}
               onClick={onSaveDraft}
             >
               更新
@@ -284,7 +288,7 @@ export function MatchDetailDialog({
             >
               {overlayActive ? "配信停止" : hasUnresolvedCalls ? "未解決呼び出しあり" : "配信開始"}
             </button>
-            <button type="button" disabled={busy || completed || !matchupReady} onClick={onConfirm}>
+            <button type="button" disabled={busy || completed || !matchupReady || hasUnresolvedCalls} onClick={onConfirm}>
               確定
             </button>
           </div>

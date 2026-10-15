@@ -2290,6 +2290,9 @@ function App() {
   const activeMatchCalls = activeMatch && selectedEvent
     ? getActiveCallsForSet(playerCalls, selectedEvent.eventId, activeMatch.setId)
     : [];
+  const activeMatchCalledEntrantIds = activeMatchCalls.map((call) =>
+    extractMetaString(call.messageMeta, "callEntrantId")
+  );
   const { ownCalls: activeMatchOwnCalls, otherCalls: activeMatchOtherCalls } =
     splitSetCalls(activeMatchCalls);
 
@@ -2300,6 +2303,7 @@ function App() {
       onTabSelect={setActiveTab}
       otherDeviceCallCount={unresolvedCallRootCounts.otherDeviceCalls}
       receivedPlayingCount={unresolvedCallRootCounts.receivedPlaying}
+      pendingDqRequestCount={pendingDqRequests.length}
       sidebarSummary={snapshot
         ? { name: selectedSummaryName, slug: snapshot.slug, eventCount: snapshot.events.length }
         : selectedSidebarItem
@@ -2878,6 +2882,7 @@ function App() {
                   }]
                   : [];
               })}
+              calledEntrantIds={activeMatchCalledEntrantIds}
               hasUnresolvedCalls={activeMatchCalls.length > 0}
               canResolveCalls={activeMatchOwnCalls.length > 0 && activeMatchOtherCalls.length === 0}
               isDqDraft={isActiveMatchDqDraft}

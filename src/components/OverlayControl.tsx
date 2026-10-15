@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 export type ObsOverlayState = {
   active: boolean;
   fullyStopped: boolean;
@@ -37,7 +39,7 @@ type OverlayControlProps = {
   onTestBlueNameChange: (value: string) => void;
   onTestRedWinsChange: (value: number) => void;
   onTestBlueWinsChange: (value: number) => void;
-  onToggleTestOverlay: () => void;
+  onToggleTestOverlay: (forceSwitch: boolean) => void;
   onFullyStop: () => void;
   onPreviewLoad: () => void;
 };
@@ -67,6 +69,9 @@ export function OverlayControl({
   onFullyStop,
   onPreviewLoad,
 }: OverlayControlProps) {
+  const [confirmTestOverlaySwitch, setConfirmTestOverlaySwitch] = useState(false);
+  const isSwitchingFromLiveSet = Boolean(overlayState?.active && !isTestOverlayActive);
+
   return (
     <>
       <section className="panel">
@@ -184,7 +189,19 @@ export function OverlayControl({
                   </label>
                 </div>
                 <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
-                  <button type="button" onClick={onToggleTestOverlay} disabled={busy}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isTestOverlayActive) {
+                        onToggleTestOverlay(false);
+                      } else if (isSwitchingFromLiveSet) {
+                        setConfirmTestOverlaySwitch(true);
+                      } else {
+                        onToggleTestOverlay(false);
+                      }
+                    }}
+                    disabled={busy}
+                  >
                     {isTestOverlayActive ? "テスト配信停止" : "テスト配信開始"}
                   </button>
                   <button
@@ -213,6 +230,56 @@ export function OverlayControl({
           </>
         )}
       </section>
+
+      {confirmTestOverlaySwitch && (
+        <div className="dialog-backdrop" onClick={() => setConfirmTestOverlaySwitch(false)}>
+          <section
+            className="dialog-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="テスト配信への切り替え確認"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="dialog-head">
+              <div>
+                <h3>テスト配信への切り替え確認</h3>
+                <p className="meta">現在の配信を停止して、テスト配信に切り替えます。</p>
+              </div>
+            </div>
+            <div className="dialog-body">
+              <div className="dialog-summary-box">
+                <p className="dialog-summary-title">現在の配信中セット</p>
+                <p className="dialog-summary-value">
+                  {activeSetLabel ?? overlayState?.currentSetId ?? "配信中のセット"}
+                </p>
+                <p className="meta">
+                  {[overlayState?.redPlayerName, overlayState?.bluePlayerName].filter(Boolean).join(" vs ")}
+                </p>
+              </div>
+              <p className="meta">テスト配信に切り替えてよろしいですか？</p>
+            </div>
+            <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setConfirmTestOverlaySwitch(false)}
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setConfirmTestOverlaySwitch(false);
+                  onToggleTestOverlay(true);
+                }}
+              >
+                テスト配信に切り替え
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </>
   );
 }
