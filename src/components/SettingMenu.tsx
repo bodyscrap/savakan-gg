@@ -39,8 +39,6 @@ type SettingsScreenProps = {
   callListColorSecondsMax: number;
   onCallListColorSecondsChange: (value: string) => void;
   onCallListColorSecondsBlur: (value: string) => void;
-  callListRotateSecondsDisplay: number;
-  callListColorToRedSeconds: number;
   hasCallListMessages: boolean;
   onClearCallList: () => void;
   disableOwnCallActions: boolean;
@@ -83,8 +81,6 @@ export function SettingsScreen({
   callListColorSecondsMax,
   onCallListColorSecondsChange,
   onCallListColorSecondsBlur,
-  callListRotateSecondsDisplay,
-  callListColorToRedSeconds,
   hasCallListMessages,
   onClearCallList,
   disableOwnCallActions,
@@ -96,8 +92,6 @@ export function SettingsScreen({
     <>
       <section className="panel sender-profile-panel">
         <h2>送信者設定</h2>
-        <p className="meta">端末ごとに送信者名と重複しないユーザーIDを設定してください。IP・サブネットはデバイス選択から自動反映されます。</p>
-        <p className="meta">送信者名・IDの変更前に、自分の呼び出しを解決し、他端末の外部報告者設定を解除してください。</p>
 
         <label className="checkbox-row" style={{ marginTop: "0.6rem" }}>
           <input
@@ -122,8 +116,10 @@ export function SettingsScreen({
             />
           </label>
           <div className="sender-id-actions">
-            <label htmlFor="sender-user-id-input" style={{ display: "grid", gap: "0.3rem" }}>
-              <span className="meta">ユーザーID (8桁数字)</span>
+            <label htmlFor="sender-user-id-input" className="meta sender-user-id-title">
+              ユーザーID (8桁数字。端末間重複不可)
+            </label>
+            <div className="sender-id-controls">
               <input
                 id="sender-user-id-input"
                 className="sender-user-id-input"
@@ -133,13 +129,13 @@ export function SettingsScreen({
                 inputMode="numeric"
                 maxLength={8}
               />
-            </label>
-            <button type="button" className="ghost" onClick={onRandomizeSenderUserId}>
-              ランダム決定
-            </button>
-            <button type="button" className="ghost" onClick={onOpenSenderUserList}>
-              ユーザー一覧
-            </button>
+              <button type="button" className="ghost" onClick={onRandomizeSenderUserId}>
+                ランダム決定
+              </button>
+              <button type="button" className="ghost" onClick={onOpenSenderUserList}>
+                ユーザー一覧
+              </button>
+            </div>
           </div>
           <div style={{ display: "grid", gap: "0.3rem" }}>
             <label htmlFor="sender-network-device-select" className="meta">ネットワークデバイス</label>
@@ -192,11 +188,10 @@ export function SettingsScreen({
         <h2>スマートフォン入力同期設定</h2>
         <p className="meta">スマートフォン入力画面とブラケット画面の自動更新間隔をミリ秒で設定します。</p>
 
-        <div className="form" style={{ marginTop: "0.6rem" }}>
+        <div className="form mobile-input-settings-form" style={{ marginTop: "0.6rem" }}>
           <label htmlFor="mobile-input-polling-ms-input" style={{ display: "grid", gap: "0.3rem" }}>
             <span className="meta setting-field-title">
               <span>ポーリング周期 (ms / 500-10000 / 既定値: 1500)</span>
-              <span className="setting-field-current">現在値: {mobileInputPollingMs} ms</span>
             </span>
             <input
               id="mobile-input-polling-ms-input"
@@ -211,18 +206,16 @@ export function SettingsScreen({
           </label>
         </div>
 
-        <p className="meta">次回URL発行時にスマートフォン側へ同じ周期を配布します。</p>
       </section>
 
       <section className="panel">
         <h2>呼出リスト設定</h2>
         <p className="meta">呼び出しリストのページ切替間隔と、カード色が赤になるまでの時間を秒単位で設定します。</p>
 
-        <div className="form" style={{ marginTop: "0.6rem" }}>
+        <div className="form call-list-settings-form" style={{ marginTop: "0.6rem" }}>
           <label htmlFor="call-list-rotate-seconds-input" style={{ display: "grid", gap: "0.3rem" }}>
             <span className="meta setting-field-title">
               <span>切替間隔 (秒 / 1-180)</span>
-              <span className="setting-field-current">現在値: {callListRotateSecondsDisplay} 秒</span>
             </span>
             <input
               id="call-list-rotate-seconds-input"
@@ -238,7 +231,6 @@ export function SettingsScreen({
           <label htmlFor="call-list-color-seconds-input" style={{ display: "grid", gap: "0.3rem" }}>
             <span className="meta setting-field-title">
               <span>赤化までの時間 (秒 / 30-3600)</span>
-              <span className="setting-field-current">現在値: {callListColorToRedSeconds} 秒</span>
             </span>
             <input
               id="call-list-color-seconds-input"
@@ -251,10 +243,15 @@ export function SettingsScreen({
               onBlur={(e) => onCallListColorSecondsBlur(e.currentTarget.value)}
             />
           </label>
+          <div className="call-list-settings-actions">
+            <button type="button" className="ghost" onClick={onClearCallList} disabled={!hasCallListMessages}>
+              呼び出しリストの表示を初期化
+            </button>
+            <p className="meta call-list-sync-note">
+              他端末の呼び出しを最新化する場合は、呼び出しリスト画面の「呼び出しの同期」を使用してください。
+            </p>
+          </div>
         </div>
-
-        <p className="meta">保持中の未解決の呼び出しから表示を再構築します。呼び出し自体は削除しません。</p>
-        <p className="meta">他端末の呼び出しを最新化する場合は、呼び出しリスト画面の「呼び出しの同期」を使用してください。</p>
 
         <label className="checkbox-row">
           <input
@@ -273,13 +270,6 @@ export function SettingsScreen({
           他端末呼び出しへのアクション禁止
         </label>
         <p className="meta">有効にすると、該当する呼び出しカードをクリックしても操作できません。掲示専用端末での誤操作防止に使用してください。</p>
-
-        <div className="panel-toolbar compact">
-          <p className="meta">表示順やページを初期化する場合に実行してください。</p>
-          <button type="button" className="ghost" onClick={onClearCallList} disabled={!hasCallListMessages}>
-            呼び出しリストの表示を初期化
-          </button>
-        </div>
       </section>
 
     </>

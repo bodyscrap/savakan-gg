@@ -82,7 +82,6 @@ import {
   CALL_LIST_COLOR_SECONDS_MIN,
   CALL_LIST_ROTATE_SECONDS_MAX,
   CALL_LIST_ROTATE_SECONDS_MIN,
-  normalizeCallListRotateSeconds,
   useCallList,
 } from "../hooks/useCallList";
 import {
@@ -2961,8 +2960,6 @@ function App() {
             callListColorSecondsMax={CALL_LIST_COLOR_SECONDS_MAX}
             onCallListColorSecondsChange={changeCallListColorSeconds}
             onCallListColorSecondsBlur={commitCallListColorSeconds}
-            callListRotateSecondsDisplay={normalizeCallListRotateSeconds(callListPageRotateSeconds)}
-            callListColorToRedSeconds={callListColorToRedSeconds}
             hasCallListMessages={hasCallListMessages}
             onClearCallList={initializeCallListDisplay}
             disableOwnCallActions={disableOwnCallActions}

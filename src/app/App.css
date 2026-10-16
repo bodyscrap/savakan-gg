@@ -409,6 +409,51 @@ h4 {
   gap: 0.6rem;
 }
 
+.form.mobile-input-settings-form input[type="number"] {
+  width: calc(6ch + 3rem);
+  min-width: calc(6ch + 3rem);
+  justify-self: start;
+}
+
+.form.call-list-settings-form {
+  grid-template-columns: max-content max-content minmax(0, 1fr);
+  align-items: end;
+}
+
+.form.call-list-settings-form > label {
+  justify-self: start;
+}
+
+.form.call-list-settings-form input[type="number"] {
+  width: calc(5ch + 3rem);
+  min-width: calc(5ch + 3rem);
+}
+
+.form.call-list-settings-form .call-list-settings-actions {
+  display: flex;
+  align-items: center;
+  align-self: end;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.form.call-list-settings-form button {
+  flex: 0 0 auto;
+  justify-self: start;
+  white-space: nowrap;
+}
+
+.form.call-list-settings-form .call-list-sync-note {
+  min-width: 0;
+  margin: 0;
+}
+
+@media (max-width: 760px) {
+  .form.call-list-settings-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 .setting-field-title {
   display: flex;
   justify-content: space-between;
@@ -424,8 +469,9 @@ h4 {
 }
 
 .form.sender-profile-form {
-  grid-template-columns: minmax(140px, 0.75fr) minmax(260px, 0.9fr) minmax(360px, 1.5fr);
+  grid-template-columns: 180px 370px minmax(300px, 1fr);
   align-items: end;
+  justify-content: start;
 }
 
 .sender-profile-panel {
@@ -437,23 +483,31 @@ h4 {
 }
 
 .sender-id-actions {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  padding-left: 3.75rem;
+}
+
+.sender-user-id-title {
+  margin: 0;
+}
+
+.sender-id-controls {
   display: flex;
   align-items: end;
   flex-wrap: wrap;
   gap: 0.35rem;
 }
 
-.sender-id-actions button {
-  padding: 0.5rem 0.55rem;
+.sender-id-controls button {
+  padding: 0.62rem 0.55rem;
   white-space: nowrap;
-}
-
-.sender-id-actions label {
-  min-width: 0;
 }
 
 .sender-user-id-input {
   width: 9ch;
+  flex: 0 0 9ch;
 }
 
 .sender-network-device-row {
@@ -469,7 +523,7 @@ h4 {
 }
 
 .sender-network-device-row button {
-  padding: 0.5rem 0.45rem;
+  padding: 0.62rem 0.45rem;
   white-space: nowrap;
 }
 
@@ -2558,14 +2612,11 @@ li {
   }
 }
 
-@container (max-width: 800px) {
+@container (max-width: 880px) {
   .form.sender-profile-form {
     grid-template-columns: 1fr;
   }
 
-  .sender-id-actions {
-    flex-wrap: wrap;
-  }
 }
 
 @media (max-width: 700px) {
