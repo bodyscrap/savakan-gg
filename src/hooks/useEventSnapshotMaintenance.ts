@@ -257,6 +257,7 @@ export function useEventSnapshotMaintenance({
     scope: SnapshotRestoreScope,
     phaseGroupId: string | null,
     phaseName: string | null,
+    discardSeedShuffle = false,
   ): Promise<RestoreEventGraphResult | null> {
     const normalizedSlug = toApiSlug(slug);
     const eventId = selectedEvent?.eventId ?? selectedEventId;
@@ -277,6 +278,7 @@ export function useEventSnapshotMaintenance({
         scope,
         phaseGroupId,
         phaseName,
+        discardSeedShuffle,
       });
       onSeedStateRefreshRequested();
       if (scope === "all") {
@@ -284,7 +286,7 @@ export function useEventSnapshotMaintenance({
       }
       closeMatchDialog();
       setMessage(scope === "all"
-        ? "最後に取得したスナップショット時点に全体を復元しました。対象eventの未報告結果は破棄されました。"
+        ? `最後に取得したスナップショット時点に全体を復元しました。${discardSeedShuffle ? "Seedの並び替えを破棄しました。" : "Seedの並び順は維持しました。"}対象eventの未報告結果は破棄されました。`
         : `最後に取得したスナップショット時点に復元しました。影響set: ${restoredResult.affectedSetIds.length}件`);
       return restoredResult;
     } catch (err) {

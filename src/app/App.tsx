@@ -195,13 +195,9 @@ function readSnapshotArchiveIdentity(archiveJson: string) {
 function getCallListResolveDialogTitle(dialog: {
   playerName: string;
   dqRequest?: FeatureMessage;
-  afterDqConfirmation?: boolean;
 }) {
   if (dialog.dqRequest) {
     return `DQ申請受信(${dialog.playerName})`;
-  }
-  if (dialog.afterDqConfirmation) {
-    return `DQ確定後の呼び出し解決(${dialog.playerName})`;
   }
   return `呼び出し解決(${dialog.playerName})`;
 }
@@ -669,6 +665,7 @@ function App() {
     senderContacts,
     ready: bracketMessagesReady,
     markProcessed: markBracketMessageProcessed,
+    discardDqRequest,
     sendExternalEditRequest,
     sendExternalScoreReport,
     sendExternalScoreReports,
@@ -713,18 +710,6 @@ function App() {
   const pendingDqRequests = bracketMessages.filter(isDqRequestMessage);
   confirmedDqRequestsRef.current = async (report) => {
     const confirmedRequests = pendingDqRequests.filter((request) => isDqRequestConfirmed(request, report));
-    const confirmedRequest = confirmedRequests[0];
-    if (confirmedRequest) {
-      const callMessageId = extractMetaString(confirmedRequest.messageMeta, "dqCallMessageId");
-      const call = playerCallMessages.find((message) => message.messageId === callMessageId);
-      setCallListResolveDialog({
-        messageId: callMessageId,
-        playerName: call
-          ? extractMetaString(call.messageMeta, "callEntrantName") || call.subject
-          : extractMetaString(confirmedRequest.messageMeta, "dqCallEntrantName") || "DQ対象プレイヤー",
-        afterDqConfirmation: true,
-      });
-    }
     for (const request of confirmedRequests) {
       await markBracketMessageProcessed(request.messageId);
     }
@@ -735,9 +720,9 @@ function App() {
     playerName: string;
     playingCommunication?: string;
     dqRequest?: FeatureMessage;
-    afterDqConfirmation?: boolean;
   } | null>(null);
   const [callListResolveSubmitting, setCallListResolveSubmitting] = useState(false);
+  const [dqRequestDiscarding, setDqRequestDiscarding] = useState(false);
   const pendingSetCallActionRef = useRef<SetCallAction | null>(null);
   const [setCallResolutionDialog, setSetCallResolutionDialog] =
     useState<SetCallResolutionDialogState | null>(null);
@@ -1098,7 +1083,7 @@ function App() {
   }
 
   function closeCallListResolveDialog() {
-    if (callListResolveSubmitting) {
+    if (callListResolveSubmitting || dqRequestDiscarding) {
       return;
     }
     setCallListResolveDialog(null);
@@ -1106,7 +1091,7 @@ function App() {
   }
 
   async function confirmCallListResolution() {
-    if (!callListResolveDialog || callListResolveSubmitting) {
+    if (!callListResolveDialog || callListResolveSubmitting || dqRequestDiscarding) {
       return;
     }
     setCallListResolveSubmitting(true);
@@ -1129,6 +1114,23 @@ function App() {
     }
     setCallListResolveDialog(null);
     pauseCallListPageRotation(false);
+  }
+
+  async function handleDiscardDqRequest(request: FeatureMessage) {
+    if (dqRequestDiscarding || callListResolveSubmitting) {
+      return;
+    }
+    setDqRequestDiscarding(true);
+    try {
+      if (await discardDqRequest(request)) {
+        if (callListResolveDialog?.dqRequest?.messageId === request.messageId) {
+          setCallListResolveDialog(null);
+          pauseCallListPageRotation(false);
+        }
+      }
+    } finally {
+      setDqRequestDiscarding(false);
+    }
   }
 
   const callListAliasSettingsByEvent = useMemo(() => {
@@ -2234,8 +2236,9 @@ function App() {
     scope: "currentPool" | "lockedPoolsInCurrentPhase" | "all",
     phaseGroupId: string | null,
     phaseName: string | null,
+    discardSeedShuffle = false,
   ) {
-    const restoredResult = await restoreGraphFromSnapshot(scope, phaseGroupId, phaseName);
+    const restoredResult = await restoreGraphFromSnapshot(scope, phaseGroupId, phaseName, discardSeedShuffle);
     if (!restoredResult) {
       return;
     }
@@ -2744,7 +2747,7 @@ function App() {
               <button
                 type="button"
                 className="ghost"
-                disabled={callListResolveSubmitting}
+                disabled={callListResolveSubmitting || dqRequestDiscarding}
                 onClick={closeCallListResolveDialog}
               >
                 キャンセル
@@ -2752,7 +2755,21 @@ function App() {
               {callListResolveDialog.dqRequest && (
                 <button
                   type="button"
-                  disabled={callListResolveSubmitting}
+                  className="ghost"
+                  disabled={callListResolveSubmitting || dqRequestDiscarding}
+                  onClick={() => {
+                    if (callListResolveDialog.dqRequest) {
+                      void handleDiscardDqRequest(callListResolveDialog.dqRequest);
+                    }
+                  }}
+                >
+                  {dqRequestDiscarding ? "破棄中..." : "DQ申請を破棄"}
+                </button>
+              )}
+              {callListResolveDialog.dqRequest && (
+                <button
+                  type="button"
+                  disabled={callListResolveSubmitting || dqRequestDiscarding}
                   onClick={acceptCallListDqRequest}
                 >
                   DQ申請受理
@@ -2760,7 +2777,7 @@ function App() {
               )}
               <button
                 type="button"
-                disabled={callListResolveSubmitting}
+                disabled={callListResolveSubmitting || dqRequestDiscarding}
                 onClick={() => void confirmCallListResolution()}
               >
                 {callListResolveSubmitting ? "解決中..." : "呼び出しを解決"}
@@ -3036,6 +3053,8 @@ function App() {
               .filter((request) => extractMetaString(request.messageMeta, "scopeEventId") === selectedEvent?.eventId)
               .map((request) => extractMetaString(request.messageMeta, "phaseGroupId"))}
             onProcessDqRequest={processDqRequestFromMessage}
+            onDiscardDqRequest={(request) => void handleDiscardDqRequest(request)}
+            dqRequestBusy={dqRequestDiscarding || callListResolveSubmitting}
             pendingExternalRequestPoolIds={pendingExternalRequestPoolIds}
             canAcceptExternalRequest={Boolean(selectedPoolExternalRequest && canAcceptExternalEditRequest(selectedPoolExternalRequest))}
             canRespondExternalRequest={Boolean(!busy && selectedPoolExternalRequest && canReplyToExternalEditRequest(selectedPoolExternalRequest))}
@@ -3219,7 +3238,7 @@ function App() {
               null,
               selectedPhaseName,
             )}
-            onRestoreAll={() => void restoreGraphAndRefreshDisplay("all", null, null)}
+            onRestoreAll={(discardSeedShuffle) => void restoreGraphAndRefreshDisplay("all", null, null, discardSeedShuffle)}
             onUpdateSnapshot={() => {
               setRestoreDialogOpen(false);
               void updateSnapshot();

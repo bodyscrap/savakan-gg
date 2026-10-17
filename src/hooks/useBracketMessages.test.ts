@@ -45,6 +45,44 @@ beforeEach(() => {
   vi.mocked(invoke).mockResolvedValue(undefined);
 });
 
+describe("discarding received DQ requests", () => {
+  const dqRequest: FeatureMessage = {
+    ...request, messageType: "dq_request", method: "player_dq_request",
+  };
+
+  it.each([false, true])("persists only the request as processed, including offline=%s", async (disabled) => {
+    const actions = setup(disabled);
+    expect(await actions.discardDqRequest(dqRequest)).toBe(true);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith("mark_bracket_message_processed", { messageId: "request" });
+    expect(actions.options.refresh).toHaveBeenCalledOnce();
+    expect(actions.options.onMessage).toHaveBeenLastCalledWith(expect.stringContaining("DQ申請を破棄しました"));
+  });
+
+  it("rejects messages other than DQ requests without changing storage", async () => {
+    const actions = setup();
+    expect(await actions.discardDqRequest(request)).toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(actions.options.onError).toHaveBeenLastCalledWith(expect.stringContaining("不正"));
+  });
+
+  it("reports persistence failure without refreshing or claiming success", async () => {
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("storage failed"));
+    const actions = setup();
+    expect(await actions.discardDqRequest(dqRequest)).toBe(false);
+    expect(actions.options.refresh).not.toHaveBeenCalled();
+    expect(actions.options.onError).toHaveBeenLastCalledWith(expect.stringContaining("storage failed"));
+    expect(actions.options.onMessage).toHaveBeenCalledExactlyOnceWith("");
+  });
+
+  it("reports refresh failures rather than silently claiming success", async () => {
+    const actions = setup();
+    actions.options.refresh.mockRejectedValueOnce(new Error("refresh failed"));
+    expect(await actions.discardDqRequest(dqRequest)).toBe(false);
+    expect(actions.options.onError).toHaveBeenLastCalledWith(expect.stringContaining("refresh failed"));
+    expect(actions.options.onMessage).toHaveBeenCalledExactlyOnceWith("");
+  });
+});
+
 describe("feature-routed external report messaging", () => {
   it("broadcasts requests directly to bracket without starting a thread", async () => {
     const target = getExternalEditRequest(request);

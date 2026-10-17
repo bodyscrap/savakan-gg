@@ -8936,25 +8936,67 @@ fn initial_phase_seed_mapping(
     Ok((phase_id, entries))
 }
 
-fn replace_event_with_pristine_snapshot(
+fn replace_event_with_snapshot(
     snapshot: &mut TournamentSnapshot,
-    pristine_snapshot: &TournamentSnapshot,
-    event_id: &str,
+    restored_event: &EventSnapshot,
 ) -> Result<(), String> {
-    let pristine_event = pristine_snapshot
-        .events
-        .iter()
-        .find(|event| event.event_id == event_id)
-        .cloned()
-        .ok_or_else(|| format!("取得時点のスナップショットにイベントがありません: {event_id}"))?;
     let current_event = snapshot
         .events
         .iter_mut()
-        .find(|event| event.event_id == event_id)
-        .ok_or_else(|| format!("復元対象イベントが見つかりません: {event_id}"))?;
-
-    *current_event = pristine_event;
+        .find(|event| event.event_id == restored_event.event_id)
+        .ok_or_else(|| {
+            format!(
+                "復元対象イベントが見つかりません: {}",
+                restored_event.event_id
+            )
+        })?;
+    *current_event = restored_event.clone();
     Ok(())
+}
+
+fn prepare_snapshot_restore_event(
+    current: &EventSnapshot,
+    pristine: &EventSnapshot,
+    discard_seed_shuffle: bool,
+) -> Result<EventSnapshot, String> {
+    let current_mapping = initial_phase_seed_mapping_if_available(current)?;
+    let pristine_mapping = initial_phase_seed_mapping_if_available(pristine)?;
+    let mut restored = pristine.clone();
+    if discard_seed_shuffle {
+        let seed_restore_requested = current_mapping != pristine_mapping
+            || current.phase_groups.iter().any(|group| {
+                group.initial_seed_restore_pending || group.seed_update_awaiting_started_snapshot
+            });
+        if seed_restore_requested {
+            let first_phase_id = initial_phase_seed_mapping(&restored)?.0;
+            for group in restored
+                .phase_groups
+                .iter_mut()
+                .filter(|group| group.phase_id.as_deref() == Some(first_phase_id.as_str()))
+            {
+                group.initial_seed_restore_pending = true;
+                group.seed_update_awaiting_started_snapshot = false;
+            }
+        }
+    } else {
+        if current_mapping != pristine_mapping {
+            let (_, mapping) =
+                current_mapping.ok_or_else(|| "現在のSeedの並び順を取得できません。".to_owned())?;
+            apply_initial_phase_seed_mapping(&mut restored, &mapping, false)?;
+        }
+        for group in &mut restored.phase_groups {
+            if let Some(current_group) = current
+                .phase_groups
+                .iter()
+                .find(|current_group| current_group.phase_group_id == group.phase_group_id)
+            {
+                group.initial_seed_restore_pending = current_group.initial_seed_restore_pending;
+                group.seed_update_awaiting_started_snapshot =
+                    current_group.seed_update_awaiting_started_snapshot;
+            }
+        }
+    }
+    Ok(restored)
 }
 
 fn locked_phase_group_ids_for_phase(
@@ -8986,9 +9028,217 @@ fn locked_phase_group_ids_for_phase(
     locked_phase_group_ids
 }
 
+fn restore_event_pools_from_snapshot(
+    event: &mut EventSnapshot,
+    pristine: &EventSnapshot,
+    phase_group_ids: &HashSet<String>,
+) -> Result<HashSet<String>, String> {
+    let pristine_sets = pristine
+        .sets
+        .iter()
+        .filter(|set| {
+            set.phase_group_id
+                .as_ref()
+                .is_some_and(|id| phase_group_ids.contains(id))
+        })
+        .collect::<Vec<_>>();
+    if pristine_sets.is_empty() {
+        return Err("復元対象Poolにsetがありません。".to_owned());
+    }
+    let mut affected_set_ids = HashSet::new();
+    for pristine_set in pristine_sets {
+        let current_set = event
+            .sets
+            .iter_mut()
+            .find(|set| set.set_id == pristine_set.set_id)
+            .ok_or_else(|| format!("復元対象setが見つかりません: {}", pristine_set.set_id))?;
+        *current_set = pristine_set.clone();
+        affected_set_ids.insert(pristine_set.set_id.clone());
+    }
+    for pristine_group in &pristine.phase_groups {
+        if phase_group_ids.contains(&pristine_group.phase_group_id) {
+            if let Some(current_group) = event
+                .phase_groups
+                .iter_mut()
+                .find(|group| group.phase_group_id == pristine_group.phase_group_id)
+            {
+                *current_group = pristine_group.clone();
+            }
+        }
+    }
+    Ok(affected_set_ids)
+}
+
 #[cfg(test)]
 mod snapshot_restore_scope_tests {
     use super::*;
+
+    fn event_fixture() -> EventSnapshot {
+        serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Event",
+            "phases": [{ "phaseId": "phase-1", "phaseOrder": 1 }],
+            "phaseGroups": [{
+                "phaseGroupId": "pool-a", "phaseId": "phase-1", "phaseName": "Phase 1",
+                "seedOrder": ["seed-a", "seed-b"],
+                "seeds": [
+                    { "seedId": "seed-a", "seedNum": 1, "entrantId": "a", "entrantName": "A" },
+                    { "seedId": "seed-b", "seedNum": 2, "entrantId": "b", "entrantName": "B" }
+                ]
+            }, {
+                "phaseGroupId": "pool-b", "phaseName": "Phase 2"
+            }],
+            "sets": [{
+                "setId": "set-a", "phaseGroupId": "pool-a", "phaseOrder": 1,
+                "fullRoundText": "Round 1", "state": 1,
+                "slots": [
+                    { "entrantId": "a", "entrantName": "A", "seedId": "seed-a", "seedNum": 1 },
+                    { "entrantId": "b", "entrantName": "B", "seedId": "seed-b", "seedNum": 2 }
+                ],
+                "entrant1Source": { "typeId": "seed-a", "seedNum": 1 }
+            }, {
+                "setId": "set-b", "phaseGroupId": "pool-b", "phaseOrder": 2,
+                "fullRoundText": "Round 2", "state": 1, "slots": []
+            }]
+        }))
+        .expect("restore fixture should deserialize")
+    }
+
+    fn progressed_shuffled_event(pristine: &EventSnapshot) -> EventSnapshot {
+        let mut current = pristine.clone();
+        apply_initial_phase_seed_mapping(
+            &mut current,
+            &[
+                InitialPhaseSeedMappingEntry {
+                    seed_id: "seed-a".to_owned(),
+                    seed_num: 2,
+                },
+                InitialPhaseSeedMappingEntry {
+                    seed_id: "seed-b".to_owned(),
+                    seed_num: 1,
+                },
+            ],
+            false,
+        )
+        .expect("shuffle should apply");
+        current.phase_groups[0].seed_update_awaiting_started_snapshot = true;
+        for set in &mut current.sets {
+            set.state = 3;
+            set.winner_id = Some("b".to_owned());
+        }
+        current.sets[0].slots[0].score = Some(2.0);
+        current
+    }
+
+    #[test]
+    fn all_restore_preserves_seed_mapping_slots_sources_and_sync_flags() {
+        let pristine = event_fixture();
+        let current = progressed_shuffled_event(&pristine);
+        let restored = prepare_snapshot_restore_event(&current, &pristine, false).unwrap();
+
+        assert_eq!(
+            initial_phase_seed_mapping(&restored),
+            initial_phase_seed_mapping(&current)
+        );
+        assert_eq!(restored.phase_groups[0].seed_order, ["seed-b", "seed-a"]);
+        assert!(restored.phase_groups[0].seed_update_awaiting_started_snapshot);
+        assert!(!restored.phase_groups[0].initial_seed_restore_pending);
+        assert_eq!(restored.sets[0].slots[0].entrant_id.as_deref(), Some("b"));
+        assert_eq!(restored.sets[0].slots[0].seed_id.as_deref(), Some("seed-b"));
+        assert_eq!(
+            restored.sets[0]
+                .entrant1_source
+                .as_ref()
+                .unwrap()
+                .type_id
+                .as_deref(),
+            Some("seed-b")
+        );
+        assert!(restored
+            .sets
+            .iter()
+            .all(|set| set.state == 1 && set.winner_id.is_none()));
+        assert!(restored.sets[0].slots[0].score.is_none());
+
+        let reloaded: EventSnapshot =
+            serde_json::from_str(&serde_json::to_string(&restored).unwrap()).unwrap();
+        assert_eq!(
+            initial_phase_seed_mapping(&reloaded),
+            initial_phase_seed_mapping(&current)
+        );
+    }
+
+    #[test]
+    fn pool_restore_preserves_shuffle_without_resetting_other_pool_results() {
+        let pristine = event_fixture();
+        let mut current = progressed_shuffled_event(&pristine);
+        let baseline = prepare_snapshot_restore_event(&current, &pristine, false).unwrap();
+        let untouched_set = serde_json::to_value(&current.sets[1]).unwrap();
+        let affected = restore_event_pools_from_snapshot(
+            &mut current,
+            &baseline,
+            &HashSet::from(["pool-a".to_owned()]),
+        )
+        .unwrap();
+
+        assert_eq!(affected, HashSet::from(["set-a".to_owned()]));
+        assert_eq!(current.phase_groups[0].seed_order, ["seed-b", "seed-a"]);
+        assert!(current.phase_groups[0].seed_update_awaiting_started_snapshot);
+        assert_eq!(current.sets[0].slots[0].entrant_id.as_deref(), Some("b"));
+        assert_eq!(current.sets[0].state, 1);
+        assert!(current.sets[0].winner_id.is_none());
+        assert!(current.sets[0].slots[0].score.is_none());
+        assert_eq!(
+            serde_json::to_value(&current.sets[1]).unwrap(),
+            untouched_set
+        );
+    }
+
+    #[test]
+    fn all_restore_can_discard_shuffle_and_mark_original_seeds_for_reporting() {
+        let pristine = event_fixture();
+        let current = progressed_shuffled_event(&pristine);
+        let restored = prepare_snapshot_restore_event(&current, &pristine, true).unwrap();
+
+        assert_eq!(
+            initial_phase_seed_mapping(&restored),
+            initial_phase_seed_mapping(&pristine)
+        );
+        assert_eq!(restored.phase_groups[0].seed_order, ["seed-a", "seed-b"]);
+        assert!(restored.phase_groups[0].initial_seed_restore_pending);
+        assert!(!restored.phase_groups[0].seed_update_awaiting_started_snapshot);
+        assert_eq!(restored.sets[0].slots[0].entrant_id.as_deref(), Some("a"));
+        assert_eq!(restored.sets[0].state, 1);
+    }
+
+    #[test]
+    fn restore_keeps_existing_seed_restore_pending_even_when_mapping_matches() {
+        let pristine = event_fixture();
+        let mut current = pristine.clone();
+        current.phase_groups[0].initial_seed_restore_pending = true;
+        let restored = prepare_snapshot_restore_event(&current, &pristine, false).unwrap();
+        assert!(restored.phase_groups[0].initial_seed_restore_pending);
+    }
+
+    #[test]
+    fn restore_supports_events_without_seed_metadata_and_defaults_to_preserving_seeds() {
+        let pristine: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event", "name": "Event", "sets": []
+        }))
+        .unwrap();
+        for discard in [false, true] {
+            let restored = prepare_snapshot_restore_event(&pristine, &pristine, discard).unwrap();
+            assert_eq!(
+                serde_json::to_value(restored).unwrap(),
+                serde_json::to_value(&pristine).unwrap()
+            );
+        }
+        let input: RestoreEventGraphInput = serde_json::from_value(serde_json::json!({
+            "slug": "test", "eventId": "event", "scope": "all"
+        }))
+        .unwrap();
+        assert!(!input.discard_seed_shuffle);
+    }
 
     #[test]
     fn locked_pool_restore_scope_excludes_unlocked_pools_and_other_phases() {
@@ -9022,6 +9272,9 @@ pub fn restore_event_graph_from_snapshot(
     app: &AppHandle,
     input: RestoreEventGraphInput,
 ) -> Result<RestoreEventGraphResult, String> {
+    if input.discard_seed_shuffle && input.scope != SnapshotRestoreScope::All {
+        return Err("Seedの並び替えを破棄できるのは全体復元の場合のみです。".to_owned());
+    }
     let normalized_slug = normalize_slug_for_storage(&input.slug);
     let mut workspace = load_workspace(app, &normalized_slug, &input.event_id)?;
     let pristine_snapshot = load_pristine_event_snapshot(app, &normalized_slug, &input.event_id)?;
@@ -9036,56 +9289,20 @@ pub fn restore_event_graph_from_snapshot(
                 input.event_id
             )
         })?;
+    let current_event = workspace
+        .snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == input.event_id)
+        .ok_or_else(|| format!("復元対象イベントが見つかりません: {}", input.event_id))?;
+    let pristine_event =
+        prepare_snapshot_restore_event(current_event, &pristine_event, input.discard_seed_shuffle)?;
     let mut affected_set_ids = HashSet::new();
     let mut restored_phase_group_ids = HashSet::new();
-    let seed_restore_requested = if input.scope == SnapshotRestoreScope::All {
-        workspace
-            .snapshot
-            .events
-            .iter()
-            .find(|event| event.event_id == input.event_id)
-            .is_some_and(|current_event| {
-                current_event.phase_groups.iter().any(|group| {
-                    group.initial_seed_restore_pending
-                        || group.seed_update_awaiting_started_snapshot
-                }) || match (
-                    initial_phase_seed_mapping(current_event),
-                    initial_phase_seed_mapping(&pristine_event),
-                ) {
-                    (Ok(current), Ok(pristine)) => current != pristine,
-                    _ => false,
-                }
-            })
-    } else {
-        false
-    };
 
     match input.scope {
         SnapshotRestoreScope::All => {
-            replace_event_with_pristine_snapshot(
-                &mut workspace.snapshot,
-                &pristine_snapshot,
-                &input.event_id,
-            )?;
-            if seed_restore_requested {
-                let event = workspace
-                    .snapshot
-                    .events
-                    .iter_mut()
-                    .find(|event| event.event_id == input.event_id)
-                    .ok_or_else(|| {
-                        format!("復元対象イベントが見つかりません: {}", input.event_id)
-                    })?;
-                let first_phase_id = initial_phase_seed_mapping(event)?.0;
-                for group in event
-                    .phase_groups
-                    .iter_mut()
-                    .filter(|group| group.phase_id.as_deref() == Some(first_phase_id.as_str()))
-                {
-                    group.initial_seed_restore_pending = true;
-                    group.seed_update_awaiting_started_snapshot = false;
-                }
-            }
+            replace_event_with_snapshot(&mut workspace.snapshot, &pristine_event)?;
             affected_set_ids.extend(pristine_event.sets.iter().map(|set| set.set_id.clone()));
         }
         SnapshotRestoreScope::CurrentPool => {
@@ -9126,55 +9343,24 @@ pub fn restore_event_graph_from_snapshot(
     }
 
     if input.scope != SnapshotRestoreScope::All {
-        let pristine_sets = pristine_event
-            .sets
-            .iter()
-            .filter(|set| {
-                set.phase_group_id
-                    .as_ref()
-                    .is_some_and(|id| restored_phase_group_ids.contains(id))
-            })
-            .map(|set| (set.set_id.clone(), set.clone()))
-            .collect::<HashMap<_, _>>();
-        if pristine_sets.is_empty() {
-            return Err("復元対象Poolにsetがありません。".to_owned());
-        }
         let event = workspace
             .snapshot
             .events
             .iter_mut()
             .find(|event| event.event_id == input.event_id)
             .ok_or_else(|| format!("復元対象イベントが見つかりません: {}", input.event_id))?;
-        for (set_id, pristine_set) in pristine_sets {
-            let current_set = event
-                .sets
-                .iter_mut()
-                .find(|set| set.set_id == set_id)
-                .ok_or_else(|| format!("復元対象setが見つかりません: {set_id}"))?;
-            *current_set = pristine_set;
-            affected_set_ids.insert(set_id);
-        }
-        for phase_group_id in &restored_phase_group_ids {
-            if let Some(pristine_group) = pristine_event
-                .phase_groups
-                .iter()
-                .find(|group| &group.phase_group_id == phase_group_id)
-            {
-                if let Some(current_group) = event
-                    .phase_groups
-                    .iter_mut()
-                    .find(|group| &group.phase_group_id == phase_group_id)
-                {
-                    *current_group = pristine_group.clone();
-                }
-            }
-        }
+        affected_set_ids.extend(restore_event_pools_from_snapshot(
+            event,
+            &pristine_event,
+            &restored_phase_group_ids,
+        )?);
         affected_set_ids.extend(rebuild_event_progression_from_completed_sets(
             &mut workspace.snapshot,
             &input.event_id,
         ));
     }
 
+    workspace.snapshot.updated_at = Utc::now();
     let mut local_meta = workspace.local_meta;
     if input.scope == SnapshotRestoreScope::All {
         local_meta
@@ -9209,6 +9395,15 @@ pub fn restore_event_graph_from_snapshot(
         .ok_or_else(|| format!("復元対象イベントが見つかりません: {}", input.event_id))?;
     let graph = build_bracket_graph(&workspace.snapshot, event);
 
+    save_event_snapshot_file(
+        app,
+        &workspace.snapshot,
+        &workspace.snapshot.tournament_id,
+        &normalized_slug,
+        &event.event_id,
+        &event.name,
+        false,
+    )?;
     save_event_graph_file(
         app,
         &graph,

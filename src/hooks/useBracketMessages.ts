@@ -1,8 +1,8 @@
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { FeatureMessage } from "../domain/messages";
 import {
-  buildScopedMessageMeta, getExternalEditRequest, isSenderProfileReadyForMessaging,
+  buildScopedMessageMeta, getExternalEditRequest, isDqRequestMessage, isSenderProfileReadyForMessaging,
   isValidIpv4, isValidSenderUserId,
   type ExternalEditRequest, type ExternalScoreReport, type ExternalScoreSyncRequest,
   type MessageScope, type SenderMessagingProfile,
@@ -28,6 +28,28 @@ export function createBracketMessaging({
   senderProfile, scope, communicationDisabled, refresh, onError, onMessage,
 }: MessagingOptions) {
   const senderReady = isSenderProfileReadyForMessaging(senderProfile);
+
+  async function markProcessed(messageId: string) {
+    await invoke("mark_bracket_message_processed", { messageId });
+    await refresh();
+  }
+
+  async function discardDqRequest(request: FeatureMessage): Promise<boolean> {
+    onError("");
+    onMessage("");
+    if (!isDqRequestMessage(request)) {
+      onError("破棄するDQ申請の情報が不正です。");
+      return false;
+    }
+    try {
+      await markProcessed(request.messageId);
+      onMessage("DQ申請を破棄しました。呼び出しと試合結果は変更していません。");
+      return true;
+    } catch (error) {
+      onError(`DQ申請の破棄に失敗しました: ${String(error)}`);
+      return false;
+    }
+  }
 
   async function send(input: {
     method: string;
@@ -231,6 +253,7 @@ export function createBracketMessaging({
   }
 
   return {
+    markProcessed, discardDqRequest,
     sendExternalEditRequest, canReplyToExternalEditRequest, replyToExternalEditRequest,
     sendExternalScoreReport, sendExternalScoreReports, sendExternalScoreSyncRequest, replyToExternalScoreReport,
   };
@@ -244,9 +267,5 @@ export function useBracketMessages(options: Omit<MessagingOptions, "refresh">) {
   const actions = useMemo(() => createBracketMessaging({ ...options, refresh }), [
     options.senderProfile, options.scope, options.communicationDisabled, options.onError, options.onMessage, refresh,
   ]);
-  const markProcessed = useCallback(async (messageId: string) => {
-    await invoke("mark_bracket_message_processed", { messageId });
-    await refresh();
-  }, [refresh]);
-  return { messages: data.messages, senderContacts: data.senderContacts, ready, markProcessed, ...actions };
+  return { messages: data.messages, senderContacts: data.senderContacts, ready, ...actions };
 }

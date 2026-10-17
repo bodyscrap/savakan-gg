@@ -33,6 +33,7 @@ describe("pool external report request panel", () => {
           requests={[{ ...request, body: "DQ reason" }, secondRequest]}
           busy={false}
           onProcess={vi.fn()}
+          onDiscard={vi.fn()}
         />,
       );
       expect(html).toContain("DQ申請が届いています");
@@ -41,11 +42,15 @@ describe("pool external report request panel", () => {
       expect(html.match(/class="dq-request-row"/g)).toHaveLength(2);
       expect(html).toContain("Latest Reporter");
       expect(html).toContain(">DQ内容を確認</button>");
+      expect(html.match(/>DQ申請を破棄<\/button>/g)).toHaveLength(2);
       expect(html).toContain("開くだけでは申請は処理済みになりません");
     });
     it("does not render processed requests and disables opening while busy", () => {
-      expect(renderToStaticMarkup(<PlayerDqRequestPanel requests={[]} busy={false} onProcess={vi.fn()} />)).toBe("");
-      expect(renderToStaticMarkup(<PlayerDqRequestPanel requests={[request]} busy onProcess={vi.fn()} />)).toContain('disabled=""');
+      expect(renderToStaticMarkup(<PlayerDqRequestPanel requests={[]} busy={false} onProcess={vi.fn()} onDiscard={vi.fn()} />)).toBe("");
+      const html = renderToStaticMarkup(
+        <PlayerDqRequestPanel requests={[request]} busy onProcess={vi.fn()} onDiscard={vi.fn()} />,
+      );
+      expect(html.match(/disabled=""/g)).toHaveLength(2);
     });
   });
   it("disables actions when communication or authorization is unavailable", () => {

@@ -445,6 +445,8 @@ pub struct RestoreEventGraphInput {
     pub phase_group_id: Option<String>,
     #[serde(default)]
     pub phase_name: Option<String>,
+    #[serde(default)]
+    pub discard_seed_shuffle: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

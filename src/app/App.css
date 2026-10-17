@@ -823,7 +823,7 @@ button:disabled {
 
 .dq-request-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.7fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.7fr) auto auto;
   align-items: center;
   gap: 0.75rem;
   min-width: 0;

@@ -38,7 +38,10 @@ fn replaces_only_the_requested_event_from_pristine_snapshot() {
         updated_at: Utc::now(),
     };
 
-    replace_event_with_pristine_snapshot(&mut snapshot, &pristine_snapshot, "event-a").unwrap();
+    let restored_event =
+        prepare_snapshot_restore_event(&snapshot.events[0], &pristine_snapshot.events[0], false)
+            .unwrap();
+    replace_event_with_snapshot(&mut snapshot, &restored_event).unwrap();
 
     assert_eq!(snapshot.events[0].name, "Downloaded A");
     assert_eq!(snapshot.events[1].name, "Local B");

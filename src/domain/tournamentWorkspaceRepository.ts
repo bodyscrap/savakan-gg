@@ -175,6 +175,7 @@ export type RestoreEventGraphInput = {
   scope: SnapshotRestoreScope;
   phaseGroupId: string | null;
   phaseName: string | null;
+  discardSeedShuffle?: boolean;
 };
 
 export type RestoreEventGraphResult = {

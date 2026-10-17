@@ -53,6 +53,8 @@ type BracketTabProps = {
   dqRequests: FeatureMessage[];
   pendingDqPoolIds: string[];
   onProcessDqRequest: (message: FeatureMessage) => void;
+  onDiscardDqRequest: (message: FeatureMessage) => void;
+  dqRequestBusy: boolean;
   pendingExternalRequestPoolIds: string[];
   canAcceptExternalRequest: boolean;
   canRespondExternalRequest: boolean;
@@ -106,6 +108,8 @@ export function BracketTab({
   dqRequests,
   pendingDqPoolIds,
   onProcessDqRequest,
+  onDiscardDqRequest,
+  dqRequestBusy,
   pendingExternalRequestPoolIds,
   canAcceptExternalRequest,
   canRespondExternalRequest,
@@ -251,7 +255,12 @@ export function BracketTab({
                   onReject={onRejectExternalRequest}
                 />
                 <p className="meta">sets: {selectedPhasePoolGroup.sets.length}</p>
-                <PlayerDqRequestPanel requests={dqRequests} busy={busy} onProcess={onProcessDqRequest} />
+                <PlayerDqRequestPanel
+                  requests={dqRequests}
+                  busy={busy || dqRequestBusy}
+                  onProcess={onProcessDqRequest}
+                  onDiscard={onDiscardDqRequest}
+                />
                 <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
                   <label className="checkbox-row">
                     <input
@@ -353,11 +362,12 @@ export function BracketTab({
 }
 
 export function PlayerDqRequestPanel({
-  requests, busy, onProcess,
+  requests, busy, onProcess, onDiscard,
 }: {
   requests: FeatureMessage[];
   busy: boolean;
   onProcess: (request: FeatureMessage) => void;
+  onDiscard: (request: FeatureMessage) => void;
 }) {
   if (requests.length === 0) return null;
   return (
@@ -375,6 +385,7 @@ export function PlayerDqRequestPanel({
               {request.senderName} ({request.senderUserId}) / {request.createdAt}
             </p>
             <button type="button" disabled={busy} onClick={() => onProcess(request)}>DQ内容を確認</button>
+            <button type="button" className="ghost" disabled={busy} onClick={() => onDiscard(request)}>DQ申請を破棄</button>
           </div>
         ))}
       </div>

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { BatchConflictDialogState } from "../hooks/useBracketReport";
 import type { ResultConfirmationState } from "../hooks/useSetResultDrafts";
 
@@ -33,7 +34,7 @@ type BracketDialogsProps = {
   onCloseRestore: () => void;
   onRestoreCurrentPool: () => void;
   onRestoreLockedPoolsInCurrentPhase: () => void;
-  onRestoreAll: () => void;
+  onRestoreAll: (discardSeedShuffle: boolean) => void;
   onUpdateSnapshot: () => void;
   onDiscardAllDrafts: () => void;
   overlaySwitch: OverlaySwitchView | null;
@@ -103,6 +104,13 @@ export function BracketDialogs({
   onForceOverwriteRemainingChange,
   onContinueConflict,
 }: BracketDialogsProps) {
+  const [restoreAllConfirmationOpen, setRestoreAllConfirmationOpen] = useState(false);
+
+  function closeRestore() {
+    setRestoreAllConfirmationOpen(false);
+    onCloseRestore();
+  }
+
   return (
     <>
       {resultConfirmation && resultConfirmation.match.setId === activeSetId && (
@@ -202,8 +210,19 @@ export function BracketDialogs({
         </div>
       )}
 
-      {restoreOpen && (
-        <div className="dialog-backdrop" onClick={onCloseRestore}>
+      {restoreOpen && restoreAllConfirmationOpen && (
+        <RestoreAllSeedsDialog
+          busy={busy}
+          selectedEventName={selectedEventName}
+          onCancel={() => setRestoreAllConfirmationOpen(false)}
+          onRestore={(discardSeedShuffle) => {
+            setRestoreAllConfirmationOpen(false);
+            onRestoreAll(discardSeedShuffle);
+          }}
+        />
+      )}
+      {restoreOpen && !restoreAllConfirmationOpen && (
+        <div className="dialog-backdrop" onClick={closeRestore}>
           <section
             className="dialog-panel"
             role="dialog"
@@ -216,11 +235,11 @@ export function BracketDialogs({
                 <h3>復元方法</h3>
                 <p className="meta">対象: {selectedEventName}</p>
               </div>
-              <button type="button" className="ghost" onClick={onCloseRestore}>閉じる</button>
+              <button type="button" className="ghost" onClick={closeRestore}>閉じる</button>
             </div>
             <div className="dialog-body" style={{ display: "grid", gap: "0.5rem" }}>
               <p className="meta">
-                選択範囲のスコアを、最後に取得したスナップショット時点に戻します。範囲内の未報告結果も破棄されます。
+                選択範囲のスコアを、最後に取得したスナップショット時点に戻します。範囲内の未報告結果も破棄されます。Seedの並び順は維持します。全体を復元する場合のみ、Seedの並び替えを破棄するか選択できます。
               </p>
               <button type="button" className="ghost" disabled={!canRestoreCurrentPool} onClick={onRestoreCurrentPool}>
                 スナップショットから復元(現在Pool)
@@ -233,7 +252,7 @@ export function BracketDialogs({
               >
                 スナップショットから復元(現在Phaseのロック中Pool)
               </button>
-              <button type="button" className="ghost" disabled={!canRestoreAll} onClick={onRestoreAll}>
+              <button type="button" className="ghost" disabled={!canRestoreAll} onClick={() => setRestoreAllConfirmationOpen(true)}>
                 スナップショットから復元(全体)
               </button>
               <button type="button" className="ghost" disabled={!canDiscardAllDrafts} onClick={onDiscardAllDrafts}>
@@ -404,5 +423,51 @@ export function BracketDialogs({
         </div>
       )}
     </>
+  );
+}
+
+export function RestoreAllSeedsDialog({
+  busy,
+  selectedEventName,
+  onCancel,
+  onRestore,
+}: {
+  busy: boolean;
+  selectedEventName: string;
+  onCancel: () => void;
+  onRestore: (discardSeedShuffle: boolean) => void;
+}) {
+  return (
+    <div className="dialog-backdrop" onClick={() => { if (!busy) onCancel(); }}>
+      <section
+        className="dialog-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="全体復元時のSeedの扱い"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-head">
+          <div>
+            <h3>全体復元時のSeedの扱い</h3>
+            <p className="meta">対象: {selectedEventName}</p>
+          </div>
+        </div>
+        <div className="dialog-body">
+          <p className="meta">
+            全体のスコアをスナップショット時点に戻し、未報告結果を破棄します。
+            Seedの並び順を維持するか、並び替えも破棄してスナップショット時点に戻すかを選択してください。
+          </p>
+        </div>
+        <div className="dialog-actions dialog-actions-split">
+          <button type="button" className="ghost" disabled={busy} onClick={onCancel}>キャンセル</button>
+          <button type="button" className="ghost" disabled={busy} onClick={() => onRestore(true)}>
+            Seedの並び替えも破棄して復元
+          </button>
+          <button type="button" disabled={busy} onClick={() => onRestore(false)}>
+            Seedの並び順を維持して復元
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
