@@ -144,7 +144,17 @@ pub struct TournamentLocalMeta {
     pub pending_grand_final_reset_results: Vec<LocalGrandFinalResetResultMeta>,
     #[serde(default)]
     pub set_confirmation_history: Vec<SetConfirmationRecord>,
+    #[serde(default)]
+    pub set_stream_starts: Vec<SetStreamStartRecord>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetStreamStartRecord {
+    pub event_id: String,
+    pub set_id: String,
+    pub last_started_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

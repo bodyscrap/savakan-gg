@@ -131,7 +131,7 @@ export function resolveOverlaySidesForSet(
   }
 
   if (!onePSlot) {
-    onePSlot = slot0;
+    onePSlot = twoPSlot === slot0 ? slot1 : slot0;
   }
   if (!twoPSlot) {
     twoPSlot = onePSlot === slot0 ? slot1 : slot0;
@@ -392,6 +392,8 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
       applyOverlayState(await invoke<ObsOverlayState>(command, {
         input: {
           ...input,
+          slug: normalizeApiSlug(slug),
+          eventId: selectedEventId,
           redSetWins: normalizeObsSetWins(input.redSetWins),
           blueSetWins: normalizeObsSetWins(input.blueSetWins),
           fontScale: normalizeObsFontScale(input.fontScale),

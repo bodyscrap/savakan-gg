@@ -2585,6 +2585,8 @@ function App() {
         {activeTab === "tournament" && (
           <EventSetting
             event={{
+              slug: toApiSlug(slug),
+              eventId: selectedEvent?.eventId ?? "",
               hasSelectedEvent: Boolean(selectedEvent),
               tournamentName: snapshot?.name ?? "-",
               eventName: selectedEvent?.name ?? "",

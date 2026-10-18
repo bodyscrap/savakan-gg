@@ -1,4 +1,5 @@
 import type { ItemListConfig } from "../domain/itemList";
+import { YoutubeChapters } from "./YoutubeChapters";
 
 export type EventSettingEntrant = {
   entrantId: string;
@@ -25,6 +26,8 @@ export type SideDecisionMethod = "upper_1p" | "upper_2p" | "random";
 
 export type EventSettingProps = {
   event: {
+    slug: string;
+    eventId: string;
     hasSelectedEvent: boolean;
     tournamentName: string;
     eventName: string;
@@ -519,6 +522,12 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
               </section>
             </div>
           )}
+          <YoutubeChapters
+            key={`${event.slug}:${event.eventId}`}
+            slug={event.slug}
+            eventId={event.eventId}
+            useAliasName={useAliasName}
+          />
         </>
       )}
     </section>

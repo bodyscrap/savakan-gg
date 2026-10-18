@@ -935,6 +935,53 @@ button:disabled {
   gap: 0.55rem;
 }
 
+.youtube-chapters {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.9rem;
+}
+
+.youtube-chapters label {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.youtube-chapters textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.chapter-generation-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 0.65rem;
+}
+
+.chapter-generation-controls input {
+  min-width: 0;
+}
+
+.chapter-record-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chapter-item-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.youtube-chapters .chapter-item-categories label {
+  display: inline-flex;
+  align-items: center;
+}
+
 .setting-row {
   border: 1px solid var(--line);
   border-radius: 10px;

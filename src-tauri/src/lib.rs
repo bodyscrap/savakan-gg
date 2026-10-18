@@ -615,6 +615,40 @@ fn sort_pending_set_results_by_phase_order(
 mod tests {
     use super::*;
 
+    #[test]
+    fn set_stream_start_only_records_real_starts_and_restarts() {
+        let mut input: ObsOverlaySetInput = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "slug": "tournament/slug",
+            "eventId": "event",
+            "setId": "set-a",
+            "eventName": "Event",
+            "eventAlias": "",
+            "roundText": "Round 1",
+            "redPlayerName": "Player A",
+            "bluePlayerName": "Player B",
+            "redSetWins": 0,
+            "blueSetWins": 0,
+            "fontScale": 1.0
+        }))
+        .unwrap();
+        assert!(input.starts_new_set(None));
+        assert!(input.starts_new_set(Some("set-b")));
+        assert!(input.starts_new_set(Some("__test__")));
+        assert!(!input.starts_new_set(Some("set-a")));
+        input.red_set_wins = 1;
+        input.red_player_name = "Alias A".to_owned();
+        assert!(!input.starts_new_set(Some("set-a")));
+        input.enabled = false;
+        assert!(!input.starts_new_set(Some("set-a")));
+        assert!(!input.starts_new_set(None));
+        input.enabled = true;
+        assert!(input.starts_new_set(None));
+        input.set_id = "__test__".to_owned();
+        assert!(!input.starts_new_set(None));
+        assert!(!input.starts_new_set(Some("set-a")));
+    }
+
     fn make_call_message(
         event_id: &str,
         set_id: &str,
@@ -1079,6 +1113,10 @@ fn resolve_winner_id_from_slot_scores(
 #[serde(rename_all = "camelCase")]
 struct ObsOverlaySetInput {
     enabled: bool,
+    #[serde(default)]
+    slug: String,
+    #[serde(default)]
+    event_id: String,
     set_id: String,
     event_name: String,
     event_alias: String,
@@ -1088,6 +1126,12 @@ struct ObsOverlaySetInput {
     red_set_wins: u32,
     blue_set_wins: u32,
     font_scale: f64,
+}
+
+impl ObsOverlaySetInput {
+    fn starts_new_set(&self, active_set_id: Option<&str>) -> bool {
+        self.enabled && self.set_id.trim() != "__test__" && active_set_id != Some(self.set_id.trim())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4343,6 +4387,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 pending_set_results: Vec::new(),
                 pending_grand_final_reset_results: Vec::new(),
                 set_confirmation_history: Vec::new(),
+                set_stream_starts: Vec::new(),
                 updated_at: chrono::Utc::now(),
             },
         };
@@ -5088,6 +5133,8 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
 
         let input = ObsOverlaySetInput {
             enabled: payload.enabled,
+            slug: payload.slug.clone(),
+            event_id: payload.event_id.clone(),
             set_id: payload.set_id.clone(),
             event_name: payload.event_name.clone(),
             event_alias: payload.event_alias.clone(),
@@ -5100,7 +5147,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
         };
 
         let state = if payload.enabled {
-            match apply_obs_overlay_toggle(input.clone(), payload.force_switch) {
+            match apply_obs_overlay_toggle(app, input.clone(), payload.force_switch) {
                 Ok(value) => value,
                 Err(err) if !payload.force_switch => {
                     if let Ok(current) = snapshot_obs_overlay_state() {
@@ -5132,7 +5179,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 }
             }
         } else {
-            match toggle_obs_overlay_set(input) {
+            match apply_obs_overlay_toggle(app, input, false) {
                 Ok(value) => value,
                 Err(err) => {
                     if let Ok(current) = snapshot_obs_overlay_state() {
@@ -5424,6 +5471,7 @@ fn set_obs_overlay_fully_stopped(fully_stopped: bool) -> Result<ObsOverlayState,
 }
 
 fn apply_obs_overlay_toggle(
+    app: &tauri::AppHandle,
     input: ObsOverlaySetInput,
     force_switch: bool,
 ) -> Result<ObsOverlayState, String> {
@@ -5448,7 +5496,28 @@ fn apply_obs_overlay_toggle(
                 if !force_switch {
                     return Err(format!("すでに別のsetが配信中です: {}", active.set_id));
                 }
-                guard.active_set = None;
+            }
+        }
+
+        if input.starts_new_set(guard.active_set.as_ref().map(|active| active.set_id.as_str())) {
+            if input.slug.trim().is_empty() || input.event_id.trim().is_empty() {
+                return Err("配信開始時刻の保存には大会slugとeventIdが必要です。".to_owned());
+            }
+            let mut workspace = storage::load_workspace(app, &input.slug, &input.event_id)?;
+            let set = workspace
+                .snapshot
+                .events
+                .iter()
+                .find(|event| event.event_id == input.event_id)
+                .and_then(|event| resolve_mobile_set_entrants(event, &set_id))
+                .ok_or_else(|| format!("配信対象のsetが見つかりません: {set_id}"))?;
+            if storage::record_set_stream_start(
+                &mut workspace,
+                &input.event_id,
+                &set,
+                chrono::Utc::now(),
+            ) {
+                storage::save_local_meta(app, &input.event_id, &workspace.local_meta)?;
             }
         }
 
@@ -5501,13 +5570,19 @@ fn apply_obs_overlay_toggle(
 }
 
 #[tauri::command]
-fn toggle_obs_overlay_set(input: ObsOverlaySetInput) -> Result<ObsOverlayState, String> {
-    apply_obs_overlay_toggle(input, false)
+fn toggle_obs_overlay_set(
+    app: tauri::AppHandle,
+    input: ObsOverlaySetInput,
+) -> Result<ObsOverlayState, String> {
+    apply_obs_overlay_toggle(&app, input, false)
 }
 
 #[tauri::command]
-fn force_toggle_obs_overlay_set(input: ObsOverlaySetInput) -> Result<ObsOverlayState, String> {
-    apply_obs_overlay_toggle(input, true)
+fn force_toggle_obs_overlay_set(
+    app: tauri::AppHandle,
+    input: ObsOverlaySetInput,
+) -> Result<ObsOverlayState, String> {
+    apply_obs_overlay_toggle(&app, input, true)
 }
 
 fn local_ipv4_score(ip: &std::net::Ipv4Addr) -> i32 {
@@ -7053,6 +7128,17 @@ fn restore_local_event_graph_from_snapshot(
 }
 
 #[tauri::command]
+fn clear_local_set_stream_starts(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+) -> Result<TournamentWorkspace, String> {
+    let workspace = storage::clear_set_stream_starts(&app, &slug, &event_id)?;
+    emit_workspace_updated(&app, &slug, &event_id);
+    Ok(workspace)
+}
+
+#[tauri::command]
 async fn clear_local_set_result_drafts(
     app: tauri::AppHandle,
     slug: String,
@@ -7536,6 +7622,7 @@ pub fn run() {
             refresh_local_event_snapshot_from_remote,
             restore_local_event_graph_from_snapshot,
             clear_local_set_result_drafts,
+            clear_local_set_stream_starts,
             clear_local_set_result_draft_for_set,
             save_local_player_meta,
             derive_player_ids,

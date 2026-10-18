@@ -135,6 +135,11 @@ export type TournamentLocalMeta = {
   pendingSetResults: LocalSetResultMeta[];
   pendingGrandFinalResetResults?: LocalGrandFinalResetResultMeta[];
   setConfirmationHistory?: SetConfirmationRecord[];
+  setStreamStarts?: Array<{
+    eventId: string;
+    setId: string;
+    lastStartedAt: string;
+  }>;
   updatedAt: string;
 };
 
@@ -276,6 +281,10 @@ export async function listLocalSnapshotEvents(): Promise<LocalSnapshotEventListI
 
 export async function loadTournamentWorkspace(slug: string, eventId: string): Promise<TournamentWorkspace> {
   return invoke<TournamentWorkspace>("load_local_tournament_workspace", { slug, eventId });
+}
+
+export async function clearSetStreamStarts(slug: string, eventId: string): Promise<TournamentWorkspace> {
+  return invoke<TournamentWorkspace>("clear_local_set_stream_starts", { slug, eventId });
 }
 
 export async function exportTournamentShareArchive(

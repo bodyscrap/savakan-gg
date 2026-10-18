@@ -66,4 +66,32 @@ describe("overlay display formatting", () => {
       blueSetWins: 1,
     });
   });
+
+  it("does not duplicate the upper player when only their 2P side is saved", () => {
+    const set: SetSnapshot = {
+      setId: "set-1",
+      fullRoundText: "Round 1",
+      round: 1,
+      phaseName: null,
+      phaseGroupName: null,
+      phaseOrder: null,
+      phaseGroupDisplayIdentifier: null,
+      state: 1,
+      winnerId: null,
+      entrant1Source: null,
+      entrant2Source: null,
+      slots: [
+        { entrantId: "a", entrantName: "Player A", seedId: null, seedNum: null, score: 1 },
+        { entrantId: "b", entrantName: "Player B", seedId: null, seedNum: null, score: 2 },
+      ],
+    };
+    expect(resolveOverlaySidesForSet(set, {
+      getSavedSide: (_setId, entrantId) => entrantId === "a" ? "2P" : "",
+    })).toMatchObject({
+      redPlayerName: "Player B",
+      bluePlayerName: "Player A",
+      redSetWins: 2,
+      blueSetWins: 1,
+    });
+  });
 });

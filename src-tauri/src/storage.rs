@@ -270,6 +270,7 @@ fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
         pending_set_results: Vec::new(),
         pending_grand_final_reset_results: Vec::new(),
         set_confirmation_history: Vec::new(),
+        set_stream_starts: Vec::new(),
         updated_at: Utc::now(),
     }
 }
@@ -311,6 +312,56 @@ fn append_set_confirmation_record(
 #[cfg(test)]
 #[path = "storage/tests/set_confirmation_history_tests.rs"]
 mod set_confirmation_history_tests;
+
+#[cfg(test)]
+#[path = "storage/tests/set_stream_start_tests.rs"]
+mod set_stream_start_tests;
+
+pub fn record_set_stream_start(
+    workspace: &mut TournamentWorkspace,
+    event_id: &str,
+    set: &SetSnapshot,
+    started_at: chrono::DateTime<Utc>,
+) -> bool {
+    if set.state >= 3 || !is_set_matchup_ready(set) {
+        return false;
+    }
+
+    let meta = &mut workspace.local_meta;
+    if let Some(record) = meta
+        .set_stream_starts
+        .iter_mut()
+        .find(|record| record.event_id == event_id && record.set_id == set.set_id)
+    {
+        record.last_started_at = started_at;
+    } else {
+        meta.set_stream_starts
+            .push(crate::models::SetStreamStartRecord {
+                event_id: event_id.to_owned(),
+                set_id: set.set_id.clone(),
+                last_started_at: started_at,
+            });
+    }
+    meta.updated_at = started_at;
+    true
+}
+
+fn clear_set_stream_start_records(meta: &mut TournamentLocalMeta, event_id: &str) {
+    meta.set_stream_starts
+        .retain(|record| record.event_id != event_id);
+    meta.updated_at = Utc::now();
+}
+
+pub fn clear_set_stream_starts(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<TournamentWorkspace, String> {
+    let mut workspace = load_workspace(app, slug, event_id)?;
+    clear_set_stream_start_records(&mut workspace.local_meta, event_id);
+    save_local_meta(app, event_id, &workspace.local_meta)?;
+    Ok(workspace)
+}
 
 fn derive_auth_code(slug: &str, event_id: &str, entrant_id: &str) -> String {
     let mut hasher = Sha256::new();
@@ -1680,6 +1731,9 @@ pub fn import_tournament_share_archive(
         .retain(|result| result.event_id != event_id);
     local_meta
         .set_confirmation_history
+        .retain(|record| record.event_id != event_id);
+    local_meta
+        .set_stream_starts
         .retain(|record| record.event_id != event_id);
     local_meta.updated_at = Utc::now();
     save_local_meta(app, &event_id, &local_meta)?;
@@ -8229,6 +8283,9 @@ pub fn save_local_meta(
     normalized
         .pending_grand_final_reset_results
         .retain(|pending| pending.event_id == event_id);
+    normalized
+        .set_stream_starts
+        .retain(|record| record.event_id == event_id);
 
     let event_name = normalized
         .events
@@ -8401,6 +8458,9 @@ pub fn load_local_meta(
     parsed
         .pending_grand_final_reset_results
         .retain(|pending| pending.event_id == event_id);
+    parsed
+        .set_stream_starts
+        .retain(|record| record.event_id == event_id);
     Ok(parsed)
 }
 
