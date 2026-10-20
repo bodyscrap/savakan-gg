@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { UserCardPlayer } from "../hooks/userCardCanvas";
 
 export type { UserCardPlayer } from "../hooks/userCardCanvas";
@@ -36,32 +37,28 @@ export function PlayerListInfo({
   return (
     <>
       <section className="panel">
-        <h2>プレイヤーリストの出力</h2>
+        <h2>{t("プレイヤーリストの出力")}</h2>
         {disableLocalCommunication && (
-          <p className="meta meta-attention">ローカル通信OFF中のため、プレイヤーリスト機能は停止中です。</p>
+          <p className="meta meta-attention">{t("ローカル通信OFF中のため、プレイヤーリスト機能は停止中です。")}</p>
         )}
         {!hasSelectedEvent ? (
-          <p className="meta">ホームの大会一覧からイベントを選択してください。</p>
+          <p className="meta">{t("ホームの大会一覧からイベントを選択してください。")}</p>
         ) : (
           <>
-            <p className="meta">対象イベント: {selectedEventLabel} / プレイヤー数: {players.length}</p>
+            <p className="meta">{t("対象イベント: {value1} / プレイヤー数: {value2}", { value1: selectedEventLabel, value2: players.length })}</p>
 
             <div className="form" style={{ marginTop: "0.65rem" }}>
               <button
                 type="button"
                 disabled={disableLocalCommunication || userCardBusy || !selectedPlayer}
                 onClick={onSaveSelectedCard}
-              >
-                選択カードを保存
-              </button>
+              >{t("選択カードを保存")}</button>
               <button
                 type="button"
                 className="ghost"
                 disabled={disableLocalCommunication || userCardBusy || players.length === 0}
                 onClick={onExportA4Sheet}
-              >
-                A4シートを作成
-              </button>
+              >{t("A4シートを作成")}</button>
             </div>
           </>
         )}
@@ -71,26 +68,22 @@ export function PlayerListInfo({
         <section className="panel users-grid-panel">
           <section className="users-player-list">
             <div className="users-player-list-head">
-              <h3>プレイヤー一覧</h3>
+              <h3>{t("プレイヤー一覧")}</h3>
               <button
                 type="button"
                 className="ghost"
                 disabled={disableLocalCommunication || userCardBusy || players.length === 0}
                 onClick={onSelectAllPlayers}
-              >
-                全選択
-              </button>
+              >{t("全選択")}</button>
               <button
                 type="button"
                 className="ghost"
                 disabled={disableLocalCommunication || userCardBusy || selectedPlayerIds.length === 0}
                 onClick={onClearPlayerSelection}
-              >
-                全解除
-              </button>
+              >{t("全解除")}</button>
             </div>
             {players.length === 0 ? (
-              <p className="meta">プレイヤーが存在しません。</p>
+              <p className="meta">{t("プレイヤーが存在しません。")}</p>
             ) : (
               <div className="event-list player-list-scroll enabled">
                 {players.map((player) => {
@@ -119,9 +112,9 @@ export function PlayerListInfo({
           </section>
 
           <section className="users-card-preview">
-            <h3>プレイヤーカードプレビュー</h3>
+            <h3>{t("プレイヤーカードプレビュー")}</h3>
             {!selectedPlayer || selectedPlayerPreviewUrl === "" ? (
-              <p className="meta">プレイヤーを選択してください。</p>
+              <p className="meta">{t("プレイヤーを選択してください。")}</p>
             ) : (
               <>
                 <p className="meta">{selectedPlayer.entrantName} / {selectedPlayer.playerId}</p>

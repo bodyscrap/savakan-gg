@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { SenderUserListEntry } from "../hooks/useSenderUserList";
 
 type SenderUserListProps = {
@@ -45,21 +46,17 @@ export function SenderUserList({
     <>
       <section className="panel">
         <div className="panel-toolbar compact">
-          <h2>ユーザー一覧</h2>
+          <h2>{t("ユーザー一覧")}</h2>
           <div className="sender-user-list-actions">
-            <button type="button" className="ghost" onClick={onBackToSettings}>
-              設定に戻る
-            </button>
-            <button type="button" onClick={onRefresh}>
-              更新
-            </button>
+            <button type="button" className="ghost" onClick={onBackToSettings}>{t("設定に戻る")}</button>
+            <button type="button" onClick={onRefresh}>{t("更新")}</button>
           </div>
         </div>
-        <p className="meta">更新ボタンで問い合わせ、1秒以内に応答したユーザーを表示します。</p>
+        <p className="meta">{t("更新ボタンで問い合わせ、1秒以内に応答したユーザーを表示します。")}</p>
         <p className={duplicateIds.size > 0 ? "meta meta-attention" : "meta"}>
           {duplicateIds.size > 0
-            ? "ユーザーIDが重複しています。重複しているユーザーは赤字で表示されます。"
-            : "ユーザーIDの重複はありません。"}
+            ? t("ユーザーIDが重複しています。重複しているユーザーは赤字で表示されます。")
+            : t("ユーザーIDの重複はありません。")}
         </p>
       </section>
 
@@ -68,8 +65,8 @@ export function SenderUserList({
           <table className="sender-user-list-table">
             <thead>
               <tr>
-                <th scope="col">送信者名</th>
-                <th scope="col">ユーザーID</th>
+                <th scope="col">{t("送信者名")}</th>
+                <th scope="col">{t("ユーザーID")}</th>
                 <th scope="col">IP</th>
               </tr>
             </thead>
@@ -82,14 +79,14 @@ export function SenderUserList({
                     className={duplicate ? "sender-user-entry-duplicate" : ""}
                   >
                     <td>
-                      {user.senderName || "未設定"}
-                      {user.isLocal && <span className="meta"> (この端末)</span>}
+                      {user.senderName || t("未設定")}
+                      {user.isLocal && <span className="meta">{t(" (この端末)")}</span>}
                     </td>
                     <td>
                       {user.isLocal ? (
                         <div className="sender-user-id-editor">
                           <input
-                            aria-label="この端末のユーザーID"
+                            aria-label={t("この端末のユーザーID")}
                             className={duplicate ? "sender-user-id-input duplicate" : "sender-user-id-input"}
                             value={senderUserIdDraft}
                             onChange={(event) => onSenderUserIdChange(event.currentTarget.value)}
@@ -100,20 +97,16 @@ export function SenderUserList({
                             type="button"
                             className="ghost"
                             onClick={onRandomizeSenderUserId}
-                          >
-                            ランダム決定
-                          </button>
+                          >{t("ランダム決定")}</button>
                           <button
                             type="button"
                             onClick={onSaveSenderProfile}
                             disabled={!canSaveSenderProfile}
-                          >
-                            保存
-                          </button>
+                          >{t("保存")}</button>
                         </div>
                       ) : user.senderUserId}
                     </td>
-                    <td>{user.senderIp || "未設定"}</td>
+                    <td>{user.senderIp || t("未設定")}</td>
                   </tr>
                 );
               })}

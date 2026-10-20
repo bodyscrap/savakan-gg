@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { FeatureMessage } from "../domain/messages";
@@ -17,17 +18,17 @@ export async function sendPlayerDqRequest(
   profile: SenderMessagingProfile, call: FeatureMessage, rawPlayerId: string, reason: string,
   communicationDisabled = false,
 ) {
-  if (communicationDisabled) throw new Error("ローカル通信を有効にしてください。");
+  if (communicationDisabled) throw new Error(t("ローカル通信を有効にしてください。"));
   const identity = extractPlayerCallIdentity(call);
   const playerId = normalizePlayerId(rawPlayerId);
   if (!identity || call.senderUserId === profile.senderUserId || !isValidIpv4(call.senderIp)) {
-    throw new Error("DQ申請先の他端末の呼び出し情報が不正です。");
+    throw new Error(t("DQ申請先の他端末の呼び出し情報が不正です。"));
   }
   if (!isSenderProfileReadyForMessaging(profile)) {
-    throw new Error("設定タブで送信者情報とネットワークデバイスを保存してください。");
+    throw new Error(t("設定タブで送信者情報とネットワークデバイスを保存してください。"));
   }
   if (!isLikelyPlayerId(playerId) || playerId !== identity.expectedPlayerId) {
-    throw new Error("入力したPLAYER IDが呼び出し対象と一致しません。");
+    throw new Error(t("入力したPLAYER IDが呼び出し対象と一致しません。"));
   }
   await invoke("send_mailbox_message", {
     input: {
@@ -35,8 +36,8 @@ export async function sendPlayerDqRequest(
       profile,
       messageType: "dq_request",
       method: "player_dq_request",
-      subject: `DQ申請: ${call.subject}`,
-      body: `DQ申請\n対象: ${identity.callEntrantName || identity.callEntrantId}${reason.trim() ? `\n理由: ${reason.trim()}` : ""}`,
+      subject: t("DQ申請: {p0}", { p0: call.subject }),
+      body: t("DQ申請\n対象: {p0}{p1}", { p0: identity.callEntrantName || identity.callEntrantId, p1: reason.trim() ? t("\n理由: {p0}", { p0: reason.trim() }) : "" }),
       messageMeta: {
         ...call.messageMeta,
         scopeEventId: extractCallEventMeta(call).eventId,
@@ -83,7 +84,7 @@ export function usePlayerDqRequest({
     const identity = extractPlayerCallIdentity(call ?? null);
     if (communicationDisabled || !isSenderProfileReadyForMessaging(senderProfile) || !call || !identity
       || call.senderUserId === senderProfile.senderUserId || !isValidIpv4(call.senderIp)) {
-      onError("ローカル通信と送信者設定を確認し、他端末からの未解決の呼び出しを選択してください。");
+      onError(t("ローカル通信と送信者設定を確認し、他端末からの未解決の呼び出しを選択してください。"));
       return;
     }
     setDqDialog({ call, ...identity });
@@ -97,12 +98,12 @@ export function usePlayerDqRequest({
   async function submitDqRequest() {
     if (dqSubmitting) return;
     if (communicationDisabled || !dqDialog) {
-      setDqDialogError("DQ申請対象またはローカル通信設定を確認してください。");
+      setDqDialogError(t("DQ申請対象またはローカル通信設定を確認してください。"));
       return;
     }
     const current = calls.find((call) => call.messageId === dqDialog.call.messageId);
     if (!current) {
-      setDqDialogError("この呼び出しは解決または更新されています。呼び出しリストから開き直してください。");
+      setDqDialogError(t("この呼び出しは解決または更新されています。呼び出しリストから開き直してください。"));
       return;
     }
     setDqSubmitting(true);
@@ -110,7 +111,7 @@ export function usePlayerDqRequest({
     try {
       await sendPlayerDqRequest(senderProfile, current, dqPlayerIdDraft, dqReasonDraft, communicationDisabled);
       setDqDialog(null);
-      onMessage("呼び出し元の端末へDQ申請を送信しました。");
+      onMessage(t("呼び出し元の端末へDQ申請を送信しました。"));
     } catch (error) {
       setDqDialogError(String(error));
     } finally {

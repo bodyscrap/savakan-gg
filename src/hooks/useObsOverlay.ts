@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -173,9 +174,9 @@ type UseObsOverlayOptions = {
 export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: UseObsOverlayOptions) {
   const [obsOverlayState, setObsOverlayState] = useState<ObsOverlayState | null>(null);
   const [obsOverlayBusy, setObsOverlayBusy] = useState(false);
-  const [testOverlayEventAlias, setTestOverlayEventAlias] = useState("テスト大会");
-  const [testOverlayRedName, setTestOverlayRedName] = useState("テストプレイヤー1");
-  const [testOverlayBlueName, setTestOverlayBlueName] = useState("テストプレイヤー2");
+  const [testOverlayEventAlias, setTestOverlayEventAlias] = useState(t("テスト大会"));
+  const [testOverlayRedName, setTestOverlayRedName] = useState(t("テストプレイヤー1"));
+  const [testOverlayBlueName, setTestOverlayBlueName] = useState(t("テストプレイヤー2"));
   const [testOverlayRedWins, setTestOverlayRedWins] = useState(0);
   const [testOverlayBlueWins, setTestOverlayBlueWins] = useState(0);
   const [isTestOverlayActive, setIsTestOverlayActive] = useState(false);
@@ -280,11 +281,11 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
             input: {
               enabled: true,
               setId: "__test__",
-              eventName: "テスト配信",
+              eventName: t("テスト配信"),
               eventAlias: testOverlayEventAlias.trim(),
               roundText: "Preview / Pool A\nPreview\nSet T",
-              redPlayerName: testOverlayRedName.trim() || "テストプレイヤー1",
-              bluePlayerName: testOverlayBlueName.trim() || "テストプレイヤー2",
+              redPlayerName: testOverlayRedName.trim() || t("テストプレイヤー1"),
+              bluePlayerName: testOverlayBlueName.trim() || t("テストプレイヤー2"),
               redSetWins: normalizeObsSetWins(testOverlayRedWins),
               blueSetWins: normalizeObsSetWins(testOverlayBlueWins),
               fontScale: normalizeObsFontScale(obsOverlayState.fontScale),
@@ -416,11 +417,11 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     await toggleObsOverlaySet({
       enabled: true,
       setId: "__test__",
-      eventName: "テスト配信",
+      eventName: t("テスト配信"),
       eventAlias: testOverlayEventAlias.trim(),
       roundText: "Preview / Pool A\nPreview\nSet T",
-      redPlayerName: testOverlayRedName.trim() || "テストプレイヤー1",
-      bluePlayerName: testOverlayBlueName.trim() || "テストプレイヤー2",
+      redPlayerName: testOverlayRedName.trim() || t("テストプレイヤー1"),
+      bluePlayerName: testOverlayBlueName.trim() || t("テストプレイヤー2"),
       redSetWins: testOverlayRedWins,
       blueSetWins: testOverlayBlueWins,
       fontScale: obsOverlayState.fontScale,

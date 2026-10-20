@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { isCompletedSet, resolveEntrantDisplayName } from "./bracketDisplay";
 import { createSetEntrantResolver, isResolvedEntrantName } from "./bracketProgression";
 import { buildPendingSetResultsById, getSetScoresForDisplay, isConfirmedSetResult } from "./setResultDrafts";
@@ -24,7 +25,7 @@ export function collectStreamChapterSets(
 ): StreamChapterSet[] {
   const event = workspace.snapshot.events.find((item) => item.eventId === eventId);
   if (!event) {
-    throw new Error("チャプター生成対象のイベントが見つかりません。");
+    throw new Error(t("チャプター生成対象のイベントが見つかりません。"));
   }
   const eventMeta = workspace.localMeta.events.find((item) => item.eventId === eventId);
   const aliases = new Map(eventMeta?.entrants.map((entrant) => [entrant.entrantId, entrant.aliasName]));
@@ -57,15 +58,15 @@ export function collectStreamChapterSets(
     .map((record) => {
       const sourceSet = setsById.get(record.setId);
       if (!sourceSet) {
-        throw new Error(`配信開始記録の Set ${record.setId} が見つかりません。`);
+        throw new Error(t("配信開始記録の Set {p0} が見つかりません。", { p0: record.setId }));
       }
       const startedAt = Date.parse(record.lastStartedAt);
       if (!Number.isFinite(startedAt)) {
-        throw new Error(`Set ${record.setId} の配信開始時刻が不正です。`);
+        throw new Error(t("Set {p0} の配信開始時刻が不正です。", { p0: record.setId }));
       }
       const set = resolveSet(sourceSet);
       if (set.slots.length !== 2 || set.slots.some((slot) => !slot.entrantId || !isResolvedEntrantName(slot.entrantName))) {
-        throw new Error(`Set ${record.setId} の対戦プレイヤーを特定できません。`);
+        throw new Error(t("Set {p0} の対戦プレイヤーを特定できません。", { p0: record.setId }));
       }
       const overlaySides = resolveOverlaySidesForSet(set, {
         getSavedSide: (setId, entrantId) => sides.get(`${setId}:${entrantId}`) ?? "",
@@ -114,11 +115,11 @@ export function collectStreamChapterSets(
 export function parseChapterVideoTime(value: string): number {
   const match = /^(?:(\d+):)?([0-5]?\d):([0-5]?\d)$/.exec(value.trim());
   if (!match) {
-    throw new Error("動画上の開始時刻は hh:mm:ss または mm:ss 形式で入力してください。");
+    throw new Error(t("動画上の開始時刻は hh:mm:ss または mm:ss 形式で入力してください。"));
   }
   const seconds = Number(match[1] ?? 0) * 3600 + Number(match[2]) * 60 + Number(match[3]);
   if (!Number.isSafeInteger(seconds)) {
-    throw new Error("動画上の開始時刻が大きすぎます。");
+    throw new Error(t("動画上の開始時刻が大きすぎます。"));
   }
   return seconds;
 }
@@ -139,11 +140,11 @@ export function generateYoutubeChapters(
   referenceSetId?: string,
 ): string {
   if (sets.length === 0) {
-    throw new Error("配信開始時刻が記録された Set がありません。");
+    throw new Error(t("配信開始時刻が記録された Set がありません。"));
   }
   const opening = singleLine(openingText);
   if (!opening) {
-    throw new Error("00:00 の後ろに表示するテキストを入力してください。");
+    throw new Error(t("00:00 の後ろに表示するテキストを入力してください。"));
   }
   const referenceVideoSeconds = parseChapterVideoTime(referenceVideoTime);
   const sortedSets = [...sets].sort((left, right) => left.startedAt - right.startedAt);
@@ -151,14 +152,14 @@ export function generateYoutubeChapters(
     ? sortedSets[0]
     : sortedSets.find((set) => set.setId === referenceSetId);
   if (!referenceSet) {
-    throw new Error("基準の試合が配信開始記録に見つかりません。基準の試合を選び直してください。");
+    throw new Error(t("基準の試合が配信開始記録に見つかりません。基準の試合を選び直してください。"));
   }
   const lines = sortedSets.map((set) => {
     const seconds = referenceVideoSeconds + Math.floor((set.startedAt - referenceSet.startedAt) / 1000);
     if (!Number.isSafeInteger(seconds)) {
-      throw new Error(`Set ${set.setId} の動画上の開始時刻を計算できません。`);
+      throw new Error(t("Set {p0} の動画上の開始時刻を計算できません。", { p0: set.setId }));
     }
-    return `${seconds < 10 ? "(未記録)" : formatVideoTime(seconds)} ${set.matchup}`;
+    return `${seconds < 10 ? t("(未記録)") : formatVideoTime(seconds)} ${set.matchup}`;
   });
   return [`00:00 ${opening}`, ...lines].join("\n");
 }

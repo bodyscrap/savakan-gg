@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { FeatureMessage } from "./messages";
 import type { EventSnapshot } from "./bracketDisplay";
 import type { SetSnapshot } from "./bracketProgression";
@@ -23,7 +24,7 @@ export function getExternalReportRejectionReason(
 ): string | null {
   const report = getExternalScoreReport(message);
   if (!report || !tournamentId || !event) {
-    return "対象のスナップショットまたはイベントを選択できません。";
+    return t("対象のスナップショットまたはイベントを選択できません。");
   }
   if (
     eventMeta?.eventId !== event.eventId
@@ -31,24 +32,24 @@ export function getExternalReportRejectionReason(
     || report.eventId !== event.eventId
     || message.senderName.trim() === ""
   ) {
-    return "対象イベントまたは送信者情報が一致しません。";
+    return t("対象イベントまたは送信者情報が一致しません。");
   }
   const set = sets.get(report.setId);
   if (!set?.phaseGroupId) {
-    return "対象setまたはプールをsnapshot内で特定できません。";
+    return t("対象setまたはプールをsnapshot内で特定できません。");
   }
   if (report.phaseGroupId && report.phaseGroupId !== set.phaseGroupId) {
-    return "報告されたPoolと対象setのPoolが一致しません。";
+    return t("報告されたPoolと対象setのPoolが一致しません。");
   }
   const scoreEditLocked = !(eventMeta.scoreEditEnabledPhaseGroupIds ?? []).includes(set.phaseGroupId);
   if (!scoreEditLocked) {
-    return "対象プールのスコア編集がロックされていません。";
+    return t("対象プールのスコア編集がロックされていません。");
   }
   const authorizedEditor = (eventMeta.externalEditors ?? []).some(
     (editor) => editor.phaseGroupId === set.phaseGroupId && editor.senderUserId === message.senderUserId,
   );
   if (!authorizedEditor) {
-    return "送信者は対象プールの承認済み外部報告者ではありません。";
+    return t("送信者は対象プールの承認済み外部報告者ではありません。");
   }
   if (report.sequence !== undefined) {
     return null;
@@ -62,7 +63,7 @@ export function getExternalReportRejectionReason(
     || !setEntrantIds.every((entrantId, index) => entrantId === reportEntrantIds[index])
     || !report.slotScores.some((score) => score.entrantId === report.winnerId)
   ) {
-    return "報告内容と対象setの参加者または勝者が一致しません。";
+    return t("報告内容と対象setの参加者または勝者が一致しません。");
   }
   return null;
 }

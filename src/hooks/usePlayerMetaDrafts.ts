@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useRef, useState } from "react";
 import { clampNonNegativeInteger, emptyCategorySelections } from "../domain/eventManagement";
 import type { EventSettingCategorySlot } from "../components/EventSetting";
@@ -20,6 +21,7 @@ type Entrant = {
 type SavePlayerMetaOptions = {
   silent?: boolean;
   manageBusy?: boolean;
+  scope?: "all" | "alias" | "selections";
 };
 
 type UsePlayerMetaDraftsOptions = {
@@ -42,9 +44,9 @@ type UsePlayerMetaDraftsOptions = {
     entrantId: string;
     entrantName: string;
     aliasName: string;
-    playSide: null;
+    playSide: PlaySide | null;
     characterNames: string[];
-    notes: null;
+    notes: string | null;
   }) => Promise<unknown>;
   setBusy: (busy: boolean) => void;
   setError: (error: string) => void;
@@ -70,7 +72,7 @@ export function usePlayerMetaDrafts({
   setMessage,
 }: UsePlayerMetaDraftsOptions) {
   const [metaDrafts, setMetaDrafts] = useState<Record<string, PlayerMetaDraft>>({});
-  const dirtyMetaDraftKeysRef = useRef(new Set<string>());
+  const dirtyMetaDraftFieldsRef = useRef(new Map<string, Set<keyof PlayerMetaDraft>>());
 
   function getMetaDraftKey(eventId: string, entrantId: string): string {
     return `${eventId}:${entrantId}`;
@@ -135,13 +137,15 @@ export function usePlayerMetaDrafts({
       for (const entrant of selectedEventEntrants) {
         const key = getMetaDraftKey(selectedEvent.eventId, entrant.entrantId);
         const existingMeta = findEntrantMeta(selectedEvent.eventId, entrant.entrantId);
-        if (!current[key] || !dirtyMetaDraftKeysRef.current.has(key)) {
-          next[key] = {
-            aliasName: existingMeta?.aliasName ?? "",
-            playSide: existingMeta?.playSide ?? "",
-            categorySelections: buildInitialCategorySelections(existingMeta?.characterNames ?? []),
-          };
-        }
+        const draft = current[key];
+        const dirty = dirtyMetaDraftFieldsRef.current.get(key);
+        next[key] = {
+          aliasName: draft && dirty?.has("aliasName") ? draft.aliasName : existingMeta?.aliasName ?? "",
+          playSide: draft && dirty?.has("playSide") ? draft.playSide : existingMeta?.playSide ?? "",
+          categorySelections: draft && dirty?.has("categorySelections")
+            ? draft.categorySelections
+            : buildInitialCategorySelections(existingMeta?.characterNames ?? []),
+        };
       }
       return next;
     });
@@ -168,12 +172,16 @@ export function usePlayerMetaDrafts({
   function setMetaDraft(eventId: string, entrantId: string, patch: Partial<PlayerMetaDraft>) {
     const key = getMetaDraftKey(eventId, entrantId);
     const existingMeta = findEntrantMeta(eventId, entrantId);
-    dirtyMetaDraftKeysRef.current.add(key);
+    const dirty = dirtyMetaDraftFieldsRef.current.get(key) ?? new Set<keyof PlayerMetaDraft>();
+    if (patch.aliasName !== undefined) dirty.add("aliasName");
+    if (patch.playSide !== undefined) dirty.add("playSide");
+    if (patch.categorySelections !== undefined) dirty.add("categorySelections");
+    dirtyMetaDraftFieldsRef.current.set(key, dirty);
     setMetaDrafts((current) => {
       const baseDraft = current[key] ?? {
         aliasName: existingMeta?.aliasName ?? "",
         playSide: existingMeta?.playSide ?? "",
-        categorySelections: emptyCategorySelections(),
+        categorySelections: buildInitialCategorySelections(existingMeta?.characterNames ?? []),
       };
       const nextSelections = patch.categorySelections
         ? patch.categorySelections.slice(0, MAX_CATEGORY_SLOTS).map((items) =>
@@ -284,10 +292,10 @@ export function usePlayerMetaDrafts({
         selections = [...new Set(selections)];
       }
       if (selections.length < slot.minCount) {
-        errors.push(`${slot.list.categoryName}: 最低 ${slot.minCount} 件必要です。`);
+        errors.push(t("{p0}: 最低 {p1} 件必要です。", { p0: slot.list.categoryName, p1: slot.minCount }));
       }
       if (selections.length > slot.maxCount) {
-        errors.push(`${slot.list.categoryName}: 最大 ${slot.maxCount} 件までです。`);
+        errors.push(t("{p0}: 最大 {p1} 件までです。", { p0: slot.list.categoryName, p1: slot.maxCount }));
       }
       normalizedBySlot[slot.slotIndex] = selections;
       flattened.push(...selections);
@@ -296,16 +304,16 @@ export function usePlayerMetaDrafts({
     const totalMin = clampNonNegativeInteger(totalItemMinCount, 0);
     const totalMax = Math.max(clampNonNegativeInteger(totalItemMaxCount, 0), totalMin);
     if (flattened.length < totalMin) {
-      errors.push(`全体の選択数が不足しています (最低 ${totalMin} 件)。`);
+      errors.push(t("全体の選択数が不足しています (最低 {p0} 件)。", { p0: totalMin }));
     }
     if (flattened.length > totalMax) {
-      errors.push(`全体の選択数が超過しています (最大 ${totalMax} 件)。`);
+      errors.push(t("全体の選択数が超過しています (最大 {p0} 件)。", { p0: totalMax }));
     }
     return { normalizedBySlot, flattened, errors };
   }
 
   function clearDirtyDraft(eventId: string, entrantId: string) {
-    dirtyMetaDraftKeysRef.current.delete(getMetaDraftKey(eventId, entrantId));
+    dirtyMetaDraftFieldsRef.current.delete(getMetaDraftKey(eventId, entrantId));
   }
 
   async function savePlayerMeta(
@@ -316,18 +324,18 @@ export function usePlayerMetaDrafts({
   ) {
     const silent = options?.silent ?? false;
     const manageBusy = options?.manageBusy ?? true;
+    const scope = options?.scope ?? "all";
+    const savesAlias = scope !== "selections";
+    const savesSelections = scope !== "alias";
     const normalizedSlug = toApiSlug(slug);
     const draft = getMetaDraft(eventSnapshot.eventId, entrantId);
-    const validated = buildValidatedSelections(draft, configuredCategorySlots);
+    const existingMeta = findEntrantMeta(eventSnapshot.eventId, entrantId);
+    const validated = savesSelections ? buildValidatedSelections(draft, configuredCategorySlots) : null;
 
-    if (validated.errors.length > 0) {
+    if (validated && validated.errors.length > 0) {
       setError(validated.errors.join(" "));
       return;
     }
-
-    setMetaDraft(eventSnapshot.eventId, entrantId, {
-      categorySelections: validated.normalizedBySlot,
-    });
 
     if (manageBusy) {
       setBusy(true);
@@ -344,15 +352,36 @@ export function usePlayerMetaDrafts({
         eventName: eventSnapshot.name,
         entrantId,
         entrantName,
-        aliasName: draft.aliasName,
-        playSide: null,
-        characterNames: validated.flattened,
-        notes: null,
+        aliasName: savesAlias ? draft.aliasName : existingMeta?.aliasName ?? "",
+        playSide: existingMeta?.playSide ?? null,
+        characterNames: validated?.flattened ?? existingMeta?.characterNames ?? [],
+        notes: existingMeta?.notes ?? null,
       });
 
-      clearDirtyDraft(eventSnapshot.eventId, entrantId);
+      const key = getMetaDraftKey(eventSnapshot.eventId, entrantId);
+      setMetaDrafts((current) => {
+        const latest = current[key] ?? draft;
+        const dirty = dirtyMetaDraftFieldsRef.current.get(key);
+        const next = { ...latest };
+        if (savesAlias && latest.aliasName === draft.aliasName) {
+          dirty?.delete("aliasName");
+        }
+        if (validated && latest.categorySelections.length === draft.categorySelections.length
+          && latest.categorySelections.every((items, slotIndex) =>
+            items.length === draft.categorySelections[slotIndex].length
+            && items.every((item, index) => item === draft.categorySelections[slotIndex][index]))) {
+          next.categorySelections = validated.normalizedBySlot;
+          dirty?.delete("categorySelections");
+        }
+        if (dirty?.size === 0) dirtyMetaDraftFieldsRef.current.delete(key);
+        return { ...current, [key]: next };
+      });
       if (!silent) {
-        setMessage("ローカルメタを保存しました。");
+        setMessage(scope === "alias"
+          ? t("プレイヤーエイリアス名を保存しました。")
+          : scope === "selections"
+            ? t("アイテムの選択状態を保存しました。")
+            : t("ローカルメタを保存しました。"));
       }
     } catch (err) {
       setError(String(err));
@@ -391,9 +420,10 @@ export function usePlayerMetaDrafts({
     );
   }
 
-  function saveSelectedEntrantMeta() {
+  function saveSelectedEntrantMeta(scope: "alias" | "selections") {
     if (selectedEvent && selectedEntrant) {
-      void savePlayerMeta(selectedEvent, selectedEntrant.entrantId, selectedEntrant.entrantName);
+      return savePlayerMeta(selectedEvent, selectedEntrant.entrantId, selectedEntrant.entrantName, { scope })
+        .catch((error: unknown) => setError(String(error)));
     }
   }
 
@@ -422,6 +452,7 @@ export function usePlayerMetaDrafts({
     savePlayerMeta,
     addSelectedEntrantDraftSelection,
     removeSelectedEntrantDraftSelection,
-    saveSelectedEntrantMeta,
+    saveSelectedEntrantAliasName: () => saveSelectedEntrantMeta("alias"),
+    saveSelectedEntrantSelections: () => saveSelectedEntrantMeta("selections"),
   };
 }

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { MouseEvent } from "react";
 import type { SetSnapshot } from "../domain/bracketProgression";
 
@@ -43,7 +44,7 @@ export function RoundRobinMatrix({ entrantNames, rows, onMatchClick }: RoundRobi
       <table className="round-robin-matrix">
         <thead>
           <tr>
-            <th scope="col">対戦表</th>
+            <th scope="col">{t("対戦表")}</th>
             {entrantNames.map((entrantName, index) => (
               <th scope="col" key={`${index}-${entrantName}`} title={entrantName}>
                 {entrantName || "-"}
@@ -83,10 +84,10 @@ export function RoundRobinMatrix({ entrantNames, rows, onMatchClick }: RoundRobi
                         <span className="round-robin-match-status">
                           {match.resultStatusLabel !== "" && match.resultStatus && (
                             <span className={`set-status-badge status-${match.resultStatus}`}>
-                              {match.resultStatusLabel}
+                              {t(match.resultStatusLabel)}
                             </span>
                           )}
-                          {match.isLiveOverlaySet && <span className="set-live-badge">配信中</span>}
+                          {match.isLiveOverlaySet && <span className="set-live-badge">{t("配信中")}</span>}
                         </span>
                       )}
                       <strong>{match.rowGameScore} - {match.columnGameScore}</strong>

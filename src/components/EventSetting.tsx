@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { ItemListConfig } from "../domain/itemList";
 import { YoutubeChapters } from "./YoutubeChapters";
 
@@ -82,7 +83,8 @@ export type EventSettingProps = {
     onSelectEntrant: (entrantId: string) => void;
     onAddDraftSelection: (slot: EventSettingCategorySlot, itemName: string) => void;
     onRemoveDraftSelection: (slotIndex: number, selectionIndex: number) => void;
-    onSavePlayerMeta: () => void;
+    onSavePlayerAliasName: () => void;
+    onSavePlayerSelections: () => void;
     onEntrantAliasNameChange: (value: string) => void;
   };
 };
@@ -143,13 +145,14 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
     onSelectEntrant,
     onAddDraftSelection,
     onRemoveDraftSelection,
-    onSavePlayerMeta,
+    onSavePlayerAliasName,
+    onSavePlayerSelections,
     onEntrantAliasNameChange,
   } = actions;
   return (
     <section className="panel">
       {!hasSelectedEvent ? (
-        <p className="meta">ホームの大会一覧からイベントを選択してください。</p>
+        <p className="meta">{t("ホームの大会一覧からイベントを選択してください。")}</p>
       ) : (
         <>
           <div className="stats-grid">
@@ -157,53 +160,45 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
               <label
                 className="meta"
                 style={{ display: "grid", gap: "0.3rem" }}
-              >
-                エイリアス名
-                <input
+              >{t("エイリアス名")}<input
                   id="event-alias-draft"
                   type="text"
                   value={eventAliasDraft}
                   onChange={(e) => onEventAliasDraftChange(e.currentTarget.value)}
-                  placeholder="大会一覧に表示する表示名"
+                  placeholder={t("大会一覧に表示する表示名")}
                   autoComplete="off"
                 />
               </label>
             </article>
             <article className="stat-card">
-              <p className="meta">tournament名 (start.gg)</p>
+              <p className="meta">{t("tournament名 (start.gg)")}</p>
               <h3>{tournamentName || "-"}</h3>
             </article>
             <article className="stat-card">
-              <p className="meta">event名 (start.gg)</p>
+              <p className="meta">{t("event名 (start.gg)")}</p>
               <h3>{eventName}</h3>
             </article>
           </div>
 
           <div className="panel-toolbar compact" style={{ justifyContent: "flex-start" }}>
-            <button type="button" className="ghost" disabled={busy} onClick={onSaveEventAlias}>
-              エイリアス名を変更
-            </button>
-            <button type="button" className="ghost" disabled={busy || !canUpdateSnapshot} onClick={onUpdateSnapshot}>
-              スナップショットを更新
-            </button>
+            <button type="button" className="ghost" disabled={busy} onClick={onSaveEventAlias}>{t("エイリアス名を変更")}</button>
+            <button type="button" className="ghost" disabled={busy || !canUpdateSnapshot} onClick={onUpdateSnapshot}>{t("スナップショットを更新")}</button>
           </div>
 
           <div className="tournament-settings" style={{ marginTop: "0.9rem" }}>
             <div className="setting-row">
-              <p className="setting-row-title">1P/2P決定方法</p>
+              <p className="setting-row-title">{t("1P/2P決定方法")}</p>
               <div className="setting-row-fields single" style={{ gridTemplateColumns: "minmax(220px, 340px) auto" }}>
                 <select
                   id="side-method"
                   value={sideDecisionMethod}
                   onChange={(e) => onSideDecisionMethodChange(e.currentTarget.value as SideDecisionMethod)}
                 >
-                  <option value="upper_1p">上側を1P</option>
-                  <option value="upper_2p">上側を2P</option>
-                  <option value="random">ランダム</option>
+                  <option value="upper_1p">{t("上側を1P")}</option>
+                  <option value="upper_2p">{t("上側を2P")}</option>
+                  <option value="random">{t("ランダム")}</option>
                 </select>
-                <button type="button" className="ghost" disabled={busy} onClick={onApplySideDecisionMethod}>
-                  全未確定試合に適用
-                </button>
+                <button type="button" className="ghost" disabled={busy} onClick={onApplySideDecisionMethod}>{t("全未確定試合に適用")}</button>
               </div>
             </div>
 
@@ -216,15 +211,15 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
 
               return (
                 <div className="setting-row" key={`category-setting-${slotIndex}`}>
-                  <p className="setting-row-title">カテゴリ{slotIndex + 1}</p>
+                  <p className="setting-row-title">{t("カテゴリ{value1}", { value1: slotIndex + 1 })}</p>
                   <div className="setting-row-fields">
-                    <label htmlFor={`item-list-slot-${slotIndex}`}>使用リスト</label>
+                    <label htmlFor={`item-list-slot-${slotIndex}`}>{t("使用リスト")}</label>
                     <select
                       id={`item-list-slot-${slotIndex}`}
                       value={listId}
                       onChange={(e) => onCategoryListChange(slotIndex, e.currentTarget.value)}
                     >
-                      <option value="">未選択</option>
+                      <option value="">{t("未選択")}</option>
                       {itemLists
                         .slice()
                         .sort((a, b) => a.name.localeCompare(b.name, "ja"))
@@ -235,7 +230,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                         ))}
                     </select>
 
-                    <label htmlFor={`item-list-slot-min-${slotIndex}`}>カテゴリ下限</label>
+                    <label htmlFor={`item-list-slot-min-${slotIndex}`}>{t("カテゴリ下限")}</label>
                     <input
                       id={`item-list-slot-min-${slotIndex}`}
                       type="number"
@@ -246,7 +241,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                       onChange={(e) => onCategoryMinChange(slotIndex, e.currentTarget.value)}
                     />
 
-                    <label htmlFor={`item-list-slot-max-${slotIndex}`}>カテゴリ上限</label>
+                    <label htmlFor={`item-list-slot-max-${slotIndex}`}>{t("カテゴリ上限")}</label>
                     <input
                       id={`item-list-slot-max-${slotIndex}`}
                       type="number"
@@ -257,7 +252,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                       onChange={(e) => onCategoryMaxChange(slotIndex, e.currentTarget.value)}
                     />
 
-                    <label htmlFor={`item-list-slot-allow-dup-${slotIndex}`}>重複可否</label>
+                    <label htmlFor={`item-list-slot-allow-dup-${slotIndex}`}>{t("重複可否")}</label>
                     <label className="setting-checkbox" htmlFor={`item-list-slot-allow-dup-${slotIndex}`}>
                       <input
                         id={`item-list-slot-allow-dup-${slotIndex}`}
@@ -265,18 +260,16 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                         checked={allowDuplicates}
                         disabled={disabledSlot}
                         onChange={(e) => onCategoryAllowDuplicatesChange(slotIndex, e.currentTarget.checked)}
-                      />
-                      許可
-                    </label>
+                      />{t("許可")}</label>
                   </div>
                 </div>
               );
             })}
 
             <div className="setting-row">
-              <p className="setting-row-title">アイテム全体選択</p>
+              <p className="setting-row-title">{t("アイテム全体選択")}</p>
               <div className="setting-row-fields total">
-                <label htmlFor="total-item-min">下限</label>
+                <label htmlFor="total-item-min">{t("下限")}</label>
                 <input
                   id="total-item-min"
                   type="number"
@@ -286,7 +279,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                   onChange={(e) => onTotalItemMinChange(e.currentTarget.value)}
                 />
 
-                <label htmlFor="total-item-max">上限</label>
+                <label htmlFor="total-item-max">{t("上限")}</label>
                 <input
                   id="total-item-max"
                   type="number"
@@ -299,7 +292,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
             </div>
 
             <div className="setting-row">
-              <p className="setting-row-title">プレイヤー表示</p>
+              <p className="setting-row-title">{t("プレイヤー表示")}</p>
               <div className="setting-row-fields player-display">
                 <label className="setting-checkbox" htmlFor="use-player-alias-name">
                   <input
@@ -307,58 +300,45 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                     type="checkbox"
                     checked={useAliasName}
                     onChange={(e) => onUseAliasNameChange(e.currentTarget.checked)}
-                  />
-                  エイリアス名を使う
-                </label>
-                <button type="button" className="ghost" disabled={busy} onClick={onRefreshPlayerDisplay}>
-                  プレイヤー表示を更新
-                </button>
+                  />{t("エイリアス名を使う")}</label>
+                <button type="button" className="ghost" disabled={busy} onClick={onRefreshPlayerDisplay}>{t("プレイヤー表示を更新")}</button>
               </div>
             </div>
 
             <div className="setting-row save">
-              <button type="button" className="ghost" onClick={onSaveEventManagementSetting}>
-                設定の適用&保存
-              </button>
+              <button type="button" className="ghost" onClick={onSaveEventManagementSetting}>{t("設定の適用&保存")}</button>
             </div>
           </div>
-          <p className="meta">カテゴリは最大3つまで設定できます。カテゴリ重複は不可で、カテゴリごとの件数条件と全体件数条件を設定します。</p>
+          <p className="meta">{t("カテゴリは最大3つまで設定できます。カテゴリ重複は不可で、カテゴリごとの件数条件と全体件数条件を設定します。")}</p>
 
           <div className="setting-row" style={{ marginTop: "0.9rem" }}>
-            <p className="setting-row-title">初期PhaseのプレイヤーSeedシャッフル</p>
+            <p className="setting-row-title">{t("初期PhaseのプレイヤーSeedシャッフル")}</p>
             <div className="setting-row-fields single" style={{ gridTemplateColumns: "minmax(220px, 1fr) auto auto" }}>
-              <p className="meta">
-                対象: {initialSeedPhaseName || "-"} / {initialSeedEntrantCount}人。
-                試合開始前のみ実行でき、結果報告時にstart.ggへSeedを反映します。
-              </p>
+              <p className="meta">{t("対象: {value1} / {value2}人。 試合開始前のみ実行でき、結果報告時にstart.ggへSeedを反映します。", { value1: initialSeedPhaseName || "-", value2: initialSeedEntrantCount })}</p>
               <button
                 type="button"
                 className="ghost"
                 disabled={busy || !canShuffleInitialSeeds}
                 onClick={onShuffleInitialSeeds}
-              >
-                Seedをシャッフル
-              </button>
+              >{t("Seedをシャッフル")}</button>
               <button
                 type="button"
                 className="ghost"
                 disabled={busy || !canRestoreInitialSeeds}
                 onClick={onRestoreInitialSeeds}
-              >
-                スナップショット時に戻す
-              </button>
+              >{t("スナップショット時に戻す")}</button>
             </div>
           </div>
 
           {selectedEventEntrants.length === 0 ? (
-            <p className="meta" style={{ marginTop: "0.75rem" }}>参加者が見つかりません。</p>
+            <p className="meta" style={{ marginTop: "0.75rem" }}>{t("参加者が見つかりません。")}</p>
           ) : (
             <div className="tournament-manager-grid" style={{ marginTop: "0.8rem" }}>
               <div className="tournament-manager-left-stack">
                 <section className="panel" style={{ padding: "0.75rem" }}>
-                  <h3>プレイヤー一覧 (seed順)</h3>
-                  <p className="meta">参加人数: {selectedEventEntrants.length}</p>
-                  <p className="meta">メタ情報の保存数: {selectedEventMetaEntrantCount}</p>
+                  <h3>{t("プレイヤー一覧 (seed順)")}</h3>
+                  <p className="meta">{t("参加人数: {value1}", { value1: selectedEventEntrants.length })}</p>
+                  <p className="meta">{t("メタ情報の保存数: {value1}", { value1: selectedEventMetaEntrantCount })}</p>
                   <div className={`event-list player-list-scroll ${selectedEventEntrants.length > 8 ? "enabled" : ""}`}>
                     {selectedEventEntrants.map((entrant) => {
                       const isSelected = selectedEntrantId === entrant.entrantId;
@@ -385,10 +365,10 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                 </section>
 
                 <section className="panel" style={{ padding: "0.75rem" }}>
-                  <h3>使用率一覧</h3>
+                  <h3>{t("使用率一覧")}</h3>
                   <div className="usage-board">
                     {configuredCategorySlots.length === 0 ? (
-                      <p className="meta">カテゴリ設定後に表示されます。</p>
+                      <p className="meta">{t("カテゴリ設定後に表示されます。")}</p>
                     ) : (
                       <div className="usage-category-list">
                         {selectedCategoryUsageList.map((categoryUsage) => (
@@ -398,7 +378,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                             </p>
 
                             {categoryUsage.entries.length === 0 ? (
-                              <p className="meta">このカテゴリの選択データはまだありません。</p>
+                              <p className="meta">{t("このカテゴリの選択データはまだありません。")}</p>
                             ) : (
                               <ul className="usage-item-list">
                                 {categoryUsage.entries.map((entry) => {
@@ -439,25 +419,28 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
               </div>
 
               <section className="panel" style={{ padding: "0.75rem" }}>
-                <h3>選択プレイヤー設定</h3>
+                <h3>{t("選択プレイヤー設定")}</h3>
                 {selectedEntrantId === "" ? (
-                  <p className="meta">プレイヤーを選択してください。</p>
+                  <p className="meta">{t("プレイヤーを選択してください。")}</p>
                 ) : (
                   <>
                     <p className="meta">{selectedEntrantName}</p>
                     <div className="entrant-meta-editor">
-                      <label className="meta" style={{ display: "grid", gap: "0.3rem" }}>
-                        エイリアス名
-                        <input
+                      <label className="meta" style={{ display: "grid", gap: "0.3rem" }}>{t("エイリアス名")}<input
                           type="text"
                           value={selectedEntrantAliasName}
                           onChange={(e) => onEntrantAliasNameChange(e.currentTarget.value)}
-                          placeholder="プレイヤーの表示名"
+                          placeholder={t("プレイヤーの表示名")}
                           autoComplete="off"
                         />
                       </label>
+                      <div className="entrant-meta-actions">
+                        <button type="button" disabled={!canSavePlayerMeta} onClick={onSavePlayerAliasName}>
+                          {t("プレイヤーエイリアス名を保存")}
+                        </button>
+                      </div>
                       {configuredCategorySlots.length === 0 ? (
-                        <p className="meta">先に上部でカテゴリ(最大3つ)を選択してください。</p>
+                        <p className="meta">{t("先に上部でカテゴリ(最大3つ)を選択してください。")}</p>
                       ) : (
                         configuredCategorySlots.map((slot) => {
                           const currentSelections = draftSelectionsBySlot[slot.slotIndex] ?? [];
@@ -468,17 +451,14 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
 
                           return (
                             <div key={`${selectedEntrantId}-${slot.list.id}-${slot.slotIndex}`} style={{ border: "1px solid var(--line)", borderRadius: "10px", padding: "0.55rem" }}>
-                              <p className="meta" style={{ marginBottom: "0.35rem" }}>
-                                {slot.list.categoryName} ({slot.list.name}) / {currentSelections.length} 件
-                                {` / 下限 ${slot.minCount} / 上限 ${slot.maxCount} / 重複 ${slot.allowDuplicates ? "可" : "不可"}`}
-                              </p>
+                              <p className="meta" style={{ marginBottom: "0.35rem" }}>{t("{value1} ({value2}) / {value3} 件{value4}", { value1: slot.list.categoryName, value2: slot.list.name, value3: currentSelections.length, value4: t(" / 下限 {value1} / 上限 {value2} / 重複 {value3}", { value1: slot.minCount, value2: slot.maxCount, value3: slot.allowDuplicates ? t("可") : t("不可") }) })}</p>
 
                               <select
                                 value=""
                                 disabled={!canAddMore || selectableItems.length === 0}
                                 onChange={(e) => onAddDraftSelection(slot, e.currentTarget.value)}
                               >
-                                <option value="">アイテムを追加</option>
+                                <option value="">{t("アイテムを追加")}</option>
                                 {selectableItems.map((itemName) => (
                                   <option key={`${slot.list.id}-${slot.slotIndex}-${itemName}`} value={itemName}>
                                     {itemName}
@@ -513,8 +493,8 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                     )}
 
                     <div className="entrant-meta-actions" style={{ marginTop: "0.6rem" }}>
-                      <button type="button" disabled={!canSavePlayerMeta} onClick={onSavePlayerMeta}>
-                        このプレイヤーを保存
+                      <button type="button" disabled={!canSavePlayerMeta || validationErrors.length > 0} onClick={onSavePlayerSelections}>
+                        {t("アイテムの選択状態を保存")}
                       </button>
                     </div>
                   </>

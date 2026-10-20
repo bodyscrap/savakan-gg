@@ -992,6 +992,11 @@ button:disabled {
   border-radius: 10px;
 }
 
+.chapter-item-categories--stacked {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
 .youtube-chapters .chapter-item-categories label {
   display: inline-flex;
   align-items: center;

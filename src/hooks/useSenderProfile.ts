@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isValidIpv4, isValidSenderUserId, normalizeSenderUserId } from "../domain/messageUtils";
@@ -202,7 +203,7 @@ export function useSenderProfile(
       );
     } catch (error) {
       if (showError) {
-        onError(`ネットワークデバイス一覧の取得に失敗しました: ${String(error)}`);
+        onError(t("ネットワークデバイス一覧の取得に失敗しました: {p0}", { p0: String(error) }));
       }
     } finally {
       setNetworkCandidatesLoading(false);
@@ -259,40 +260,38 @@ export function useSenderProfile(
     onMessage("");
 
     if (normalizedSenderNameDraft === "") {
-      onError("送信者名を入力してください。");
+      onError(t("送信者名を入力してください。"));
       return;
     }
 
     if (!isValidSenderUserId(normalizedSenderUserIdDraft)) {
-      onError("ユーザーIDは8桁の数字で入力してください。");
+      onError(t("ユーザーIDは8桁の数字で入力してください。"));
       return;
     }
 
     if (!selectedNetworkCandidate) {
-      onError("ネットワークデバイスを選択してください。");
+      onError(t("ネットワークデバイスを選択してください。"));
       return;
     }
 
     if (!isValidIpv4(normalizedSubnetMaskDraft)) {
-      onError("ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0");
+      onError(t("ブロードキャスト用サブネットマスクはIPv4形式で入力してください。例: 255.255.255.0"));
       return;
     }
 
     if (senderIdCollision) {
-      onError("呼び出し・通信相手の情報で同じユーザーIDが別名義に使われています。別のIDを設定してください。");
+      onError(t("呼び出し・通信相手の情報で同じユーザーIDが別名義に使われています。別のIDを設定してください。"));
       return;
     }
 
     if (senderIdentityChanged) {
       const confirmed = window.confirm(
-        "送信者名またはユーザーIDを変更して保存しようとしています。\n"
-        + "先に自分の呼び出しを解決し、他端末の外部報告者設定を解除してください。\n"
-        + "このまま保存しますか？",
+        t("送信者名またはユーザーIDを変更して保存しようとしています。\n先に自分の呼び出しを解決し、他端末の外部報告者設定を解除してください。\nこのまま保存しますか？"),
       );
       if (!confirmed) {
         setSenderNameDraft(senderProfile.senderName);
         setSenderUserIdDraft(senderProfile.senderUserId);
-        onError("送信者設定の保存を中止し、送信者名/ユーザーIDを元の値に戻しました。");
+        onError(t("送信者設定の保存を中止し、送信者名/ユーザーIDを元の値に戻しました。"));
         return;
       }
     }
@@ -307,12 +306,12 @@ export function useSenderProfile(
     try {
       await invoke<string>("test_sender_network", { profile: nextProfile });
     } catch (error) {
-      onError(`ネットワークテストに失敗したため保存を中止しました: ${String(error)}`);
+      onError(t("ネットワークテストに失敗したため保存を中止しました: {p0}", { p0: String(error) }));
       return;
     }
 
     setSenderProfile(nextProfile);
-    onMessage(`送信者設定を保存しました: ${nextProfile.senderName} (${nextProfile.senderUserId}) @ ${nextProfile.bindIp} (ネットワークテストOK)`);
+    onMessage(t("送信者設定を保存しました: {p0} ({p1}) @ {p2} (ネットワークテストOK)", { p0: nextProfile.senderName, p1: nextProfile.senderUserId, p2: nextProfile.bindIp }));
   }
 
   function cancelSenderProfileChanges() {
@@ -333,7 +332,7 @@ export function useSenderProfile(
       savedNetworkCandidate ? localNetworkCandidateKey(savedNetworkCandidate) : "",
     );
     onError("");
-    onMessage("送信者設定の変更を破棄しました。");
+    onMessage(t("送信者設定の変更を破棄しました。"));
   }
 
   return {

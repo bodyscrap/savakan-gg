@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import jsQR from "jsqr";
 import {
@@ -62,7 +63,7 @@ export function useDqCameraScan() {
     onMessage,
   }: StartDqCameraScanOptions) {
     if (!dialogOpen) {
-      onDialogError("DQ申請対象が見つかりません。再度開き直してください。");
+      onDialogError(t("DQ申請対象が見つかりません。再度開き直してください。"));
       return;
     }
 
@@ -70,7 +71,7 @@ export function useDqCameraScan() {
     onDialogError("");
 
     if (!navigator.mediaDevices?.getUserMedia) {
-      onDialogError("この環境ではカメラアクセスに対応していません。PLAYER IDを手入力してください。");
+      onDialogError(t("この環境ではカメラアクセスに対応していません。PLAYER IDを手入力してください。"));
       return;
     }
 
@@ -90,14 +91,14 @@ export function useDqCameraScan() {
       const video = videoRef.current;
       if (!video) {
         stopDqCameraScan();
-        onDialogError("カメラプレビューの初期化に失敗しました。");
+        onDialogError(t("カメラプレビューの初期化に失敗しました。"));
         return;
       }
 
       const scanCanvas = canvasRef.current;
       if (!scanCanvas) {
         stopDqCameraScan();
-        onDialogError("カメラスキャンの初期化に失敗しました。");
+        onDialogError(t("カメラスキャンの初期化に失敗しました。"));
         return;
       }
 
@@ -152,7 +153,7 @@ export function useDqCameraScan() {
 
             if (playerId !== "") {
               onPlayerIdFound(playerId);
-              onMessage("カメラでPLAYER IDを読み取りました。");
+              onMessage(t("カメラでPLAYER IDを読み取りました。"));
               stopDqCameraScan();
               return;
             }
@@ -168,7 +169,7 @@ export function useDqCameraScan() {
       rafRef.current = requestAnimationFrame(tick);
     } catch (error) {
       stopDqCameraScan();
-      onDialogError(`カメラを起動できませんでした: ${String(error)}`);
+      onDialogError(t("カメラを起動できませんでした: {p0}", { p0: String(error) }));
     }
   }
 

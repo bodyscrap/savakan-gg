@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { SetSlot, SetSnapshot } from "../domain/bracketProgression";
 
 export type MatchSideRandomNotice = {
@@ -107,7 +108,7 @@ export function MatchDetailDialog({
         className="dialog-panel"
         role="dialog"
         aria-modal="true"
-        aria-label="試合詳細"
+        aria-label={t("試合詳細")}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="dialog-head">
@@ -115,33 +116,27 @@ export function MatchDetailDialog({
             <h3>{match.fullRoundText}</h3>
             <div className="dialog-set-meta">
               <span className="set-identifier">Set {setCode ?? "-"}</span>
-              {isLive && <span className="set-live-badge">配信中</span>}
+              {isLive && <span className="set-live-badge">{t("配信中")}</span>}
             </div>
           </div>
-          <button type="button" className="ghost" onClick={onClose}>閉じる</button>
+          <button type="button" className="ghost" onClick={onClose}>{t("閉じる")}</button>
         </div>
         <p className="meta">setId: {match.setId} / state: {match.state}</p>
         {completed && (
-          <p className="meta">確定済みsetのスコアは変更できません。修正する場合は「影響setを取消」からやり直してください。</p>
+          <p className="meta">{t("確定済みsetのスコアは変更できません。修正する場合は「影響setを取消」からやり直してください。")}</p>
         )}
-        {!matchupReady && <p className="meta">対戦カード確定後にプレイヤーサイドを変更できます。</p>}
+        {!matchupReady && <p className="meta">{t("対戦カード確定後にプレイヤーサイドを変更できます。")}</p>}
         {randomNotice && randomNotice.setId === match.setId && (
-          <p className={`meta side-random-notice ${randomNotice.changed ? "changed" : "unchanged"}`}>
-            ランダム実行済み ({new Date(randomNotice.triggeredAt).toLocaleTimeString("ja-JP", { hour12: false })})
-            : 上段 {randomNotice.upperEntrantName} = {randomNotice.upperSide} / 下段 {randomNotice.lowerEntrantName} = {randomNotice.lowerSide}
-            {!randomNotice.changed ? " (結果は変更なし)" : ""}
-          </p>
+          <p className={`meta side-random-notice ${randomNotice.changed ? "changed" : "unchanged"}`}>{t("ランダム実行済み ({value1}) : 上段 {value2} = {value3} / 下段 {value4} = {value5}{value6}", { value1: new Date(randomNotice.triggeredAt).toLocaleTimeString("ja-JP", { hour12: false }), value2: randomNotice.upperEntrantName, value3: randomNotice.upperSide, value4: randomNotice.lowerEntrantName, value5: randomNotice.lowerSide, value6: !randomNotice.changed ? t(" (結果は変更なし)") : "" })}</p>
         )}
         {callNotices.map((notice) => (
-          <p className="meta match-call-notice" key={notice.messageId}>
-            {notice.entrantName}の呼び出しを行いました（{new Date(notice.calledAt).toLocaleTimeString("ja-JP", { hour12: false })}）
-          </p>
+          <p className="meta match-call-notice" key={notice.messageId}>{t("{value1}の呼び出しを行いました（{value2}）", { value1: notice.entrantName, value2: new Date(notice.calledAt).toLocaleTimeString("ja-JP", { hour12: false }) })}</p>
         ))}
         {hasUnresolvedCalls && (
           <p className="meta">
             {completed
-              ? "確定済みSetの呼び出しは呼び出しリストから解決してください。"
-              : "このSetでは呼び出し中のプレイヤーがいるため、呼び出しを解決するまでスコア入力・DQ・確定はできません。"}
+              ? t("確定済みSetの呼び出しは呼び出しリストから解決してください。")
+              : t("このSetでは呼び出し中のプレイヤーがいるため、呼び出しを解決するまでスコア入力・DQ・確定はできません。")}
           </p>
         )}
         <label className="checkbox-row" style={{ marginTop: "0.4rem" }}>
@@ -149,26 +144,20 @@ export function MatchDetailDialog({
             type="checkbox"
             checked={displayPlayersBySide}
             onChange={(event) => onDisplayPlayersBySideChange(event.currentTarget.checked)}
-          />
-          プレイヤーサイドに合わせて表示 (1Pが左 / 2Pが右)
-        </label>
+          />{t("プレイヤーサイドに合わせて表示 (1Pが左 / 2Pが右)")}</label>
         <div className="side-toggle-row" style={{ marginTop: "0.45rem" }}>
           <button
             type="button"
             className="ghost tiny"
             disabled={busy || !matchupReady || hasUnresolvedCalls}
             onClick={onSwapSides}
-          >
-            1P/2P入替
-          </button>
+          >{t("1P/2P入替")}</button>
           <button
             type="button"
             className="ghost tiny side-choice side-choice-random"
             disabled={busy || !matchupReady || hasUnresolvedCalls}
             onClick={onRandomizeSides}
-          >
-            1P/2Pランダム決定
-          </button>
+          >{t("1P/2Pランダム決定")}</button>
         </div>
 
         <div className="dialog-players">
@@ -184,10 +173,8 @@ export function MatchDetailDialog({
                 <p className="meta">entrantId: {entrantId ?? "-"}</p>
                 {entrantId && (
                   <>
-                    <p className="meta">プレイヤーサイド: {player.side === "" ? "-" : player.side}</p>
-                    <label>
-                      取得ゲーム数
-                      <div className="set-score-stepper">
+                    <p className="meta">{t("プレイヤーサイド: {value1}", { value1: player.side === "" ? "-" : player.side })}</p>
+                    <label>{t("取得ゲーム数")}<div className="set-score-stepper">
                         <button
                           type="button"
                           className="ghost tiny"
@@ -221,7 +208,7 @@ export function MatchDetailDialog({
                         disabled={scoreInputDisabled}
                         onClick={() => onToggleWinner(entrantId, otherEntrantId)}
                       >
-                        {directWinnerId === entrantId ? "解除" : "Win"}
+                        {directWinnerId === entrantId ? t("解除") : "Win"}
                       </button>
                     )}
                     {otherEntrantId && (
@@ -242,7 +229,7 @@ export function MatchDetailDialog({
                       disabled={busy || callingEntrantId === entrantId}
                       onClick={() => onCall(slot, entrantId)}
                     >
-                      {callingEntrantId === entrantId ? "送信中..." : "呼び出し"}
+                      {callingEntrantId === entrantId ? t("送信中...") : t("呼び出し")}
                     </button>
                   </>
                 )}
@@ -253,44 +240,34 @@ export function MatchDetailDialog({
 
         <div className="dialog-actions dialog-actions-split match-dialog-actions">
           <div className="dialog-danger-actions">
-            <button type="button" className="ghost" disabled={busy || completed || scoreEditLocked || hasUnresolvedCalls} onClick={onDiscardDraft}>
-              下書きの破棄
-            </button>
-            <button type="button" className="ghost" disabled={busy || scoreEditLocked || hasUnresolvedCalls} onClick={onResetSet}>
-              setの取り消し
-            </button>
+            <button type="button" className="ghost" disabled={busy || completed || scoreEditLocked || hasUnresolvedCalls} onClick={onDiscardDraft}>{t("下書きの破棄")}</button>
+            <button type="button" className="ghost" disabled={busy || scoreEditLocked || hasUnresolvedCalls} onClick={onResetSet}>{t("setの取り消し")}</button>
           </div>
           <div className="dialog-primary-actions">
             <button
               type="button"
               disabled={busy || completed || !matchupReady || isDqDraft || hasUnresolvedCalls}
               onClick={onSaveDraft}
-            >
-              更新
-            </button>
+            >{t("更新")}</button>
             {hasUnresolvedCalls && !completed && (
               <button
                 type="button"
                 className="ghost"
                 disabled={busy || !canResolveCalls}
                 onClick={onResolveCalls}
-                title={canResolveCalls ? undefined : "他端末発行の呼び出しは発行端末で解決してください。"}
-              >
-                呼び出しを解決
-              </button>
+                title={canResolveCalls ? undefined : t("他端末発行の呼び出しは発行端末で解決してください。")}
+              >{t("呼び出しを解決")}</button>
             )}
             <button
               type="button"
               className="ghost"
               disabled={busy || overlayBusy || (!overlayActive && hasUnresolvedCalls)}
               onClick={onToggleOverlay}
-              title={!overlayActive && hasUnresolvedCalls ? "呼び出しを解決してから配信を開始してください。" : undefined}
+              title={!overlayActive && hasUnresolvedCalls ? t("呼び出しを解決してから配信を開始してください。") : undefined}
             >
-              {overlayActive ? "配信停止" : hasUnresolvedCalls ? "未解決呼び出しあり" : "配信開始"}
+              {overlayActive ? t("配信停止") : hasUnresolvedCalls ? t("未解決呼び出しあり") : t("配信開始")}
             </button>
-            <button type="button" disabled={busy || completed || !matchupReady || hasUnresolvedCalls} onClick={onConfirm}>
-              確定
-            </button>
+            <button type="button" disabled={busy || completed || !matchupReady || hasUnresolvedCalls} onClick={onConfirm}>{t("確定")}</button>
           </div>
         </div>
       </section>

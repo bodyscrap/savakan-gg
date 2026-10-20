@@ -1,3 +1,4 @@
+import { t, useLanguage } from "../i18n";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -103,7 +104,7 @@ export function useTournamentCreation({
     setMessage("");
     try {
       await saveStartggToken();
-      setMessage("start.ggトークンを保存しました。");
+      setMessage(t("start.ggトークンを保存しました。"));
     } catch (error) {
       setError(String(error));
     } finally {
@@ -120,7 +121,7 @@ export function useTournamentCreation({
     event?.preventDefault();
     const apiSlug = toApiSlug(slug);
     if (apiSlug === "") {
-      setError("大会IDを入力してください。");
+      setError(t("大会IDを入力してください。"));
       return;
     }
     const previousSelectedEventId = createSelectedEventId;
@@ -136,7 +137,7 @@ export function useTournamentCreation({
       const preview = await invoke<TournamentPreview>("preview_tournament", { slug: apiSlug });
       setCreatePreview(preview);
       applyCreateEventSelection(resolveCreatePreviewSelection(preview.events, previousSelectedEventId), preview.name);
-      setMessage("tournamentのevent一覧を取得しました。");
+      setMessage(t("tournamentのevent一覧を取得しました。"));
     } catch (error) {
       setCreatePreviewLoadFailed(true);
       setError(String(error));
@@ -166,7 +167,7 @@ export function useTournamentCreation({
     const selectedEvent = findCreatePreviewEvent(createPreview?.events ?? [], createSelectedEventId);
     const eventSlug = selectedEvent ? toEventApiSlug(slug, selectedEvent.eventSlug ?? "") : "";
     if (tournamentSlug === "" || eventSlug === "") {
-      setError("大会IDを入力し、event一覧からeventを選択してください。");
+      setError(t("大会IDを入力し、event一覧からeventを選択してください。"));
       return;
     }
     if (createSelectedEventId !== "") {
@@ -177,7 +178,7 @@ export function useTournamentCreation({
           && item.eventId === createSelectedEventId,
         );
         if (existing && !window.confirm(
-          `このeventのスナップショットは既に存在します。上書きして再取得しますか？\n${existing.slug}`,
+          t("このeventのスナップショットは既に存在します。上書きして再取得しますか？\n{p0}", { p0: existing.slug }),
         )) {
           return;
         }
@@ -207,7 +208,7 @@ export function useTournamentCreation({
         perPage,
       });
       await onSnapshotCreated();
-      setMessage("eventのローカルスナップショットを作成しました。");
+      setMessage(t("eventのローカルスナップショットを作成しました。"));
     } catch (error) {
       setError(String(error));
     } finally {
@@ -229,52 +230,53 @@ export function useTournamentCreation({
     return Math.max(0, Math.min(100, (createSnapshotProgress.completedSets / createSnapshotProgress.totalSets) * 100));
   }, [createSnapshotProgress]);
 
+  const language = useLanguage();
   const createSnapshotProgressLabel = useMemo(() => {
     if (!createSnapshotProgress) {
       return "";
     }
     if (createSnapshotProgress.phase === "starting") {
-      return "開始準備中...";
+      return t("開始準備中...");
     }
     if (createSnapshotProgress.phase === "requestingEventPage") {
-      return `ページ${createSnapshotProgress.currentPage ?? 1}を取得中`;
+      return t("ページ{p0}を取得中", { p0: createSnapshotProgress.currentPage ?? 1 });
     }
     if (createSnapshotProgress.phase === "requestingTournamentPreview") {
-      return "大会event一覧を取得中";
+      return t("大会event一覧を取得中");
     }
     if (createSnapshotProgress.phase === "requestingTournamentSnapshot") {
-      return "大会snapshotへ切替えて取得中";
+      return t("大会snapshotへ切替えて取得中");
     }
     if (createSnapshotProgress.phase === "discovering") {
       const pageText = createSnapshotProgress.currentPage !== null
-        ? `ページ${createSnapshotProgress.currentPage}を確認済み`
-        : "ページを確認中";
-      return `${pageText}（対象set数を確認中）`;
+        ? t("ページ{p0}を確認済み", { p0: createSnapshotProgress.currentPage })
+        : t("ページを確認中");
+      return t("{p0}（対象set数を確認中）", { p0: pageText });
     }
     if (createSnapshotProgress.phase === "requestingSetDetails") {
       const total = createSnapshotProgress.totalSets ?? 0;
       const details = total > 0
-        ? `${createSnapshotProgress.completedSets}/${total} set処理済み`
-        : `${createSnapshotProgress.completedSets} set処理済み`;
+        ? t("{p0}/{p1} set処理済み", { p0: createSnapshotProgress.completedSets, p1: total })
+        : t("{p0} set処理済み", { p0: createSnapshotProgress.completedSets });
       const currentSet = createSnapshotProgress.currentSetId
-        ? `set ${createSnapshotProgress.currentSetId} を含むbatch`
-        : "set詳細batch";
-      return `${details} / ${currentSet}を取得中`;
+        ? t("set {p0} を含むbatch", { p0: createSnapshotProgress.currentSetId })
+        : t("set詳細batch");
+      return t("{p0} / {p1}を取得中", { p0: details, p1: currentSet });
     }
     if (createSnapshotProgress.phase === "fetchingSetDetails") {
       const total = createSnapshotProgress.totalSets ?? 0;
       const details = total > 0
-        ? `${createSnapshotProgress.completedSets}/${total} set処理済み`
-        : `${createSnapshotProgress.completedSets} set処理済み`;
+        ? t("{p0}/{p1} set処理済み", { p0: createSnapshotProgress.completedSets, p1: total })
+        : t("{p0} set処理済み", { p0: createSnapshotProgress.completedSets });
       return createSnapshotProgress.currentSetId
-        ? `${details} / set ${createSnapshotProgress.currentSetId} を取得中`
+        ? t("{p0} / set {p1} を取得中", { p0: details, p1: createSnapshotProgress.currentSetId })
         : details;
     }
     if (createSnapshotProgress.phase === "completed") {
-      return "取得完了";
+      return t("取得完了");
     }
-    return "取得中...";
-  }, [createSnapshotProgress]);
+    return t("取得中...");
+  }, [createSnapshotProgress, language]);
 
   return {
     token,

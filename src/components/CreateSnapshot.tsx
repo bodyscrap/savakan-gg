@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { FormEvent } from "react";
 
 export type TournamentEventPreviewItem = {
@@ -76,7 +77,7 @@ export function CreateSnapshot({
   return (
     <div className="create-layout">
       <section className="panel create-layout-half">
-        <h2>1.APIトークンの設定</h2>
+        <h2>{t("1.APIトークンの設定")}</h2>
 
         <form
           className="form"
@@ -91,14 +92,12 @@ export function CreateSnapshot({
             autoComplete="off"
             style={{ flex: "1 1 18rem" }}
           />
-          <button type="submit" disabled={createBusy || token.trim() === ""}>
-            APIトークンを保存
-          </button>
+          <button type="submit" disabled={createBusy || token.trim() === ""}>{t("APIトークンを保存")}</button>
         </form>
       </section>
 
       <section className="panel create-layout-half">
-        <h2>2. tournamentの選択</h2>
+        <h2>{t("2. tournamentの選択")}</h2>
         <form
           className="form"
           onSubmit={onLoadPreview}
@@ -107,23 +106,21 @@ export function CreateSnapshot({
           <input
             value={slug}
             onChange={(e) => onSlugChange(e.currentTarget.value)}
-            placeholder="大会ID (例: savakan-weekly-1)"
+            placeholder={t("大会ID (例: savakan-weekly-1)")}
             style={{ flex: "1 1 18rem" }}
           />
-          <button type="submit" disabled={createBusy || !canLoadPreview}>
-            event一覧取得
-          </button>
+          <button type="submit" disabled={createBusy || !canLoadPreview}>{t("event一覧取得")}</button>
         </form>
       </section>
 
       <section className="panel create-layout-full">
-        <h2>3. tournament内のevent一覧</h2>
+        <h2>{t("3. tournament内のevent一覧")}</h2>
         {createPreviewLoadFailed ? (
-          <p className="meta">event一覧の取得に失敗しました</p>
+          <p className="meta">{t("event一覧の取得に失敗しました")}</p>
         ) : !createPreview ? (
-          <p className="meta">先に tournament を選択してevent一覧を取得してください。</p>
+          <p className="meta">{t("先に tournament を選択してevent一覧を取得してください。")}</p>
         ) : createPreview.events.length === 0 ? (
-          <p className="meta">この tournament にはイベントがありません。</p>
+          <p className="meta">{t("この tournament にはイベントがありません。")}</p>
         ) : (
           <>
             <p className="meta">
@@ -132,27 +129,27 @@ export function CreateSnapshot({
             <div className="form" style={{ marginTop: "0.7rem" }}>
               <label htmlFor="create-event-search-input" style={{ display: "grid", gap: "0.3rem" }}>
                 <span style={{ display: "flex", alignItems: "baseline", gap: "0.5rem", flexWrap: "wrap" }}>
-                  <span className="meta">イベント検索</span>
-                  <span className="meta">候補: {createFilteredEvents.length}件 / 全{createPreview.events.length}件</span>
+                  <span className="meta">{t("イベント検索")}</span>
+                  <span className="meta">{t("候補: {value1}件 / 全{value2}件", { value1: createFilteredEvents.length, value2: createPreview.events.length })}</span>
                 </span>
                 <input
                   id="create-event-search-input"
                   type="search"
                   value={createEventSearchInput}
                   onChange={(e) => onEventSearchInputChange(e.currentTarget.value)}
-                  placeholder="event名 または eventId で検索"
+                  placeholder={t("event名 または eventId で検索")}
                   autoComplete="off"
                 />
               </label>
               <label htmlFor="create-event-select" style={{ display: "grid", gap: "0.3rem" }}>
-                <span className="meta">event選択(選択: {selectedEventName})</span>
+                <span className="meta">{t("event選択(選択: {value1})", { value1: selectedEventName })}</span>
                 <select
                   id="create-event-select"
                   value={createFilteredEvents.some((event) => event.eventId === createSelectedEventId) ? createSelectedEventId : ""}
                   onChange={(e) => onEventDropdownChange(e.currentTarget.value)}
                 >
                   <option value="" disabled>
-                    {createFilteredEvents.length === 0 ? "一致するeventがありません" : "eventを選択"}
+                    {createFilteredEvents.length === 0 ? t("一致するeventがありません") : t("eventを選択")}
                   </option>
                   {createFilteredEvents.map((event) => (
                     <option key={event.eventId} value={event.eventId}>
@@ -167,23 +164,21 @@ export function CreateSnapshot({
       </section>
 
       <section className="panel create-layout-full">
-        <h2>4. 選択eventのスナップショット作成</h2>
+        <h2>{t("4. 選択eventのスナップショット作成")}</h2>
         <div className="form" style={{ display: "flex", alignItems: "end", flexWrap: "wrap", marginTop: "0.8rem" }}>
           <label htmlFor="create-event-alias" style={{ display: "grid", gap: "0.3rem", flex: "1 1 18rem" }}>
             <span style={{ display: "flex", justifyContent: "space-between", gap: "0.6rem", flexWrap: "wrap" }}>
-              <span className="meta">エイリアス名</span>
-              <span className="meta">選択中 event: {selectedEventName}</span>
+              <span className="meta">{t("エイリアス名")}</span>
+              <span className="meta">{t("選択中 event: {value1}", { value1: selectedEventName })}</span>
             </span>
             <input
               id="create-event-alias"
               value={createEventAlias}
               onChange={(e) => onEventAliasChange(e.currentTarget.value)}
-              placeholder="アプリ内表示用のevent alias"
+              placeholder={t("アプリ内表示用のevent alias")}
             />
           </label>
-          <button type="button" disabled={createBusy || !canCreateSnapshot} onClick={onCreateSnapshot}>
-            スナップショット作成
-          </button>
+          <button type="button" disabled={createBusy || !canCreateSnapshot} onClick={onCreateSnapshot}>{t("スナップショット作成")}</button>
         </div>
       </section>
     </div>

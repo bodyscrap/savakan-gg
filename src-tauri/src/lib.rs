@@ -351,6 +351,7 @@ fn mobile_set_has_matchup(slots: &[models::SetSlotSnapshot]) -> bool {
 #[serde(rename_all = "camelCase")]
 struct MobileEventInfo {
     event_alias: String,
+    event_alias_is_default: bool,
     tournament_name: String,
     event_name: String,
 }
@@ -1251,6 +1252,16 @@ fn build_overlay_html() -> &'static str {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Savakan OBS Overlay</title>
   <script>
+    function applyOverlayLanguage() {
+      let language = 'ja';
+      try {
+        if (localStorage.getItem('savakan.mobile.language') === 'en') language = 'en';
+      } catch (_) {}
+      document.documentElement.lang = language;
+      document.title = language === 'en' ? 'Savakan OBS Overlay' : 'Savakan OBS オーバーレイ';
+    }
+    applyOverlayLanguage();
+    window.addEventListener('storage', applyOverlayLanguage);
     // プレビューモード検出とスケール係数の管理
     const isPreview = new URLSearchParams(window.location.search).has('preview');
         function setContainerScaleBySize(width, height) {
@@ -1846,13 +1857,14 @@ fn query_param_from_url(url: &str, key: &str) -> Option<String> {
     None
 }
 
-fn mobile_input_html() -> &'static str {
+fn mobile_input_html() -> String {
     r#"<!doctype html>
 <html lang="ja">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Savakan Mobile Input</title>
+    <script>/* MOBILE_LOCALIZATION */</script>
     <style>
         :root {
             --bg: #f7f7f5;
@@ -2179,17 +2191,24 @@ fn mobile_input_html() -> &'static str {
 </head>
 <body>
     <section class="card">
+        <label class="checkbox-row">
+            <span data-i18n="language">言語</span>
+            <select id="mobileLanguage" aria-label="言語" style="width: auto;">
+                <option value="ja">日本語</option>
+                <option value="en">English</option>
+            </select>
+        </label>
         <h1 id="pageTitle">スマートフォン結果入力依頼</h1>
         <p id="scopeLabel" class="meta">読み込み中...</p>
 
         <div id="searchView">
             <div class="row">
                 <input id="searchBox" placeholder="Set名 / ラウンド / プレイヤー名で検索" />
-                <button id="searchBtn" type="button">検索</button>
+                <button id="searchBtn" type="button" data-i18n="search">検索</button>
             </div>
             <label class="checkbox-row">
                 <input id="matchupReadyOnlyCheckbox" type="checkbox" checked />
-                <span>入力可能な試合のみ</span>
+                <span data-i18n="inputtableOnly">入力可能な試合のみ</span>
             </label>
 
             <div id="setList" class="set-list"></div>
@@ -2207,37 +2226,37 @@ fn mobile_input_html() -> &'static str {
             <p id="callStatusLabel" class="meta" style="margin-top: 4px;" role="status" aria-live="polite"></p>
             <label class="checkbox-row">
                 <input id="onePOnTopCheckbox" type="checkbox" checked />
-                <span>1Pを左に表示</span>
+                <span data-i18n="onePLeft">1Pを左に表示</span>
             </label>
 
             <div id="sideActions" class="side-actions">
-                <button id="swapSideBtn" type="button">1P/2P入替</button>
-                <button id="randomSideBtn" type="button">ランダム</button>
+                <button id="swapSideBtn" type="button" data-i18n="swapSides">1P/2P入替</button>
+                <button id="randomSideBtn" type="button" data-i18n="random">ランダム</button>
             </div>
 
             <div class="detail-head-actions-row">
-                <button id="refreshDetailBtn" class="detail-close" type="button">情報取得</button>
-                <button id="discardBtn" type="button" class="detail-close">下書きを破棄</button>
+                <button id="refreshDetailBtn" class="detail-close" type="button" data-i18n="refresh">情報取得</button>
+                <button id="discardBtn" type="button" class="detail-close" data-i18n="discard">下書きを破棄</button>
             </div>
 
             <div class="detail-head-actions-row">
-                <button id="closeDetailBtn" class="detail-close" type="button">一覧へ戻る</button>
+                <button id="closeDetailBtn" class="detail-close" type="button" data-i18n="back">一覧へ戻る</button>
             </div>
 
             <div id="overlayBox" class="row" hidden>
                 <p id="overlayStatus" class="meta"></p>
                 <div class="overlay-button-row">
                     <button id="overlayToggleBtn" type="button">配信開始</button>
-                    <button id="resolveCallsBtn" type="button">呼出解決</button>
-                    <button id="overlayStopBtn" type="button" style="background: #e2e8f0; color: #0f172a; border-color: #cbd5e1;">完全停止</button>
+                    <button id="resolveCallsBtn" type="button" data-i18n="resolveCalls">呼出解決</button>
+                    <button id="overlayStopBtn" type="button" data-i18n="stopCompletely" style="background: #e2e8f0; color: #0f172a; border-color: #cbd5e1;">完全停止</button>
                 </div>
             </div>
 
             <div id="slotRows"></div>
 
             <div class="detail-actions">
-                <button id="updateBtn" type="button">更新</button>
-                <button id="confirmBtn" type="button">確定</button>
+                <button id="updateBtn" type="button" data-i18n="update">更新</button>
+                <button id="confirmBtn" type="button" data-i18n="confirm">確定</button>
             </div>
             <p id="submitStatus" class="status"></p>
             <p id="randomActionTime" class="status-sub"></p>
@@ -2356,14 +2375,18 @@ fn mobile_input_html() -> &'static str {
         let shouldRefreshSetListOnReturn = false;
 
         function updateHeaderInfo(info) {
-            const eventAlias = (info && info.eventAlias && info.eventAlias.trim()) || 'スマートフォン結果入力依頼';
-            mobileEventAlias = eventAlias;
+            const eventAlias = (info && info.eventAlias && info.eventAlias.trim()) || '';
+            // Keep the existing payload fallback independent of the display language.
+            mobileEventAlias = eventAlias || mobileMessages.title[0];
             const tournamentName = (info && info.tournamentName && info.tournamentName.trim()) || '-';
             const eventName = (info && info.eventName && info.eventName.trim()) || '-';
             if (pageTitle) {
-                pageTitle.textContent = eventAlias;
+                const useDefaultTitle = !eventAlias || Boolean(info?.eventAliasIsDefault);
+                setLocalizedText(pageTitle, useDefaultTitle ? 'title' : '');
+                if (!useDefaultTitle) pageTitle.textContent = eventAlias;
             }
             if (scopeLabel) {
+                setLocalizedText(scopeLabel, '');
                 scopeLabel.textContent = `${tournamentName} / ${eventName}`;
             }
         }
@@ -2373,13 +2396,13 @@ fn mobile_input_html() -> &'static str {
             try {
                 const response = await fetch(url, { cache: 'no-store' });
                 if (!response.ok) {
-                    updateHeaderInfo({ eventAlias: 'スマートフォン結果入力依頼', tournamentName: '-', eventName: '-' });
+                    updateHeaderInfo(null);
                     return;
                 }
                 const info = await response.json();
                 updateHeaderInfo(info);
             } catch (error) {
-                updateHeaderInfo({ eventAlias: 'スマートフォン結果入力依頼', tournamentName: '-', eventName: '-' });
+                updateHeaderInfo(null);
             }
         }
 
@@ -2396,7 +2419,7 @@ fn mobile_input_html() -> &'static str {
             if (overlayBox) {
                 overlayBox.hidden = true;
             }
-            submitStatus.textContent = '';
+            setLocalizedText(submitStatus, '');
 
             if (shouldRefresh) {
                 void fetchSets();
@@ -2417,7 +2440,7 @@ fn mobile_input_html() -> &'static str {
 
         async function fetchSetCallStatus() {
             if (!selectedSet) {
-                throw new Error('先にsetを選択してください。');
+                throw new Error(t('selectSet'));
             }
             const url = `/mobile/api/sets/${encodeURIComponent(selectedSet.setId)}/calls?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&token=${encodeURIComponent(token)}`;
             const response = await fetch(url, { cache: 'no-store' });
@@ -2441,21 +2464,20 @@ fn mobile_input_html() -> &'static str {
             const hasActiveCalls = hasActiveSetCalls();
             if (callStatusLabel) {
                 const callingPlayers = selectedSetCallStatus?.callingPlayers || [];
-                callStatusLabel.textContent = !selectedSetCallStatus && selectedSet
-                    ? '呼び出し状態を確認できないため、入力を停止中'
-                    : hasActiveCalls
-                        ? `呼び出し中: ${callingPlayers.length > 0 ? callingPlayers.join(' / ') : 'プレイヤー名不明'}（入力停止中）`
-                        : '';
+                setLocalizedText(callStatusLabel, !selectedSetCallStatus && selectedSet
+                    ? 'callsUnknown' : hasActiveCalls ? 'calling' : '', {
+                        players: () => callingPlayers.length > 0 ? callingPlayers.join(' / ') : t('unknownPlayer'),
+                    });
             }
             if (resolveCallsBtn) {
                 const completed = isCompletedSet(selectedSet);
                 resolveCallsBtn.hidden = completed || !hasActiveCalls;
                 resolveCallsBtn.disabled = !selectedSetCallStatus || !hasActiveCalls || completed;
-                resolveCallsBtn.title = completed
-                    ? '確定済みSetの呼び出しは呼び出しリストから解決してください。'
+                setLocalizedText(resolveCallsBtn, completed
+                    ? 'completedCalls'
                     : selectedSetCallStatus && selectedSetCallStatus.otherCallCount > 0
-                        ? '他端末発行の呼び出しは発行端末で解決してください。'
-                        : '';
+                        ? 'otherCallsHint'
+                        : '', {}, 'title');
             }
             if (overlayToggleBtn) {
                 overlayToggleBtn.hidden = !selectedSetCallStatus || hasActiveCalls;
@@ -2466,7 +2488,7 @@ fn mobile_input_html() -> &'static str {
             applySetCallInputLock();
 
             if (detailMeta && isCompletedSet(selectedSet) && hasActiveCalls) {
-                detailMeta.textContent = '確定済みSetの呼び出しは呼び出しリストから解決してください。';
+                setLocalizedText(detailMeta, 'completedCalls');
             }
 
             if (!overlayToggleBtn || !selectedSet) {
@@ -2530,7 +2552,7 @@ fn mobile_input_html() -> &'static str {
                 return selectedSetCallStatus;
             } catch (error) {
                 updateSetCallControls();
-                submitStatus.textContent = `呼び出し状態の確認に失敗しました: ${error && error.message ? error.message : String(error)}`;
+                setLocalizedText(submitStatus, 'callCheckFailed', { error: () => mobileErrorDetail(error?.message || String(error)) });
                 return null;
             } finally {
                 callStatusRequestInProgress = false;
@@ -2553,7 +2575,7 @@ fn mobile_input_html() -> &'static str {
                 if (selectedSet && String(selectedSet.setId) === pollingSetId) {
                     selectedSetCallStatus = null;
                     updateSetCallControls();
-                    submitStatus.textContent = `呼び出し状態の確認に失敗しました: ${error && error.message ? error.message : String(error)}`;
+                    setLocalizedText(submitStatus, 'callCheckFailed', { error: () => mobileErrorDetail(error?.message || String(error)) });
                 }
             } finally {
                 callStatusRequestInProgress = false;
@@ -2565,7 +2587,7 @@ fn mobile_input_html() -> &'static str {
                 return;
             }
             if (isCompletedSet(selectedSet)) {
-                submitStatus.textContent = '確定済みSetの呼び出しは呼び出しリストから解決してください。';
+                setLocalizedText(submitStatus, 'completedCalls');
                 return;
             }
             try {
@@ -2574,16 +2596,15 @@ fn mobile_input_html() -> &'static str {
                     return;
                 }
                 if (callStatus.otherCallCount > 0) {
-                    const message = '他端末が発行した未解決の呼び出しがあります。発行端末で解決してください。';
-                    submitStatus.textContent = message;
-                    window.alert(message);
+                    setLocalizedText(submitStatus, 'otherCalls');
+                    window.alert(t('otherCalls'));
                     return;
                 }
                 if (callStatus.ownCallCount === 0) {
-                    submitStatus.textContent = 'このsetに未解決の呼び出しはありません。';
+                    setLocalizedText(submitStatus, 'noCalls');
                     return;
                 }
-                if (!window.confirm(`このsetの呼び出し${callStatus.ownCallCount}件を解決しますか？`)) {
+                if (!window.confirm(t('resolveConfirm', { count: callStatus.ownCallCount }))) {
                     return;
                 }
 
@@ -2591,35 +2612,33 @@ fn mobile_input_html() -> &'static str {
                 const response = await fetch(resolveUrl, { method: 'POST' });
                 if (!response.ok) {
                     const text = await response.text();
-                    submitStatus.textContent = `呼び出しの解決に失敗しました: ${text}`;
+                    setLocalizedText(submitStatus, 'resolveFailed', { error: () => mobileErrorDetail(text) });
                     return;
                 }
 
                 const latestStatus = await refreshSetCallStatus();
                 if (latestStatus && latestStatus.ownCallCount === 0 && latestStatus.otherCallCount === 0) {
-                    submitStatus.textContent = '呼び出しを解決しました。スコア更新や配信開始は別途操作してください。';
+                    setLocalizedText(submitStatus, 'callsResolved');
                 } else if (latestStatus) {
-                    submitStatus.textContent = latestStatus.otherCallCount > 0
-                        ? '他端末が発行した未解決の呼び出しがあります。発行端末で解決してください。'
-                        : 'このsetの呼び出しがまだ解決されていません。';
+                    setLocalizedText(submitStatus, latestStatus.otherCallCount > 0 ? 'otherCalls' : 'callsRemain');
                 }
             } catch (error) {
-                submitStatus.textContent = `呼び出しの解決に失敗しました: ${error && error.message ? error.message : String(error)}`;
+                setLocalizedText(submitStatus, 'resolveFailed', { error: () => mobileErrorDetail(error?.message || String(error)) });
             }
         }
 
-        async function resolveCallsBeforeSetAction(actionLabel) {
+        async function resolveCallsBeforeSetAction(actionKey) {
             if (!selectedSet) {
-                submitStatus.textContent = '先にsetを選択してください。';
+                setLocalizedText(submitStatus, 'selectSet');
                 return false;
             }
 
             try {
                 const callStatus = await fetchSetCallStatus();
                 if (callStatus.otherCallCount > 0) {
-                    const message = `他端末が発行した未解決の呼び出しがあります。発行端末で解決するまで「${actionLabel}」はできません。`;
-                    submitStatus.textContent = message;
-                    window.alert(message);
+                    const values = { action: () => t(actionKey) };
+                    setLocalizedText(submitStatus, 'otherCallsBlock', values);
+                    window.alert(t('otherCallsBlock', values));
                     return false;
                 }
                 if (callStatus.ownCallCount === 0) {
@@ -2627,7 +2646,7 @@ fn mobile_input_html() -> &'static str {
                 }
 
                 const shouldResolve = window.confirm(
-                    `このsetには未解決の呼び出しが${callStatus.ownCallCount}件あります。\n「${actionLabel}」の前に呼び出しを解決して続行しますか？`,
+                    t('resolveBeforeAction', { count: callStatus.ownCallCount, action: t(actionKey) }),
                 );
                 if (!shouldResolve) {
                     return false;
@@ -2643,16 +2662,17 @@ fn mobile_input_html() -> &'static str {
                 selectedSetCallStatus = latestStatus;
                 updateSetCallControls();
                 if (latestStatus.ownCallCount > 0 || latestStatus.otherCallCount > 0) {
-                    const message = latestStatus.otherCallCount > 0
-                        ? '他端末が発行した未解決の呼び出しがあります。発行端末で解決してください。'
-                        : 'このsetの呼び出しがまだ解決されていません。';
-                    submitStatus.textContent = message;
-                    window.alert(message);
+                    const messageKey = latestStatus.otherCallCount > 0 ? 'otherCalls' : 'callsRemain';
+                    setLocalizedText(submitStatus, messageKey);
+                    window.alert(t(messageKey));
                     return false;
                 }
                 return true;
             } catch (error) {
-                submitStatus.textContent = `${actionLabel}の前の呼び出し確認に失敗しました: ${error && error.message ? error.message : String(error)}`;
+                setLocalizedText(submitStatus, 'callCheckBeforeFailed', {
+                    action: () => t(actionKey),
+                    error: () => mobileErrorDetail(error?.message || String(error)),
+                });
                 return false;
             }
         }
@@ -2662,7 +2682,7 @@ fn mobile_input_html() -> &'static str {
                 return;
             }
 
-            submitStatus.textContent = '下書きを破棄しています...';
+            setLocalizedText(submitStatus, 'discarding');
 
             const url = `/mobile/api/sets/${encodeURIComponent(selectedSet.setId)}/discard?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&token=${encodeURIComponent(token)}`;
             const res = await fetch(url, {
@@ -2671,20 +2691,20 @@ fn mobile_input_html() -> &'static str {
 
             if (!res.ok) {
                 const text = await res.text();
-                submitStatus.textContent = `下書き破棄に失敗しました: ${text}`;
+                setLocalizedText(submitStatus, 'discardFailed', { error: () => mobileErrorDetail(text) });
                 return;
             }
 
             const detail = await res.json();
             selectedSet = detail;
             directWinnerId = detail.directWin && detail.winnerId ? String(detail.winnerId) : null;
-            detailMeta.textContent = '';
+            setLocalizedText(detailMeta, '');
             detailSetId.textContent = getDisplaySetLabel(detail);
             mobileSideDrafts = buildMobileSideDraftsFromDetail(detail);
             renderDetailSlots(detail);
             await refreshOverlayState();
             shouldRefreshSetListOnReturn = true;
-            submitStatus.textContent = '下書きを破棄しました。情報取得で復元済みデータを確認できます。';
+            setLocalizedText(submitStatus, 'discarded');
         }
 
         function normalizeScoreValue(score) {
@@ -2958,14 +2978,13 @@ fn mobile_input_html() -> &'static str {
 
             if (submitStatus) {
                 const changed = mobileSideDrafts[upperId] !== upperCurrent || mobileSideDrafts[lowerId] !== lowerCurrent;
-                submitStatus.textContent = changed
-                    ? 'ランダムで1P/2Pを更新しました。'
-                    : 'ランダムを実行しました（結果は変わりませんでした）。';
+                setLocalizedText(submitStatus, changed ? 'randomChanged' : 'randomUnchanged');
             }
             if (randomActionTime) {
                 const now = new Date();
-                const hhmmss = now.toLocaleTimeString('ja-JP', { hour12: false });
-                randomActionTime.textContent = `実行時刻: ${hhmmss}`;
+                setLocalizedText(randomActionTime, 'executedAt', {
+                    time: () => now.toLocaleTimeString(mobileLanguage === 'en' ? 'en-US' : 'ja-JP', { hour12: false }),
+                });
             }
 
             renderDetailSlots(selectedSet);
@@ -2993,11 +3012,11 @@ fn mobile_input_html() -> &'static str {
             const matchupReady = isMatchupReady(detail);
             const completed = isCompletedSet(detail);
             const scoreEditLocked = Boolean(detail?.scoreEditLocked);
-            detailMeta.textContent = scoreEditLocked
-                ? 'このプールは編集ロック中です。スコア入力・結果更新はできません。'
+            setLocalizedText(detailMeta, scoreEditLocked
+                ? 'poolLockedDetail'
                 : completed
-                ? '結果が確定しているため編集できません。修正する場合は「影響setを取消」からやり直してください。'
-                : '';
+                ? 'completedDetail'
+                : '');
             const visibleSlots = slots.slice(0, 2);
             const numericScores = matchupReady
                 ? visibleSlots.map((slot) => normalizeScoreValue(slot?.score)).filter((value) => value !== null)
@@ -3026,7 +3045,7 @@ fn mobile_input_html() -> &'static str {
                     return displayOnePOnTop ? (index === 0 ? '1P' : '2P') : (index === 0 ? '2P' : '1P');
                 })();
                 const directWinButton = matchupReady && hasEntrant
-                    ? `<button class="win-btn" type="button" data-win-entrant-id="${entrantId}" ${completed || scoreEditLocked ? 'disabled' : ''}>${directWinnerId === entrantId ? '解除' : 'Win'}</button>`
+                    ? `<button class="win-btn" type="button" data-i18n="${directWinnerId === entrantId ? 'clearWin' : 'win'}" data-win-entrant-id="${entrantId}" ${completed || scoreEditLocked ? 'disabled' : ''}>${t(directWinnerId === entrantId ? 'clearWin' : 'win')}</button>`
                     : '';
                 const directScore = directWinnerId && hasEntrant
                     ? (directWinnerId === entrantId ? 'W' : 'L')
@@ -3039,9 +3058,9 @@ fn mobile_input_html() -> &'static str {
                             <button class="score-step-btn" type="button" data-score-adjust="1" data-score-entrant-id="${entrantId}" ${completed || scoreEditLocked || directWinnerId ? 'disabled' : ''}>+</button>
                             <button class="score-step-btn" type="button" data-score-adjust="-1" data-score-entrant-id="${entrantId}" ${completed || scoreEditLocked || directWinnerId ? 'disabled' : ''}>−</button>
                         </div>`}
-                        ${scoreEditLocked ? '<span class="slot-lock-note">プール編集ロック中</span>' : (completed ? '<span class="slot-lock-note">確定済みset</span>' : (matchupReady ? '' : '<span class="slot-lock-note">対戦カード未確定</span>'))}
+                        ${scoreEditLocked ? `<span class="slot-lock-note" data-i18n="poolLocked">${t('poolLocked')}</span>` : (completed ? `<span class="slot-lock-note" data-i18n="completedSet">${t('completedSet')}</span>` : (matchupReady ? '' : `<span class="slot-lock-note" data-i18n="matchupPending">${t('matchupPending')}</span>`))}
                     </div>`
-                    : `<div class="player-controls"><span class="slot-lock-note">対戦カード未確定</span></div>`;
+                    : `<div class="player-controls"><span class="slot-lock-note" data-i18n="matchupPending">${t('matchupPending')}</span></div>`;
                 const dqButton = matchupReady && hasEntrant
                     ? `<button class="dq-btn" type="button" data-dq-entrant-id="${entrantId}" ${completed || scoreEditLocked ? 'disabled' : ''}>DQ</button>`
                     : '';
@@ -3245,8 +3264,8 @@ fn mobile_input_html() -> &'static str {
             }
 
             if (!active) {
-                overlayStatus.textContent = overlayState && overlayState.fullyStopped ? '配信は完全停止中です。' : '配信は停止中です。';
-                overlayToggleBtn.textContent = '配信開始';
+                setLocalizedText(overlayStatus, overlayState && overlayState.fullyStopped ? 'streamFullyStopped' : 'streamStopped');
+                setLocalizedText(overlayToggleBtn, 'startStream');
                 overlayToggleBtn.disabled = !selectedSet;
                 if (overlayStopBtn) {
                     overlayStopBtn.disabled = Boolean(overlayState && overlayState.fullyStopped);
@@ -3256,8 +3275,8 @@ fn mobile_input_html() -> &'static str {
             }
 
             if (isCurrent) {
-                overlayStatus.textContent = `現在このsetが配信中です: ${getOverlaySetLabelFromState(overlayState)}`;
-                overlayToggleBtn.textContent = '配信停止';
+                setLocalizedText(overlayStatus, 'streamCurrent', { set: getOverlaySetLabelFromState(overlayState) });
+                setLocalizedText(overlayToggleBtn, 'stopStream');
                 overlayToggleBtn.disabled = false;
                 if (overlayStopBtn) {
                     overlayStopBtn.disabled = false;
@@ -3266,8 +3285,8 @@ fn mobile_input_html() -> &'static str {
                 return;
             }
 
-            overlayStatus.textContent = `別のsetが配信中です: ${getOverlaySetLabelFromState(overlayState)}`;
-            overlayToggleBtn.textContent = '強制切り替え';
+            setLocalizedText(overlayStatus, 'streamOther', { set: getOverlaySetLabelFromState(overlayState) });
+            setLocalizedText(overlayToggleBtn, 'forceSwitch');
             overlayToggleBtn.disabled = !selectedSet;
             if (overlayStopBtn) {
                 overlayStopBtn.disabled = false;
@@ -3282,13 +3301,13 @@ fn mobile_input_html() -> &'static str {
 
             if (!response.ok) {
                 const text = await response.text();
-                submitStatus.textContent = `配信の完全停止に失敗しました: ${text}`;
+                setLocalizedText(submitStatus, 'stopFailed', { error: () => mobileErrorDetail(text) });
                 return;
             }
 
             overlayState = await response.json();
             await refreshOverlayState();
-            submitStatus.textContent = '配信を完全停止しました。';
+            setLocalizedText(submitStatus, 'streamHidden');
         }
 
         async function toggleOverlayFromDetail() {
@@ -3310,18 +3329,16 @@ fn mobile_input_html() -> &'static str {
                     return;
                 }
                 if (callStatus.ownCallCount > 0 || callStatus.otherCallCount > 0) {
-                    const message = isCompletedSet(selectedSet)
-                        ? '確定済みSetの呼び出しは呼び出しリストから解決してください。'
-                        : '未解決の呼び出しがあるため配信を開始できません。先に呼び出しを解決してください。';
-                    submitStatus.textContent = message;
-                    window.alert(message);
+                    const messageKey = isCompletedSet(selectedSet) ? 'completedCalls' : 'callsBlockStream';
+                    setLocalizedText(submitStatus, messageKey);
+                    window.alert(t(messageKey));
                     return;
                 }
             }
 
             if (forceSwitch) {
                 const currentSetLabel = getOverlaySetLabelFromState(overlayState);
-                const ok = window.confirm(`別のset (${currentSetLabel}) が配信中です。\nこのsetへ強制切り替えしますか？`);
+                const ok = window.confirm(t('forceSwitchConfirm', { set: currentSetLabel }));
                 if (!ok) {
                     return;
                 }
@@ -3339,15 +3356,15 @@ fn mobile_input_html() -> &'static str {
 
             if (!response.ok) {
                 const text = await response.text();
-                submitStatus.textContent = `配信状態の更新に失敗しました: ${text}`;
+                setLocalizedText(submitStatus, 'streamUpdateFailed', { error: () => mobileErrorDetail(text) });
                 return;
             }
 
             overlayState = await response.json();
             await refreshOverlayState();
-            submitStatus.textContent = overlayState.active
-                ? (overlayState.currentSetId === selectedSet.setId ? '配信を開始しました。' : '配信を切り替えました。')
-                : '配信を停止しました。';
+            setLocalizedText(submitStatus, overlayState.active
+                ? (overlayState.currentSetId === selectedSet.setId ? 'streamStarted' : 'streamSwitched')
+                : 'streamEnded');
         }
 
         async function syncOverlayFromDetailIfNeeded() {
@@ -3380,17 +3397,17 @@ fn mobile_input_html() -> &'static str {
         }
 
         async function fetchSets() {
-            submitStatus.textContent = '';
+            setLocalizedText(submitStatus, '');
             const q = encodeURIComponent(searchBox.value || '');
             const url = `/mobile/api/sets?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&q=${q}&token=${encodeURIComponent(token)}`;
             const res = await fetch(url, { cache: 'no-store' });
             if (!res.ok) {
-                setList.innerHTML = '<p class="meta">取得に失敗しました。</p>';
+                setList.innerHTML = `<p class="meta" data-i18n="fetchFailed">${t('fetchFailed')}</p>`;
                 return;
             }
             const sets = await res.json();
             if (!Array.isArray(sets) || sets.length === 0) {
-                setList.innerHTML = '<p class="meta">該当するsetがありません。</p>';
+                setList.innerHTML = `<p class="meta" data-i18n="noSets">${t('noSets')}</p>`;
                 return;
             }
 
@@ -3399,7 +3416,7 @@ fn mobile_input_html() -> &'static str {
                 ? sets.filter((set) => isListItemInputtable(set))
                 : sets;
             if (filteredSets.length === 0) {
-                setList.innerHTML = '<p class="meta">該当するsetがありません。</p>';
+                setList.innerHTML = `<p class="meta" data-i18n="noSets">${t('noSets')}</p>`;
                 return;
             }
 
@@ -3411,12 +3428,12 @@ fn mobile_input_html() -> &'static str {
                     .map((value) => String(value || '').trim())
                     .filter(Boolean)
                     .join(' / ');
-                return `<article class="set-item" data-set-id="${set.setId}">
-                    <h2>${set.fullRoundText}</h2>
-                    <p class="meta">${setLabel}</p>
-                    ${phaseLabel ? `<p class="meta">${phaseLabel}</p>` : ''}
-                    ${set.scoreEditLocked ? '<p class="meta">編集ロック中（入力不可）</p>' : ''}
-                    <p class="meta">${players}</p>
+                return `<article class="set-item" data-set-id="${escapeHtml(set.setId)}">
+                    <h2>${escapeHtml(set.fullRoundText)}</h2>
+                    <p class="meta">${escapeHtml(setLabel)}</p>
+                    ${phaseLabel ? `<p class="meta">${escapeHtml(phaseLabel)}</p>` : ''}
+                    ${set.scoreEditLocked ? `<p class="meta" data-i18n="lockedList">${t('lockedList')}</p>` : ''}
+                    <p class="meta">${escapeHtml(players)}</p>
                 </article>`;
             }).join('');
 
@@ -3440,9 +3457,7 @@ fn mobile_input_html() -> &'static str {
                     errorBody = '';
                 }
                 if (!silent) {
-                    submitStatus.textContent = errorBody
-                        ? `詳細取得に失敗しました: ${errorBody}`
-                        : `詳細取得に失敗しました: HTTP ${res.status}`;
+                    setLocalizedText(submitStatus, 'detailFailed', { error: () => mobileErrorDetail(errorBody || `HTTP ${res.status}`) });
                 }
                 throw new Error(errorBody || `HTTP ${res.status}`);
             }
@@ -3468,7 +3483,7 @@ fn mobile_input_html() -> &'static str {
                 .map((value) => String(value || '').trim())
                 .filter(Boolean)
                 .join(' / ');
-            detailMeta.textContent = '';
+            setLocalizedText(detailMeta, '');
             if (sideActions) {
                 sideActions.hidden = false;
             }
@@ -3526,25 +3541,25 @@ fn mobile_input_html() -> &'static str {
 
         async function saveSetFromDetail(confirmed, callsAlreadyResolved = false) {
             if (!selectedSet) {
-                submitStatus.textContent = '先にsetを選択してください。';
+                setLocalizedText(submitStatus, 'selectSet');
                 return;
             }
             if (hasActiveSetCalls()) {
-                submitStatus.textContent = '呼び出し中のため結果を入力できません。先に呼出解決してください。';
+                setLocalizedText(submitStatus, 'callsBlockResult');
                 return;
             }
 
             if (isCompletedSet(selectedSet)) {
-                submitStatus.textContent = '確定済みsetの結果は変更できません。修正する場合はsetを削除して再入力してください。';
+                setLocalizedText(submitStatus, 'completedResult');
                 return;
             }
 
             if (confirmed && !isMatchupReady(selectedSet)) {
-                submitStatus.textContent = '対戦カードが確定していないsetは確定できません。';
+                setLocalizedText(submitStatus, 'matchupCannotConfirm');
                 return;
             }
             if (!callsAlreadyResolved
-                && !(await resolveCallsBeforeSetAction(confirmed ? '結果確定' : '結果更新'))) {
+                && !(await resolveCallsBeforeSetAction(confirmed ? 'confirmResult' : 'updateResult'))) {
                 return;
             }
 
@@ -3574,14 +3589,14 @@ fn mobile_input_html() -> &'static str {
 
             if (!res.ok) {
                 const text = await res.text();
-                submitStatus.textContent = `保存に失敗しました: ${text}`;
+                setLocalizedText(submitStatus, 'saveFailed', { error: () => mobileErrorDetail(text) });
                 return;
             }
 
             const detail = await res.json();
             selectedSet = detail;
             directWinnerId = detail.directWin && detail.winnerId ? String(detail.winnerId) : null;
-            detailMeta.textContent = '';
+            setLocalizedText(detailMeta, '');
             detailSetId.textContent = getDisplaySetLabel(detail);
             mobileSideDrafts = buildMobileSideDraftsFromDetail(detail);
 
@@ -3602,9 +3617,7 @@ fn mobile_input_html() -> &'static str {
                 shouldRefreshSetListOnReturn = true;
             }
 
-            submitStatus.textContent = confirmed
-                ? '結果を確定しました。'
-                : '結果を更新しました。';
+            setLocalizedText(submitStatus, confirmed ? 'resultConfirmed' : 'resultUpdated');
         }
 
         document.getElementById('searchBtn').addEventListener('click', () => { void fetchSets(); });
@@ -3624,16 +3637,14 @@ fn mobile_input_html() -> &'static str {
             if (!selectedSet || !selectedSet.setId) {
                 return;
             }
-            submitStatus.textContent = '最新状態を取得中...';
+            setLocalizedText(submitStatus, 'refreshing');
             void fetchSetDetail(selectedSet.setId, { silent: true })
                 .then(() => {
-                    submitStatus.textContent = '最新情報へ更新しました。';
+                    setLocalizedText(submitStatus, 'refreshed');
                 })
                 .catch((error) => {
                     const message = error && error.message ? String(error.message).trim() : '';
-                    submitStatus.textContent = message
-                        ? `詳細取得に失敗しました: ${message}`
-                        : '詳細取得に失敗しました。';
+                    setLocalizedText(submitStatus, message ? 'detailFailed' : 'detailFailedEmpty', { error: () => mobileErrorDetail(message) });
                 });
         });
         searchBox.addEventListener('keydown', (event) => {
@@ -3647,7 +3658,7 @@ fn mobile_input_html() -> &'static str {
             if (!selectedSet) {
                 return;
             }
-            if (!(await resolveCallsBeforeSetAction('結果確定'))) {
+            if (!(await resolveCallsBeforeSetAction('confirmResult'))) {
                 return;
             }
 
@@ -3659,12 +3670,12 @@ fn mobile_input_html() -> &'static str {
                     }
                     const scores = collectSlotScores();
                     const score = scores.find((item) => item.entrantId === slot.entrantId);
-                    return `${slot.entrantName || 'TBD'}: ${score ? score.score : '未入力'}`;
+                    return `${slot.entrantName || 'TBD'}: ${score ? score.score : t('notEntered')}`;
                 })
                 .join('\n');
             const setLabel = selectedSet.fullRoundText || getDisplaySetLabel(selectedSet);
             const ok = window.confirm(
-                `結果を確定しますか？\n\n${setLabel}\n${scoreSummary || '対戦者未確定'}\n\n確定後は通常の下書き破棄では取り消せません。内容を確認してください。`,
+                t('confirmResultPrompt', { set: setLabel, scores: scoreSummary || t('opponentsPending') }),
             );
             if (ok) {
                 void saveSetFromDetail(true, true);
@@ -3703,6 +3714,21 @@ fn mobile_input_html() -> &'static str {
             });
         }
 
+        setLocalizedText(pageTitle, 'title');
+        setLocalizedText(scopeLabel, 'loading');
+        setLocalizedText(searchBox, 'searchPlaceholder', {}, 'placeholder');
+        setLocalizedText(overlayToggleBtn, 'startStream');
+        document.getElementById('mobileLanguage').addEventListener('change', (event) => {
+            changeMobileLanguage(event.target.value);
+        });
+        applyMobileLanguage();
+
+        window.addEventListener('unhandledrejection', (event) => {
+            setLocalizedText(submitStatus, 'requestFailed', {
+                error: () => mobileErrorDetail(event.reason?.message || String(event.reason)),
+            });
+        });
+
         window.setInterval(() => {
             void pollSetCallStatus();
         }, autoRefreshMs);
@@ -3711,6 +3737,99 @@ fn mobile_input_html() -> &'static str {
     </script>
 </body>
 </html>"#
+        .replace(
+            "/* MOBILE_LOCALIZATION */",
+            &include_str!("web/mobile-localization.js").replace(
+                "/* MOBILE_MESSAGES */",
+                include_str!("web/mobile-translations.json"),
+            ),
+        )
+}
+
+#[cfg(test)]
+mod embedded_web_localization_tests {
+    use super::{build_overlay_html, mobile_input_html};
+    use std::collections::BTreeSet;
+
+    fn placeholders(message: &str) -> BTreeSet<&str> {
+        message
+            .split('{')
+            .skip(1)
+            .map(|part| part.split('}').next().expect("closing placeholder brace"))
+            .collect()
+    }
+
+    #[test]
+    fn mobile_translations_are_complete_and_keep_matching_placeholders() {
+        let messages: serde_json::Value =
+            serde_json::from_str(include_str!("web/mobile-translations.json")).unwrap();
+        let html = mobile_input_html();
+        for (key, translations) in messages.as_object().unwrap() {
+            let pair = translations.as_array().unwrap();
+            assert_eq!(pair.len(), 2, "{key} must have Japanese and English");
+            let ja = pair[0].as_str().unwrap();
+            let en = pair[1].as_str().unwrap();
+            assert!(!ja.trim().is_empty() && !en.trim().is_empty(), "{key}");
+            assert_eq!(placeholders(ja), placeholders(en), "{key}");
+            assert!(
+                html.contains(&format!("'{key}'"))
+                    || html.contains(&format!("data-i18n=\"{key}\"")),
+                "unused translation: {key}"
+            );
+        }
+        for (index, _) in html.match_indices("t('") {
+            if html[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '$'))
+            {
+                continue;
+            }
+            let key = html[index + 3..].split('\'').next().unwrap();
+            assert!(messages.get(key).is_some(), "missing translation: {key}");
+        }
+        for part in html.split("data-i18n=\"").skip(1) {
+            let key = part.split('"').next().unwrap();
+            if !key.starts_with("${") {
+                assert!(messages.get(key).is_some(), "missing label: {key}");
+            }
+        }
+    }
+
+    #[test]
+    fn mobile_html_embeds_localization_and_explicit_language_controls() {
+        let html = mobile_input_html();
+        assert!(!html.contains("/* MOBILE_LOCALIZATION */"));
+        assert!(!html.contains("/* MOBILE_MESSAGES */"));
+        assert!(html.contains("id=\"mobileLanguage\""));
+        assert!(html.contains("<html lang=\"ja\">"));
+        assert!(html.contains("localStorage.setItem(mobileLanguageStorageKey, mobileLanguage)"));
+        assert!(html.contains("document.documentElement.lang = mobileLanguage"));
+        assert!(html.contains("setLocalizedText(submitStatus, 'saveFailed'"));
+        assert!(html.contains("eventAliasIsDefault"));
+        let main_script = html.rsplit("<script>").next().unwrap();
+        assert!(
+            !main_script
+                .chars()
+                .any(|ch| matches!(ch, '\u{3040}'..='\u{30ff}' | '\u{4e00}'..='\u{9fff}')),
+            "mobile JS labels must use the dictionary, not Japanese literals"
+        );
+        assert!(!html.contains("location.reload"));
+        assert!(!html.contains("TreeWalker"));
+        assert!(!html.contains("MutationObserver"));
+    }
+
+    #[test]
+    fn obs_overlay_keeps_language_controls_out_of_capture() {
+        let html = build_overlay_html();
+        assert!(html.contains("applyOverlayLanguage()"));
+        assert!(html.contains("document.documentElement.lang = language"));
+        assert!(!html.contains("<select"));
+        assert!(!html.contains("data-i18n"));
+        assert!(html.contains("String(state.redPlayerName || '')"));
+        assert!(html.contains("String(state.bluePlayerName || '')"));
+        assert!(html.contains("String(state.eventAlias || '')"));
+    }
 }
 
 fn is_mobile_authorized(url: &str) -> bool {
@@ -4391,26 +4510,29 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 updated_at: chrono::Utc::now(),
             },
         };
-        let event_alias = local_meta
+        let saved_event_alias = local_meta
             .events
             .iter()
             .find(|item| item.event_id == event_id)
             .and_then(|item| item.event_alias.clone())
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| {
-                if tournament_name.is_empty() && event_name.is_empty() {
-                    "スマートフォン結果入力依頼".to_owned()
-                } else if tournament_name.is_empty() {
-                    event_name.clone()
-                } else if event_name.is_empty() {
-                    tournament_name.clone()
-                } else {
-                    format!("{tournament_name} / {event_name}")
-                }
-            });
+            .filter(|value| !value.trim().is_empty());
+        let event_alias_is_default =
+            saved_event_alias.is_none() && tournament_name.is_empty() && event_name.is_empty();
+        let event_alias = saved_event_alias.unwrap_or_else(|| {
+            if tournament_name.is_empty() && event_name.is_empty() {
+                "スマートフォン結果入力依頼".to_owned()
+            } else if tournament_name.is_empty() {
+                event_name.clone()
+            } else if event_name.is_empty() {
+                tournament_name.clone()
+            } else {
+                format!("{tournament_name} / {event_name}")
+            }
+        });
 
         let payload = serde_json::to_string(&MobileEventInfo {
             event_alias,
+            event_alias_is_default,
             tournament_name,
             event_name,
         })

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type {
   LocalGrandFinalResetResultMeta,
   LocalSetResultMeta,
@@ -534,7 +535,7 @@ export function buildSlotScoresForSave(
     });
 
   if (entries.length < 2) {
-    throw new Error("結果入力には少なくとも2人のプレイヤーが必要です。");
+    throw new Error(t("結果入力には少なくとも2人のプレイヤーが必要です。"));
   }
 
   const unfilled = entries.filter((entry) => entry.score === null && entry.raw.trim() === "");
@@ -548,7 +549,7 @@ export function buildSlotScoresForSave(
   const slotScores: Array<{ entrantId: string; score: number }> = [];
   for (const entry of entries) {
     if (entry.score === null) {
-      throw new Error(`スコアが未入力です: ${entry.entrantName}`);
+      throw new Error(t("スコアが未入力です: {p0}", { p0: entry.entrantName }));
     }
     slotScores.push({ entrantId: entry.entrantId, score: entry.score });
   }

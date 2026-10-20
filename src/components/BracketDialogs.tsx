@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useState } from "react";
 import type { BatchConflictDialogState } from "../hooks/useBracketReport";
 import type { ResultConfirmationState } from "../hooks/useSetResultDrafts";
@@ -119,13 +120,13 @@ export function BracketDialogs({
             className="dialog-panel"
             role="dialog"
             aria-modal="true"
-            aria-label="結果確定確認"
+            aria-label={t("結果確定確認")}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="dialog-head">
               <div>
-                <h3>結果を確定しますか？</h3>
-                <p className="meta">確定後は通常の下書き破棄では取り消せません。</p>
+                <h3>{t("結果を確定しますか？")}</h3>
+                <p className="meta">{t("確定後は通常の下書き破棄では取り消せません。")}</p>
               </div>
             </div>
             <div className="dialog-body">
@@ -135,17 +136,15 @@ export function BracketDialogs({
                   .filter((slot) => slot.entrantId)
                   .map((slot) => (
                     <p className="meta" key={`result-confirm-${resultConfirmation.match.setId}-${slot.entrantId}`}>
-                      {slot.entrantName}: {resultConfirmation.scoreDrafts[slot.entrantId ?? ""] || "未入力"}
+                      {slot.entrantName}: {resultConfirmation.scoreDrafts[slot.entrantId ?? ""] || t("未入力")}
                     </p>
                   ))}
               </div>
-              <p className="meta">内容を確認し、正しければ確定してください。修正する場合はキャンセルしてください。</p>
+              <p className="meta">{t("内容を確認し、正しければ確定してください。修正する場合はキャンセルしてください。")}</p>
             </div>
             <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
-              <button type="button" className="ghost" onClick={onCancelResultConfirmation}>キャンセル</button>
-              <button type="button" disabled={busy} onClick={onConfirmResult}>
-                この結果を確定
-              </button>
+              <button type="button" className="ghost" onClick={onCancelResultConfirmation}>{t("キャンセル")}</button>
+              <button type="button" disabled={busy} onClick={onConfirmResult}>{t("この結果を確定")}</button>
             </div>
           </section>
         </div>
@@ -164,31 +163,25 @@ export function BracketDialogs({
             className="dialog-panel"
             role="dialog"
             aria-modal="true"
-            aria-label="Seed反映後のスナップショット更新"
+            aria-label={t("Seed反映後のスナップショット更新")}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="dialog-head">
               <div>
-                <h3>Seedをstart.ggへ反映しました</h3>
-                <p className="meta">次にstart.ggでブラケットをStartしてください。</p>
+                <h3>{t("Seedをstart.ggへ反映しました")}</h3>
+                <p className="meta">{t("次にstart.ggでブラケットをStartしてください。")}</p>
               </div>
               <button
                 type="button"
                 className="ghost"
                 disabled={busy}
                 onClick={onCloseSeedSnapshotPrompt}
-              >
-                後で
-              </button>
+              >{t("後で")}</button>
             </div>
             <div className="dialog-body">
-              <p className="meta">
-                推奨手順は、ブラケットStart後にスナップショットを更新してから結果を報告することです。更新するとローカル状態がstart.gg側に置き換わり、未報告結果や途中経過が失われることがあります。
-              </p>
+              <p className="meta">{t("推奨手順は、ブラケットStart後にスナップショットを更新してから結果を報告することです。更新するとローカル状態がstart.gg側に置き換わり、未報告結果や途中経過が失われることがあります。")}</p>
               {canReportWithoutSnapshot && (
-                <p className="meta">
-                  すでにローカルで進行済みの場合は、更新せずに報告する方法もありますが、Setの対応付けに失敗して報告が停止する可能性がある上級者向けの手順です。
-                </p>
+                <p className="meta">{t("すでにローカルで進行済みの場合は、更新せずに報告する方法もありますが、Setの対応付けに失敗して報告が停止する可能性がある上級者向けの手順です。")}</p>
               )}
             </div>
             <div className="dialog-actions dialog-actions-split">
@@ -198,13 +191,9 @@ export function BracketDialogs({
                   className="ghost"
                   disabled={busy}
                   onClick={onReportWithoutSnapshot}
-                >
-                  更新せずに結果を報告（上級者向け）
-                </button>
+                >{t("更新せずに結果を報告（上級者向け）")}</button>
               )}
-              <button type="button" disabled={busy} onClick={onUpdateSeedSnapshot}>
-                Start後にスナップショットを更新
-              </button>
+              <button type="button" disabled={busy} onClick={onUpdateSeedSnapshot}>{t("Start後にスナップショットを更新")}</button>
             </div>
           </section>
         </div>
@@ -227,40 +216,28 @@ export function BracketDialogs({
             className="dialog-panel"
             role="dialog"
             aria-modal="true"
-            aria-label="復元方法"
+            aria-label={t("復元方法")}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="dialog-head">
               <div>
-                <h3>復元方法</h3>
-                <p className="meta">対象: {selectedEventName}</p>
+                <h3>{t("復元方法")}</h3>
+                <p className="meta">{t("対象: {value1}", { value1: selectedEventName })}</p>
               </div>
-              <button type="button" className="ghost" onClick={closeRestore}>閉じる</button>
+              <button type="button" className="ghost" onClick={closeRestore}>{t("閉じる")}</button>
             </div>
             <div className="dialog-body" style={{ display: "grid", gap: "0.5rem" }}>
-              <p className="meta">
-                選択範囲のスコアを、最後に取得したスナップショット時点に戻します。範囲内の未報告結果も破棄されます。Seedの並び順は維持します。全体を復元する場合のみ、Seedの並び替えを破棄するか選択できます。
-              </p>
-              <button type="button" className="ghost" disabled={!canRestoreCurrentPool} onClick={onRestoreCurrentPool}>
-                スナップショットから復元(現在Pool)
-              </button>
+              <p className="meta">{t("選択範囲のスコアを、最後に取得したスナップショット時点に戻します。範囲内の未報告結果も破棄されます。Seedの並び順は維持します。全体を復元する場合のみ、Seedの並び替えを破棄するか選択できます。")}</p>
+              <button type="button" className="ghost" disabled={!canRestoreCurrentPool} onClick={onRestoreCurrentPool}>{t("スナップショットから復元(現在Pool)")}</button>
               <button
                 type="button"
                 className="ghost"
                 disabled={!canRestoreLockedPoolsInCurrentPhase}
                 onClick={onRestoreLockedPoolsInCurrentPhase}
-              >
-                スナップショットから復元(現在Phaseのロック中Pool)
-              </button>
-              <button type="button" className="ghost" disabled={!canRestoreAll} onClick={() => setRestoreAllConfirmationOpen(true)}>
-                スナップショットから復元(全体)
-              </button>
-              <button type="button" className="ghost" disabled={!canDiscardAllDrafts} onClick={onDiscardAllDrafts}>
-                全下書きの破棄
-              </button>
-              <button type="button" className="ghost" disabled={!canUpdateSnapshot} onClick={onUpdateSnapshot}>
-                スナップショットの更新(全体)
-              </button>
+              >{t("スナップショットから復元(現在Phaseのロック中Pool)")}</button>
+              <button type="button" className="ghost" disabled={!canRestoreAll} onClick={() => setRestoreAllConfirmationOpen(true)}>{t("スナップショットから復元(全体)")}</button>
+              <button type="button" className="ghost" disabled={!canDiscardAllDrafts} onClick={onDiscardAllDrafts}>{t("全下書きの破棄")}</button>
+              <button type="button" className="ghost" disabled={!canUpdateSnapshot} onClick={onUpdateSnapshot}>{t("スナップショットの更新(全体)")}</button>
             </div>
           </section>
         </div>
@@ -272,28 +249,26 @@ export function BracketDialogs({
             className="dialog-panel"
             role="dialog"
             aria-modal="true"
-            aria-label="配信切替確認"
+            aria-label={t("配信切替確認")}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="dialog-head">
               <div>
-                <h3>配信先の切り替え確認</h3>
-                <p className="meta">他のセットが配信中です。</p>
+                <h3>{t("配信先の切り替え確認")}</h3>
+                <p className="meta">{t("他のセットが配信中です。")}</p>
               </div>
             </div>
             <div className="dialog-body">
               <div className="dialog-summary-box">
-                <p className="dialog-summary-title">現在の配信中セット</p>
+                <p className="dialog-summary-title">{t("現在の配信中セット")}</p>
                 <p className="dialog-summary-value">{overlaySwitch.activeSetLabel}</p>
-                <p className="meta">{overlaySwitch.activeEntrantNames.join(" vs ") || "対戦カード未確定"}</p>
+                <p className="meta">{overlaySwitch.activeEntrantNames.join(" vs ") || t("対戦カード未確定")}</p>
               </div>
-              <p className="meta">「{overlaySwitch.targetSetLabel}」へ切り替えますか？</p>
+              <p className="meta">{t("「{value1}」へ切り替えますか？", { value1: overlaySwitch.targetSetLabel })}</p>
             </div>
             <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
-              <button type="button" className="ghost" onClick={onCancelOverlaySwitch}>キャンセル</button>
-              <button type="button" disabled={busy || overlayBusy} onClick={onConfirmOverlaySwitch}>
-                強制切り替え
-              </button>
+              <button type="button" className="ghost" onClick={onCancelOverlaySwitch}>{t("キャンセル")}</button>
+              <button type="button" disabled={busy || overlayBusy} onClick={onConfirmOverlaySwitch}>{t("強制切り替え")}</button>
             </div>
           </section>
         </div>
@@ -305,26 +280,24 @@ export function BracketDialogs({
             className="dialog-panel mobile-input-dialog"
             role="dialog"
             aria-modal="true"
-            aria-label="スマートフォン入力URL"
+            aria-label={t("スマートフォン入力URL")}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="dialog-head">
               <div>
-                <h3>スマートフォンでアクセス</h3>
-                <p className="meta">同一LAN内の端末に共有してください。</p>
+                <h3>{t("スマートフォンでアクセス")}</h3>
+                <p className="meta">{t("同一LAN内の端末に共有してください。")}</p>
               </div>
-              <button type="button" className="ghost" onClick={onCloseMobileInput}>閉じる</button>
+              <button type="button" className="ghost" onClick={onCloseMobileInput}>{t("閉じる")}</button>
             </div>
             <div className="dialog-body">
               <div className="dialog-summary-box">
-                <p className="dialog-summary-title">アクセス候補</p>
+                <p className="dialog-summary-title">{t("アクセス候補")}</p>
                 <div className="mobile-url-list">
                   {mobileInputCandidates.map((item) => (
                     <article className="mobile-url-item" key={`${item.bindIp}::${item.interfaceName}`}>
                       <span className="mobile-url-text">{item.bindIp}</span>
-                      <button type="button" className="ghost tiny" onClick={() => onIssueMobileUrl(item.bindIp)}>
-                        URL発行
-                      </button>
+                      <button type="button" className="ghost tiny" onClick={() => onIssueMobileUrl(item.bindIp)}>{t("URL発行")}</button>
                     </article>
                   ))}
                 </div>
@@ -334,13 +307,13 @@ export function BracketDialogs({
                 <>
                   <div className="mobile-input-qr-wrap">
                     {issuedQrUrl === "" ? (
-                      <p className="meta">2次元コードを生成中です...</p>
+                      <p className="meta">{t("2次元コードを生成中です...")}</p>
                     ) : (
-                      <img className="mobile-input-qr" src={issuedQrUrl} alt="スマートフォン入力URLの2次元コード" />
+                      <img className="mobile-input-qr" src={issuedQrUrl} alt={t("スマートフォン入力URLの2次元コード")} />
                     )}
                   </div>
                   <div className="dialog-summary-box">
-                    <p className="dialog-summary-title">発行中のURL</p>
+                    <p className="dialog-summary-title">{t("発行中のURL")}</p>
                     <p className="dialog-summary-value mobile-url-text">{issuedUrlDisplayIp}</p>
                     <p className="meta mobile-url-full">{issuedUrl}</p>
                     <div className="mobile-url-actions">
@@ -349,11 +322,9 @@ export function BracketDialogs({
                         className="ghost"
                         disabled={mobileInputBusy || issuedUrl.trim() === ""}
                         onClick={onCopyMobileUrl}
-                      >
-                        URLをコピー
-                      </button>
+                      >{t("URLをコピー")}</button>
                       <button type="button" className="ghost" disabled={mobileInputBusy} onClick={onRefreshMobileUrl}>
-                        {mobileInputBusy ? "更新中..." : "URLを更新"}
+                        {mobileInputBusy ? t("更新中...") : t("URLを更新")}
                       </button>
                     </div>
                   </div>
@@ -377,19 +348,19 @@ export function BracketDialogs({
             className="dialog-panel conflict-dialog"
             role="dialog"
             aria-modal="true"
-            aria-label="一括報告の競合確認"
+            aria-label={t("一括報告の競合確認")}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="dialog-head">
               <div>
-                <h3>一括報告の競合</h3>
-                <p className="meta">このsetは start.gg 側の状態が進んでいるため、そのままでは更新できません。</p>
+                <h3>{t("一括報告の競合")}</h3>
+                <p className="meta">{t("このsetは start.gg 側の状態が進んでいるため、そのままでは更新できません。")}</p>
               </div>
-              <button type="button" className="ghost" disabled={busy} onClick={onCancelConflict}>中止</button>
+              <button type="button" className="ghost" disabled={busy} onClick={onCancelConflict}>{t("中止")}</button>
             </div>
             <div className="dialog-body">
               <div className="dialog-summary-box">
-                <p className="dialog-summary-title">対象set</p>
+                <p className="dialog-summary-title">{t("対象set")}</p>
                 <p className="dialog-summary-value">{conflictDialog.conflict.fullRoundText}</p>
                 <p className="meta">
                   {conflictDialog.conflict.entrantNames.filter((name) => name.trim() !== "").join(" vs ") || conflictDialog.conflict.setId}
@@ -399,25 +370,19 @@ export function BracketDialogs({
                 </p>
               </div>
               <div className="dialog-summary-box">
-                <p className="dialog-summary-title">ここまでの進捗</p>
-                <p className="dialog-summary-value">
-                  対象 {conflictDialog.progress.totalCount} 件 / 送信 {conflictDialog.progress.reportedCount} 件 / スキップ {conflictDialog.progress.skippedCount} 件
-                </p>
+                <p className="dialog-summary-title">{t("ここまでの進捗")}</p>
+                <p className="dialog-summary-value">{t("対象 {value1} 件 / 送信 {value2} 件 / スキップ {value3} 件", { value1: conflictDialog.progress.totalCount, value2: conflictDialog.progress.reportedCount, value3: conflictDialog.progress.skippedCount })}</p>
               </div>
               <label className="checkbox-row">
                 <input
                   type="checkbox"
                   checked={forceOverwriteRemaining}
                   onChange={(event) => onForceOverwriteRemainingChange(event.currentTarget.checked)}
-                />
-                この一括報告の残りでも、競合したsetは自動で reset して強制上書きする
-              </label>
+                />{t("この一括報告の残りでも、競合したsetは自動で reset して強制上書きする")}</label>
             </div>
             <div className="dialog-actions dialog-actions-split">
-              <button type="button" className="ghost" disabled={busy} onClick={onCancelConflict}>この時点で止める</button>
-              <button type="button" disabled={busy} onClick={onContinueConflict}>
-                このsetを reset して続行
-              </button>
+              <button type="button" className="ghost" disabled={busy} onClick={onCancelConflict}>{t("この時点で止める")}</button>
+              <button type="button" disabled={busy} onClick={onContinueConflict}>{t("このsetを reset して続行")}</button>
             </div>
           </section>
         </div>
@@ -443,29 +408,22 @@ export function RestoreAllSeedsDialog({
         className="dialog-panel"
         role="dialog"
         aria-modal="true"
-        aria-label="全体復元時のSeedの扱い"
+        aria-label={t("全体復元時のSeedの扱い")}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="dialog-head">
           <div>
-            <h3>全体復元時のSeedの扱い</h3>
-            <p className="meta">対象: {selectedEventName}</p>
+            <h3>{t("全体復元時のSeedの扱い")}</h3>
+            <p className="meta">{t("対象: {value1}", { value1: selectedEventName })}</p>
           </div>
         </div>
         <div className="dialog-body">
-          <p className="meta">
-            全体のスコアをスナップショット時点に戻し、未報告結果を破棄します。
-            Seedの並び順を維持するか、並び替えも破棄してスナップショット時点に戻すかを選択してください。
-          </p>
+          <p className="meta">{t("全体のスコアをスナップショット時点に戻し、未報告結果を破棄します。 Seedの並び順を維持するか、並び替えも破棄してスナップショット時点に戻すかを選択してください。")}</p>
         </div>
         <div className="dialog-actions dialog-actions-split">
-          <button type="button" className="ghost" disabled={busy} onClick={onCancel}>キャンセル</button>
-          <button type="button" className="ghost" disabled={busy} onClick={() => onRestore(true)}>
-            Seedの並び替えも破棄して復元
-          </button>
-          <button type="button" disabled={busy} onClick={() => onRestore(false)}>
-            Seedの並び順を維持して復元
-          </button>
+          <button type="button" className="ghost" disabled={busy} onClick={onCancel}>{t("キャンセル")}</button>
+          <button type="button" className="ghost" disabled={busy} onClick={() => onRestore(true)}>{t("Seedの並び替えも破棄して復元")}</button>
+          <button type="button" disabled={busy} onClick={() => onRestore(false)}>{t("Seedの並び順を維持して復元")}</button>
         </div>
       </section>
     </div>

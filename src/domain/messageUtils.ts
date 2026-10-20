@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { FeatureMessage } from "./messages";
 import { callElapsedSeconds, type CallListEventGroup } from "../components/StatusBoard";
 
@@ -34,9 +35,9 @@ export function canBroadcastCallListSync(
 }
 
 export function formatSenderProfileLabel(profile: SenderMessagingProfile): string {
-  const senderName = profile.senderName.trim() || "未設定";
-  const senderUserId = isValidSenderUserId(profile.senderUserId) ? profile.senderUserId : "未設定";
-  const bindIp = isValidIpv4(profile.bindIp) ? profile.bindIp : "未設定";
+  const senderName = profile.senderName.trim() || t("未設定");
+  const senderUserId = isValidSenderUserId(profile.senderUserId) ? profile.senderUserId : t("未設定");
+  const bindIp = isValidIpv4(profile.bindIp) ? profile.bindIp : t("未設定");
   return `${senderName} / ${senderUserId} / IP: ${bindIp}`;
 }
 
@@ -48,19 +49,19 @@ export function resolveSenderSettingsStatus(input: {
   broadcastSubnetMask: string;
 }): string {
   if (input.senderIdCollision) {
-    return "呼び出し・通信相手の情報で同一IDが別名義に使われています。";
+    return t("呼び出し・通信相手の情報で同一IDが別名義に使われています。");
   }
   if (input.senderIdentityChanged) {
-    return "送信者名/ID変更前に呼び出しを解決し、他端末の外部報告者設定を解除してください。";
+    return t("送信者名/ID変更前に呼び出しを解決し、他端末の外部報告者設定を解除してください。");
   }
   if (!input.hasSelectedNetworkDevice) {
-    return "ネットワークデバイスを選択してください。";
+    return t("ネットワークデバイスを選択してください。");
   }
   if (!isValidIpv4(input.bindIp)) {
-    return "選択デバイスのIPが不正です。";
+    return t("選択デバイスのIPが不正です。");
   }
   if (!isValidIpv4(input.broadcastSubnetMask)) {
-    return "選択デバイスのサブネットマスクが不正です。";
+    return t("選択デバイスのサブネットマスクが不正です。");
   }
   return "";
 }

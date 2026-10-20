@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { invoke } from "@tauri-apps/api/core";
 import {
   isCompletedSet,
@@ -105,7 +106,7 @@ export function useSetResultPersistence<TWorkspace>({
 
       if (winnerId === "") {
         if (input.confirmed) {
-          setError("スコアから勝者を特定できませんでした。入力を確認してください。");
+          setError(t("スコアから勝者を特定できませんでした。入力を確認してください。"));
           return;
         }
 
@@ -129,8 +130,8 @@ export function useSetResultPersistence<TWorkspace>({
 
         setMessage(
           overlaySyncFailed
-            ? "勝者未確定のため結果は確定せず、現在スコアを更新しました。オーバーレイ同期には失敗しましたが、ローカル保存は維持されています。"
-            : "勝者未確定のため結果は確定せず、現在スコアを更新しました。オーバーレイへも同期済みです。",
+            ? t("勝者未確定のため結果は確定せず、現在スコアを更新しました。オーバーレイ同期には失敗しましたが、ローカル保存は維持されています。")
+            : t("勝者未確定のため結果は確定せず、現在スコアを更新しました。オーバーレイへも同期済みです。"),
         );
         return;
       }
@@ -178,21 +179,21 @@ export function useSetResultPersistence<TWorkspace>({
           }, workspace);
         } catch (error) {
           externalReportFailed = true;
-          setError(`結果はローカルで確定しましたが、外部報告の送信に失敗しました: ${String(error)}`);
+          setError(t("結果はローカルで確定しましたが、外部報告の送信に失敗しました: {p0}", { p0: String(error) }));
         }
       }
 
       const saveMessage =
         input.confirmed
           ? externalReportFailed
-            ? "結果を確定しましたが、外部報告は送信できませんでした。"
+            ? t("結果を確定しましたが、外部報告は送信できませんでした。")
             : externalReportSent
-              ? "結果を確定し、外部報告をブロードキャストしました。"
-              : "結果を確定しました。確定済みの試合だけが一括報告の対象になります。"
-          : "入力を保存しました。確定すると一括報告の対象になります。";
+              ? t("結果を確定し、外部報告をブロードキャストしました。")
+              : t("結果を確定しました。確定済みの試合だけが一括報告の対象になります。")
+          : t("入力を保存しました。確定すると一括報告の対象になります。");
       setMessage(
         overlaySyncFailed
-          ? `${saveMessage} オーバーレイ同期には失敗しましたが、ローカル保存は維持されています。`
+          ? t("{p0} オーバーレイ同期には失敗しましたが、ローカル保存は維持されています。", { p0: saveMessage })
           : saveMessage,
       );
       if (input.confirmed) {
@@ -209,19 +210,19 @@ export function useSetResultPersistence<TWorkspace>({
     const event = input.event;
     const set = input.set;
     if (!event) {
-      setError("イベントが選択されていません。");
+      setError(t("イベントが選択されていません。"));
       return;
     }
     if (!set) {
-      setError("試合が選択されていません。");
+      setError(t("試合が選択されていません。"));
       return;
     }
     if (isCompletedSet(set)) {
-      setError("確定済みsetの結果は変更できません。修正する場合は「影響setを取消」からやり直してください。");
+      setError(t("確定済みsetの結果は変更できません。修正する場合は「影響setを取消」からやり直してください。"));
       return;
     }
     if (isInactiveGrandFinalReset(set, event)) {
-      setError("Winners側のプレイヤーがGrand Finalに勝利したため、Grand Final Resetは行われません。");
+      setError(t("Winners側のプレイヤーがGrand Finalに勝利したため、Grand Final Resetは行われません。"));
       return;
     }
 
@@ -254,8 +255,8 @@ export function useSetResultPersistence<TWorkspace>({
       }
       setMessage(
         overlaySyncFailed
-          ? "外部報告の結果を反映しましたが、オーバーレイ同期に失敗しました。"
-          : "外部報告の結果をローカルsnapshotに反映しました。",
+          ? t("外部報告の結果を反映しましたが、オーバーレイ同期に失敗しました。")
+          : t("外部報告の結果をローカルsnapshotに反映しました。"),
       );
       return null;
     } catch (error) {
@@ -280,7 +281,7 @@ export function useSetResultPersistence<TWorkspace>({
       clearAllDrafts();
       closeMatchDialog();
       await refreshSnapshotEvents();
-      setMessage("全下書きを破棄しました。スナップショットの内容に戻しました。");
+      setMessage(t("全下書きを破棄しました。スナップショットの内容に戻しました。"));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -301,7 +302,7 @@ export function useSetResultPersistence<TWorkspace>({
       removeDraftsForSet(input.setId);
       restoreSetDraftState(workspace, input.eventId, input.setId);
       await refreshSnapshotEvents();
-      setMessage("このsetの下書きを破棄しました。保存用スナップショットの内容に戻しました。");
+      setMessage(t("このsetの下書きを破棄しました。保存用スナップショットの内容に戻しました。"));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -323,11 +324,11 @@ export function useSetResultPersistence<TWorkspace>({
     set: SetSnapshot | null,
   ) {
     if (!event) {
-      setError("先にイベントを選択してください。");
+      setError(t("先にイベントを選択してください。"));
       return;
     }
     if (!set) {
-      setError("試合が選択されていません。");
+      setError(t("試合が選択されていません。"));
       return;
     }
 
@@ -351,7 +352,7 @@ export function useSetResultPersistence<TWorkspace>({
       );
       setWorkspace(result.workspace);
       closeMatchDialog();
-      setMessage(`結果をローカルで取り消しました。${result.affectedSetIds.length} 件のsetを更新しています。`);
+      setMessage(t("結果をローカルで取り消しました。{p0} 件のsetを更新しています。", { p0: result.affectedSetIds.length }));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -366,15 +367,15 @@ export function useSetResultPersistence<TWorkspace>({
     perPage: number;
   }) {
     if (!input.event) {
-      setError("先にイベントを選択してください。");
+      setError(t("先にイベントを選択してください。"));
       return;
     }
     if (!input.set) {
-      setError("試合が選択されていません。");
+      setError(t("試合が選択されていません。"));
       return;
     }
 
-    const confirmed = window.confirm("このsetと影響するsetの結果をローカルで取り消します。実行しますか？");
+    const confirmed = window.confirm(t("このsetと影響するsetの結果をローカルで取り消します。実行しますか？"));
     if (!confirmed) {
       return;
     }

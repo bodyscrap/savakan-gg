@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import QRCode from "qrcode";
@@ -130,19 +131,19 @@ export function useMobileInputPortal({
 
   async function refreshDialog() {
     if (!eventId) {
-      setError("先にイベントを選択してください。");
+      setError(t("先にイベントを選択してください。"));
       return;
     }
 
     const normalizedSlug = toApiSlug(slug);
     if (normalizedSlug === "") {
-      setError("大会IDを入力してください。");
+      setError(t("大会IDを入力してください。"));
       return;
     }
 
     const activeHost = mobileInputUrlHostKey(issuedUrl);
     if (activeHost === "") {
-      setError("先にURLを発行してください。");
+      setError(t("先にURLを発行してください。"));
       return;
     }
 
@@ -171,7 +172,7 @@ export function useMobileInputPortal({
 
       setPortalInfo(nextPortalInfo);
       setIssuedUrl(refreshedUrl);
-      setMessage("スマートフォン向けURLを更新しました。新しい2次元コードを共有してください。");
+      setMessage(t("スマートフォン向けURLを更新しました。新しい2次元コードを共有してください。"));
     } catch (error) {
       setError(String(error));
     } finally {
@@ -181,19 +182,19 @@ export function useMobileInputPortal({
 
   async function issueUrl(bindIp: string) {
     if (!eventId) {
-      setError("先にイベントを選択してください。");
+      setError(t("先にイベントを選択してください。"));
       return;
     }
 
     const normalizedSlug = toApiSlug(slug);
     if (normalizedSlug === "") {
-      setError("大会IDを入力してください。");
+      setError(t("大会IDを入力してください。"));
       return;
     }
 
     const selectedHost = bindIp.trim();
     if (selectedHost === "") {
-      setError("IPを選択してください。");
+      setError(t("IPを選択してください。"));
       return;
     }
 
@@ -222,7 +223,7 @@ export function useMobileInputPortal({
 
       setPortalInfo(nextPortalInfo);
       setIssuedUrl(selectedUrl);
-      setMessage("スマートフォン向けURLを発行しました。必要に応じてURLを更新できます。");
+      setMessage(t("スマートフォン向けURLを発行しました。必要に応じてURLを更新できます。"));
     } catch (error) {
       setError(String(error));
     } finally {
@@ -232,13 +233,13 @@ export function useMobileInputPortal({
 
   async function openDialog() {
     if (!eventId) {
-      setError("先にイベントを選択してください。");
+      setError(t("先にイベントを選択してください。"));
       return;
     }
 
     const normalizedSlug = toApiSlug(slug);
     if (normalizedSlug === "") {
-      setError("大会IDを入力してください。");
+      setError(t("大会IDを入力してください。"));
       return;
     }
 
@@ -247,7 +248,7 @@ export function useMobileInputPortal({
     setMessage("");
 
     if (portalInfo && issuedUrl.trim() !== "") {
-      setMessage("発行中のURLを表示しています。必要に応じてURL更新で再発行できます。");
+      setMessage(t("発行中のURLを表示しています。必要に応じてURL更新で再発行できます。"));
       return;
     }
 
@@ -257,11 +258,11 @@ export function useMobileInputPortal({
       setCandidates(availableCandidates);
 
       if (availableCandidates.length === 0) {
-        setError("利用可能なIP候補が見つかりませんでした。");
+        setError(t("利用可能なIP候補が見つかりませんでした。"));
         return;
       }
 
-      setMessage("IP候補を表示しました。URL発行を押すと結果を共有できます。");
+      setMessage(t("IP候補を表示しました。URL発行を押すと結果を共有できます。"));
     } catch (error) {
       setError(String(error));
     } finally {
@@ -276,12 +277,12 @@ export function useMobileInputPortal({
 
     try {
       if (!navigator.clipboard || !navigator.clipboard.writeText) {
-        throw new Error("この環境ではクリップボードAPIが使用できません。");
+        throw new Error(t("この環境ではクリップボードAPIが使用できません。"));
       }
       await navigator.clipboard.writeText(issuedUrl);
-      setMessage("スマートフォン入力URLをクリップボードへコピーしました。");
+      setMessage(t("スマートフォン入力URLをクリップボードへコピーしました。"));
     } catch {
-      setError("URLコピーに失敗しました。URLを手動で共有してください。");
+      setError(t("URLコピーに失敗しました。URLを手動で共有してください。"));
     }
   }
 

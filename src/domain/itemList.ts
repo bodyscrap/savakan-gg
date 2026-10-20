@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 export type ItemListConfig = {
   id: string;
   name: string;
@@ -39,7 +40,7 @@ export function createImportedItemList(
     || typeof rawValue !== "object"
     || Array.isArray(rawValue)
   ) {
-    throw new Error("インポートするアイテムリストの形式が不正です。");
+    throw new Error(t("インポートするアイテムリストの形式が不正です。"));
   }
 
   const source = rawValue as Partial<ItemListConfig>;
@@ -51,7 +52,7 @@ export function createImportedItemList(
     || !Array.isArray(source.items)
     || source.items.some((item) => typeof item !== "string")
   ) {
-    throw new Error("アイテムリスト名、カテゴリ名、アイテム一覧を含むJSONを指定してください。");
+    throw new Error(t("アイテムリスト名、カテゴリ名、アイテム一覧を含むJSONを指定してください。"));
   }
 
   const normalized = normalizeItemListConfig(rawValue);

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveEntrantDisplayName } from "../domain/bracketDisplay";
@@ -72,7 +73,7 @@ export function useUserCards({
           entrantIds: entrants.map((entrant) => entrant.entrantId),
         });
         if (playerIds.length !== entrants.length) {
-          throw new Error("選手IDの生成結果が参加者数と一致しません。");
+          throw new Error(t("選手IDの生成結果が参加者数と一致しません。"));
         }
         const rows = entrants.map((entrant, index) => ({
           tournamentId,
@@ -201,15 +202,15 @@ export function useUserCards({
 
   async function saveSelectedCards() {
     if (disableLocalCommunication) {
-      onError("ローカル通信を行わない設定のため、プレイヤーリスト機能は無効です。設定タブで解除してください。");
+      onError(t("ローカル通信を行わない設定のため、プレイヤーリスト機能は無効です。設定タブで解除してください。"));
       return;
     }
 
     const selectedPlayers = getSelectedPlayers();
     if (selectedPlayers.length === 0) {
       onError(selectedPlayerIds.length === 0 && !selectedPlayer
-        ? "保存するプレイヤーカードがありません。"
-        : "保存対象のプレイヤーカードが見つかりませんでした。");
+        ? t("保存するプレイヤーカードがありません。")
+        : t("保存対象のプレイヤーカードが見つかりませんでした。"));
       return;
     }
 
@@ -223,7 +224,7 @@ export function useUserCards({
         const blob = await canvasToBlob(canvas);
         triggerBlobDownload(blob, buildPlayerCardFileName(player));
       }
-      onMessage(`${selectedPlayers.length} 枚のプレイヤーカードを保存しました。`);
+      onMessage(t("{p0} 枚のプレイヤーカードを保存しました。", { p0: selectedPlayers.length }));
     } catch (error) {
       onError(String(error));
     } finally {
@@ -233,13 +234,13 @@ export function useUserCards({
 
   async function exportSelectedCardsAsA4Sheet() {
     if (disableLocalCommunication) {
-      onError("ローカル通信を行わない設定のため、プレイヤーリスト機能は無効です。設定タブで解除してください。");
+      onError(t("ローカル通信を行わない設定のため、プレイヤーリスト機能は無効です。設定タブで解除してください。"));
       return;
     }
 
     const selectedPlayers = getSelectedPlayers();
     if (selectedPlayers.length === 0) {
-      onError("出力対象の選択カードがありません。");
+      onError(t("出力対象の選択カードがありません。"));
       return;
     }
 
@@ -268,7 +269,7 @@ export function useUserCards({
         const ctx = canvas.getContext("2d");
 
         if (!ctx) {
-          throw new Error("A4画像の生成に失敗しました。");
+          throw new Error(t("A4画像の生成に失敗しました。"));
         }
 
         ctx.fillStyle = "#ffffff";
@@ -298,7 +299,7 @@ export function useUserCards({
         triggerBlobDownload(blob, buildPrintedPlayerCardPageFileName(safeEventAlias, page + 1, totalPages));
       }
 
-      onMessage(`選択中のカードを A4 シートにまとめて出力しました。${selectedPlayers.length} 枚 / ${totalPages} ページ`);
+      onMessage(t("選択中のカードを A4 シートにまとめて出力しました。{p0} 枚 / {p1} ページ", { p0: selectedPlayers.length, p1: totalPages }));
     } catch (error) {
       onError(String(error));
     } finally {

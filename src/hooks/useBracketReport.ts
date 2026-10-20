@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -122,36 +123,36 @@ export function useBracketReport<TWorkspace>({
       return "";
     }
 
-    const doneText = `${progress.processedCount}/${progress.totalCount} 件`;
-    const detailText = `送信 ${progress.reportedCount} / スキップ ${progress.skippedCount}`;
+    const doneText = t("{p0}/{p1} 件", { p0: progress.processedCount, p1: progress.totalCount });
+    const detailText = t("送信 {p0} / スキップ {p1}", { p0: progress.reportedCount, p1: progress.skippedCount });
 
     if (progress.phase === "starting") {
-      return `結果報告の準備中...（${doneText}）`;
+      return t("結果報告の準備中...（{p0}）", { p0: doneText });
     }
     if (progress.phase === "processing") {
       return progress.currentSetId
-        ? `結果報告中 ${doneText} / ${detailText} / set ${progress.currentSetId}`
-        : `結果報告中 ${doneText} / ${detailText}`;
+        ? t("結果報告中 {p0} / {p1} / set {p2}", { p0: doneText, p1: detailText, p2: progress.currentSetId })
+        : t("結果報告中 {p0} / {p1}", { p0: doneText, p1: detailText });
     }
     if (progress.phase === "refreshingSnapshot") {
-      return `結果報告後のスナップショット更新中... ${doneText} / ${detailText}`;
+      return t("結果報告後のスナップショット更新中... {p0} / {p1}", { p0: doneText, p1: detailText });
     }
     if (progress.phase === "paused") {
       return progress.currentSetId
-        ? `競合のため一時停止 ${doneText} / ${detailText} / set ${progress.currentSetId}`
-        : `競合のため一時停止 ${doneText} / ${detailText}`;
+        ? t("競合のため一時停止 {p0} / {p1} / set {p2}", { p0: doneText, p1: detailText, p2: progress.currentSetId })
+        : t("競合のため一時停止 {p0} / {p1}", { p0: doneText, p1: detailText });
     }
     if (progress.phase === "completed") {
-      return `結果報告が完了しました。${detailText}`;
+      return t("結果報告が完了しました。{p0}", { p0: detailText });
     }
-    return `結果報告中 ${doneText} / ${detailText}`;
+    return t("結果報告中 {p0} / {p1}", { p0: doneText, p1: detailText });
   }, [progress]);
 
   function cancelConflict() {
     setConflictDialog(null);
     setForceOverwriteRemaining(false);
     setProgress(null);
-    setMessage("一括報告を中断しました。未送信のsetはそのまま残しています。");
+    setMessage(t("一括報告を中断しました。未送信のsetはそのまま残しています。"));
   }
 
   async function runBatchReport(
@@ -160,7 +161,7 @@ export function useBracketReport<TWorkspace>({
     forceOverwriteRemainingConflicts: boolean,
   ) {
     if (!eventId) {
-      throw new Error("先にイベントを選択してください。");
+      throw new Error(t("先にイベントを選択してください。"));
     }
 
     const result = await invoke<BracketBatchReportResult<TWorkspace>>("report_confirmed_sets_from_bracket", {
@@ -188,7 +189,7 @@ export function useBracketReport<TWorkspace>({
       setProgress(null);
       const unsentCount = Math.max(0, nextProgress.totalCount - nextProgress.reportedCount - nextProgress.skippedCount);
       setMessage(
-        `一括報告を実行しました。対象 ${nextProgress.totalCount} 件 / 送信 ${nextProgress.reportedCount} 件 / スキップ ${nextProgress.skippedCount} 件 / 未送信 ${unsentCount} 件`,
+        t("一括報告を実行しました。対象 {p0} 件 / 送信 {p1} 件 / スキップ {p2} 件 / 未送信 {p3} 件", { p0: nextProgress.totalCount, p1: nextProgress.reportedCount, p2: nextProgress.skippedCount, p3: unsentCount }),
       );
       return;
     }
@@ -196,33 +197,33 @@ export function useBracketReport<TWorkspace>({
     if (result.conflict) {
       setConflictDialog({ conflict: result.conflict, progress: nextProgress });
       setMessage(
-        `一括報告を一時停止しました。${result.conflict.fullRoundText} で start.gg 側との競合を確認してください。`,
+        t("一括報告を一時停止しました。{p0} で start.gg 側との競合を確認してください。", { p0: result.conflict.fullRoundText }),
       );
       return;
     }
 
-    throw new Error("一括報告の状態が不正です。競合情報を取得できませんでした。");
+    throw new Error(t("一括報告の状態が不正です。競合情報を取得できませんでした。"));
   }
 
   async function startReport() {
     if (seedStatusLoading) {
-      setMessage("初期Seedの状態確認が終わるまでお待ちください。");
+      setMessage(t("初期Seedの状態確認が終わるまでお待ちください。"));
       return;
     }
     if (!eventId) {
-      setError("先にイベントを選択してください。");
+      setError(t("先にイベントを選択してください。"));
       return;
     }
     if (slug === "") {
-      setError("大会IDを入力してください。");
+      setError(t("大会IDを入力してください。"));
       return;
     }
 
     if (hasUnreportedSeedShuffle) {
       if (!window.confirm(
-        "Seed設定前に、Seed設定対象のすべてのPhaseGroup（Pool）がReset済みである必要があります。対象PoolをすべてResetしたことを確認しましたか？",
+        t("Seed設定前に、Seed設定対象のすべてのPhaseGroup（Pool）がReset済みである必要があります。対象PoolをすべてResetしたことを確認しましたか？"),
       )) {
-        setMessage("Seed設定対象のすべてのPhaseGroup（Pool）をResetしてから、再度報告してください。");
+        setMessage(t("Seed設定対象のすべてのPhaseGroup（Pool）をResetしてから、再度報告してください。"));
         return;
       }
       setBusy(true);
@@ -242,7 +243,7 @@ export function useBracketReport<TWorkspace>({
         setSeedSnapshotPromptOpen(true);
       } catch (error) {
         setError(
-          `Seedをstart.ggへ反映できませんでした。Seed設定対象のすべてのPhaseGroup（Pool）をResetした状態か確認し、Start済みのPoolがあればResetしてから再度報告してください。詳細: ${String(error)}`,
+          t("Seedをstart.ggへ反映できませんでした。Seed設定対象のすべてのPhaseGroup（Pool）をResetした状態か確認し、Start済みのPoolがあればResetしてから再度報告してください。詳細: {p0}", { p0: String(error) }),
         );
       } finally {
         setBusy(false);
@@ -253,10 +254,10 @@ export function useBracketReport<TWorkspace>({
     setError("");
     setMessage("");
     const startConfirmationMessage = seedSnapshotRefreshRequired
-      ? "start.gg側でブラケットをStart済みであることを確認してください。スナップショット未更新のままローカル結果を報告する方法は上級者向けです。Setの対応付けに失敗した場合は報告が停止することがあります。続行しますか？"
-      : "start.gg側でブラケットをStart済みであることを確認してください。確定結果を報告しますか？";
+      ? t("start.gg側でブラケットをStart済みであることを確認してください。スナップショット未更新のままローカル結果を報告する方法は上級者向けです。Setの対応付けに失敗した場合は報告が停止することがあります。続行しますか？")
+      : t("start.gg側でブラケットをStart済みであることを確認してください。確定結果を報告しますか？");
     if (!window.confirm(startConfirmationMessage)) {
-      setMessage("ブラケットがStart済みであることを確認してから、結果を報告してください。");
+      setMessage(t("ブラケットがStart済みであることを確認してから、結果を報告してください。"));
       return;
     }
 

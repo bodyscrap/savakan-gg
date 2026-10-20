@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { KeyboardEvent, MouseEvent } from "react";
 
 type BracketSetCardSlot = {
@@ -56,10 +57,10 @@ export function BracketSetCard({
           <div className="set-header-badges">
             {resultStatusLabel !== "" && resultStatus && (
               <span className={`set-status-badge status-${resultStatus}`}>
-                {resultStatusLabel}
+                {t(resultStatusLabel)}
               </span>
             )}
-            {isLiveOverlaySet && <span className="set-live-badge">配信中</span>}
+            {isLiveOverlaySet && <span className="set-live-badge">{t("配信中")}</span>}
           </div>
         </div>
       )}

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useRef } from "react";
 import {
   isCompletedSet,
@@ -98,7 +99,7 @@ export function useSetSideAssignment({
       });
 
       if (!silent) {
-        setMessage("setサイドを保存しました。");
+        setMessage(t("setサイドを保存しました。"));
       }
     } catch (err) {
       const errorMessage = String(err);
@@ -286,7 +287,7 @@ export function useSetSideAssignment({
       }
 
       if (updates.length === 0) {
-        setMessage("適用対象の未確定試合はありませんでした。");
+        setMessage(t("適用対象の未確定試合はありませんでした。"));
         return;
       }
 
@@ -303,7 +304,7 @@ export function useSetSideAssignment({
       }
 
       const affectedSetCount = new Set(updates.map((update) => update.setSnapshot.setId)).size;
-      setMessage(`未確定試合 ${affectedSetCount} 件に 1P/2P 決定方法を適用しました。`);
+      setMessage(t("未確定試合 {p0} 件に 1P/2P 決定方法を適用しました。", { p0: affectedSetCount }));
     } catch (err) {
       setError(String(err));
     } finally {

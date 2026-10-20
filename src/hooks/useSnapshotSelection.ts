@@ -1,3 +1,4 @@
+import { t, useLanguage } from "../i18n";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EventSnapshot } from "../domain/bracketDisplay";
 import {
@@ -30,6 +31,7 @@ export function useSnapshotSelectionView({
   startupSavedSlugRef,
   startupSavedEventIdRef,
 }: UseSnapshotSelectionViewOptions) {
+  const language = useLanguage();
   const [homeSnapshotSearchInput, setHomeSnapshotSearchInput] = useState("");
   const [homeSelectedSnapshotKey, setHomeSelectedSnapshotKey] = useState("");
 
@@ -44,9 +46,9 @@ export function useSnapshotSelectionView({
       eventName: selectedEvent?.name,
       slug: currentSelectedSlug,
       eventId: currentSelectedEventId,
-      fallbackName: snapshot?.name ?? "未選択",
+      fallbackName: snapshot?.name ?? t("未選択"),
     });
-  }, [localSnapshotEvents, selectedEventMeta, selectedEvent, selectedEventId, snapshot]);
+  }, [language, localSnapshotEvents, selectedEventMeta, selectedEvent, selectedEventId, snapshot]);
 
   const selectedSidebarItem = useMemo(() => {
     const startupSelectedSlug = startupSavedSlugRef.current.trim();

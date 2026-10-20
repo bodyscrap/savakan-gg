@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -73,11 +74,11 @@ export function useSenderUserList({
     onError("");
     onMessage("");
     if (communicationDisabled) {
-      onError("ローカル通信を行わない設定のため、ユーザー一覧を更新できません。");
+      onError(t("ローカル通信を行わない設定のため、ユーザー一覧を更新できません。"));
       return;
     }
     if (!canBroadcastCallListSync(senderProfile, communicationDisabled)) {
-      onError("送信者情報とネットワークデバイスを保存してからユーザー一覧を更新してください。");
+      onError(t("送信者情報とネットワークデバイスを保存してからユーザー一覧を更新してください。"));
       return;
     }
 
@@ -103,8 +104,8 @@ export function useSenderUserList({
           profile: senderProfile,
           messageType: "normal",
           method: "sender_user_list_request",
-          subject: "ユーザー一覧の問い合わせ",
-          body: "現在利用中の送信者情報を返信してください。",
+          subject: t("ユーザー一覧の問い合わせ"),
+          body: t("現在利用中の送信者情報を返信してください。"),
           messageMeta: { requestId },
           deliveryTargetMode: "broadcast",
           deliveryTargetIp: null,
@@ -112,7 +113,7 @@ export function useSenderUserList({
           parentMessageId: null,
         },
       });
-      onMessage("ユーザー一覧の問い合わせをブロードキャストしました。");
+      onMessage(t("ユーザー一覧の問い合わせをブロードキャストしました。"));
     } catch (error) {
       if (activeRequestId.current === requestId) {
         activeRequestId.current = "";

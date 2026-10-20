@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { AppTab } from "../components/AppShell";
 import type { EventSnapshot } from "../domain/bracketDisplay";
 import type { FeatureMessage } from "../domain/messages";
@@ -50,34 +51,34 @@ export function useDqRequestNavigation({
     onMessage("");
 
     if (!event) {
-      onError("先にイベントを選択してください。DQ処理先を開けません。");
+      onError(t("先にイベントを選択してください。DQ処理先を開けません。"));
       return false;
     }
     if (extractMetaString(message.messageMeta, "scopeEventId") !== event.eventId) {
-      onError("DQ申請のイベントが現在のイベントと一致しません。");
+      onError(t("DQ申請のイベントが現在のイベントと一致しません。"));
       return false;
     }
 
     const context = resolveDqRequestContext(message);
     if (!context) {
-      onError("DQ申請メッセージから対象setを特定できませんでした。");
+      onError(t("DQ申請メッセージから対象setを特定できませんでした。"));
       return false;
     }
 
     const targetSet = event.sets.find((set) => set.setId === context.setId);
     if (!targetSet) {
-      onError(`対象setが現在のイベント内に見つかりません: ${context.setId}`);
+      onError(t("対象setが現在のイベント内に見つかりません: {p0}", { p0: context.setId }));
       return false;
     }
     if (extractMetaString(message.messageMeta, "phaseGroupId") !== targetSet.phaseGroupId) {
-      onError("DQ申請のPoolが対象の試合と一致しません。");
+      onError(t("DQ申請のPoolが対象の試合と一致しません。"));
       return false;
     }
 
     const resolvedTargetSet = resolvedSetsById.get(targetSet.setId) ?? targetSet;
     const draftState = buildDqDraftStateForEntrant(resolvedTargetSet, context.dqEntrantId);
     if (!draftState) {
-      onError("DQ入力の自動設定に失敗しました。対象プレイヤーまたは対戦カードを確認してください。");
+      onError(t("DQ入力の自動設定に失敗しました。対象プレイヤーまたは対戦カードを確認してください。"));
       return false;
     }
 
@@ -87,7 +88,7 @@ export function useDqRequestNavigation({
     setSelectedPhasePoolKey(targetSet.phaseGroupId ? `id:${targetSet.phaseGroupId}` : `${phaseName}::${phaseGroupName}`);
     setActiveTab("bracket");
     openMatchDialog(targetSet, draftState);
-    onMessage("DQ申請から対象setを開きました。DQ入力済みなので「確定」を押すと反映できます。");
+    onMessage(t("DQ申請から対象setを開きました。DQ入力済みなので「確定」を押すと反映できます。"));
     return true;
   }
 

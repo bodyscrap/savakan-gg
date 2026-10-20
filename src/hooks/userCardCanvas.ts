@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import QRCode from "qrcode";
 
 export type UserCardPlayer = {
@@ -46,7 +47,7 @@ export function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (!blob) {
-        reject(new Error("画像の生成に失敗しました。"));
+        reject(new Error(t("画像の生成に失敗しました。")));
         return;
       }
       resolve(blob);
@@ -91,7 +92,7 @@ export async function renderPlayerCardCanvas(
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
-    throw new Error("Canvasを初期化できませんでした。ブラウザ設定を確認してください。");
+    throw new Error(t("Canvasを初期化できませんでした。ブラウザ設定を確認してください。"));
   }
 
   const bg = ctx.createLinearGradient(0, 0, width, height);
@@ -125,7 +126,7 @@ export async function renderPlayerCardCanvas(
 
   const aliasLabel = player.eventAlias && player.eventAlias.trim() !== ""
     ? player.eventAlias.trim()
-    : "未設定";
+    : t("未設定");
 
   let cursorY = titleY + 110;
 
@@ -143,12 +144,12 @@ export async function renderPlayerCardCanvas(
 
   ctx.fillStyle = "#1d4ed8";
   ctx.font = "700 24px 'Noto Sans JP', sans-serif";
-  ctx.fillText(`大会通称: ${aliasLabel}`, infoX + 12, cursorY + 10, infoMaxWidth - 18);
+  ctx.fillText(t("大会通称: {p0}", { p0: aliasLabel }), infoX + 12, cursorY + 10, infoMaxWidth - 18);
 
   cursorY += 56;
   ctx.fillStyle = "#334155";
   ctx.font = "600 21px 'Noto Sans JP', sans-serif";
-  ctx.fillText(`正式名称: ${player.tournamentName} / ${player.eventName}`, infoX, cursorY, infoMaxWidth);
+  ctx.fillText(t("正式名称: {p0} / {p1}", { p0: player.tournamentName, p1: player.eventName }), infoX, cursorY, infoMaxWidth);
 
   cursorY += 52;
   drawRoundedRect(ctx, infoX - 2, cursorY - 34, infoMaxWidth, 84, 12);

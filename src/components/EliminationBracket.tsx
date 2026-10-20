@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { CSSProperties, MouseEvent } from "react";
 import type { PhaseGroupSeedSnapshot, SetSnapshot } from "../domain/bracketProgression";
 import { BracketSetCard } from "./BracketSetCard";
@@ -56,7 +57,7 @@ export function EliminationBracket({
   return (
     <div className="bracket-split-stack" style={scaleStyle}>
       <details className="meta bracket-debug-seeds">
-        <summary>対象PhaseGroup seeds / seedMapを確認</summary>
+        <summary>{t("対象PhaseGroup seeds / seedMapを確認")}</summary>
         <h4>seeds</h4>
         <pre style={{ whiteSpace: "pre-wrap", maxHeight: "16rem", overflow: "auto" }}>
           {JSON.stringify(seeds, null, 2)}

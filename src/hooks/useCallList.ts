@@ -1,3 +1,4 @@
+import { t, useLanguage } from "../i18n";
 import { useEffect, useMemo, useState } from "react";
 import type { FeatureMessage } from "../domain/messages";
 import type { CallListEventGroup, CallListEventSortStrategy } from "../components/StatusBoard";
@@ -90,6 +91,7 @@ type ResetCallListDisplayOptions = {
 };
 
 export function useCallList({ activeTab, calls, dqRequests, senderUserId }: UseCallListOptions) {
+  const language = useLanguage();
   const [pageIndex, setPageIndex] = useState(0);
   const [pageRotateSeconds, setPageRotateSeconds] = useState(CALL_LIST_ROTATE_SECONDS_DEFAULT);
   const [colorSeconds, setColorSeconds] = useState(CALL_LIST_COLOR_SECONDS_DEFAULT);
@@ -189,7 +191,7 @@ export function useCallList({ activeTab, calls, dqRequests, senderUserId }: UseC
       const entrantName = callIdentity?.callEntrantName
         || extractMetaString(root.messageMeta, "callEntrantName")
         || extractMetaString(root.messageMeta, "callEntrantId")
-        || "不明プレイヤー";
+        || t("不明プレイヤー");
       const eventMeta = extractCallEventMeta(root);
       const groupKey = [
         eventMeta.tournamentId,
@@ -256,7 +258,7 @@ export function useCallList({ activeTab, calls, dqRequests, senderUserId }: UseC
         .slice()
         .sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
     }));
-  }, [dqRequestsByCallId, focusOwnUnresolved, calls, senderUserId]);
+  }, [language, dqRequestsByCallId, focusOwnUnresolved, calls, senderUserId]);
 
   const eventGroupComparator = useMemo(() => {
     if (eventSortStrategy === "max-elapsed") {

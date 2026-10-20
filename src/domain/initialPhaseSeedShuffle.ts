@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { EventSnapshot } from "./bracketDisplay";
 import type { PhaseGroupSeedSnapshot } from "./bracketProgression";
 
@@ -14,7 +15,7 @@ export function buildInitialPhaseSeedMapping(
     .filter((phase) => phase.phaseOrder !== null)
     .sort((left, right) => (left.phaseOrder ?? 0) - (right.phaseOrder ?? 0))[0];
   if (!firstPhase) {
-    throw new Error("最初のPhase情報がありません。");
+    throw new Error(t("最初のPhase情報がありません。"));
   }
 
   const seedsById = new Map<string, PhaseGroupSeedSnapshot>();
@@ -24,14 +25,14 @@ export function buildInitialPhaseSeedMapping(
     }
     for (const seed of group.seeds ?? []) {
       if (!seed.seedId || seed.seedNum === null || seed.seedNum === undefined) {
-        throw new Error("初期PhaseのSeed番号が不足しています。");
+        throw new Error(t("初期PhaseのSeed番号が不足しています。"));
       }
       const existing = seedsById.get(seed.seedId);
       if (existing && (
         existing.seedNum !== seed.seedNum
         || existing.entrantId !== seed.entrantId
       )) {
-        throw new Error("初期Phaseに不整合なSeed情報があります。");
+        throw new Error(t("初期Phaseに不整合なSeed情報があります。"));
       }
       seedsById.set(seed.seedId, seed);
     }
@@ -39,7 +40,7 @@ export function buildInitialPhaseSeedMapping(
   const seeds = [...seedsById.values()];
   const entrantSeeds = seeds.filter((seed) => seed.entrantId !== null && seed.entrantId !== undefined);
   if (entrantSeeds.length < 2) {
-    throw new Error("シャッフルできるプレイヤーSeedが2件以上ありません。");
+    throw new Error(t("シャッフルできるプレイヤーSeedが2件以上ありません。"));
   }
 
   const shuffledIds = entrantSeeds.map((seed) => seed.seedId);

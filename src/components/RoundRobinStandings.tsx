@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { RoundRobinStanding, RoundRobinTieBreakRule } from "../domain/bracketProgression";
 
 type RoundRobinStandingsProps = {
@@ -50,14 +51,14 @@ export function RoundRobinStandings({
   return (
     <aside className="round-robin-standings">
       <div className="round-robin-standings-head">
-        <h4>現在順位</h4>
-        <span>{qualifyingCount > 0 ? `${qualifyingCount}位まで次フェーズ` : "次フェーズ枠未取得"}</span>
+        <h4>{t("現在順位")}</h4>
+        <span>{qualifyingCount > 0 ? t("{value1}位まで次フェーズ", { value1: qualifyingCount }) : t("次フェーズ枠未取得")}</span>
       </div>
       <table>
         <thead>
           <tr>
-            <th>順位</th>
-            <th className="round-robin-player-column">プレイヤー</th>
+            <th>{t("順位")}</th>
+            <th className="round-robin-player-column">{t("プレイヤー")}</th>
             {tieBreakRules.map((rule, index) => (
               <th key={rule}>{index + 1}. {tieBreakRuleLabel(rule)}</th>
             ))}

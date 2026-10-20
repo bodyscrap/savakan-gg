@@ -1,3 +1,4 @@
+import { t, useLanguage } from "../i18n";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -167,12 +168,12 @@ function getActiveCallsForSet(
 function readSnapshotArchiveIdentity(archiveJson: string) {
   const archive: unknown = JSON.parse(archiveJson);
   if (!isRecord(archive)) {
-    throw new Error("スナップショットの形式が不正です。");
+    throw new Error(t("スナップショットの形式が不正です。"));
   }
 
   const snapshot = archive.snapshot;
   if (!isRecord(snapshot)) {
-    throw new Error("スナップショットの大会情報がありません。");
+    throw new Error(t("スナップショットの大会情報がありません。"));
   }
   const events = snapshot.events;
   const event = Array.isArray(events) ? events[0] : null;
@@ -183,7 +184,7 @@ function readSnapshotArchiveIdentity(archiveJson: string) {
     || !isRecord(event)
     || typeof event.eventId !== "string"
   ) {
-    throw new Error("スナップショットのイベント情報が不正です。");
+    throw new Error(t("スナップショットのイベント情報が不正です。"));
   }
 
   return {
@@ -197,12 +198,13 @@ function getCallListResolveDialogTitle(dialog: {
   dqRequest?: FeatureMessage;
 }) {
   if (dialog.dqRequest) {
-    return `DQ申請受信(${dialog.playerName})`;
+    return t("DQ申請受信({p0})", { p0: dialog.playerName });
   }
-  return `呼び出し解決(${dialog.playerName})`;
+  return t("呼び出し解決({p0})", { p0: dialog.playerName });
 }
 
 function App() {
+  useLanguage();
   const [activeTab, setActiveTab] = useState<AppTab>("create");
   const appVersion = useAppVersion();
   const [slug, setSlug] = useState("");
@@ -410,7 +412,7 @@ function App() {
       try {
         await confirmedDqRequestsRef.current?.(report);
       } catch (dqError) {
-        setError(`試合結果は確定済みですが、DQ申請の処理済み保存に失敗しました: ${String(dqError)}`);
+        setError(t("試合結果は確定済みですが、DQ申請の処理済み保存に失敗しました: {p0}", { p0: String(dqError) }));
       }
       const confirmation = [...(savedWorkspace.localMeta.setConfirmationHistory ?? [])]
         .reverse()
@@ -420,7 +422,7 @@ function App() {
           && item.setId === report.setId
         ));
       if (!confirmation) {
-        throw new Error("確定情報のPool連番を取得できませんでした。");
+        throw new Error(t("確定情報のPool連番を取得できませんでした。"));
       }
       return externalScoreReportSenderRef.current
         ? externalScoreReportSenderRef.current({ ...report, sequence: confirmation.sequence })
@@ -587,7 +589,7 @@ function App() {
       .catch((checkError) => {
         if (active) {
           setIsInitialSeedStatusLoading(false);
-          setError(`初期Seedの状態確認に失敗しました: ${String(checkError)}`);
+          setError(t("初期Seedの状態確認に失敗しました: {p0}", { p0: String(checkError) }));
         }
       });
 
@@ -775,7 +777,7 @@ function App() {
     ) {
       setCallReactionDialog(null);
       pauseCallListPageRotation(false);
-      setMessage("呼び出しは解決または更新されています。");
+      setMessage(t("呼び出しは解決または更新されています。"));
     }
   }, [callReactionDialog, playerCallMessages, pauseCallListPageRotation]);
 
@@ -845,7 +847,7 @@ function App() {
 
   function requestSetCallResolution(set: SetSnapshot) {
     if (isCompletedSet(set)) {
-      setMessage("確定済みSetの呼び出しは呼び出しリストから解決してください。");
+      setMessage(t("確定済みSetの呼び出しは呼び出しリストから解決してください。"));
       return;
     }
     const calls = getSetCalls(set);
@@ -861,7 +863,7 @@ function App() {
     const calls = getSetCalls(set);
     if (calls.length > 0) {
       if (isCompletedSet(set)) {
-        setMessage("確定済みSetの呼び出しは呼び出しリストから解決してください。");
+        setMessage(t("確定済みSetの呼び出しは呼び出しリストから解決してください。"));
         return;
       }
       const { ownCalls, otherCalls } = splitSetCalls(calls);
@@ -1054,7 +1056,7 @@ function App() {
       || !Number.isSafeInteger(minutes)
       || minutes < 0
     ) {
-      setError("終了見込み時間は0以上の整数で入力してください。");
+      setError(t("終了見込み時間は0以上の整数で入力してください。"));
       return;
     }
     setPlayingNoticeSubmitting(true);
@@ -1066,8 +1068,8 @@ function App() {
       );
       if (sent) {
         setMessage(minutes === 0
-          ? "終了時刻未定のプレイ中通知を送信しました。"
-          : `約${minutes}分後に解除するプレイ中通知を送信しました。`);
+          ? t("終了時刻未定のプレイ中通知を送信しました。")
+          : t("約{p0}分後に解除するプレイ中通知を送信しました。", { p0: minutes }));
         setPlayingNoticeDialog(null);
         pauseCallListPageRotation(false);
       }
@@ -1078,7 +1080,7 @@ function App() {
 
   async function handleReleasePlaying(messageId: string) {
     if (await releasePlaying(messageId)) {
-      setMessage("プレイ中通知の解除を送信しました。");
+      setMessage(t("プレイ中通知の解除を送信しました。"));
     }
   }
 
@@ -1098,7 +1100,7 @@ function App() {
     try {
       const resolved = await resolveCall(callListResolveDialog.messageId);
       if (resolved) {
-        setMessage("呼び出しの解決をブロードキャストで送信しました。");
+        setMessage(t("呼び出しの解決をブロードキャストで送信しました。"));
         setCallListResolveDialog(null);
         pauseCallListPageRotation(false);
       }
@@ -1310,7 +1312,7 @@ function App() {
       const safeSlug = item.slug.replace(/^tournament\//, "").replace(/[^\w.-]+/g, "-");
       const safeEventId = item.eventId.replace(/[^\w.-]+/g, "-");
       const path = await saveFile({
-        title: "スナップショットをエクスポート",
+        title: t("スナップショットをエクスポート"),
         defaultPath: `savakan-gg-${safeSlug}-${safeEventId}-snapshot.json`,
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
@@ -1320,7 +1322,7 @@ function App() {
 
       const archive = await exportTournamentShareArchive(item.slug, item.eventId);
       await writeSnapshotExportFile(path, JSON.stringify(archive, null, 2));
-      setMessage(`スナップショットをエクスポートしました: ${item.tournamentName} / ${item.eventName}`);
+      setMessage(t("スナップショットをエクスポートしました: {p0} / {p1}", { p0: item.tournamentName, p1: item.eventName }));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -1342,7 +1344,7 @@ function App() {
         identity.eventId,
       );
       if (existingEvent && !window.confirm(
-        `同一イベントのスナップショットが既にあります。\n${existingEvent.tournamentName} / ${existingEvent.eventName}\n\nスナップショットとイベント別メタデータを上書きしますか？`,
+        t("同一イベントのスナップショットが既にあります。\n{p0} / {p1}\n\nスナップショットとイベント別メタデータを上書きしますか？", { p0: existingEvent.tournamentName, p1: existingEvent.eventName }),
       )) {
         return;
       }
@@ -1350,7 +1352,7 @@ function App() {
       const importedWorkspace = await importTournamentShareArchive(archiveJson);
       const importedEvent = importedWorkspace.snapshot.events[0];
       if (!importedEvent) {
-        throw new Error("スナップショットにイベントがありません。");
+        throw new Error(t("スナップショットにイベントがありません。"));
       }
 
       if (
@@ -1368,7 +1370,7 @@ function App() {
         setSelectedPhasePoolKey("");
       }
       await fetchLocalSnapshotEvents();
-      setMessage(`スナップショットをインポートしました: ${importedWorkspace.snapshot.name} / ${importedEvent.name}`);
+      setMessage(t("スナップショットをインポートしました: {p0} / {p1}", { p0: importedWorkspace.snapshot.name, p1: importedEvent.name }));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -1383,7 +1385,7 @@ function App() {
     try {
       const safeName = itemList.name.replace(/[<>:"/\\|?*\u0000-\u001f]+/g, "-") || "item-list";
       const path = await saveFile({
-        title: "アイテムリストをエクスポート",
+        title: t("アイテムリストをエクスポート"),
         defaultPath: `savakan-gg-${safeName}.json`,
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
@@ -1392,7 +1394,7 @@ function App() {
       }
 
       await writeSnapshotExportFile(path, JSON.stringify(itemList, null, 2));
-      setMessage(`アイテムリストをエクスポートしました: ${itemList.name}`);
+      setMessage(t("アイテムリストをエクスポートしました: {p0}", { p0: itemList.name }));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -1435,7 +1437,8 @@ function App() {
     selectedEntrantValidationErrors,
     addSelectedEntrantDraftSelection,
     removeSelectedEntrantDraftSelection,
-    saveSelectedEntrantMeta,
+    saveSelectedEntrantAliasName,
+    saveSelectedEntrantSelections,
   } = usePlayerMetaDrafts({
     selectedEvent,
     selectedEventMeta,
@@ -1543,7 +1546,7 @@ function App() {
   function deleteItemList(itemListId: string) {
     removeItemList(itemListId);
     removeItemListSettings(itemListId);
-    setMessage("アイテムリストを削除しました。");
+    setMessage(t("アイテムリストを削除しました。"));
   }
 
   async function syncObsOverlayScoresForSet(
@@ -1614,7 +1617,7 @@ function App() {
       return false;
     }
     if (!snapshot || snapshot.events.every((event) => event.eventId !== result.eventId)) {
-      throw new Error("外部報告のイベントsnapshotを特定できません。");
+      throw new Error(t("外部報告のイベントsnapshotを特定できません。"));
     }
     const report: ExternalScoreReport = {
       ...result,
@@ -1648,8 +1651,8 @@ function App() {
         enabled,
       });
       setMessage(enabled
-        ? "スコア確定時の外部報告を有効にしました。"
-        : "スコア確定時の外部報告を無効にしました。");
+        ? t("スコア確定時の外部報告を有効にしました。")
+        : t("スコア確定時の外部報告を無効にしました。"));
     } catch (error) {
       setError(String(error));
     } finally {
@@ -1738,7 +1741,7 @@ function App() {
         if (!rejectionReason && snapshot && selectedEvent && firstReport.sequence === undefined) {
           const set = selectedEventSetsById.get(firstReport.setId);
           if (!set) {
-            rejectionReason = "対象setをsnapshot内で特定できません。";
+            rejectionReason = t("対象setをsnapshot内で特定できません。");
           } else {
             const applyError = await persistIncomingExternalScoreReport({
               set,
@@ -1755,7 +1758,7 @@ function App() {
               },
             });
             if (applyError) {
-              rejectionReason = `受信側で結果を適用できませんでした: ${applyError}`;
+              rejectionReason = t("受信側で結果を適用できませんでした: {p0}", { p0: applyError });
             }
           }
         } else if (!rejectionReason && snapshot && selectedEvent && firstReport.sequence !== undefined) {
@@ -1770,7 +1773,7 @@ function App() {
           );
           if (batch.resetPool) {
             if (firstReport.sequence !== 1) {
-              rejectionReason = "全同期の確定情報が先頭番号から始まっていません。";
+              rejectionReason = t("全同期の確定情報が先頭番号から始まっていません。");
             } else {
               try {
                 await restoreWorkspaceGraph({
@@ -1782,7 +1785,7 @@ function App() {
                 });
                 currentSequence = 0;
               } catch (restoreError) {
-                rejectionReason = `同期前のPool初期化に失敗しました: ${String(restoreError)}`;
+                rejectionReason = t("同期前のPool初期化に失敗しました: {p0}", { p0: String(restoreError) });
               }
             }
           }
@@ -1796,10 +1799,10 @@ function App() {
                 fromSequence: currentSequence + 1,
                 resetPool: false,
               }, item.senderIp);
-              setMessage(`外部報告 #${currentSequence + 1} からの再送を自動要求しました。`);
+              setMessage(t("外部報告 #{p0} からの再送を自動要求しました。", { p0: currentSequence + 1 }));
               deferredForSync = true;
             } catch (requestError) {
-              rejectionReason = `欠番の再送要求に失敗しました: ${String(requestError)}`;
+              rejectionReason = t("欠番の再送要求に失敗しました: {p0}", { p0: String(requestError) });
             }
           } else if (!rejectionReason) {
             for (const report of batch.reports) {
@@ -1807,12 +1810,12 @@ function App() {
                 continue;
               }
               if (report.sequence !== currentSequence + 1) {
-                rejectionReason = `確定情報 #${currentSequence + 1} が不足しています。`;
+                rejectionReason = t("確定情報 #{p0} が不足しています。", { p0: currentSequence + 1 });
                 break;
               }
               const set = selectedEventSetsById.get(report.setId);
               if (!set) {
-                rejectionReason = `対象set ${report.setId} をsnapshot内で特定できません。`;
+                rejectionReason = t("対象set {p0} をsnapshot内で特定できません。", { p0: report.setId });
                 break;
               }
               const applyError = await persistIncomingExternalScoreReport({
@@ -1830,7 +1833,7 @@ function App() {
                 },
               });
               if (applyError) {
-                rejectionReason = `確定情報 #${report.sequence} を適用できませんでした: ${applyError}`;
+                rejectionReason = t("確定情報 #{p0} を適用できませんでした: {p1}", { p0: report.sequence, p1: applyError });
                 break;
               }
               currentSequence = report.sequence;
@@ -1845,11 +1848,11 @@ function App() {
         await replyToExternalScoreReport(
           item,
           rejectionReason === null,
-          rejectionReason ? `理由: ${rejectionReason}` : "",
+          rejectionReason ? t("理由: {p0}", { p0: rejectionReason }) : "",
         );
       }
     })().catch((processingError) => {
-      setError(`外部報告の処理に失敗しました: ${String(processingError)}`);
+      setError(t("外部報告の処理に失敗しました: {p0}", { p0: String(processingError) }));
     });
 
     return () => {
@@ -1903,7 +1906,7 @@ function App() {
         ))
         .sort((left, right) => left.sequence - right.sequence);
       if (records.length === 0) {
-        setError("同期要求に返信できる確定情報がありません。");
+        setError(t("同期要求に返信できる確定情報がありません。"));
         continue;
       }
       const reports = records.flatMap((record): ExternalScoreReport[] => {
@@ -1928,7 +1931,7 @@ function App() {
       });
       void sendExternalScoreReports(reports, item.senderIp, request.resetPool)
         .then(() => markBracketMessageProcessed(item.messageId)).catch((sendError) => {
-        setError(`外部報告の同期返信に失敗しました: ${String(sendError)}`);
+        setError(t("外部報告の同期返信に失敗しました: {p0}", { p0: String(sendError) }));
       });
     }
   }, [
@@ -1948,7 +1951,7 @@ function App() {
   async function acceptExternalEditRequest(message: Parameters<typeof getExternalEditRequest>[0]) {
     const request = getExternalEditRequest(message);
     if (!request || !canAcceptExternalEditRequest(message) || !snapshot || !selectedEvent) {
-      setError("申請対象イベントが選択されていないか、申請情報が不正です。");
+      setError(t("申請対象イベントが選択されていないか、申請情報が不正です。"));
       return;
     }
     setBusy(true);
@@ -1990,10 +1993,10 @@ function App() {
           fromSequence: 1,
           resetPool: true,
         }, message.senderIp);
-        setMessage(`外部報告申請を受理し、返信しました: ${request.phaseName} / ${request.phaseGroupName}。Pool全同期を要求しました。`);
+        setMessage(t("外部報告申請を受理し、返信しました: {p0} / {p1}。Pool全同期を要求しました。", { p0: request.phaseName, p1: request.phaseGroupName }));
       } catch (syncError) {
         setMessage("");
-        setError(`外部報告申請は受理しましたが、Pool全同期の要求に失敗しました: ${String(syncError)}`);
+        setError(t("外部報告申請は受理しましたが、Pool全同期の要求に失敗しました: {p0}", { p0: String(syncError) }));
       }
     } catch (error) {
       setError(String(error));
@@ -2020,18 +2023,18 @@ function App() {
       || !selectedEvent
       || !selectedPhasePoolGroup?.phaseGroupId
     ) {
-      setError("外部報告申請を送信するイベント/プールを選択してください。");
+      setError(t("外部報告申請を送信するイベント/プールを選択してください。"));
       return;
     }
     if (selectedPoolScoreEditLocked) {
-      setError("外部報告申請を送信するには、このプールのスコア編集ロックを解除してください。");
+      setError(t("外部報告申請を送信するには、このプールのスコア編集ロックを解除してください。"));
       return;
     }
     if (busy) {
       return;
     }
     if (!selectedEventMeta || selectedEvent.eventId !== selectedEventMeta.eventId) {
-      setError("外部報告申請を送信するイベント/プールを選択してください。");
+      setError(t("外部報告申請を送信するイベント/プールを選択してください。"));
       return;
     }
     setBusy(true);
@@ -2056,9 +2059,9 @@ function App() {
       phaseGroupId: selectedPhasePoolGroup.phaseGroupId,
       enabled: true,
     });
-    setMessage("外部報告申請を送信し、確定スコアの外部報告を有効にしました。");
+    setMessage(t("外部報告申請を送信し、確定スコアの外部報告を有効にしました。"));
     } catch (error) {
-    setError(`外部報告申請は送信済みですが、外部報告設定を保存できませんでした: ${String(error)}`);
+    setError(t("外部報告申請は送信済みですが、外部報告設定を保存できませんでした: {p0}", { p0: String(error) }));
     } finally {
     setBusy(false);
     }
@@ -2079,7 +2082,7 @@ function App() {
         phaseGroupId: selectedPhasePoolGroup.phaseGroupId,
         locked,
       });
-      setMessage(locked ? "このプールのスコア編集をロックしました。" : "このプールのスコア編集を許可しました。");
+      setMessage(locked ? t("このプールのスコア編集をロックしました。") : t("このプールのスコア編集を許可しました。"));
     } catch (error) {
       setError(String(error));
     } finally {
@@ -2099,7 +2102,7 @@ function App() {
       return;
     }
 
-    if (!window.confirm(`外部報告者 ${selectedPoolExternalEditor.senderName} (${selectedPoolExternalEditor.senderUserId}) をこのプールから解除しますか？`)) {
+    if (!window.confirm(t("外部報告者 {p0} ({p1}) をこのプールから解除しますか？", { p0: selectedPoolExternalEditor.senderName, p1: selectedPoolExternalEditor.senderUserId }))) {
       return;
     }
     setBusy(true);
@@ -2112,7 +2115,7 @@ function App() {
         eventName: selectedEvent.name,
         phaseGroupId,
       });
-      setMessage("このプールの外部報告者を解除しました。");
+      setMessage(t("このプールの外部報告者を解除しました。"));
     } catch (error) {
       setError(String(error));
     } finally {
@@ -2123,7 +2126,7 @@ function App() {
   async function syncSelectedPoolExternalEditor() {
     const phaseGroupId = selectedPhasePoolGroup?.phaseGroupId;
     if (!snapshot || !selectedEvent || !phaseGroupId || !selectedPoolExternalEditor) {
-      setError("同期対象の外部報告者またはPoolが選択されていません。");
+      setError(t("同期対象の外部報告者またはPoolが選択されていません。"));
       return;
     }
     const reporterMessage = senderContacts.find((item) => (
@@ -2131,7 +2134,7 @@ function App() {
       && isValidIpv4(item.senderIp)
     ));
     if (!reporterMessage) {
-      setError("外部報告者の送信元IPがありません。外部報告者からの通信を受信後に同期してください。");
+      setError(t("外部報告者の送信元IPがありません。外部報告者からの通信を受信後に同期してください。"));
       return;
     }
     setBusy(true);
@@ -2146,7 +2149,7 @@ function App() {
         fromSequence: 1,
         resetPool: true,
       }, reporterMessage.senderIp);
-      setMessage("外部報告者にPoolの全同期を要求しました。返信受信後に自動適用します。");
+      setMessage(t("外部報告者にPoolの全同期を要求しました。返信受信後に自動適用します。"));
     } catch (syncError) {
       setError(String(syncError));
     } finally {
@@ -2195,7 +2198,7 @@ function App() {
     const overlayUpdated = await refreshActivePlayerDisplay(aliasesByEntrantId, shouldUseAliasNames);
     if (showStatus && overlayUpdated) {
       setError("");
-      setMessage("プレイヤー表示を更新しました。");
+      setMessage(t("プレイヤー表示を更新しました。"));
     }
   }
 
@@ -2379,7 +2382,7 @@ function App() {
       return;
     }
 
-    runSetActionAfterCallResolution(set, confirmed ? "結果確定" : "結果更新", () =>
+    runSetActionAfterCallResolution(set, confirmed ? t("結果確定") : t("結果更新"), () =>
       persistMatchResult({
         slug: toApiSlug(slug),
         event: selectedEvent,
@@ -2404,12 +2407,12 @@ function App() {
   if (createBusy) {
     statusProgresses.push({
       id: "snapshot-creation",
-      label: createSnapshotProgressLabel || "処理中...",
+      label: createSnapshotProgressLabel || t("処理中..."),
       percent: createSnapshotProgressPercent,
       valueLabel: createSnapshotProgress && createSnapshotProgress.totalSets !== null
         ? `${Math.round(createSnapshotProgressPercent)}%`
         : undefined,
-      ariaLabel: "スナップショット作成の進捗",
+      ariaLabel: t("スナップショット作成の進捗"),
     });
   }
   if (bracketReport.progress) {
@@ -2418,18 +2421,18 @@ function App() {
       label: bracketReport.progressLabel,
       percent: bracketReport.progressPercent,
       valueLabel: `${Math.round(bracketReport.progressPercent)}%`,
-      ariaLabel: "結果報告の進捗",
+      ariaLabel: t("結果報告の進捗"),
     });
   }
   if (shouldShowBracketSnapshotRefreshProgress && createSnapshotProgress) {
     statusProgresses.push({
       id: "bracket-snapshot-refresh",
-      label: `報告後スナップショット更新: ${createSnapshotProgressLabel}`,
+      label: t("報告後スナップショット更新: {p0}", { p0: createSnapshotProgressLabel }),
       percent: createSnapshotProgressPercent,
       valueLabel: createSnapshotProgress.totalSets !== null
         ? `${Math.round(createSnapshotProgressPercent)}%`
         : undefined,
-      ariaLabel: "報告後スナップショット更新の進捗",
+      ariaLabel: t("報告後スナップショット更新の進捗"),
     });
   }
 
@@ -2450,11 +2453,11 @@ function App() {
 
   async function shuffleSelectedEventInitialSeeds() {
     if (!selectedEvent || !canShuffleSelectedInitialSeeds) {
-      setError("試合が開始済み、またはシャッフル可能なSeedがありません。");
+      setError(t("試合が開始済み、またはシャッフル可能なSeedがありません。"));
       return;
     }
     if (!window.confirm(
-      "最初のPhaseのSeed順をローカルでシャッフルします。Seed設定対象の全PhaseGroupがReset済みであることを確認し、後の報告操作でこのSeed順をstart.ggへ反映します。続行しますか？",
+      t("最初のPhaseのSeed順をローカルでシャッフルします。Seed設定対象の全PhaseGroupがReset済みであることを確認し、後の報告操作でこのSeed順をstart.ggへ反映します。続行しますか？"),
     )) {
       return;
     }
@@ -2473,7 +2476,7 @@ function App() {
       });
       setWorkspace(result);
       setSeedStatusRefreshRevision((revision) => revision + 1);
-      setMessage("初期PhaseのSeedをシャッフルしました。ブラケットを更新しました。");
+      setMessage(t("初期PhaseのSeedをシャッフルしました。ブラケットを更新しました。"));
     } catch (shuffleError) {
       setError(String(shuffleError));
     } finally {
@@ -2483,11 +2486,11 @@ function App() {
 
   async function restoreSelectedEventInitialSeeds() {
     if (!selectedEvent || !canRestoreSelectedInitialSeeds) {
-      setError("スナップショット時のSeed順へ戻せない状態です。");
+      setError(t("スナップショット時のSeed順へ戻せない状態です。"));
       return;
     }
     if (!window.confirm(
-      "スナップショット取得時の初期Phase Seed順に戻します。Reset済みの対象Poolを確認後、報告操作でこのSeed順をstart.ggへ反映します。続行しますか？",
+      t("スナップショット取得時の初期Phase Seed順に戻します。Reset済みの対象Poolを確認後、報告操作でこのSeed順をstart.ggへ反映します。続行しますか？"),
     )) {
       return;
     }
@@ -2502,7 +2505,7 @@ function App() {
       });
       setWorkspace(result);
       setSeedStatusRefreshRevision((revision) => revision + 1);
-      setMessage("初期PhaseのSeedをスナップショット取得時の順序に戻しました。ブラケットを更新しました。");
+      setMessage(t("初期PhaseのSeedをスナップショット取得時の順序に戻しました。ブラケットを更新しました。"));
     } catch (restoreError) {
       setError(String(restoreError));
     } finally {
@@ -2653,7 +2656,8 @@ function App() {
               onSelectEntrant: setSelectedTournamentEntrantId,
               onAddDraftSelection: addSelectedEntrantDraftSelection,
               onRemoveDraftSelection: removeSelectedEntrantDraftSelection,
-              onSavePlayerMeta: saveSelectedEntrantMeta,
+              onSavePlayerAliasName: saveSelectedEntrantAliasName,
+              onSavePlayerSelections: saveSelectedEntrantSelections,
               onEntrantAliasNameChange: setSelectedEntrantAliasName,
             }}
           />
@@ -2666,7 +2670,7 @@ function App() {
           focusOwnUnresolved={callListFocusOwnUnresolved}
           onShowAllUnresolved={() => {
             resetCallListDisplay({ clearOwnOnly: true });
-            setMessage("呼び出しリストを全未解決表示に戻しました。");
+            setMessage(t("呼び出しリストを全未解決表示に戻しました。"));
           }}
           resolvePhaseName={(eventId, phaseName) => resolveCallPhaseName(
             snapshot?.events.find((event) => event.eventId === eventId) ?? null,
@@ -2735,12 +2739,12 @@ function App() {
               {callListResolveDialog.dqRequest && (
                 <div className="dialog-summary-box" style={{ marginTop: "0.75rem" }}>
                   <p className="meta">
-                    申請元: {callListResolveDialog.dqRequest.senderName}
+                    {t("申請元: ")}{callListResolveDialog.dqRequest.senderName}
                     {" / ID: "}{callListResolveDialog.dqRequest.senderUserId}
                     {" / IP: "}{callListResolveDialog.dqRequest.senderIp}
                   </p>
                   <p className="meta">
-                    申請理由: {extractMetaString(callListResolveDialog.dqRequest.messageMeta, "dqReason") || "（理由なし）"}
+                    {t("申請理由: ")}{extractMetaString(callListResolveDialog.dqRequest.messageMeta, "dqReason") || t("（理由なし）")}
                   </p>
                 </div>
               )}
@@ -2752,8 +2756,7 @@ function App() {
                 disabled={callListResolveSubmitting || dqRequestDiscarding}
                 onClick={closeCallListResolveDialog}
               >
-                キャンセル
-              </button>
+                {t("キャンセル")}</button>
               {callListResolveDialog.dqRequest && (
                 <button
                   type="button"
@@ -2765,7 +2768,7 @@ function App() {
                     }
                   }}
                 >
-                  {dqRequestDiscarding ? "破棄中..." : "DQ申請を破棄"}
+                  {dqRequestDiscarding ? t("破棄中...") : t("DQ申請を破棄")}
                 </button>
               )}
               {callListResolveDialog.dqRequest && (
@@ -2774,15 +2777,14 @@ function App() {
                   disabled={callListResolveSubmitting || dqRequestDiscarding}
                   onClick={acceptCallListDqRequest}
                 >
-                  DQ申請受理
-                </button>
+                  {t("DQ申請受理")}</button>
               )}
               <button
                 type="button"
                 disabled={callListResolveSubmitting || dqRequestDiscarding}
                 onClick={() => void confirmCallListResolution()}
               >
-                {callListResolveSubmitting ? "解決中..." : "呼び出しを解決"}
+                {callListResolveSubmitting ? t("解決中...") : t("呼び出しを解決")}
               </button>
             </div>
           </section>
@@ -2795,15 +2797,15 @@ function App() {
             className="dialog-panel"
             role="dialog"
             aria-modal="true"
-            aria-label={`プレイ中通知(${playingNoticeDialog.playerName})`}
+            aria-label={t("プレイ中通知({p0})", { p0: playingNoticeDialog.playerName })}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="dialog-head">
-              <h3>{`プレイ中通知(${playingNoticeDialog.playerName})`}</h3>
+              <h3>{t("プレイ中通知({p0})", { p0: playingNoticeDialog.playerName })}</h3>
             </div>
             <div className="dialog-body">
               <label className="field" style={{ marginTop: "0.75rem" }}>
-                <span>終了見込み時間（分）</span>
+                <span>{t("終了見込み時間（分）")}</span>
                 <input
                   type="number"
                   min="0"
@@ -2812,21 +2814,21 @@ function App() {
                   value={playingMinutesDraft}
                   onChange={(event) => setPlayingMinutesDraft(event.currentTarget.value)}
                   disabled={playingNoticeSubmitting}
-                  aria-label="終了見込み時間（分）"
+                  aria-label={t("終了見込み時間（分）")}
                 />
               </label>
               <label className="field">
-                <span>通信欄</span>
+                <span>{t("通信欄")}</span>
                 <textarea
                   value={playingCommunicationDraft}
                   onChange={(event) => setPlayingCommunicationDraft(event.currentTarget.value)}
                   disabled={playingNoticeSubmitting}
                   rows={3}
-                  aria-label="通信欄"
-                  placeholder="相手に伝える内容を入力"
+                  aria-label={t("通信欄")}
+                  placeholder={t("相手に伝える内容を入力")}
                 />
               </label>
-              <p className="meta">0を指定すると解除予定なしになります。1以上の場合は指定時間後に自動で解除を通知します。</p>
+              <p className="meta">{t("0を指定すると解除予定なしになります。1以上の場合は指定時間後に自動で解除を通知します。")}</p>
             </div>
             <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
               <button
@@ -2835,14 +2837,13 @@ function App() {
                 disabled={playingNoticeSubmitting}
                 onClick={closePlayingNoticeDialog}
               >
-                キャンセル
-              </button>
+                {t("キャンセル")}</button>
               <button
                 type="button"
                 disabled={playingNoticeSubmitting}
                 onClick={() => void submitPlayingNotice()}
               >
-                {playingNoticeSubmitting ? "送信中..." : "プレイ中を通知"}
+                {playingNoticeSubmitting ? t("送信中...") : t("プレイ中を通知")}
               </button>
             </div>
           </section>
@@ -2889,7 +2890,7 @@ function App() {
             filteredItemLists={filteredItemLists}
             onEditItemList={editItemList}
             onDeleteItemList={(itemList) => {
-              if (window.confirm(`「${itemList.name}」を削除しますか？`)) {
+              if (window.confirm(t("「{p0}」を削除しますか？", { p0: itemList.name }))) {
                 deleteItemList(itemList.id);
               }
             }}
@@ -2914,7 +2915,7 @@ function App() {
           previewIframeRef={overlayPreviewIframeRef}
           onOpenUrl={(url) => {
             void openUrl(url).catch((err) => {
-              setError(`URLをブラウザで開けませんでした: ${String(err)}`);
+              setError(t("URLをブラウザで開けませんでした: {p0}", { p0: String(err) }));
             });
           }}
           onNameFitModeChange={(mode) => void updateObsOverlayNameFitMode(mode)}
@@ -2937,8 +2938,8 @@ function App() {
             onDisableLocalCommunicationChange={(checked) => {
               setDisableLocalCommunication(checked);
               setMessage(checked
-                ? "ローカル通信を無効化しました。メッセージ機能とプレイヤーリストは閲覧のみになります。"
-                : "ローカル通信を有効化しました。メッセージ機能とプレイヤーリストを再開できます。");
+                ? t("ローカル通信を無効化しました。メッセージ機能とプレイヤーリストは閲覧のみになります。")
+                : t("ローカル通信を有効化しました。メッセージ機能とプレイヤーリストを再開できます。"));
             }}
             senderNameDraft={senderNameDraft}
             onSenderNameChange={setSenderNameDraft}
@@ -3013,7 +3014,7 @@ function App() {
             disableLocalCommunication={disableLocalCommunication}
             userCardBusy={userCardBusy}
             hasSelectedEvent={Boolean(snapshot && selectedEvent)}
-            selectedEventLabel={selectedEventMeta?.eventAlias?.trim() || "未設定"}
+            selectedEventLabel={selectedEventMeta?.eventAlias?.trim() || t("未設定")}
             players={userCardPlayers}
             selectedPlayerIds={selectedUserCardPlayerIds}
             selectedPlayer={selectedUserCardPlayer}
@@ -3188,7 +3189,7 @@ function App() {
                   );
                 }
               }}
-              onConfirm={() => runSetActionAfterCallResolution(activeMatch, "結果確定", () =>
+              onConfirm={() => runSetActionAfterCallResolution(activeMatch, t("結果確定"), () =>
                 requestResultConfirmation(activeMatch),
               )}
             />
@@ -3214,7 +3215,7 @@ function App() {
               void bracketReport.startReport();
             }}
             restoreOpen={restoreDialogOpen}
-            selectedEventName={selectedEvent?.name ?? "選択中のイベント"}
+            selectedEventName={selectedEvent?.name ?? t("選択中のイベント")}
             canRestoreCurrentPool={
               !busy
               && Boolean(selectedEvent)
@@ -3288,30 +3289,30 @@ function App() {
                 className="dialog-panel"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Setの呼び出し解決"
+                aria-label={t("Setの呼び出し解決")}
                 onClick={(event) => event.stopPropagation()}
               >
                 <div className="dialog-head">
                   <h3>{setCallResolutionDialog.otherCalls.length > 0
-                    ? "他端末の呼び出しが未解決です"
+                    ? t("他端末の呼び出しが未解決です")
                     : setCallResolutionDialog.continueAfterResolution
-                      ? "呼び出しを解決して続行しますか？"
-                      : "このSetの呼び出しを解決しますか？"}</h3>
+                      ? t("呼び出しを解決して続行しますか？")
+                      : t("このSetの呼び出しを解決しますか？")}</h3>
                 </div>
                 <div className="dialog-body">
                   <div className="dialog-summary-box">
                     <p className="dialog-summary-title">{setCallResolutionDialog.setLabel}</p>
                     <p className="meta">
                       {setCallResolutionDialog.continueAfterResolution
-                        ? `呼び出しを解決するまで「${setCallResolutionDialog.operationLabel}」は行えません。`
+                        ? t("呼び出しを解決するまで「{p0}」は行えません。", { p0: t(setCallResolutionDialog.operationLabel) })
                         : setCallResolutionDialog.operationLabel === "配信開始"
-                          ? "呼び出しを解決すると、配信は開始せずにこのダイアログを閉じます。"
-                          : "呼び出しの解決後、スコア更新や配信開始は自動で行われません。"}
+                          ? t("呼び出しを解決すると、配信は開始せずにこのダイアログを閉じます。")
+                          : t("呼び出しの解決後、スコア更新や配信開始は自動で行われません。")}
                     </p>
                   </div>
                   {setCallResolutionDialog.ownCalls.length > 0 && (
                     <div className="dialog-summary-box" style={{ marginTop: "0.75rem" }}>
-                      <p className="dialog-summary-title">自端末発行: {setCallResolutionDialog.ownCalls.length}件</p>
+                      <p className="dialog-summary-title">{t("自端末発行: ")}{setCallResolutionDialog.ownCalls.length}{t("件")}</p>
                       {setCallResolutionDialog.ownCalls.map((call) => (
                         <p className="meta" key={call.messageId}>
                           {extractMetaString(call.messageMeta, "callEntrantName") || call.subject}
@@ -3322,24 +3323,21 @@ function App() {
                   {setCallResolutionDialog.otherCalls.length > 0 && (
                     <div className="dialog-summary-box" style={{ marginTop: "0.75rem" }}>
                       <p className="dialog-summary-title">
-                        他端末発行: {setCallResolutionDialog.otherCalls.length}件
-                      </p>
+                        {t("他端末発行: ")}{setCallResolutionDialog.otherCalls.length}{t("件")}</p>
                       {setCallResolutionDialog.otherCalls.map((call) => (
                         <p className="meta" key={call.messageId}>
                           {extractMetaString(call.messageMeta, "callEntrantName") || call.subject}
-                          {" / 発行元: "}{call.senderName}{" ("}{call.senderUserId}{")"}
+                          {t(" / 発行元: ")}{call.senderName}{" ("}{call.senderUserId}{")"}
                         </p>
                       ))}
                       <p className="meta">
-                        呼び出しを発行した端末で解決してから、この操作をやり直してください。
-                      </p>
+                        {t("呼び出しを発行した端末で解決してから、この操作をやり直してください。")}</p>
                     </div>
                   )}
                   {setCallResolutionDialog.otherCalls.length === 0
                     && setCallResolutionDialog.continueAfterResolution && (
                     <p className="meta">
-                      解決を選ぶと、このSetの自端末発行呼び出しをすべて解決して操作を続けます。
-                    </p>
+                      {t("解決を選ぶと、このSetの自端末発行呼び出しをすべて解決して操作を続けます。")}</p>
                   )}
                 </div>
                 <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
@@ -3349,8 +3347,7 @@ function App() {
                     disabled={setCallResolutionBusy}
                     onClick={closeSetCallResolutionDialog}
                   >
-                    キャンセル
-                  </button>
+                    {t("キャンセル")}</button>
                   {setCallResolutionDialog.otherCalls.length === 0
                     && setCallResolutionDialog.ownCalls.length > 0 && (
                       <button
@@ -3359,10 +3356,10 @@ function App() {
                         onClick={() => void resolveSetCalls()}
                       >
                         {setCallResolutionBusy
-                          ? "呼び出しを解決中..."
+                          ? t("呼び出しを解決中...")
                           : setCallResolutionDialog.continueAfterResolution
-                            ? "呼び出しを解決して続行"
-                            : "呼び出しを解決"}
+                            ? t("呼び出しを解決して続行")
+                            : t("呼び出しを解決")}
                       </button>
                     )}
                 </div>

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useState } from "react";
 
 export type ObsOverlayState = {
@@ -75,8 +76,8 @@ export function OverlayControl({
   return (
     <>
       <section className="panel">
-        <h2>オーバーレイ</h2>
-        <p className="meta">配信中セット、またはテスト表示を オーバーレイ画面に出力します。</p>
+        <h2>{t("オーバーレイ")}</h2>
+        <p className="meta">{t("配信中セット、またはテスト表示を オーバーレイ画面に出力します。")}</p>
         <p className="meta">
           URL: {overlayState?.overlayUrl
             ? (
@@ -90,22 +91,20 @@ export function OverlayControl({
                   {overlayState.overlayUrl}
                 </a>
               )
-            : "読み込み中..."}
+            : t("読み込み中...")}
         </p>
       </section>
 
       <section className="panel overlay-preview-panel">
         {!overlayState ? (
-          <p className="meta">オーバーレイ状態を読み込んでいます...</p>
+          <p className="meta">{t("オーバーレイ状態を読み込んでいます...")}</p>
         ) : (
           <>
             <div className="overlay-preview-controls">
-              <p className="meta">
-                状態: {overlayState.active
-                  ? (isTestOverlayActive ? "テスト配信中" : `配信中 (${overlayState.currentSetId ?? "-"})`)
-                  : (overlayState.fullyStopped ? "完全停止中" : "停止中")}
-              </p>
-              {activeSetLabel && <p className="meta">配信中set: {activeSetLabel}</p>}
+              <p className="meta">{t("状態: {value1}", { value1: overlayState.active
+                  ? (isTestOverlayActive ? t("テスト配信中") : t("配信中 ({setId})", { setId: overlayState.currentSetId ?? "-" }))
+                  : (overlayState.fullyStopped ? t("完全停止中") : t("停止中")) })}</p>
+              {activeSetLabel && <p className="meta">{t("配信中set: {value1}", { value1: activeSetLabel })}</p>}
 
               <div className="obs-overlay-grid">
                 <label className="checkbox-row">
@@ -114,53 +113,41 @@ export function OverlayControl({
                     checked={overlayState.nameFitMode === "shrink"}
                     onChange={(e) => onNameFitModeChange(e.currentTarget.checked ? "shrink" : "truncate")}
                     disabled={busy}
-                  />
-                  プレイヤー名を縮小表示
-                </label>
+                  />{t("プレイヤー名を縮小表示")}</label>
                 <label className="checkbox-row">
                   <input
                     type="checkbox"
                     checked={overlayState.showSetInfo}
                     onChange={(e) => onShowSetInfoChange(e.currentTarget.checked)}
                     disabled={busy}
-                  />
-                  中央のセット情報を表示
-                </label>
+                  />{t("中央のセット情報を表示")}</label>
                 <label className="checkbox-row">
                   <input
                     type="checkbox"
                     checked={overlayState.showEventAlias}
                     onChange={(e) => onShowEventAliasChange(e.currentTarget.checked)}
                     disabled={busy}
-                  />
-                  下部中央にイベントエイリアスを表示
-                </label>
+                  />{t("下部中央にイベントエイリアスを表示")}</label>
               </div>
 
               <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--line)" }}>
-                <p className="meta">テスト配信（タブ離脱で自動停止）</p>
+                <p className="meta">{t("テスト配信（タブ離脱で自動停止）")}</p>
                 <div className="obs-overlay-grid">
-                  <label>
-                    ダミーイベントエイリアス
-                    <input
+                  <label>{t("ダミーイベントエイリアス")}<input
                       type="text"
                       value={testEventAlias}
                       onChange={(e) => onTestEventAliasChange(e.currentTarget.value)}
                       disabled={busy}
                     />
                   </label>
-                  <label>
-                    1P プレイヤー名
-                    <input
+                  <label>{t("1P プレイヤー名")}<input
                       type="text"
                       value={testRedName}
                       onChange={(e) => onTestRedNameChange(e.currentTarget.value)}
                       disabled={busy}
                     />
                   </label>
-                  <label>
-                    1P 取得ゲーム数
-                    <input
+                  <label>{t("1P 取得ゲーム数")}<input
                       type="number"
                       min={0}
                       value={testRedWins}
@@ -168,18 +155,14 @@ export function OverlayControl({
                       disabled={busy}
                     />
                   </label>
-                  <label>
-                    2P プレイヤー名
-                    <input
+                  <label>{t("2P プレイヤー名")}<input
                       type="text"
                       value={testBlueName}
                       onChange={(e) => onTestBlueNameChange(e.currentTarget.value)}
                       disabled={busy}
                     />
                   </label>
-                  <label>
-                    2P 取得ゲーム数
-                    <input
+                  <label>{t("2P 取得ゲーム数")}<input
                       type="number"
                       min={0}
                       value={testBlueWins}
@@ -202,16 +185,14 @@ export function OverlayControl({
                     }}
                     disabled={busy}
                   >
-                    {isTestOverlayActive ? "テスト配信停止" : "テスト配信開始"}
+                    {isTestOverlayActive ? t("テスト配信停止") : t("テスト配信開始")}
                   </button>
                   <button
                     type="button"
                     className="ghost"
                     onClick={onFullyStop}
                     disabled={busy || overlayState.fullyStopped}
-                  >
-                    完全停止
-                  </button>
+                  >{t("完全停止")}</button>
                 </div>
               </div>
             </div>
@@ -221,7 +202,7 @@ export function OverlayControl({
                 <iframe
                   ref={previewIframeRef}
                   className="overlay-preview-frame"
-                  title="オーバーレイプレビュー"
+                  title={t("オーバーレイプレビュー")}
                   src={`${overlayState.overlayUrl}?preview=1`}
                   onLoad={onPreviewLoad}
                 />
@@ -237,35 +218,33 @@ export function OverlayControl({
             className="dialog-panel"
             role="dialog"
             aria-modal="true"
-            aria-label="テスト配信への切り替え確認"
+            aria-label={t("テスト配信への切り替え確認")}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="dialog-head">
               <div>
-                <h3>テスト配信への切り替え確認</h3>
-                <p className="meta">現在の配信を停止して、テスト配信に切り替えます。</p>
+                <h3>{t("テスト配信への切り替え確認")}</h3>
+                <p className="meta">{t("現在の配信を停止して、テスト配信に切り替えます。")}</p>
               </div>
             </div>
             <div className="dialog-body">
               <div className="dialog-summary-box">
-                <p className="dialog-summary-title">現在の配信中セット</p>
+                <p className="dialog-summary-title">{t("現在の配信中セット")}</p>
                 <p className="dialog-summary-value">
-                  {activeSetLabel ?? overlayState?.currentSetId ?? "配信中のセット"}
+                  {activeSetLabel ?? overlayState?.currentSetId ?? t("配信中のセット")}
                 </p>
                 <p className="meta">
                   {[overlayState?.redPlayerName, overlayState?.bluePlayerName].filter(Boolean).join(" vs ")}
                 </p>
               </div>
-              <p className="meta">テスト配信に切り替えてよろしいですか？</p>
+              <p className="meta">{t("テスト配信に切り替えてよろしいですか？")}</p>
             </div>
             <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
               <button
                 type="button"
                 className="ghost"
                 onClick={() => setConfirmTestOverlaySwitch(false)}
-              >
-                キャンセル
-              </button>
+              >{t("キャンセル")}</button>
               <button
                 type="button"
                 disabled={busy}
@@ -273,9 +252,7 @@ export function OverlayControl({
                   setConfirmTestOverlaySwitch(false);
                   onToggleTestOverlay(true);
                 }}
-              >
-                テスト配信に切り替え
-              </button>
+              >{t("テスト配信に切り替え")}</button>
             </div>
           </section>
         </div>

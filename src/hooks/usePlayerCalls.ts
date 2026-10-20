@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useCallback, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useFeatureInbox } from "./useFeatureInbox";
@@ -46,7 +47,7 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
       return false;
     }
     if (communicationDisabled) {
-      onError("ローカル通信を行わない設定のため、プレイ中通知を解除できません。");
+      onError(t("ローカル通信を行わない設定のため、プレイ中通知を解除できません。"));
       return false;
     }
 
@@ -57,8 +58,8 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
           destination: "call_list",
           profile: senderProfile,
           method: "call_player_playing_release",
-          subject: `プレイ中通知解除: ${call.message.subject}`,
-          body: "プレイ中通知を解除しました。",
+          subject: t("プレイ中通知解除: {p0}", { p0: call.message.subject }),
+          body: t("プレイ中通知を解除しました。"),
           messageType: "normal",
           messageMeta: {
             ...(call.message.messageMeta ?? {}),
@@ -82,7 +83,7 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
   async function notifyPlaying(messageId: string, minutes: number, communication: string): Promise<boolean> {
     onError("");
     if (communicationDisabled) {
-      onError("ローカル通信を行わない設定のため、プレイ中通知は無効です。");
+      onError(t("ローカル通信を行わない設定のため、プレイ中通知は無効です。"));
       return false;
     }
     const call = calls.find((item) =>
@@ -91,17 +92,17 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
       && item.message.senderUserId !== senderProfile.senderUserId
     );
     if (!call) {
-      onError("他端末が発行した未解決の呼び出しが見つかりません。");
+      onError(t("他端末が発行した未解決の呼び出しが見つかりません。"));
       return false;
     }
     if (!Number.isSafeInteger(minutes) || minutes < 0) {
-      onError("終了見込み時間は0以上の整数で入力してください。");
+      onError(t("終了見込み時間は0以上の整数で入力してください。"));
       return false;
     }
 
     const untilDate = minutes === 0 ? null : new Date(Date.now() + minutes * 60_000);
     if (untilDate && !Number.isFinite(untilDate.getTime())) {
-      onError("終了見込み時間が大きすぎます。");
+      onError(t("終了見込み時間が大きすぎます。"));
       return false;
     }
     try {
@@ -110,10 +111,10 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
           destination: "call_list",
           profile: senderProfile,
           method: "call_player_playing",
-          subject: `プレイ中通知: ${call.message.subject}`,
+          subject: t("プレイ中通知: {p0}", { p0: call.message.subject }),
           body: minutes === 0
-            ? "プレイ中です。終了時刻は未定です。"
-            : `プレイ中です。約${minutes}分後に通知を解除します。`,
+            ? t("プレイ中です。終了時刻は未定です。")
+            : t("プレイ中です。約{p0}分後に通知を解除します。", { p0: minutes }),
           messageType: "normal",
           messageMeta: {
             ...(call.message.messageMeta ?? {}),
@@ -145,7 +146,7 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
       || typeof noticeId !== "string"
       || noticeId === ""
     ) {
-      onError("この端末が発行した有効なプレイ中通知が見つかりません。");
+      onError(t("この端末が発行した有効なプレイ中通知が見つかりません。"));
       return Promise.resolve(false);
     }
     return sendPlayingRelease(messageId, noticeId);
@@ -168,12 +169,12 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
 
       const expiresAt = Date.parse(meta.callPlayerPlayingUntil);
       if (!Number.isFinite(expiresAt)) {
-        onError("保存されたプレイ中通知の解除予定時刻を読み取れません。");
+        onError(t("保存されたプレイ中通知の解除予定時刻を読み取れません。"));
         continue;
       }
       const noticeId = meta.callPlayerPlayingNoticeId;
       if (typeof noticeId !== "string" || noticeId === "") {
-        onError("保存されたプレイ中通知の識別情報がありません。");
+        onError(t("保存されたプレイ中通知の識別情報がありません。"));
         continue;
       }
       const scheduleRelease = () => {
@@ -195,12 +196,12 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
   async function resolveCall(messageId: string): Promise<boolean> {
     onError("");
     if (communicationDisabled) {
-      onError("ローカル通信を行わない設定のため、呼び出しの解決は無効です。");
+      onError(t("ローカル通信を行わない設定のため、呼び出しの解決は無効です。"));
       return false;
     }
     const call = calls.find((item) => item.message.messageId === messageId);
     if (!call || call.message.senderUserId !== senderProfile.senderUserId) {
-      onError("自分が発行した未解決の呼び出しのみ解決できます。");
+      onError(t("自分が発行した未解決の呼び出しのみ解決できます。"));
       return false;
     }
     try {
@@ -210,7 +211,7 @@ export function usePlayerCalls({ senderProfile, communicationDisabled, onError }
           profile: senderProfile,
           method: "call_player",
           subject: `Resolved: ${call.message.subject}`,
-          body: "呼び出しを解決しました。",
+          body: t("呼び出しを解決しました。"),
           messageType: "resolve",
           messageMeta: call.message.messageMeta,
           deliveryTargetMode: "broadcast",

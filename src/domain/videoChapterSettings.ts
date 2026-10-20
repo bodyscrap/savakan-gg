@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { buildEventManagementSettingKey } from "./eventManagement";
 
 export type VideoChapterSettings = {
@@ -10,7 +11,7 @@ export type VideoChapterSettings = {
 
 export function defaultVideoChapterSettings(): VideoChapterSettings {
   return {
-    openingText: "オープニング",
+    openingText: t("オープニング"),
     referenceVideoTime: "",
     referenceSetId: "",
     selectedCategorySlots: [],
@@ -38,7 +39,7 @@ export function loadVideoChapterSettings(slug: string, eventId: string): VideoCh
     || !("showResults" in value) || typeof value.showResults !== "boolean"
     || !("selectedCategorySlots" in value) || !Array.isArray(value.selectedCategorySlots)
     || !value.selectedCategorySlots.every((slot: unknown) => slot === 0 || slot === 1 || slot === 2)) {
-    throw new Error("保存された動画チャプター設定の形式が不正です。");
+    throw new Error(t("保存された動画チャプター設定の形式が不正です。"));
   }
   return {
     openingText: value.openingText,

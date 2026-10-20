@@ -1,9 +1,49 @@
+import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { setLanguage } from "../i18n";
+import type { TournamentWorkspace } from "../domain/tournamentWorkspaceRepository";
 import { defaultVideoChapterSettings, saveVideoChapterSettings } from "../domain/videoChapterSettings";
 import { ReferenceStreamMatchInfo, StreamStartEditor, YoutubeChapters } from "./YoutubeChapters";
 
+vi.mock("react", { spy: true });
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  setLanguage("ja");
+});
+
 describe("video chapter generation", () => {
+  it.each(["ja", "en"] as const)("shows category and list names in three stacked checkbox rows in %s", (language) => {
+    setLanguage(language);
+    const workspace: TournamentWorkspace = {
+      snapshot: { tournamentId: "tournament", slug: "test", name: "Tournament", events: [], updatedAt: "" },
+      localMeta: {
+        tournamentId: "tournament", slug: "test", pendingSetResults: [], updatedAt: "",
+        events: [{
+          eventId: "event", eventName: "Event", eventAlias: null, entrants: [],
+          eventManagement: {
+            sideDecisionMethod: "upper_1p",
+            itemListSnapshots: [
+              { id: "characters", categoryName: "キャラクター", name: "大会用キャラクター", items: [] },
+              { id: "assists", categoryName: "アシスト", name: "アシスト候補", items: [] },
+              { id: "equipment", categoryName: "", name: "装備リスト", items: [] },
+            ],
+          },
+        }],
+      },
+    };
+    vi.mocked(React.useState).mockImplementationOnce(() => [workspace, vi.fn()]);
+    const html = renderToStaticMarkup(<YoutubeChapters slug="test" eventId="event" useAliasName={false} />);
+    const fieldset = html.match(/<fieldset class="chapter-item-categories chapter-item-categories--stacked">([\s\S]*?)<\/fieldset>/)?.[1];
+    expect(fieldset).toBeDefined();
+    expect(fieldset?.match(/type="checkbox"/g)).toHaveLength(3);
+    expect(fieldset).toContain(language === "ja" ? "カテゴリ1" : "Category 1");
+    expect(fieldset).toContain("(キャラクター / 大会用キャラクター)");
+    expect(fieldset).toContain("(アシスト / アシスト候補)");
+    expect(fieldset).toContain("(装備リスト)");
+  });
+
   it("offers local datetime editing and clearing for the selected match", () => {
     const date = new Date(2026, 9, 19, 12, 34, 56, 123);
     const html = renderToStaticMarkup(<StreamStartEditor

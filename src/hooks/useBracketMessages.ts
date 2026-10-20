@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { FeatureMessage } from "../domain/messages";
@@ -38,15 +39,15 @@ export function createBracketMessaging({
     onError("");
     onMessage("");
     if (!isDqRequestMessage(request)) {
-      onError("破棄するDQ申請の情報が不正です。");
+      onError(t("破棄するDQ申請の情報が不正です。"));
       return false;
     }
     try {
       await markProcessed(request.messageId);
-      onMessage("DQ申請を破棄しました。呼び出しと試合結果は変更していません。");
+      onMessage(t("DQ申請を破棄しました。呼び出しと試合結果は変更していません。"));
       return true;
     } catch (error) {
-      onError(`DQ申請の破棄に失敗しました: ${String(error)}`);
+      onError(t("DQ申請の破棄に失敗しました: {p0}", { p0: String(error) }));
       return false;
     }
   }
@@ -76,25 +77,25 @@ export function createBracketMessaging({
     onError("");
     onMessage("");
     if (communicationDisabled || !senderReady || !isValidIpv4(senderProfile.broadcastSubnetMask)) {
-      onError("ローカル通信を有効にし、設定タブで送信者情報とネットワークデバイスを保存してください。");
+      onError(t("ローカル通信を有効にし、設定タブで送信者情報とネットワークデバイスを保存してください。"));
       return false;
     }
     if (!scope || input.eventId !== scope.eventId || input.tournamentId !== scope.tournamentId) {
-      onError("申請対象イベントが現在のイベント選択と一致しません。");
+      onError(t("申請対象イベントが現在のイベント選択と一致しません。"));
       return false;
     }
     if ([
       input.tournamentId, input.slug, input.eventId, input.eventName,
       input.phaseName, input.phaseGroupId, input.phaseGroupName,
     ].some((value) => value.trim() === "") || !isValidSenderUserId(senderProfile.senderUserId)) {
-      onError("外部報告申請に必要なイベント・プール・送信者情報が不足しています。");
+      onError(t("外部報告申請に必要なイベント・プール・送信者情報が不足しています。"));
       return false;
     }
     try {
       await send({
         method: "external_edit_request",
-        subject: `外部報告申請: ${input.eventName} / ${input.phaseName} / ${input.phaseGroupName}`,
-        body: `${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から外部報告申請が届きました。 対象: ${input.eventName} / ${input.phaseName} / ${input.phaseGroupName}`,
+        subject: t("外部報告申請: {p0} / {p1} / {p2}", { p0: input.eventName, p1: input.phaseName, p2: input.phaseGroupName }),
+        body: t("{p0} ({p1}) から外部報告申請が届きました。 対象: {p2} / {p3} / {p4}", { p0: senderProfile.senderName.trim(), p1: senderProfile.senderUserId.trim(), p2: input.eventName, p3: input.phaseName, p4: input.phaseGroupName }),
         messageMeta: buildScopedMessageMeta({
           externalEditRequest: true,
           externalEditTournamentId: input.tournamentId,
@@ -111,7 +112,7 @@ export function createBracketMessaging({
         deliveryTargetMode: "broadcast",
         deliveryTargetIp: null,
       });
-      onMessage(`外部報告申請をブロードキャストしました: ${input.phaseName} / ${input.phaseGroupName}`);
+      onMessage(t("外部報告申請をブロードキャストしました: {p0} / {p1}", { p0: input.phaseName, p1: input.phaseGroupName }));
       return true;
     } catch (error) {
       onError(String(error));
@@ -131,7 +132,7 @@ export function createBracketMessaging({
     onMessage("");
     const request = getExternalEditRequest(message);
     if (!request || !canReplyToExternalEditRequest(message)) {
-      onError("外部報告申請への応答に必要な申請情報、送信者情報、または返信先がありません。");
+      onError(t("外部報告申請への応答に必要な申請情報、送信者情報、または返信先がありません。"));
       return false;
     }
     try {
@@ -139,8 +140,8 @@ export function createBracketMessaging({
         method: "external_edit_request_response",
         subject: `Re: ${message.subject}`,
         body: accepted
-          ? "外部報告申請を受理しました。対象フェーズ/プールのスコア編集をロックし、申請者を外部報告者に設定しました。"
-          : "外部報告申請を拒否しました。",
+          ? t("外部報告申請を受理しました。対象フェーズ/プールのスコア編集をロックし、申請者を外部報告者に設定しました。")
+          : t("外部報告申請を拒否しました。"),
         messageMeta: buildScopedMessageMeta({
           requestMessageId: message.messageId,
           externalEditRequestResponse: accepted ? "accepted" : "rejected",
@@ -154,7 +155,7 @@ export function createBracketMessaging({
         deliveryTargetMode: "direct",
         deliveryTargetIp: message.senderIp.trim(),
       });
-      onMessage(accepted ? "外部報告申請を受理し、応答しました。" : "外部報告申請を拒否し、応答しました。");
+      onMessage(accepted ? t("外部報告申請を受理し、応答しました。") : t("外部報告申請を拒否し、応答しました。"));
       return true;
     } catch (error) {
       onError(String(error));
@@ -166,20 +167,20 @@ export function createBracketMessaging({
     reports: ExternalScoreReport[], deliveryTargetIp: string | null = null, resetPool = false,
   ) {
     if (communicationDisabled || !senderReady || !isValidIpv4(senderProfile.broadcastSubnetMask)) {
-      throw new Error("外部報告の送信には有効な送信者情報とローカル通信設定が必要です。");
+      throw new Error(t("外部報告の送信には有効な送信者情報とローカル通信設定が必要です。"));
     }
     if (reports.length === 0) {
-      throw new Error("送信する外部報告がありません。");
+      throw new Error(t("送信する外部報告がありません。"));
     }
     if (deliveryTargetIp !== null && !isValidIpv4(deliveryTargetIp)) {
-      throw new Error("外部報告の返信先IPが不正です。");
+      throw new Error(t("外部報告の返信先IPが不正です。"));
     }
     const first = reports[0];
     await send({
       method: "external_score_report",
-      subject: `外部報告: ${first.eventName} / ${first.phaseName} / ${first.phaseGroupName} (${reports.length}件)`,
+      subject: t("外部報告: {p0} / {p1} / {p2} ({p3}件)", { p0: first.eventName, p1: first.phaseName, p2: first.phaseGroupName, p3: reports.length }),
       body: [
-        `外部報告者 ${senderProfile.senderName.trim()} (${senderProfile.senderUserId.trim()}) から確定スコアが届きました。`,
+        t("外部報告者 {p0} ({p1}) から確定スコアが届きました。", { p0: senderProfile.senderName.trim(), p1: senderProfile.senderUserId.trim() }),
         ...reports.map((item) => (
           `#${item.sequence ?? "-"} ${item.setId}: ${item.winnerId} (${item.slotScores.map((score) => `${score.entrantId}=${score.score < 0 ? "DQ" : score.score}`).join(" / ")})`
         )),
@@ -203,13 +204,13 @@ export function createBracketMessaging({
 
   async function sendExternalScoreSyncRequest(request: ExternalScoreSyncRequest, deliveryTargetIp: string) {
     if (communicationDisabled || !senderReady || !isValidIpv4(deliveryTargetIp)) {
-      throw new Error("外部報告の同期要求に必要な送信者情報、ローカル通信設定、または外部報告者のIPが不正です。");
+      throw new Error(t("外部報告の同期要求に必要な送信者情報、ローカル通信設定、または外部報告者のIPが不正です。"));
     }
     await send({
       method: "external_score_sync_request",
-      subject: request.resetPool ? "外部報告の全同期要求" : "外部報告の欠番再送要求",
-      body: request.resetPool ? "対象プールのすべての確定情報を送信してください。"
-        : `対象プールの確定情報を #${request.fromSequence} から再送してください。`,
+      subject: request.resetPool ? t("外部報告の全同期要求") : t("外部報告の欠番再送要求"),
+      body: request.resetPool ? t("対象プールのすべての確定情報を送信してください。")
+        : t("対象プールの確定情報を #{p0} から再送してください。", { p0: request.fromSequence }),
       messageMeta: buildScopedMessageMeta({
         externalScoreSyncRequest: true,
         externalScoreSyncTournamentId: request.tournamentId,
@@ -227,15 +228,15 @@ export function createBracketMessaging({
   async function replyToExternalScoreReport(message: FeatureMessage, accepted: boolean, rejectionReason = ""): Promise<boolean> {
     if (communicationDisabled || !senderReady || !isValidIpv4(message.senderIp)
       || message.senderUserId === senderProfile.senderUserId) {
-      onError("外部報告への自動応答に必要な送信者情報または返信先がありません。");
+      onError(t("外部報告への自動応答に必要な送信者情報または返信先がありません。"));
       return false;
     }
     try {
       await send({
         method: "external_score_report_response",
         subject: `Re: ${message.subject}`,
-        body: accepted ? "外部報告を受理し、結果をブラケットに自動適用しました。"
-          : `外部報告を拒否しました。${rejectionReason}`,
+        body: accepted ? t("外部報告を受理し、結果をブラケットに自動適用しました。")
+          : t("外部報告を拒否しました。{p0}", { p0: rejectionReason }),
         messageMeta: buildScopedMessageMeta({
           requestMessageId: message.messageId,
           externalScoreReportResponse: accepted ? "accepted" : "rejected",
@@ -243,8 +244,8 @@ export function createBracketMessaging({
         deliveryTargetMode: "direct",
         deliveryTargetIp: message.senderIp,
       });
-      onMessage(accepted ? "外部報告を適用し、送信者へ自動応答しました。"
-        : "適用できない外部報告を拒否し、送信者へ自動応答しました。");
+      onMessage(accepted ? t("外部報告を適用し、送信者へ自動応答しました。")
+        : t("適用できない外部報告を拒否し、送信者へ自動応答しました。"));
       return true;
     } catch (error) {
       onError(String(error));

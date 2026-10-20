@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { CSSProperties } from "react";
 import type { FeatureMessage } from "../domain/messages";
 
@@ -31,7 +32,7 @@ export type CallListEventSortStrategy = "alias" | "max-elapsed";
 export function formatCallElapsedTime(createdAt: string, referenceMs: number): string {
   const createdMs = Date.parse(createdAt);
   if (!Number.isFinite(createdMs)) {
-    return "00時間00分経過";
+    return t("00時間00分経過");
   }
 
   const elapsedMs = Math.max(0, referenceMs - createdMs);
@@ -39,7 +40,7 @@ export function formatCallElapsedTime(createdAt: string, referenceMs: number): s
   const elapsedHours = Math.floor(totalMinutes / 60);
   const elapsedMinutes = totalMinutes % 60;
 
-  return `${String(elapsedHours).padStart(2, "0")}時間${String(elapsedMinutes).padStart(2, "0")}分経過`;
+  return t("{value1}時間{value2}分経過", { value1: String(elapsedHours).padStart(2, "0"), value2: String(elapsedMinutes).padStart(2, "0") });
 }
 
 export function callElapsedSeconds(createdAt: string, referenceMs: number): number {
@@ -52,16 +53,16 @@ export function callElapsedSeconds(createdAt: string, referenceMs: number): numb
 
 function formatPlayingStatus(until: string, referenceMs: number): string {
   if (until === "") {
-    return "プレイ中(終了未定)";
+    return t("プレイ中(終了未定)");
   }
   const untilMs = Date.parse(until);
   if (!Number.isFinite(untilMs)) {
-    return "プレイ中（終了時間不明）";
+    return t("プレイ中（終了時間不明）");
   }
   if (untilMs <= referenceMs) {
-    return "プレイ中（解除通知待ち）";
+    return t("プレイ中（解除通知待ち）");
   }
-  return `プレイ中（あと約${Math.ceil((untilMs - referenceMs) / 60_000)}分）`;
+  return t("プレイ中（あと約{value1}分）", { value1: Math.ceil((untilMs - referenceMs) / 60_000) });
 }
 
 export function CallListPlayingCommunication({ communication }: { communication: string }) {
@@ -71,7 +72,7 @@ export function CallListPlayingCommunication({ communication }: { communication:
 
   return (
     <div className="call-list-playing-communication">
-      <span>通信欄</span>
+      <span>{t("通信欄")}</span>
       <p>{communication}</p>
     </div>
   );
@@ -128,17 +129,15 @@ export function CallReactionDialog({
         className="dialog-panel"
         role="dialog"
         aria-modal="true"
-        aria-label={`呼び出しへのリアクション(${playerName})`}
+        aria-label={t("呼び出しへのリアクション({value1})", { value1: playerName })}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="dialog-head">
-          <h3>{`呼び出しへのリアクション(${playerName})`}</h3>
+          <h3>{t("呼び出しへのリアクション({value1})", { value1: playerName })}</h3>
         </div>
         <div className="dialog-body">
           <div className="dialog-summary-box">
-            <p className="meta">
-              呼び出し元: {senderName} / ID: {senderUserId} / IP: {senderIp}
-            </p>
+            <p className="meta">{t("呼び出し元: {value1} / ID: {value2} / IP: {value3}", { value1: senderName, value2: senderUserId, value3: senderIp })}</p>
           </div>
           {isPlaying && (
             <p className="call-list-playing-badge" style={{ marginTop: "0.75rem" }}>
@@ -148,21 +147,13 @@ export function CallReactionDialog({
           <CallListPlayingCommunication communication={playingCommunication} />
         </div>
         <div className="dialog-actions dialog-actions-split" style={{ justifyContent: "flex-end" }}>
-          <button type="button" className="ghost" onClick={onClose}>
-            閉じる
-          </button>
-          <button type="button" disabled={disabled} onClick={onRequestDq}>
-            DQ申請
-          </button>
+          <button type="button" className="ghost" onClick={onClose}>{t("閉じる")}</button>
+          <button type="button" disabled={disabled} onClick={onRequestDq}>{t("DQ申請")}</button>
           {!isPlaying && (
-            <button type="button" disabled={disabled} onClick={onNotifyPlaying}>
-              プレイ中通知
-            </button>
+            <button type="button" disabled={disabled} onClick={onNotifyPlaying}>{t("プレイ中通知")}</button>
           )}
           {isPlaying && playingByMe && (
-            <button type="button" disabled={disabled} onClick={onReleasePlaying}>
-              プレイ中通知を解除
-            </button>
+            <button type="button" disabled={disabled} onClick={onReleasePlaying}>{t("プレイ中通知を解除")}</button>
           )}
         </div>
       </section>
@@ -194,18 +185,12 @@ export function StatusBoardHero({
   return (
     <>
       <div className="hero-call-list-head">
-        <h2 className="call-list-hero-title">プレイヤー呼び出し(イベント名/フェーズ名/プール名)</h2>
+        <h2 className="call-list-hero-title">{t("プレイヤー呼び出し(イベント名/フェーズ名/プール名)")}</h2>
         <div className="hero-call-list-toolbar">
-          <button type="button" className="ghost" onClick={onToggleSort}>
-            並び替え: {sortStrategy === "alias" ? "エイリアス順" : "最大経過時間順"}
-          </button>
-          <button type="button" className="ghost" disabled={!canBroadcastSync} onClick={onBroadcastSync}>
-            呼び出しの同期
-          </button>
+          <button type="button" className="ghost" onClick={onToggleSort}>{t("並び替え: {value1}", { value1: sortStrategy === "alias" ? t("エイリアス順") : t("最大経過時間順") })}</button>
+          <button type="button" className="ghost" disabled={!canBroadcastSync} onClick={onBroadcastSync}>{t("呼び出しの同期")}</button>
           {totalPages > 1 && (
-            <button type="button" className="ghost" onClick={onNextPage}>
-              次ページ
-            </button>
+            <button type="button" className="ghost" onClick={onNextPage}>{t("次ページ")}</button>
           )}
         </div>
         <p className="call-list-page-big">{currentPage}/{totalPages}</p>
@@ -214,7 +199,7 @@ export function StatusBoardHero({
         <div
           className="call-list-rotate-progress"
           role="progressbar"
-          aria-label="次ページ切替までの進捗"
+          aria-label={t("次ページ切替までの進捗")}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(pageProgressPercent)}
@@ -265,16 +250,12 @@ export function StatusBoard({
     <section className="panel call-list-panel">
       {eventGroups.length === 0 ? (
         <div style={{ display: "grid", gap: "0.5rem" }}>
-          <p className="meta">現在未解決の呼び出しはありません。</p>
+          <p className="meta">{t("現在未解決の呼び出しはありません。")}</p>
           {focusOwnUnresolved && hiddenUnresolvedCount > 0 && (
             <>
-              <p className="meta">
-                他ユーザー起点の未解決呼び出し {hiddenUnresolvedCount} 件は、全クリア後の自分起点フィルタにより非表示です。
-              </p>
+              <p className="meta">{t("他ユーザー起点の未解決呼び出し {value1} 件は、全クリア後の自分起点フィルタにより非表示です。", { value1: hiddenUnresolvedCount })}</p>
               <div>
-                <button type="button" className="ghost" onClick={onShowAllUnresolved}>
-                  全未解決を表示する
-                </button>
+                <button type="button" className="ghost" onClick={onShowAllUnresolved}>{t("全未解決を表示する")}</button>
               </div>
             </>
           )}
@@ -289,17 +270,15 @@ export function StatusBoard({
               <div className="event-list-head">
                 <p className="call-list-event-summary">
                   <span className="call-list-event-alias">
-                    {group.eventAlias !== "" ? group.eventAlias : "(イベントエイリアス未設定)"}
+                    {group.eventAlias !== "" ? group.eventAlias : t("(イベントエイリアス未設定)")}
                     {"("}
-                    {resolvePhaseName(group.eventId, group.phaseName)}
+                    {group.phaseName === "Phase 未設定" ? t("Phase 未設定") : resolvePhaseName(group.eventId, group.phaseName)}
                     {"/"}
-                    {group.phaseGroupName !== "" ? group.phaseGroupName : "-"}
+                    {group.phaseGroupName === "Pool 未設定" ? t("Pool 未設定") : group.phaseGroupName !== "" ? group.phaseGroupName : "-"}
                     {")"}
                   </span>
                 </p>
-                <span className="meta">
-                  {group.players[0]?.isOwn ? "自分の呼び出し" : "他端末の呼び出し"} / {group.players.length} 件
-                </span>
+                <span className="meta">{t("{origin} / {count} 件", { origin: group.players[0]?.isOwn ? t("自分の呼び出し") : t("他端末の呼び出し"), count: group.players.length })}</span>
               </div>
               <div className="call-list-player-tags">
                 {group.players
@@ -335,16 +314,14 @@ export function StatusBoard({
                         onClick={() => onResolveOwnCall(group, player)}
                         disabled={communicationDisabled || disableOwnCallActions}
                         aria-label={player.dqRequest
-                          ? `${name} のDQ申請を確認`
-                          : `${name} の呼び出しを解決`}
-                        title={disableOwnCallActions ? "設定で自端末呼び出しへの操作が禁止されています" : undefined}
+                          ? t("{value1} のDQ申請を確認", { value1: name })
+                          : t("{value1} の呼び出しを解決", { value1: name })}
+                        title={disableOwnCallActions ? t("設定で自端末呼び出しへの操作が禁止されています") : undefined}
                       >
                         <span className="call-list-player-chip-name">
                           {name}
                           {player.dqRequest && (
-                            <span className="call-list-dq-request-badge" aria-label="DQ申請あり">
-                              DQ申請
-                            </span>
+                            <span className="call-list-dq-request-badge" aria-label={t("DQ申請あり")}>{t("DQ申請")}</span>
                           )}
                         </span>
                         <span className="call-list-player-chip-elapsed">{elapsed}</span>
@@ -356,10 +333,10 @@ export function StatusBoard({
                         style={chipStyle}
                         disabled={communicationDisabled || disableOtherCallActions}
                         onClick={() => onOpenCallReaction(group, player)}
-                        aria-label={`${name} への呼び出しリアクション`}
+                        aria-label={t("{value1} への呼び出しリアクション", { value1: name })}
                         title={disableOtherCallActions
-                          ? "設定で他端末呼び出しへの操作が禁止されています"
-                          : "クリックして呼び出しへのリアクションを選択"}
+                          ? t("設定で他端末呼び出しへの操作が禁止されています")
+                          : t("クリックして呼び出しへのリアクションを選択")}
                       >
                         <span className="call-list-player-chip-name">{name}</span>
                         <span className="call-list-player-chip-elapsed">{elapsed}</span>

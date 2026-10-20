@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -120,7 +121,7 @@ export function useItemLists({ onError, onMessage }: UseItemListsOptions) {
     const name = itemListName.trim();
     const categoryName = itemCategoryName.trim();
     if (name === "" || categoryName === "") {
-      onError("アイテムリスト名とカテゴリ名を入力してください。");
+      onError(t("アイテムリスト名とカテゴリ名を入力してください。"));
       return;
     }
 
@@ -133,7 +134,7 @@ export function useItemLists({ onError, onMessage }: UseItemListsOptions) {
           list.id === editingItemListId ? { ...list, name, categoryName, items } : list,
         ),
       );
-      onMessage("アイテムリストを更新しました。");
+      onMessage(t("アイテムリストを更新しました。"));
       resetItemListEditor();
       return;
     }
@@ -144,7 +145,7 @@ export function useItemLists({ onError, onMessage }: UseItemListsOptions) {
       categoryName,
       items,
     }]);
-    onMessage("アイテムリストを作成しました。");
+    onMessage(t("アイテムリストを作成しました。"));
     resetItemListEditor();
   }
 
@@ -160,7 +161,7 @@ export function useItemLists({ onError, onMessage }: UseItemListsOptions) {
       const importedItemList = createImportedItemList(rawValue, itemLists);
       setItemLists((current) => [...current, importedItemList]);
       onError("");
-      onMessage(`アイテムリストをインポートしました: ${importedItemList.name}`);
+      onMessage(t("アイテムリストをインポートしました: {p0}", { p0: importedItemList.name }));
     } catch (error) {
       onError(String(error));
     }

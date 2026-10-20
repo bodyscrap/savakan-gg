@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { invoke } from "@tauri-apps/api/core";
 import type { EventSnapshot } from "../domain/bracketDisplay";
 import { canBroadcastCallListSync, normalizeCallPhaseGroupName, normalizeCallPhaseName } from "../domain/messageUtils";
@@ -53,20 +54,20 @@ export function useCallMessage({
     onMessage("");
 
     if (communicationDisabled) {
-      onError("ローカル通信を行わない設定のため、プレイヤー呼び出しは送信できません。設定タブで解除してください。");
+      onError(t("ローカル通信を行わない設定のため、プレイヤー呼び出しは送信できません。設定タブで解除してください。"));
       return;
     }
 
     if (!tournament || !event || !activeMatch) {
-      onError("呼び出し元の試合情報が見つかりません。もう一度試してください。");
+      onError(t("呼び出し元の試合情報が見つかりません。もう一度試してください。"));
       return;
     }
 
     if (!canBroadcastCallListSync(senderProfile, communicationDisabled)) {
-      onError("設定タブで送信者名・8桁ユーザーID・ネットワークデバイスを保存してから送信してください。");
+      onError(t("設定タブで送信者名・8桁ユーザーID・ネットワークデバイスを保存してから送信してください。"));
       return;
     }
-    if (!window.confirm(`${slot.entrantName} を呼び出しますか？\n宛先機能: 呼び出しリスト\n送信先: ブロードキャスト`)) {
+    if (!window.confirm(t("{p0} を呼び出しますか？\n宛先機能: 呼び出しリスト\n送信先: ブロードキャスト", { p0: slot.entrantName }))) {
       return;
     }
     setCallingEntrantId(entrantId);
@@ -79,7 +80,7 @@ export function useCallMessage({
         entrantIds: [entrantId],
       });
       if (!playerId) {
-        throw new Error("選手IDを生成できませんでした。");
+        throw new Error(t("選手IDを生成できませんでした。"));
       }
       const eventAlias = rawEventAlias.trim() || event.name;
       const phaseName = resolveCallPhaseName(event, activeMatch.phaseName ?? "", activeMatch.phaseOrder);
@@ -92,13 +93,13 @@ export function useCallMessage({
       const senderLine = `${senderProfile.senderName} (${senderProfile.senderUserId}) / ${senderProfile.bindIp}`;
 
       const fixedBody = [
-        "【呼び出しメッセージ】",
-        `送信者: ${senderLine}`,
-        `呼び出しプレイヤー: ${slot.entrantName}`,
+        t("【呼び出しメッセージ】"),
+        t("送信者: {p0}", { p0: senderLine }),
+        t("呼び出しプレイヤー: {p0}", { p0: slot.entrantName }),
         `entrantID: ${entrantId}`,
-        `イベントエイリアス: ${eventAlias}`,
-        `呼び出し元 tournament/event: ${tournament.name} / ${event.name}`,
-        `呼び出し元 phase/pool: ${phaseName} / ${phaseGroupName}`,
+        t("イベントエイリアス: {p0}", { p0: eventAlias }),
+        t("呼び出し元 tournament/event: {p0} / {p1}", { p0: tournament.name, p1: event.name }),
+        t("呼び出し元 phase/pool: {p0} / {p1}", { p0: phaseName, p1: phaseGroupName }),
       ].join("\n");
 
       await invoke("send_mailbox_message", {
@@ -131,7 +132,7 @@ export function useCallMessage({
         },
       });
       await refreshCalls();
-      onMessage(`プレイヤー呼び出しを送信しました: ${slot.entrantName}`);
+      onMessage(t("プレイヤー呼び出しを送信しました: {p0}", { p0: slot.entrantName }));
     } catch (error) {
       onError(String(error));
     } finally {

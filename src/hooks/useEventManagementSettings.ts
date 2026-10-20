@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -390,7 +391,7 @@ export function useEventManagementSettings({
 
   async function saveEventManagementSetting() {
     if (selectedEventSettingKey === "" || !selectedEvent) {
-      setError("先にイベントを選択してください。");
+      setError(t("先にイベントを選択してください。"));
       return;
     }
     const itemListIds = categorySlotListIds.slice(0, MAX_CATEGORY_SLOTS).map((id) => id.trim());
@@ -406,12 +407,12 @@ export function useEventManagementSettings({
         continue;
       }
       if (seen.has(itemListIds[index])) {
-        setError("カテゴリは重複して設定できません。");
+        setError(t("カテゴリは重複して設定できません。"));
         return;
       }
       seen.add(itemListIds[index]);
       if (normalizedMaxCounts[index] < normalizedMinCounts[index]) {
-        setError(`カテゴリ${index + 1}: 上限は下限以上にしてください。`);
+        setError(t("カテゴリ{p0}: 上限は下限以上にしてください。", { p0: index + 1 }));
         return;
       }
     }
@@ -439,7 +440,7 @@ export function useEventManagementSettings({
         const source = selectedEventItemListSnapshots.find((item) => item.id === listId)
           ?? itemLists.find((item) => item.id === listId);
         if (!source) {
-          throw new Error(`選択中のカテゴリ設定に存在しないアイテムリストがあります: ${listId}`);
+          throw new Error(t("選択中のカテゴリ設定に存在しないアイテムリストがあります: {p0}", { p0: listId }));
         }
         return normalizeItemListConfig(source);
       });
@@ -460,7 +461,7 @@ export function useEventManagementSettings({
       });
       setEventMgmtSettings((current) => ({ ...current, [selectedEventSettingKey]: nextSetting }));
       setAppliedEventMgmtSettings((current) => ({ ...current, [selectedEventSettingKey]: nextSetting }));
-      setMessage("大会管理設定を保存しました。");
+      setMessage(t("大会管理設定を保存しました。"));
     } catch (error) {
       setError(String(error));
     } finally {

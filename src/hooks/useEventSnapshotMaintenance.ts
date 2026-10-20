@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { Dispatch, SetStateAction } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { EventSnapshot } from "../domain/bracketDisplay";
@@ -110,7 +111,7 @@ export function useEventSnapshotMaintenance({
       }
       onSeedStateRefreshRequested();
       closeMatchDialog();
-      setMessage(`イベントを読み込みました: ${item.tournamentName} / ${item.eventName}`);
+      setMessage(t("イベントを読み込みました: {p0} / {p1}", { p0: item.tournamentName, p1: item.eventName }));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -124,7 +125,7 @@ export function useEventSnapshotMaintenance({
       ? item.eventAlias
       : item.eventName;
     const confirmed = window.confirm(
-      `このローカルスナップショットを削除しますか？\n${item.tournamentName} / ${displayEventName}`,
+      t("このローカルスナップショットを削除しますか？\n{p0} / {p1}", { p0: item.tournamentName, p1: displayEventName }),
     );
     if (!confirmed) {
       return;
@@ -159,7 +160,7 @@ export function useEventSnapshotMaintenance({
       }
 
       await refreshLocalSnapshotEvents();
-      setMessage(`削除しました: ${item.tournamentName} / ${displayEventName}`);
+      setMessage(t("削除しました: {p0} / {p1}", { p0: item.tournamentName, p1: displayEventName }));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -169,13 +170,13 @@ export function useEventSnapshotMaintenance({
 
   async function saveSelectedEventAlias() {
     if (!selectedEvent) {
-      setError("先にイベントを選択してください。");
+      setError(t("先にイベントを選択してください。"));
       return;
     }
 
     const normalizedSlug = toApiSlug(slug);
     if (normalizedSlug === "") {
-      setError("大会slugが確認できません。イベントを選択してください。");
+      setError(t("大会slugが確認できません。イベントを選択してください。"));
       return;
     }
 
@@ -191,7 +192,7 @@ export function useEventSnapshotMaintenance({
         trimmed === "" ? null : trimmed,
       );
       await refreshLocalSnapshotEvents();
-      setMessage(trimmed === "" ? "エイリアス名を未設定にしました。" : `エイリアス名を保存しました: ${trimmed}`);
+      setMessage(trimmed === "" ? t("エイリアス名を未設定にしました。") : t("エイリアス名を保存しました: {p0}", { p0: trimmed }));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -203,16 +204,16 @@ export function useEventSnapshotMaintenance({
     const normalizedSlug = toApiSlug(slug);
     const eventId = selectedEvent?.eventId ?? selectedEventId;
     if (normalizedSlug === "" || eventId === "") {
-      setError("先にイベントを選択してください。");
+      setError(t("先にイベントを選択してください。"));
       return;
     }
 
     setError("");
     setMessage("");
     if (seedSnapshotRefreshRequired && !window.confirm(
-      "Seed反映直後はstart.ggのブラケットが未Startのため、まだスナップショットを更新できません。start.ggでブラケットをStartした後であることを確認しましたか？",
+      t("Seed反映直後はstart.ggのブラケットが未Startのため、まだスナップショットを更新できません。start.ggでブラケットをStartした後であることを確認しましたか？"),
     )) {
-      setMessage("start.ggでブラケットをStartしてから、スナップショットを更新してください。");
+      setMessage(t("start.ggでブラケットをStartしてから、スナップショットを更新してください。"));
       return;
     }
 
@@ -224,9 +225,9 @@ export function useEventSnapshotMaintenance({
         { slug: normalizedSlug, eventId },
       );
       if (hasUnreportedSeedShuffle && !window.confirm(
-        "未報告の初期Seed入替があります。スナップショットを更新するとローカルのSeed入替とブラケット表示が失われ、start.gg側の状態に置き換わります。更新を続行しますか？",
+        t("未報告の初期Seed入替があります。スナップショットを更新するとローカルのSeed入替とブラケット表示が失われ、start.gg側の状態に置き換わります。更新を続行しますか？"),
       )) {
-        setMessage("スナップショットの更新をキャンセルしました。");
+        setMessage(t("スナップショットの更新をキャンセルしました。"));
         return;
       }
       setCreateSnapshotProgress({
@@ -243,8 +244,8 @@ export function useEventSnapshotMaintenance({
       await refreshLocalSnapshotEvents();
       onSeedSnapshotRefreshCompleted();
       setMessage(seedSnapshotRefreshRequired
-        ? "ブラケットStart後のスナップショットを更新しました。確定済みSetの結果を報告できます。"
-        : "スナップショットを更新しました。未報告のローカル結果・途中経過は破棄され、start.gg状態に合わせました。");
+        ? t("ブラケットStart後のスナップショットを更新しました。確定済みSetの結果を報告できます。")
+        : t("スナップショットを更新しました。未報告のローカル結果・途中経過は破棄され、start.gg状態に合わせました。"));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -262,7 +263,7 @@ export function useEventSnapshotMaintenance({
     const normalizedSlug = toApiSlug(slug);
     const eventId = selectedEvent?.eventId ?? selectedEventId;
     if (normalizedSlug === "" || eventId === "") {
-      setError("先にイベントを選択してください。");
+      setError(t("先にイベントを選択してください。"));
       return null;
     }
 
@@ -286,8 +287,8 @@ export function useEventSnapshotMaintenance({
       }
       closeMatchDialog();
       setMessage(scope === "all"
-        ? `最後に取得したスナップショット時点に全体を復元しました。${discardSeedShuffle ? "Seedの並び替えを破棄しました。" : "Seedの並び順は維持しました。"}対象eventの未報告結果は破棄されました。`
-        : `最後に取得したスナップショット時点に復元しました。影響set: ${restoredResult.affectedSetIds.length}件`);
+        ? t("最後に取得したスナップショット時点に全体を復元しました。{p0}対象eventの未報告結果は破棄されました。", { p0: discardSeedShuffle ? t("Seedの並び替えを破棄しました。") : t("Seedの並び順は維持しました。") })
+        : t("最後に取得したスナップショット時点に復元しました。影響set: {p0}件", { p0: restoredResult.affectedSetIds.length }));
       return restoredResult;
     } catch (err) {
       setError(String(err));
