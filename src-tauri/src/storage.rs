@@ -352,6 +352,40 @@ fn clear_set_stream_start_records(meta: &mut TournamentLocalMeta, event_id: &str
     meta.updated_at = Utc::now();
 }
 
+fn update_set_stream_start_record(
+    meta: &mut TournamentLocalMeta,
+    event_id: &str,
+    set_id: &str,
+    started_at: Option<chrono::DateTime<Utc>>,
+) -> Result<(), String> {
+    let record = meta
+        .set_stream_starts
+        .iter_mut()
+        .find(|record| record.event_id == event_id && record.set_id == set_id)
+        .ok_or_else(|| "対象の試合の配信開始記録が見つかりません。".to_owned())?;
+    if let Some(started_at) = started_at {
+        record.last_started_at = started_at;
+    } else {
+        meta.set_stream_starts
+            .retain(|record| record.event_id != event_id || record.set_id != set_id);
+    }
+    meta.updated_at = Utc::now();
+    Ok(())
+}
+
+pub fn update_set_stream_start(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+    set_id: &str,
+    started_at: Option<chrono::DateTime<Utc>>,
+) -> Result<TournamentWorkspace, String> {
+    let mut workspace = load_workspace(app, slug, event_id)?;
+    update_set_stream_start_record(&mut workspace.local_meta, event_id, set_id, started_at)?;
+    save_local_meta(app, event_id, &workspace.local_meta)?;
+    Ok(workspace)
+}
+
 pub fn clear_set_stream_starts(
     app: &AppHandle,
     slug: &str,

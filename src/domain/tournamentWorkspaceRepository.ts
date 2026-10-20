@@ -287,6 +287,15 @@ export async function clearSetStreamStarts(slug: string, eventId: string): Promi
   return invoke<TournamentWorkspace>("clear_local_set_stream_starts", { slug, eventId });
 }
 
+export async function updateSetStreamStart(
+  slug: string,
+  eventId: string,
+  setId: string,
+  startedAt: string | null,
+): Promise<TournamentWorkspace> {
+  return invoke<TournamentWorkspace>("update_local_set_stream_start", { slug, eventId, setId, startedAt });
+}
+
 export async function exportTournamentShareArchive(
   slug: string,
   eventId: string,

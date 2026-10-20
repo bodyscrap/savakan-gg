@@ -1,5 +1,6 @@
-import { resolveEntrantDisplayName } from "./bracketDisplay";
+import { isCompletedSet, resolveEntrantDisplayName } from "./bracketDisplay";
 import { createSetEntrantResolver, isResolvedEntrantName } from "./bracketProgression";
+import { buildPendingSetResultsById, getSetScoresForDisplay, isConfirmedSetResult } from "./setResultDrafts";
 import type { TournamentWorkspace } from "./tournamentWorkspaceRepository";
 import { resolveOverlaySidesForSet } from "../hooks/useObsOverlay";
 
@@ -19,6 +20,7 @@ export function collectStreamChapterSets(
   eventId: string,
   useAliasName: boolean,
   selectedCategorySlots: readonly number[] = [],
+  showResults = false,
 ): StreamChapterSet[] {
   const event = workspace.snapshot.events.find((item) => item.eventId === eventId);
   if (!event) {
@@ -45,6 +47,10 @@ export function collectStreamChapterSets(
     .map((side) => [`${side.setId}:${side.entrantId}`, side.playSide]));
   const setsById = new Map(event.sets.map((set) => [set.setId, set]));
   const resolveSet = createSetEntrantResolver(event.sets, event.phaseGroups ?? []);
+  const resultsById = buildPendingSetResultsById(
+    workspace.localMeta.pendingSetResults.filter((result) => result.eventId === eventId),
+    (workspace.localMeta.pendingGrandFinalResetResults ?? []).filter((result) => result.eventId === eventId),
+  );
 
   return (workspace.localMeta.setStreamStarts ?? [])
     .filter((record) => record.eventId === eventId)
@@ -64,6 +70,22 @@ export function collectStreamChapterSets(
       const overlaySides = resolveOverlaySidesForSet(set, {
         getSavedSide: (setId, entrantId) => sides.get(`${setId}:${entrantId}`) ?? "",
       });
+      const result = resultsById.get(set.setId);
+      const resultDisplay = getSetScoresForDisplay(set, result);
+      const winnerId = resultDisplay.winnerId;
+      const resultConfirmed = result ? isConfirmedSetResult(result) : isCompletedSet(set);
+      const showWinner = showResults && resultConfirmed && set.slots.some((slot) => slot.entrantId === winnerId);
+      const scores = new Map(set.slots.map((slot) => {
+        const displayedScore = slot.entrantId ? resultDisplay.scores[slot.entrantId] : undefined;
+        const score = result ? (displayedScore === undefined ? null : Number(displayedScore)) : slot.score;
+        return [slot.entrantId, score];
+      }));
+      const showScores = !result?.directWin
+        && !resultDisplay.isDq
+        && set.slots.every((slot) => {
+          const score = scores.get(slot.entrantId);
+          return typeof score === "number" && Number.isFinite(score) && Number.isInteger(score) && score >= 0;
+        });
       const playerName = (name: string, entrantId: string | null) => {
         const displayName = singleLine(resolveEntrantDisplayName(
           name,
@@ -71,7 +93,12 @@ export function collectStreamChapterSets(
           useAliasName,
         ));
         const items = playerItems(entrantId);
-        return items.length > 0 ? `${displayName}(${items.join("/")})` : displayName;
+        const nameWithItems = items.length > 0 ? `${displayName}(${items.join("/")})` : displayName;
+        if (!showWinner) {
+          return nameWithItems;
+        }
+        const mark = entrantId === winnerId ? "〇" : "●";
+        return `${mark}${showScores ? scores.get(entrantId) : ""} ${nameWithItems}`;
       };
       return {
         setId: set.setId,
@@ -99,7 +126,10 @@ export function parseChapterVideoTime(value: string): number {
 function formatVideoTime(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor(seconds / 60) % 60;
-  return [hours, minutes, seconds % 60].map((value) => String(value).padStart(2, "0")).join(":");
+  const timeParts = [minutes, seconds % 60].map((value) => String(value).padStart(2, "0"));
+  return hours > 0
+    ? [String(hours).padStart(2, "0"), ...timeParts].join(":")
+    : timeParts.join(":");
 }
 
 export function generateYoutubeChapters(

@@ -7139,6 +7139,19 @@ fn clear_local_set_stream_starts(
 }
 
 #[tauri::command]
+fn update_local_set_stream_start(
+    app: tauri::AppHandle,
+    slug: String,
+    event_id: String,
+    set_id: String,
+    started_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<TournamentWorkspace, String> {
+    let workspace = storage::update_set_stream_start(&app, &slug, &event_id, &set_id, started_at)?;
+    emit_workspace_updated(&app, &slug, &event_id);
+    Ok(workspace)
+}
+
+#[tauri::command]
 async fn clear_local_set_result_drafts(
     app: tauri::AppHandle,
     slug: String,
@@ -7623,6 +7636,7 @@ pub fn run() {
             restore_local_event_graph_from_snapshot,
             clear_local_set_result_drafts,
             clear_local_set_stream_starts,
+            update_local_set_stream_start,
             clear_local_set_result_draft_for_set,
             save_local_player_meta,
             derive_player_ids,

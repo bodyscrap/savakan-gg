@@ -1,8 +1,62 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import { ReferenceStreamMatchInfo, YoutubeChapters } from "./YoutubeChapters";
+import { describe, expect, it, vi } from "vitest";
+import { defaultVideoChapterSettings, saveVideoChapterSettings } from "../domain/videoChapterSettings";
+import { ReferenceStreamMatchInfo, StreamStartEditor, YoutubeChapters } from "./YoutubeChapters";
 
 describe("video chapter generation", () => {
+  it("offers local datetime editing and clearing for the selected match", () => {
+    const date = new Date(2026, 9, 19, 12, 34, 56, 123);
+    const html = renderToStaticMarkup(<StreamStartEditor
+      set={{ setId: "set-a", setLabel: "Round 1", matchup: "Alice vs Bob", startedAt: date.getTime() }}
+      disabled={false}
+      onUpdate={async () => {}}
+    />);
+    expect(html).toContain('type="datetime-local"');
+    expect(html).toContain('value="2026-10-19T12:34:56.123"');
+    expect(html).toContain('step="0.001"');
+    expect(html).toContain("端末の現地時刻");
+    expect(html).toContain("記録日時を修正</button>");
+    expect(html).toContain("配信記録のクリア</button>");
+    expect(html).toMatch(/class="chapter-stream-start-editor"[\s\S]*type="datetime-local"[\s\S]*>記録日時を修正<\/button>[\s\S]*>配信記録のクリア<\/button>/);
+  });
+
+  it("disables record changes while another operation is running", () => {
+    const html = renderToStaticMarkup(<StreamStartEditor
+      set={{ setId: "set-a", setLabel: "Round 1", matchup: "Alice vs Bob", startedAt: Date.now() }}
+      disabled
+      onUpdate={async () => {}}
+    />);
+    expect(html.match(/disabled=""/g)).toHaveLength(3);
+  });
+
+  it("restores saved options and inputs when reopening the screen", () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("window", { localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value); },
+    } });
+    try {
+      saveVideoChapterSettings("test", "event", {
+        ...defaultVideoChapterSettings(),
+        openingText: "大会開始",
+        referenceVideoTime: "1:2:3",
+        referenceSetId: "set-b",
+        showResults: true,
+        selectedCategorySlots: [0, 2],
+      });
+      const html = renderToStaticMarkup(
+        <YoutubeChapters slug="tournament/test" eventId="event" useAliasName={false} />,
+      );
+      expect(html).toContain('value="大会開始"');
+      expect(html).toContain('value="1:2:3"');
+      expect(html.match(/checked=""/g)).toHaveLength(3);
+      expect(html).toContain('value="set-b" selected=""');
+      expect(html).toMatch(/<textarea[^>]*><\/textarea>/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("uses the video chapter feature name", () => {
     const html = renderToStaticMarkup(
       <YoutubeChapters slug="tournament/test" eventId="event" useAliasName={false} />,
@@ -26,7 +80,9 @@ describe("video chapter generation", () => {
     const html = renderToStaticMarkup(
       <YoutubeChapters slug="tournament/test" eventId="event" useAliasName={enabled} />,
     );
-    expect(html.match(/type="checkbox"/g)).toHaveLength(3);
+    expect(html.match(/type="checkbox"/g)).toHaveLength(4);
+    expect(html).toContain("勝敗を表示する");
+    expect(html).not.toContain('checked=""');
     expect(html).toContain("カテゴリ1");
     expect(html).toContain("カテゴリ2");
     expect(html).toContain("カテゴリ3");

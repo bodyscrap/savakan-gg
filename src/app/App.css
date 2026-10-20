@@ -969,6 +969,21 @@ button:disabled {
   gap: 0.5rem;
 }
 
+.chapter-stream-start-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 0.65rem;
+}
+
+.chapter-stream-start-editor input {
+  min-width: 0;
+}
+
+.chapter-stream-start-editor .error-text {
+  grid-column: 1 / -1;
+}
+
 .chapter-item-categories {
   display: flex;
   flex-wrap: wrap;

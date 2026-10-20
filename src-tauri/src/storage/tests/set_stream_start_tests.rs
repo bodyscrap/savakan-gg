@@ -3,6 +3,81 @@ use crate::models::{SetSnapshot, TournamentLocalMeta, TournamentSnapshot, Tourna
 use chrono::{TimeZone, Utc};
 
 #[test]
+fn set_stream_start_individual_update_and_clear_preserve_other_records_and_metadata() {
+    let mut workspace = workspace();
+    let target = set(&workspace);
+    let first = Utc.timestamp_opt(1_792_281_600, 123_000_000).unwrap();
+    record_set_stream_start(&mut workspace, "event", &target, first);
+    let mut second = target.clone();
+    second.set_id = "set-b".to_owned();
+    record_set_stream_start(&mut workspace, "event", &second, first);
+    record_set_stream_start(&mut workspace, "other-event", &target, first);
+    let before = serde_json::to_value(&workspace.local_meta).unwrap();
+    let corrected = first - chrono::Duration::seconds(75);
+
+    super::update_set_stream_start_record(
+        &mut workspace.local_meta,
+        "event",
+        &target.set_id,
+        Some(corrected),
+    )
+    .unwrap();
+    let serialized = serde_json::to_value(&workspace.local_meta).unwrap();
+    let reloaded: TournamentLocalMeta = serde_json::from_value(serialized.clone()).unwrap();
+    assert_eq!(reloaded.set_stream_starts.len(), 3);
+    assert_eq!(reloaded.set_stream_starts[0].last_started_at, corrected);
+    assert_eq!(reloaded.set_stream_starts[1].last_started_at, first);
+    assert_eq!(reloaded.set_stream_starts[2].last_started_at, first);
+    assert_eq!(reloaded.set_stream_starts[2].event_id, "other-event");
+    for (key, value) in before.as_object().unwrap() {
+        if key != "setStreamStarts" && key != "updatedAt" {
+            assert_eq!(
+                &serialized[key], value,
+                "metadata field {key} should be preserved"
+            );
+        }
+    }
+
+    super::update_set_stream_start_record(&mut workspace.local_meta, "event", &target.set_id, None)
+        .unwrap();
+    let after = serde_json::to_value(&workspace.local_meta).unwrap();
+    let reloaded: TournamentLocalMeta = serde_json::from_value(after.clone()).unwrap();
+    assert_eq!(reloaded.set_stream_starts.len(), 2);
+    assert_eq!(reloaded.set_stream_starts[0].set_id, "set-b");
+    assert_eq!(reloaded.set_stream_starts[0].last_started_at, first);
+    assert_eq!(reloaded.set_stream_starts[1].event_id, "other-event");
+    assert_eq!(reloaded.set_stream_starts[1].last_started_at, first);
+    for (key, value) in before.as_object().unwrap() {
+        if key != "setStreamStarts" && key != "updatedAt" {
+            assert_eq!(
+                &after[key], value,
+                "metadata field {key} should be preserved"
+            );
+        }
+    }
+}
+
+#[test]
+fn set_stream_start_individual_update_rejects_missing_record_without_mutation() {
+    let mut workspace = workspace();
+    let target = set(&workspace);
+    record_set_stream_start(&mut workspace, "event", &target, Utc::now());
+    let before = serde_json::to_value(&workspace.local_meta).unwrap();
+    for (event_id, set_id) in [("missing", "set-a"), ("event", "missing")] {
+        for time in [None, Some(Utc::now())] {
+            assert!(super::update_set_stream_start_record(
+                &mut workspace.local_meta,
+                event_id,
+                set_id,
+                time,
+            )
+            .is_err());
+            assert_eq!(serde_json::to_value(&workspace.local_meta).unwrap(), before);
+        }
+    }
+}
+
+#[test]
 fn set_stream_start_clear_removes_only_target_event_records_and_preserves_other_metadata() {
     let mut workspace = workspace();
     let target = set(&workspace);
