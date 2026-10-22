@@ -433,6 +433,26 @@ fn normalize_character_names(character_names: &[String]) -> Vec<String> {
     normalized
 }
 
+fn normalize_player_item_selections(selections: &[String]) -> Vec<String> {
+    selections.iter()
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(test)]
+mod player_item_selection_tests {
+    use super::*;
+
+    #[test]
+    fn player_item_selections_preserve_order_and_duplicates_but_list_definitions_remain_unique() {
+        let selections = [" B ", "", "A", "B", " "].map(str::to_owned);
+        assert_eq!(normalize_player_item_selections(&selections), ["B", "A", "B"]);
+        assert_eq!(normalize_character_names(&selections), ["B", "A"]);
+    }
+}
+
 fn normalize_item_list_snapshot(item_list: &ItemListConfig) -> ItemListConfig {
     ItemListConfig {
         id: item_list.id.trim().to_owned(),
@@ -10371,7 +10391,7 @@ pub fn upsert_local_player_meta(
         .ok_or_else(|| "イベントメタの更新先を特定できませんでした。".to_owned())?;
     event_meta.event_name = input.event_name.clone();
 
-    let character_names = normalize_character_names(&input.character_names);
+    let character_names = normalize_player_item_selections(&input.character_names);
     let auth_code = derive_auth_code(&input.slug, &input.event_id, &input.entrant_id);
 
     if let Some(existing) = event_meta

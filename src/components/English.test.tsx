@@ -11,6 +11,14 @@ import { PlayerDqRequestPanel, ExternalReportRequestPanel } from "./BracketTab";
 import { DqRequestDialog } from "./DqRequestDialog";
 import { ItemListEditor } from "./ItemListEditor";
 import { OverlayControl } from "./OverlayControl";
+import { OverlayComponentDialog } from "./OverlayComponentDialog";
+import { OverlayComponentSwitchDialog } from "./OverlayComponentSwitchDialog";
+import { OverlayPresetCopyDialog } from "./OverlayPresetCopyDialog";
+import { OverlayPresetCreateDialog } from "./OverlayPresetCreateDialog";
+import { OverlayColorInput } from "./OverlayColorInput";
+import { OverlayFontControls } from "./OverlayFontControls";
+import { OverlayLayoutEditor } from "./OverlayLayoutEditor";
+import { newOverlayComponent, newOverlayPreset, type OverlayLayouts } from "../domain/overlayLayout";
 import { SettingsScreen } from "./SettingMenu";
 import { CallListPlayingCommunication, CallReactionDialog, formatCallElapsedTime } from "./StatusBoard";
 import { ReferenceStreamMatchInfo, StreamStartEditor, YoutubeChapters } from "./YoutubeChapters";
@@ -216,12 +224,14 @@ describe("English component rendering", () => {
     setLanguage("en");
     const html = renderToStaticMarkup(
       <OverlayControl
-        overlayState={{ active: true, fullyStopped: false, currentSetId: "set-id", eventName: "大会", eventAlias: "別名", roundText: "Round 1", redPlayerName: "赤", bluePlayerName: "青", redSetWins: 1, blueSetWins: 2, fontScale: 1, nameFitMode: "truncate", showSetInfo: true, showEventAlias: true, overlayUrl: "http://localhost/overlay" }}
+        overlayState={{ active: true, fullyStopped: false, currentSetId: "set-id", eventName: "大会", eventAlias: "別名", roundText: "Round 1", redPlayerName: "赤", bluePlayerName: "青", redSetWins: 1, blueSetWins: 2, fontScale: 1, showSetInfo: true, showEventAlias: true, overlayUrl: "http://localhost/overlay" }}
         isTestOverlayActive={false} activeSetLabel="日本語試合" busy={false}
         testEventAlias="テスト大会" testRedName="設定" testBlueName="青プレイヤー" testRedWins={1} testBlueWins={2}
+        testRedItems={["選択A 選択B", "", "選択C"]} testBlueItems={["選択D", "選択E", ""]}
         previewWrapRef={{ current: null }} previewIframeRef={{ current: null }}
-        onOpenUrl={noop} onNameFitModeChange={noop} onShowSetInfoChange={noop} onShowEventAliasChange={noop}
+        onOpenUrl={noop} onShowSetInfoChange={noop} onShowEventAliasChange={noop}
         onTestRedNameChange={noop} onTestEventAliasChange={noop} onTestBlueNameChange={noop}
+        onTestRedItemsChange={noop} onTestBlueItemsChange={noop}
         onTestRedWinsChange={noop} onTestBlueWinsChange={noop} onToggleTestOverlay={noop} onFullyStop={noop} onPreviewLoad={noop}
       />,
     );
@@ -231,6 +241,228 @@ describe("English component rendering", () => {
     expect(html).toContain('value="設定"');
     expect(html).toContain('value="青プレイヤー"');
     expect(html).toContain("Start test stream");
+    expect(html).toContain("Dummy item lists (space-separated)");
+    expect(html).toContain("Live streams show each player&#x27;s saved selections from Snapshot &amp; metadata settings.");
+    for (const side of ["1P", "2P"]) {
+      for (const category of [1, 2, 3]) expect(html).toContain(`${side} dummy items (category ${category})`);
+    }
+    expect(html).toContain('value="選択A 選択B"');
+    expect(html).toContain("Preset to apply");
+    expect(html).toContain("Saved presets are applied immediately. Unsaved edits are not applied.");
+    expect(html.indexOf("Preset to apply")).toBeLessThan(html.indexOf("Test stream (stops automatically when leaving this tab)"));
+    expect(html).not.toContain("Save and apply");
+    expect(html).not.toContain("Shrink player names to fit");
+  });
+
+  it("translates the overlay component creation dialog", () => {
+    setLanguage("en");
+    const html = renderToStaticMarkup(<OverlayComponentDialog onCreate={() => true} onClose={noop} />);
+    expect(html).toContain('aria-label="Create component"');
+    expect(html).toContain("Component type");
+    expect(html).toContain("Component name");
+    expect(html).toContain("Text");
+    expect(html).toContain("Image");
+    expect(html).toContain("Number");
+    expect(html).toContain('<option value="item">Item</option>');
+    expect(html).toContain('<option value="clock">Clock</option>');
+    expect(html).toContain("This name identifies the component and is not displayed in the overlay.");
+  });
+
+  it("translates the preset creation dialog and initializes the default resolution", () => {
+    setLanguage("en");
+    const html = renderToStaticMarkup(<OverlayPresetCreateDialog onCreate={() => true} onClose={noop} />);
+    expect(html).toContain("<dialog");
+    expect(html).toContain('aria-label="New preset resolution"');
+    expect(html).toContain("Canvas width");
+    expect(html).toContain('value="1920"');
+    expect(html).toContain("Canvas height");
+    expect(html).toContain('value="1080"');
+    expect(html).toContain("Create with this resolution");
+    expect(html).toContain("The resolution cannot be changed after creation.");
+    expect(html).toContain("Cancel");
+    expect(html).not.toContain("Width and height are linked");
+  });
+
+  it("translates the preset duplication dialog and initializes the source resolution", () => {
+    setLanguage("en");
+    const source = newOverlayPreset({ width: 1080, height: 1920 });
+    source.name = "Portrait";
+    const html = renderToStaticMarkup(<OverlayPresetCopyDialog source={source} onCopy={() => true} onClose={noop} />);
+    expect(html).toContain('<dialog');
+    expect(html).toContain('aria-label="Duplicate preset"');
+    expect(html).toContain("Source: Portrait (1080 × 1920)");
+    expect(html).toContain("Canvas width");
+    expect(html).toContain('value="1080"');
+    expect(html).toContain("Canvas height");
+    expect(html).toContain('value="1920"');
+    expect(html).toContain("Width and height are linked to preserve the original aspect ratio.");
+    expect(html).toContain("Duplicate with this resolution");
+    expect(html).toContain("Cancel");
+  });
+
+  it("combines color and alpha controls in a compact custom picker", () => {
+    setLanguage("en");
+    const html = renderToStaticMarkup(<OverlayColorInput label="背景色" value="#12345680" onChange={noop} />);
+    expect(html).toContain('class="overlay-color-swatch"');
+    expect(html).toContain('style="background:#12345680"');
+    expect(html).toContain("#12345680");
+    expect(html).not.toContain('type="color"');
+    expect(html).toContain('class="overlay-color-trigger"');
+    expect(html).toContain('aria-label="Background color" aria-haspopup="dialog" aria-expanded="false"');
+    expect(html).toContain('popover="auto" role="dialog"');
+    expect(html).toContain("Color code");
+    expect(html).toContain('value="#12345680"');
+    expect(html).toContain("Hue");
+    expect(html).toContain("Saturation");
+    expect(html).toContain("Brightness");
+    expect(html).toContain('aria-label="Background color opacity"');
+    expect(html).toContain('aria-label="Background color alpha"');
+    expect(html).toContain('type="number"');
+    expect(html).toContain('min="0" max="255" step="1"');
+    expect(html).toContain('value="128"');
+    expect(html).toContain("0 is fully transparent; 255 is opaque.");
+    expect(html.match(/type="range"/g)).toHaveLength(4);
+    const transparent = renderToStaticMarkup(<OverlayColorInput label="文字色" value="transparent" onChange={noop} />);
+    expect(transparent).toContain("#00000000");
+    expect(transparent).toContain('aria-label="Text color alpha"');
+    expect(transparent).toContain('value="0"');
+  });
+
+  it("combines filtering and selection in a selection-only font combobox", () => {
+    setLanguage("en");
+    const html = renderToStaticMarkup(<OverlayFontControls fontFamily={'"Yu Gothic", Arial, sans-serif'} fontSize={1000}
+      onFontFamilyChange={noop} onFontSizeChange={noop}>
+      <OverlayColorInput label="文字色" value="#ffffff" onChange={noop} />
+      <label className="overlay-font-align">Text alignment<select defaultValue="left"><option value="left">Left</option></select></label>
+      <label className="checkbox-row overlay-font-bold"><input type="checkbox" defaultChecked />Bold</label>
+    </OverlayFontControls>);
+    expect(html).toContain('class="overlay-font-family"');
+    expect(html).not.toContain("<datalist");
+    expect(html).toContain("Font family");
+    expect(html).toContain('role="combobox"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('aria-autocomplete="list"');
+    expect(html).toContain('role="listbox"');
+    expect(html).toContain('type="search"');
+    expect(html).toContain("Show font candidates");
+    expect(html).not.toContain("Font family (manual entry)");
+    expect(html.match(/type="search"/g)).toHaveLength(1);
+    expect(html).toContain("Typing only filters candidates.");
+    expect(html).toContain('title="sans-serif"');
+    expect(html).toContain('title="monospace"');
+    expect(html).toContain('value="&quot;Yu Gothic&quot;, Arial, sans-serif"');
+    expect(html).toContain('class="overlay-font-size"');
+    expect(html).toContain('max="1000"');
+    expect(html).toContain('value="1000"');
+    expect(html.indexOf("Font size")).toBeLessThan(html.indexOf("Text color"));
+    expect(html.indexOf("Text color")).toBeLessThan(html.indexOf("Text alignment"));
+    expect(html.indexOf("Text alignment")).toBeLessThan(html.indexOf("Bold"));
+    expect(html.indexOf("Bold")).toBeLessThan(html.indexOf("Loading fonts"));
+    expect(html).toContain("Loading fonts");
+  });
+
+  it("lists every generic font independently of the current sans-serif setting", () => {
+    setLanguage("en");
+    const html = renderToStaticMarkup(<OverlayFontControls fontFamily="sans-serif" fontSize={48}
+      onFontFamilyChange={noop} onFontSizeChange={noop} />);
+    expect(html).toContain('value="sans-serif"');
+    for (const family of ["serif", "monospace", "system-ui", "cursive", "fantasy"]) {
+      expect(html).toContain(`title="${family}"`);
+    }
+    expect(html).not.toContain("Current setting:");
+    expect(html).toContain('type="search"');
+  });
+
+  it("disables the font combobox, candidate toggle and font-size input while busy", () => {
+    setLanguage("en");
+    const html = renderToStaticMarkup(<OverlayFontControls fontFamily="sans-serif" fontSize={48} disabled
+      onFontFamilyChange={noop} onFontSizeChange={noop} />);
+    expect(html).toMatch(/<input[^>]*role="combobox"[^>]*disabled=""/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="Show font candidates"/);
+    expect(html).toContain('aria-expanded="false"');
+  });
+
+  it("shows the default layout preview and its components as read-only", () => {
+    setLanguage("en");
+    const html = renderToStaticMarkup(<OverlayLayoutEditor
+      state={{ active: false, fullyStopped: false, redPlayerName: "", bluePlayerName: "", redSetWins: 0, blueSetWins: 0, roundText: null, eventName: null, eventAlias: null }}
+      savedLayouts={{ version: 1, activePresetId: null, presets: [] }} disabled={false}
+      onSave={async (layouts) => layouts} />);
+    expect(html).toContain('aria-label="Customization preview"');
+    expect(html).toContain("Use Ctrl+mouse wheel over the preview to zoom from 25% to 400%.");
+    expect(html).toMatch(/type="range"[^>]*min="25"[^>]*max="400"[^>]*step="1"/);
+    expect(html).toContain('<option value="" selected="">Default</option>');
+    expect(html).toContain("The default layout is read-only. Duplicate it to create an editable preset.");
+    expect(html).toContain("overlay-layout-canvas");
+    expect(html).not.toContain("overlay-layout-hit");
+    expect(html).not.toContain("Component name");
+    expect(html).not.toContain('draggable="true"');
+    expect(html).not.toContain("Alt+ArrowUp");
+    expect(html).not.toContain("overlay-selection-actions");
+    const checkboxes = html.match(/<input[^>]*aria-label="Show [^"]*"[^>]*>/g) ?? [];
+    expect(checkboxes).toHaveLength(8);
+    for (const checkbox of checkboxes) expect(checkbox).toContain('disabled=""');
+    expect(html).toContain('<fieldset class="overlay-centering-options" disabled=""');
+  });
+
+  it("offers confirm, discard, and cancel when switching components with pending changes", () => {
+    setLanguage("en");
+    const html = renderToStaticMarkup(<OverlayComponentSwitchDialog
+      onConfirm={noop} onDiscard={noop} onCancel={noop} />);
+    expect(html).toContain("Unconfirmed changes");
+    expect(html).toContain("What would you like to do with the current changes before selecting another component?");
+    expect(html).toContain("Confirm and switch");
+    expect(html).toContain("Discard and switch");
+    expect(html).toContain("Cancel switching");
+  });
+
+  it("lists frontmost components first with a leading visibility column without changing stored order", () => {
+    setLanguage("en");
+    const preset = newOverlayPreset();
+    preset.components = [newOverlayComponent("text", "Back"), newOverlayComponent("number", "Front")];
+    const layouts: OverlayLayouts = { version: 1, activePresetId: preset.id, presets: [preset] };
+    const html = renderToStaticMarkup(<OverlayLayoutEditor
+      state={{ active: false, fullyStopped: false, redPlayerName: "", bluePlayerName: "", redSetWins: 0, blueSetWins: 0, roundText: null, eventName: null, eventAlias: null }}
+      savedLayouts={layouts} disabled={false} onSave={async (next) => next} />);
+    expect(html).toContain('<th scope="col">Visible</th><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Content</th>');
+    const actions = html.slice(html.indexOf('class="overlay-component-actions"'));
+    expect(actions.indexOf("Add new")).toBeLessThan(actions.indexOf("Duplicate"));
+    expect(html.indexOf('title="Front"')).toBeLessThan(html.indexOf('title="Back"'));
+    expect(html).toContain('aria-label="Show Front"');
+    expect(html).toContain('aria-label="Show Back"');
+    expect(html.match(/draggable="true"/g)).toHaveLength(2);
+    expect(html).toContain("Alt+Up/Down also changes the display order.");
+    expect(html).toContain("Shift-drag constrains movement to the horizontal or vertical axis");
+    expect(html).toContain('aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"');
+    expect(actions).not.toContain("Move backward");
+    expect(actions).not.toContain("Move forward");
+    expect(actions).toContain("Match sizes");
+    expect(actions).toContain("Center selection");
+    expect(html).not.toContain("<legend>Centering mode</legend>");
+    expect(html).toContain('aria-label="Centering mode"');
+    expect(html).toContain("Horizontal");
+    expect(html).toContain("Vertical");
+    expect(html).toContain("Both");
+    const radios = html.match(/<input[^>]*type="radio"[^>]*>/g) ?? [];
+    expect(radios).toHaveLength(3);
+    expect(new Set(radios.map((radio) => radio.match(/name="([^"]+)"/)?.[1])).size).toBe(1);
+    expect(radios.filter((radio) => radio.includes('checked=""'))).toHaveLength(1);
+    expect(radios.find((radio) => radio.includes('checked=""'))).toContain('value="both"');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Center selection<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Match sizes<\/button>/);
+    expect(html).not.toContain("overlay-selection-actions");
+    expect(preset.components.map((component) => component.name)).toEqual(["Back", "Front"]);
+  });
+
+  it("disables row dragging while the overlay editor is busy", () => {
+    setLanguage("en");
+    const preset = newOverlayPreset();
+    const html = renderToStaticMarkup(<OverlayLayoutEditor
+      state={{ active: false, fullyStopped: false, redPlayerName: "", bluePlayerName: "", redSetWins: 0, blueSetWins: 0, roundText: null, eventName: null, eventAlias: null }}
+      savedLayouts={{ version: 1, activePresetId: preset.id, presets: [preset] }}
+      disabled onSave={async (next) => next} />);
+    expect(html).not.toContain('draggable="true"');
+    expect(html).toContain('<fieldset class="overlay-centering-options" disabled=""');
   });
 
   it("translates item list editing labels while preserving list and item names", () => {

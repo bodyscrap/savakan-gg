@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "savakan-gg",
+        "dragDropEnabled": false,
         "width": 1920,
         "height": 1000
       }

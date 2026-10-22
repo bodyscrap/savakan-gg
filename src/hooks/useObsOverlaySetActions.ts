@@ -67,6 +67,8 @@ export function useObsOverlaySetActions({
       ),
       redSetWins: overlaySides.redSetWins,
       blueSetWins: overlaySides.blueSetWins,
+      redEntrantId: overlaySides.redEntrantId,
+      blueEntrantId: overlaySides.blueEntrantId,
       fontScale: obsOverlayState?.fontScale ?? 1,
     });
   }
@@ -174,6 +176,8 @@ export function useObsOverlaySetActions({
       ),
       redSetWins: overlaySides.redSetWins,
       blueSetWins: overlaySides.blueSetWins,
+      redEntrantId: overlaySides.redEntrantId,
+      blueEntrantId: overlaySides.blueEntrantId,
       fontScale: currentOverlayState.fontScale,
     });
   }
@@ -215,6 +219,8 @@ export function useObsOverlaySetActions({
       ),
       redSetWins: currentOverlayState.redSetWins,
       blueSetWins: currentOverlayState.blueSetWins,
+      redEntrantId: overlaySides.redEntrantId,
+      blueEntrantId: overlaySides.blueEntrantId,
       fontScale: currentOverlayState.fontScale,
     })) !== false;
   }

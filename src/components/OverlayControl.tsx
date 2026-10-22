@@ -1,7 +1,11 @@
 import { t } from "../i18n";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { parseOverlayLayouts, parseOverlayTestItems, type OverlayLayouts, type OverlayTestItemInputs } from "../domain/overlayLayout";
+import { OverlayLayoutEditor } from "./OverlayLayoutEditor";
+import type { OverlayRenderState } from "../domain/overlayRenderer.js";
 
-export type ObsOverlayState = {
+export type ObsOverlayState = OverlayRenderState & {
   active: boolean;
   fullyStopped: boolean;
   currentSetId: string | null;
@@ -13,7 +17,6 @@ export type ObsOverlayState = {
   redSetWins: number;
   blueSetWins: number;
   fontScale: number;
-  nameFitMode: "truncate" | "shrink";
   showSetInfo: boolean;
   showEventAlias: boolean;
   overlayUrl: string;
@@ -27,17 +30,20 @@ type OverlayControlProps = {
   testEventAlias: string;
   testRedName: string;
   testBlueName: string;
+  testRedItems: OverlayTestItemInputs;
+  testBlueItems: OverlayTestItemInputs;
   testRedWins: number;
   testBlueWins: number;
   previewWrapRef: { current: HTMLDivElement | null };
   previewIframeRef: { current: HTMLIFrameElement | null };
   onOpenUrl: (url: string) => void;
-  onNameFitModeChange: (mode: "truncate" | "shrink") => void;
   onShowSetInfoChange: (checked: boolean) => void;
   onShowEventAliasChange: (checked: boolean) => void;
   onTestRedNameChange: (value: string) => void;
   onTestEventAliasChange: (value: string) => void;
   onTestBlueNameChange: (value: string) => void;
+  onTestRedItemsChange: (value: OverlayTestItemInputs) => void;
+  onTestBlueItemsChange: (value: OverlayTestItemInputs) => void;
   onTestRedWinsChange: (value: number) => void;
   onTestBlueWinsChange: (value: number) => void;
   onToggleTestOverlay: (forceSwitch: boolean) => void;
@@ -53,17 +59,20 @@ export function OverlayControl({
   testEventAlias,
   testRedName,
   testBlueName,
+  testRedItems,
+  testBlueItems,
   testRedWins,
   testBlueWins,
   previewWrapRef,
   previewIframeRef,
   onOpenUrl,
-  onNameFitModeChange,
   onShowSetInfoChange,
   onShowEventAliasChange,
   onTestRedNameChange,
   onTestEventAliasChange,
   onTestBlueNameChange,
+  onTestRedItemsChange,
+  onTestBlueItemsChange,
   onTestRedWinsChange,
   onTestBlueWinsChange,
   onToggleTestOverlay,
@@ -71,7 +80,44 @@ export function OverlayControl({
   onPreviewLoad,
 }: OverlayControlProps) {
   const [confirmTestOverlaySwitch, setConfirmTestOverlaySwitch] = useState(false);
+  const [savedLayouts, setSavedLayouts] = useState<OverlayLayouts>();
+  const [persisting, setPersisting] = useState(false);
+  const [presetsError, setPresetsError] = useState("");
+  const activePreset = savedLayouts?.presets.find((preset) => preset.id === savedLayouts.activePresetId);
+  const resolution = activePreset ?? { width: 1920, height: 1080 };
   const isSwitchingFromLiveSet = Boolean(overlayState?.active && !isTestOverlayActive);
+  const editorState = overlayState && !overlayState.active ? {
+    ...overlayState,
+    redItems: parseOverlayTestItems(testRedItems),
+    blueItems: parseOverlayTestItems(testBlueItems),
+  } : overlayState;
+
+  useEffect(() => {
+    let alive = true;
+    void invoke<unknown>("get_overlay_layouts").then((value) => {
+      if (alive) setSavedLayouts(parseOverlayLayouts(value));
+    }).catch((cause) => { if (alive) setPresetsError(String(cause)); });
+    return () => { alive = false; };
+  }, []);
+
+  async function saveLayouts(layouts: OverlayLayouts): Promise<OverlayLayouts> {
+    setPersisting(true);
+    try {
+      const saved = parseOverlayLayouts(await invoke<unknown>("save_overlay_layouts", { layouts }));
+      setSavedLayouts(saved);
+      setPresetsError("");
+      return saved;
+    } finally { setPersisting(false); }
+  }
+
+  async function applyPreset(presetId: string) {
+    setPersisting(true);
+    setPresetsError("");
+    try {
+      setSavedLayouts(parseOverlayLayouts(await invoke<unknown>("apply_overlay_preset", { presetId: presetId || null })));
+    } catch (cause) { setPresetsError(String(cause)); }
+    finally { setPersisting(false); }
+  }
 
   return (
     <>
@@ -110,13 +156,6 @@ export function OverlayControl({
                 <label className="checkbox-row">
                   <input
                     type="checkbox"
-                    checked={overlayState.nameFitMode === "shrink"}
-                    onChange={(e) => onNameFitModeChange(e.currentTarget.checked ? "shrink" : "truncate")}
-                    disabled={busy}
-                  />{t("プレイヤー名を縮小表示")}</label>
-                <label className="checkbox-row">
-                  <input
-                    type="checkbox"
                     checked={overlayState.showSetInfo}
                     onChange={(e) => onShowSetInfoChange(e.currentTarget.checked)}
                     disabled={busy}
@@ -131,6 +170,14 @@ export function OverlayControl({
               </div>
 
               <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--line)" }}>
+                <label>{t("適用するプリセット")}<select value={savedLayouts?.activePresetId ?? ""}
+                  disabled={busy || persisting || !savedLayouts} onChange={(event) => void applyPreset(event.target.value)}>
+                  <option value="">{t("デフォルト")}</option>
+                  {savedLayouts?.presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                </select></label>
+                <p className="meta">{t("保存済みのプリセットを即座に適用します。未保存の編集内容は適用されません。")}</p>
+                {presetsError && <p role="alert" className="error">{presetsError}</p>}
+                {activePreset && <p className="meta">{t("録画・配信ソフト側のブラウザソースの幅・高さも {width} × {height} に設定してください。", { width: activePreset.width, height: activePreset.height })}</p>}
                 <p className="meta">{t("テスト配信（タブ離脱で自動停止）")}</p>
                 <div className="obs-overlay-grid">
                   <label>{t("ダミーイベントエイリアス")}<input
@@ -171,6 +218,24 @@ export function OverlayControl({
                     />
                   </label>
                 </div>
+                <p className="meta">{t("ダミーアイテムリスト（スペース区切り）")}</p>
+                <p className="meta">{t("テスト配信と停止中のカスタマイズプレビュー専用です。本配信では「スナップショット&メタデータ設定」で保存した各プレイヤーの選択内容を表示します。")}</p>
+                <div className="obs-overlay-grid">
+                  {[
+                    { side: "1P", values: testRedItems, onChange: onTestRedItemsChange },
+                    { side: "2P", values: testBlueItems, onChange: onTestBlueItemsChange },
+                  ].map(({ side, values, onChange }) => ([0, 1, 2] as const).map((index) =>
+                    <label key={`${side}-${index}`}>{t("{side} ダミーアイテム（カテゴリ{category}）", { side, category: index + 1 })}<input
+                      type="text" value={values[index]} disabled={busy}
+                      placeholder={t("アイテムA アイテムB")}
+                      onChange={(event) => {
+                        const next: OverlayTestItemInputs = [...values];
+                        next[index] = event.currentTarget.value;
+                        onChange(next);
+                      }} />
+                    </label>,
+                  ))}
+                </div>
                 <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
                   <button
                     type="button"
@@ -198,7 +263,7 @@ export function OverlayControl({
             </div>
 
             {(overlayState.active || isTestOverlayActive) && (
-              <div className="overlay-preview-frame-wrap" ref={previewWrapRef}>
+              <div className="overlay-preview-frame-wrap" ref={previewWrapRef} style={{ aspectRatio: `${resolution.width} / ${resolution.height}` }}>
                 <iframe
                   ref={previewIframeRef}
                   className="overlay-preview-frame"
@@ -211,6 +276,9 @@ export function OverlayControl({
           </>
         )}
       </section>
+
+      {editorState && savedLayouts && <OverlayLayoutEditor state={editorState} savedLayouts={savedLayouts}
+        onSave={saveLayouts} disabled={persisting} />}
 
       {confirmTestOverlaySwitch && (
         <div className="dialog-backdrop" onClick={() => setConfirmTestOverlaySwitch(false)}>

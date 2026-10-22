@@ -308,6 +308,10 @@ function App() {
     setTestOverlayRedName,
     testOverlayBlueName,
     setTestOverlayBlueName,
+    testOverlayRedItems,
+    setTestOverlayRedItems,
+    testOverlayBlueItems,
+    setTestOverlayBlueItems,
     testOverlayRedWins,
     setTestOverlayRedWins,
     testOverlayBlueWins,
@@ -316,7 +320,6 @@ function App() {
     overlayPreviewWrapRef,
     overlayPreviewIframeRef,
     refreshObsOverlayState,
-    updateObsOverlayNameFitMode,
     updateObsOverlayShowSetInfo,
     updateObsOverlayShowEventAlias,
     setObsOverlayFullyStopped,
@@ -2909,6 +2912,8 @@ function App() {
           testEventAlias={testOverlayEventAlias}
           testRedName={testOverlayRedName}
           testBlueName={testOverlayBlueName}
+          testRedItems={testOverlayRedItems}
+          testBlueItems={testOverlayBlueItems}
           testRedWins={testOverlayRedWins}
           testBlueWins={testOverlayBlueWins}
           previewWrapRef={overlayPreviewWrapRef}
@@ -2918,12 +2923,13 @@ function App() {
               setError(t("URLをブラウザで開けませんでした: {p0}", { p0: String(err) }));
             });
           }}
-          onNameFitModeChange={(mode) => void updateObsOverlayNameFitMode(mode)}
           onShowSetInfoChange={(checked) => void updateObsOverlayShowSetInfo(checked)}
           onShowEventAliasChange={(checked) => void updateObsOverlayShowEventAlias(checked)}
           onTestRedNameChange={setTestOverlayRedName}
           onTestEventAliasChange={setTestOverlayEventAlias}
           onTestBlueNameChange={setTestOverlayBlueName}
+          onTestRedItemsChange={setTestOverlayRedItems}
+          onTestBlueItemsChange={setTestOverlayBlueItems}
           onTestRedWinsChange={setTestOverlayRedWins}
           onTestBlueWinsChange={setTestOverlayBlueWins}
           onToggleTestOverlay={toggleTestOverlay}

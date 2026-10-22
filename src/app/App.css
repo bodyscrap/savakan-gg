@@ -2225,6 +2225,388 @@ button:disabled {
   gap: 0.5rem;
 }
 
+.overlay-component-geometry {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.overlay-component-geometry label {
+  flex: 0 0 6rem;
+  width: 6rem;
+}
+
+.overlay-component-geometry .overlay-component-name {
+  flex: 1 1 10rem;
+  width: auto;
+  max-width: 18rem;
+  min-width: 0;
+}
+
+.overlay-component-geometry .overlay-component-source {
+  flex: 0 1 12rem;
+  width: 12rem;
+  min-width: 0;
+}
+
+.overlay-component-geometry .overlay-component-style {
+  flex: 0 1 9rem;
+  width: 9rem;
+  min-width: 0;
+}
+
+.overlay-component-geometry input,
+.overlay-component-geometry select {
+  width: 100%;
+  min-width: 0;
+}
+
+.overlay-clock-format {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.overlay-text-overflow {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.overlay-text-overflow .meta {
+  margin: 0;
+}
+
+.overlay-clock-format > label {
+  flex: 0 1 18rem;
+  min-width: 0;
+}
+
+.overlay-clock-format input {
+  width: 100%;
+  min-width: 0;
+}
+
+.overlay-clock-format > .meta {
+  flex: 1 1 24rem;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.overlay-font-controls {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: start;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.overlay-font-controls .overlay-font-family {
+  flex: 1 1 10rem;
+  max-width: 18rem;
+  min-width: 0;
+  position: relative;
+  display: grid;
+  gap: 0.22rem;
+}
+
+.overlay-font-combobox {
+  position: relative;
+}
+
+.overlay-font-combobox input {
+  padding-right: 3rem;
+}
+
+.overlay-font-combobox > button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0 10px 10px 0;
+  background: transparent;
+  color: var(--ink);
+}
+
+.overlay-font-combobox > button:hover {
+  background: #eff6ff;
+}
+
+.overlay-font-options {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: min(14rem, 40vh);
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 6px 18px #00000026;
+  font-size: 0.85rem;
+}
+
+.overlay-font-options.above {
+  top: auto;
+  bottom: calc(100% + 0.25rem);
+}
+
+.overlay-font-option,
+.overlay-font-empty {
+  padding: 0.4rem 0.6rem;
+  overflow-wrap: anywhere;
+}
+
+.overlay-font-option {
+  cursor: pointer;
+}
+
+.overlay-font-option[aria-selected="true"] {
+  font-weight: 600;
+}
+
+.overlay-font-option.active,
+.overlay-font-option:hover {
+  background: #dbeafe;
+}
+
+.overlay-font-empty {
+  color: var(--muted);
+}
+
+.overlay-font-controls .overlay-font-size {
+  flex: 0 0 5.5rem;
+  min-width: 0;
+}
+
+.overlay-font-controls .overlay-font-align {
+  flex: 0 0 6rem;
+  min-width: 0;
+}
+
+.overlay-font-controls .overlay-font-bold {
+  flex: 0 0 auto;
+  align-self: flex-end;
+  min-height: 2.5rem;
+  white-space: nowrap;
+}
+
+.overlay-font-controls input:not([type="checkbox"]),
+.overlay-font-controls select {
+  width: 100%;
+  min-width: 0;
+  height: 2.5rem;
+  padding-top: 0.45rem;
+  padding-bottom: 0.45rem;
+}
+
+.overlay-font-controls > .overlay-color-input {
+  flex: 0 1 12rem;
+}
+
+.overlay-font-controls p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.overlay-color-input {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
+.overlay-color-label {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.overlay-component-geometry > .overlay-color-input {
+  flex: 0 1 12rem;
+}
+
+.overlay-component-geometry .overlay-color-input label {
+  width: auto;
+  min-width: 0;
+}
+
+.overlay-color-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 2.5rem;
+  padding: 0.2rem 0.4rem;
+  width: 100%;
+  min-width: 0;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.overlay-color-trigger:hover {
+  background: var(--bg);
+}
+
+.overlay-color-swatch {
+  position: relative;
+  flex: 0 0 1.8rem;
+  height: 1.8rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: repeating-conic-gradient(#ffffff 0% 25%, #cbd5e1 0% 50%) 0 0 / 12px 12px;
+}
+
+.overlay-color-swatch > span {
+  position: absolute;
+  inset: 0;
+}
+
+.overlay-color-code {
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.overlay-color-picker {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0.75rem;
+  width: min(300px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 10px 32px #0003;
+}
+
+.overlay-color-picker:popover-open {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.overlay-color-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.overlay-color-picker-head button {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.overlay-color-saturation {
+  position: relative;
+  height: 140px;
+  border-radius: 6px;
+  background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.overlay-color-saturation > span {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 2px 1px #0009;
+  pointer-events: none;
+}
+
+.overlay-color-picker label {
+  display: grid;
+  gap: 0.2rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  min-width: 0;
+}
+
+.overlay-color-picker-row {
+  display: flex;
+  gap: 0.55rem;
+}
+
+.overlay-color-picker-row > label {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.overlay-color-picker-row > .overlay-color-alpha {
+  flex: 0 0 5rem;
+}
+
+.overlay-color-picker input[type="text"],
+.overlay-color-picker input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  height: 2.1rem;
+  padding: 0.35rem;
+  font-family: monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.overlay-color-picker input[type="range"] {
+  width: 100%;
+  height: 1.1rem;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.overlay-color-hue,
+.overlay-color-opacity {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.overlay-color-hue {
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+
+.overlay-color-opacity {
+  background-size: 100% 100%, 12px 12px;
+}
+
+.overlay-color-hue::-webkit-slider-thumb,
+.overlay-color-opacity::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 20px;
+  border: 2px solid var(--ink);
+  border-radius: 4px;
+  background: #fff;
+}
+
+.overlay-color-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.75rem;
+}
+
 .obs-overlay-actions {
   display: flex;
   justify-content: flex-end;
@@ -2264,6 +2646,293 @@ button:disabled {
   height: 100%;
   border: 0;
   background: transparent;
+}
+
+.overlay-layout-editor,
+.overlay-layout-editor fieldset {
+  min-width: 0;
+}
+
+.overlay-layout-editor fieldset {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.overlay-layout-toolbar {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0.75rem 0;
+}
+
+.overlay-layout-toolbar label {
+  min-width: 180px;
+  max-width: 320px;
+}
+
+.overlay-layout-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 42%, 480px);
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.overlay-component-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  height: min(60vh, 600px);
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+
+.overlay-component-sidebar h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.overlay-component-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+  margin: 0;
+}
+
+.overlay-component-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 0.85rem;
+}
+
+.overlay-component-table th,
+.overlay-component-table td {
+  padding: 0.4rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.overlay-component-table th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
+
+.overlay-component-table th:first-child {
+  width: 3rem;
+}
+
+.overlay-component-table th:nth-child(2) {
+  width: 36%;
+}
+
+.overlay-component-table th:nth-child(3) {
+  width: 5rem;
+}
+
+.overlay-component-table th:nth-child(3),
+.overlay-component-table td:nth-child(3) {
+  white-space: nowrap;
+}
+
+.overlay-component-table td:first-child {
+  text-align: center;
+}
+
+.overlay-component-table input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.overlay-component-table tbody tr {
+  cursor: pointer;
+}
+
+.overlay-component-table.read-only tbody tr {
+  cursor: default;
+}
+
+.overlay-component-table tbody tr[draggable="true"] {
+  cursor: grab;
+}
+
+.overlay-component-table tr.row-dragging {
+  opacity: 0.45;
+}
+
+.overlay-component-table tr.drop-above td {
+  box-shadow: inset 0 3px #2563eb;
+}
+
+.overlay-component-table tr.drop-below td {
+  box-shadow: inset 0 -3px #2563eb;
+}
+
+.overlay-component-order-help {
+  margin: 0;
+}
+
+.overlay-component-list button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: inherit;
+}
+
+.overlay-component-table tr.selected {
+  background: #dbeafe;
+}
+
+.overlay-component-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.overlay-centering-options {
+  margin: 0;
+}
+
+.overlay-centering-options .overlay-component-actions {
+  align-items: center;
+}
+
+.overlay-centering-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.overlay-centering-options input[type="radio"] {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  padding: 0;
+}
+
+.overlay-selection-actions {
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+}
+
+.overlay-selection-actions .meta {
+  margin: 0 0 0.35rem;
+}
+
+.overlay-component-dialog,
+.overlay-preset-create-dialog,
+.overlay-preset-copy-dialog {
+  width: min(440px, calc(100% - 2rem));
+  box-sizing: border-box;
+}
+
+.overlay-component-switch-dialog {
+  width: min(520px, calc(100% - 2rem));
+  box-sizing: border-box;
+}
+
+.overlay-component-switch-dialog .dialog-actions {
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.overlay-component-dialog::backdrop,
+.overlay-preset-create-dialog::backdrop,
+.overlay-preset-copy-dialog::backdrop,
+.overlay-component-switch-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.overlay-layout-viewport {
+  position: relative;
+  width: 100%;
+  max-width: 1100px;
+  height: min(60vh, 600px);
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #cbd5e1;
+  touch-action: none;
+  user-select: none;
+  cursor: default;
+}
+
+.overlay-layout-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
+  overflow: hidden;
+  background-color: #e5e7eb;
+  background-image: conic-gradient(#f8fafc 25%, transparent 0 50%, #f8fafc 0 75%, transparent 0);
+  background-size: 28px 28px;
+}
+
+.overlay-layout-handles {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
+  pointer-events: none;
+}
+
+.overlay-layout-hit {
+  position: absolute;
+  box-sizing: border-box;
+  border: solid transparent;
+  cursor: move;
+  touch-action: none;
+  pointer-events: auto;
+}
+
+.overlay-layout-hit:not(.selected):hover {
+  border-color: #2563eb;
+}
+
+.overlay-selection-bounds {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed #ffffff;
+  outline: 1px dashed #111827;
+  outline-offset: 1px;
+  pointer-events: none;
+}
+
+.overlay-layout-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  background: #2563eb;
+  cursor: nwse-resize;
+}
+
+.overlay-layout-viewport.pan-mode,
+.overlay-layout-viewport.pan-mode .overlay-layout-hit,
+.overlay-layout-viewport.pan-mode .overlay-layout-resize {
+  cursor: grab;
+}
+
+.overlay-layout-viewport.panning,
+.overlay-layout-viewport.panning * {
+  cursor: grabbing;
 }
 
 .dialog-body {

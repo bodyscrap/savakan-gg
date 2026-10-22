@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import ts from "typescript";
+import { API, documentURIToFileName } from "typescript/unstable/sync";
+import { isCallExpression, isIdentifier, isStringLiteral, type Node } from "typescript/unstable/ast";
 import { appTranslations } from "./app";
 import { componentTranslations } from "./components";
 import { getLanguage, LANGUAGE_STORAGE_KEY, setLanguage, t } from "./index";
@@ -83,22 +84,40 @@ describe("translation catalogs", () => {
   });
 
   it("includes every explicit source message in the application", () => {
-    const files = import.meta.glob<string>(
+    const files = import.meta.glob(
       ["../app/*.tsx", "../components/*.tsx", "../hooks/*.ts", "../domain/*.ts", "!../**/*.test.*"],
-      { query: "?raw", import: "default", eager: true },
+      { query: "?raw", import: "default" },
     );
-    for (const [path, text] of Object.entries(files)) {
-      const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
-      function visit(node: ts.Node): void {
-        if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "t") {
-          const key = node.arguments[0];
-          if (key && ts.isStringLiteral(key)) {
-            expect(Object.prototype.hasOwnProperty.call(catalogs, key.text), `${path}: ${key.text}`).toBe(true);
+    const api = new API();
+    try {
+      const config = documentURIToFileName(new URL("../../tsconfig.json", import.meta.url).href);
+      const snapshot = api.updateSnapshot({ openProjects: [config] });
+      try {
+        const project = snapshot.getProject(config);
+        if (!project) throw new Error("Translation check project was not loaded.");
+        expect(Object.keys(files).length).toBeGreaterThan(0);
+        let checkedMessages = 0;
+        for (const path of Object.keys(files)) {
+          const source = project.program.getSourceFile(documentURIToFileName(new URL(path, import.meta.url).href));
+          if (!source) throw new Error(`Translation check source was not loaded: ${path}`);
+          function visit(node: Node): void {
+            if (isCallExpression(node) && isIdentifier(node.expression) && node.expression.text === "t") {
+              const key = node.arguments[0];
+              if (key && isStringLiteral(key)) {
+                checkedMessages += 1;
+                expect(Object.prototype.hasOwnProperty.call(catalogs, key.text), `${path}: ${key.text}`).toBe(true);
+              }
+            }
+            node.forEachChild(visit);
           }
+          visit(source);
         }
-        ts.forEachChild(node, visit);
+        expect(checkedMessages).toBeGreaterThan(0);
+      } finally {
+        snapshot.dispose();
       }
-      visit(source);
+    } finally {
+      api.close();
     }
   });
 });

@@ -6,6 +6,7 @@ mod reporting;
 mod startgg;
 mod startgg_scalars;
 mod storage;
+mod overlay_layout;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, UdpSocket};
@@ -93,6 +94,10 @@ struct MobileOverlayToggleInput {
     round_text: String,
     red_player_name: String,
     blue_player_name: String,
+    #[serde(default)]
+    red_entrant_id: Option<String>,
+    #[serde(default)]
+    blue_entrant_id: Option<String>,
     red_set_wins: u32,
     blue_set_wins: u32,
     font_scale: f64,
@@ -135,6 +140,9 @@ fn emit_bracket_report_progress(
 }
 
 fn emit_workspace_updated(app: &tauri::AppHandle, slug: &str, event_id: &str) {
+    if let Err(error) = refresh_obs_overlay_items(app, event_id) {
+        eprintln!("Unable to refresh overlay items: {error}");
+    }
     let payload = WorkspaceUpdatedPayload {
         slug: slug.to_owned(),
         event_id: event_id.to_owned(),
@@ -174,7 +182,6 @@ fn obs_overlay_state() -> &'static Mutex<ObsOverlayRuntimeState> {
             active_set: None,
             event_alias: String::new(),
             preview_font_scale: 1.0,
-            name_fit_mode: "shrink".to_owned(),
             show_set_info: true,
             show_event_alias: true,
             fully_stopped: false,
@@ -615,6 +622,52 @@ fn sort_pending_set_results_by_phase_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlay_items_resolve_saved_categories_in_selection_order_for_both_players() {
+        let mut meta: models::EventLocalMeta = serde_json::from_value(serde_json::json!({
+            "eventId": "event", "eventName": "Event",
+            "eventManagement": {
+                "sideDecisionMethod": "upper_1p",
+                "itemListSnapshots": [
+                    {"id": "one", "name": "One", "categoryName": "One", "items": ["A", "B", "Unselected"]},
+                    {"id": "two", "name": "Two", "categoryName": "Two", "items": ["C"]},
+                    {"id": "three", "name": "Three", "categoryName": "Three", "items": ["D", "B"]}
+                ],
+                "categoryAllowDuplicates": [true, false, false]
+            },
+            "entrants": [
+                {"entrantId": "red", "entrantName": "Red", "playSide": null,
+                 "characterNames": [" B ", "A", "B", "C", "D", "C", "unknown", ""],
+                 "authCode": "", "notes": null},
+                {"entrantId": "blue", "entrantName": "Blue", "playSide": null,
+                 "characterNames": ["D"], "authCode": "", "notes": null}
+            ]
+        })).unwrap();
+        let red = overlay_items_for_entrant(Some(&meta), Some("red"));
+        let blue = overlay_items_for_entrant(Some(&meta), Some("blue"));
+        assert_eq!(red, [vec!["B", "A", "B"], vec!["C"], vec!["D"]]);
+        assert_eq!(blue, [vec![], vec![], vec!["D"]]);
+        assert_eq!(overlay_items_for_entrant(Some(&meta), None), [Vec::<String>::new(), vec![], vec![]]);
+        assert_eq!(overlay_items_for_entrant(None, Some("red")), [Vec::<String>::new(), vec![], vec![]]);
+        let mut input: ObsOverlaySetInput = serde_json::from_value(serde_json::json!({
+            "enabled": true, "setId": "real", "eventName": "Event", "eventAlias": "",
+            "roundText": "", "redPlayerName": "Red", "bluePlayerName": "Blue",
+            "redEntrantId": "red", "blueEntrantId": "blue",
+            "redSetWins": 0, "blueSetWins": 0, "fontScale": 1,
+            "redItems": [["Dummy A", "Dummy A"], [], ["Dummy C"]],
+            "blueItems": [[], ["Dummy B"], []]
+        })).unwrap();
+        assert_eq!(input.resolve_items(Some(&meta)), (red, blue));
+        input.set_id = "__test__".to_owned();
+        assert_eq!(input.resolve_items(Some(&meta)), (input.red_items.clone(), input.blue_items.clone()));
+        input.red_items = Default::default();
+        assert_eq!(input.resolve_items(None).0, [Vec::<String>::new(), vec![], vec![]]);
+        meta.entrants[0].character_names = vec!["A".to_owned()];
+        assert_eq!(overlay_items_for_entrant(Some(&meta), Some("red")), [vec!["A"], vec![], vec![]]);
+        meta.event_management.as_mut().unwrap().item_list_snapshots[0].id.clear();
+        assert_eq!(overlay_items_for_entrant(Some(&meta), Some("red")), [Vec::<String>::new(), vec![], vec![]]);
+    }
 
     #[test]
     fn set_stream_start_only_records_real_starts_and_restarts() {
@@ -1124,6 +1177,14 @@ struct ObsOverlaySetInput {
     round_text: String,
     red_player_name: String,
     blue_player_name: String,
+    #[serde(default)]
+    red_entrant_id: Option<String>,
+    #[serde(default)]
+    blue_entrant_id: Option<String>,
+    #[serde(default)]
+    red_items: [Vec<String>; 3],
+    #[serde(default)]
+    blue_items: [Vec<String>; 3],
     red_set_wins: u32,
     blue_set_wins: u32,
     font_scale: f64,
@@ -1132,6 +1193,17 @@ struct ObsOverlaySetInput {
 impl ObsOverlaySetInput {
     fn starts_new_set(&self, active_set_id: Option<&str>) -> bool {
         self.enabled && self.set_id.trim() != "__test__" && active_set_id != Some(self.set_id.trim())
+    }
+
+    fn resolve_items(&self, event_meta: Option<&models::EventLocalMeta>) -> ([Vec<String>; 3], [Vec<String>; 3]) {
+        if self.set_id.trim() == "__test__" {
+            (self.red_items.clone(), self.blue_items.clone())
+        } else {
+            (
+                overlay_items_for_entrant(event_meta, self.red_entrant_id.as_deref()),
+                overlay_items_for_entrant(event_meta, self.blue_entrant_id.as_deref()),
+            )
+        }
     }
 }
 
@@ -1146,10 +1218,11 @@ struct ObsOverlayState {
     round_text: Option<String>,
     red_player_name: String,
     blue_player_name: String,
+    red_items: [Vec<String>; 3],
+    blue_items: [Vec<String>; 3],
     red_set_wins: u32,
     blue_set_wins: u32,
     font_scale: f64,
-    name_fit_mode: String,
     show_set_info: bool,
     show_event_alias: bool,
     overlay_url: String,
@@ -1158,6 +1231,12 @@ struct ObsOverlayState {
 #[derive(Debug, Clone)]
 struct ObsOverlayActiveSet {
     set_id: String,
+    slug: String,
+    event_id: String,
+    red_entrant_id: Option<String>,
+    blue_entrant_id: Option<String>,
+    red_items: [Vec<String>; 3],
+    blue_items: [Vec<String>; 3],
     event_name: String,
     event_alias: String,
     round_text: String,
@@ -1173,18 +1252,9 @@ struct ObsOverlayRuntimeState {
     active_set: Option<ObsOverlayActiveSet>,
     event_alias: String,
     preview_font_scale: f64,
-    name_fit_mode: String,
     show_set_info: bool,
     show_event_alias: bool,
     fully_stopped: bool,
-}
-
-fn normalize_name_fit_mode(value: &str) -> &'static str {
-    if value.trim().eq_ignore_ascii_case("shrink") {
-        "shrink"
-    } else {
-        "truncate"
-    }
 }
 
 fn clamp_font_scale(value: f64) -> f64 {
@@ -1213,10 +1283,11 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
             round_text: Some(active.round_text.clone()),
             red_player_name: active.red_player_name.clone(),
             blue_player_name: active.blue_player_name.clone(),
+            red_items: active.red_items.clone(),
+            blue_items: active.blue_items.clone(),
             red_set_wins: active.red_set_wins,
             blue_set_wins: active.blue_set_wins,
             font_scale: active.font_scale,
-            name_fit_mode: guard.name_fit_mode.clone(),
             show_set_info: guard.show_set_info,
             show_event_alias: guard.show_event_alias,
             overlay_url: overlay_url(),
@@ -1234,14 +1305,62 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
         round_text: None,
         red_player_name: String::new(),
         blue_player_name: String::new(),
+        red_items: Default::default(),
+        blue_items: Default::default(),
         red_set_wins: 0,
         blue_set_wins: 0,
         font_scale: preview_font_scale,
-        name_fit_mode: guard.name_fit_mode.clone(),
         show_set_info: guard.show_set_info,
         show_event_alias: guard.show_event_alias,
         overlay_url: overlay_url(),
     })
+}
+
+fn overlay_items_for_entrant(
+    event_meta: Option<&models::EventLocalMeta>,
+    entrant_id: Option<&str>,
+) -> [Vec<String>; 3] {
+    let mut categories: [Vec<String>; 3] = Default::default();
+    let Some(meta) = event_meta else {
+        return categories;
+    };
+    let Some(setting) = &meta.event_management else {
+        return categories;
+    };
+    let Some(entrant) = meta.entrants.iter().find(|entrant| Some(entrant.entrant_id.as_str()) == entrant_id) else {
+        return categories;
+    };
+    for item in &entrant.character_names {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        if let Some(index) = setting.item_list_snapshots.iter().take(3).position(|list| {
+            !list.id.trim().is_empty() && list.items.iter().any(|name| name == item)
+        }) {
+            if setting.category_allow_duplicates.get(index).copied().unwrap_or(false)
+                || !categories[index].iter().any(|name| name == item)
+            {
+                categories[index].push(item.to_owned());
+            }
+        }
+    }
+    categories
+}
+
+fn refresh_obs_overlay_items(app: &tauri::AppHandle, event_id: &str) -> Result<(), String> {
+    let mut guard = obs_overlay_state().lock()
+        .map_err(|_| "オーバーレイ状態のロック取得に失敗しました。".to_owned())?;
+    let Some(active) = guard.active_set.as_mut().filter(|active| active.event_id == event_id && active.set_id != "__test__") else {
+        return Ok(());
+    };
+    let workspace = storage::load_workspace(app, &active.slug, event_id)?;
+    let meta = workspace.local_meta.events.iter().find(|meta| meta.event_id == event_id);
+    active.red_items = overlay_items_for_entrant(meta, active.red_entrant_id.as_deref());
+    active.blue_items = overlay_items_for_entrant(meta, active.blue_entrant_id.as_deref());
+    drop(guard);
+    emit_obs_overlay_state_changed(app);
+    Ok(())
 }
 
 fn build_overlay_html() -> &'static str {
@@ -1250,7 +1369,7 @@ fn build_overlay_html() -> &'static str {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Savakan OBS Overlay</title>
+  <title>Savakan Overlay</title>
   <script>
     function applyOverlayLanguage() {
       let language = 'ja';
@@ -1258,7 +1377,7 @@ fn build_overlay_html() -> &'static str {
         if (localStorage.getItem('savakan.mobile.language') === 'en') language = 'en';
       } catch (_) {}
       document.documentElement.lang = language;
-      document.title = language === 'en' ? 'Savakan OBS Overlay' : 'Savakan OBS オーバーレイ';
+      document.title = language === 'en' ? 'Savakan Overlay' : 'Savakan オーバーレイ';
     }
     applyOverlayLanguage();
     window.addEventListener('storage', applyOverlayLanguage);
@@ -1407,9 +1526,6 @@ fn build_overlay_html() -> &'static str {
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        body.fit-shrink .name {
-            text-overflow: clip;
-        }
         .count {
             font-weight: 900;
             font-size: var(--count-size);
@@ -1556,11 +1672,11 @@ fn build_overlay_html() -> &'static str {
             });
         }
 
-        function fitNameToPlate(element, text, mode) {
+        function fitNameToPlate(element, text) {
             element.textContent = text;
             element.style.fontSize = '';
 
-            if (mode !== 'shrink' || text === '') {
+            if (text === '') {
                 return;
             }
 
@@ -1571,7 +1687,7 @@ fn build_overlay_html() -> &'static str {
                 return;
             }
 
-            const minScale = 0.58;
+            const minScale = 0.5;
             const minSize = baseSize * minScale;
             const safetyPixels = 3;
             const targetWidth = Math.max(1, available - safetyPixels);
@@ -1656,14 +1772,11 @@ fn build_overlay_html() -> &'static str {
           return;
         }
         const state = await response.json();
+        window.dispatchEvent(new CustomEvent('overlay-state', { detail: state }));
         const scale = Number(state.fontScale || 1);
         document.documentElement.style.setProperty('--scale', String(Number.isFinite(scale) ? scale : 1));
         const isActive = Boolean(state.active);
                 const isFullyStopped = Boolean(state.fullyStopped);
-                const nameFitMode = String(state.nameFitMode || 'shrink').trim().toLowerCase() === 'shrink'
-                    ? 'shrink'
-                    : 'truncate';
-                document.body.classList.toggle('fit-shrink', nameFitMode === 'shrink');
                 document.body.classList.toggle('full-stop', isFullyStopped);
                 document.body.classList.toggle('hide-event-alias', !Boolean(state.showEventAlias));
                 const showSetInfo = Boolean(state.showSetInfo);
@@ -1682,8 +1795,8 @@ fn build_overlay_html() -> &'static str {
             hud?.classList.toggle('hide-set-info', !showSetInfo);
             const redNameEl = document.getElementById('redName');
             const blueNameEl = document.getElementById('blueName');
-            fitNameToPlate(redNameEl, redName, nameFitMode);
-            fitNameToPlate(blueNameEl, blueName, nameFitMode);
+            fitNameToPlate(redNameEl, redName);
+            fitNameToPlate(blueNameEl, blueName);
                 document.getElementById('redCount').textContent = redWins;
                 document.getElementById('blueCount').textContent = blueWins;
                                 fitSetInfoToPlate(document.getElementById('setMain'), setMain);
@@ -1696,6 +1809,7 @@ fn build_overlay_html() -> &'static str {
     tick();
     setInterval(tick, 450);
   </script>
+  <script type="module" src="/overlay-layout.js"></script>
 </body>
 </html>"#
 }
@@ -1714,6 +1828,30 @@ fn handle_obs_overlay_http_request(request: tiny_http::Request) {
             response = response.with_header(header);
         }
         if let Some(header) = no_cache_header.clone() {
+            response = response.with_header(header);
+        }
+        let _ = request.respond(response);
+        return;
+    }
+
+    if path == "/overlay-renderer.js" || path == "/overlay-layout.js"
+        || path == "/api/overlay-layout" || path == "/api/overlay-layout-revision" {
+        let result = match path {
+            "/overlay-renderer.js" => Ok(include_str!("../../src/domain/overlayRenderer.js").to_owned()),
+            "/overlay-layout.js" => Ok(include_str!("web/overlay-layout.js").to_owned()),
+            "/api/overlay-layout-revision" => Ok(overlay_layout::revision()),
+            _ => overlay_layout::active_json(),
+        };
+        let (body, status) = match result {
+            Ok(body) => (body, 200),
+            Err(error) => (error, 500),
+        };
+        let mime = if path.ends_with(".js") { "text/javascript; charset=utf-8" } else { "application/json" };
+        let mut response = Response::from_string(body).with_status_code(status);
+        if let Ok(header) = Header::from_bytes(b"Content-Type", mime.as_bytes()) {
+            response = response.with_header(header);
+        }
+        if let Some(header) = no_cache_header {
             response = response.with_header(header);
         }
         let _ = request.respond(response);
@@ -1764,7 +1902,7 @@ fn start_obs_overlay_server_if_needed() -> Result<(), String> {
     }
 
     let server = Server::http(format!("0.0.0.0:{OBS_OVERLAY_PORT}"))
-        .map_err(|e| format!("OBSオーバーレイWebサーバーの起動に失敗しました: {e}"))?;
+        .map_err(|e| format!("オーバーレイWebサーバーの起動に失敗しました: {e}"))?;
 
     obs_overlay_server_running().store(true, Ordering::SeqCst);
 
@@ -3224,6 +3362,8 @@ fn mobile_input_html() -> String {
                 roundText: overlayRoundText,
                 redPlayerName: onePSlot?.entrantName || 'RED',
                 bluePlayerName: twoPSlot?.entrantName || 'BLUE',
+                redEntrantId: onePSlot?.entrantId || null,
+                blueEntrantId: twoPSlot?.entrantId || null,
                 redSetWins: toOverlayGameWins(onePSlot?.score),
                 blueSetWins: toOverlayGameWins(twoPSlot?.score),
                 fontScale: 1,
@@ -5191,10 +5331,11 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     round_text: None,
                     red_player_name: String::new(),
                     blue_player_name: String::new(),
+                    red_items: Default::default(),
+                    blue_items: Default::default(),
                     red_set_wins: 0,
                     blue_set_wins: 0,
                     font_scale: 1.0,
-                    name_fit_mode: "shrink".to_owned(),
                     show_set_info: true,
                     show_event_alias: true,
                     overlay_url: overlay_url(),
@@ -5263,6 +5404,10 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             round_text: payload.round_text.clone(),
             red_player_name: payload.red_player_name.clone(),
             blue_player_name: payload.blue_player_name.clone(),
+            red_entrant_id: payload.red_entrant_id.clone(),
+            blue_entrant_id: payload.blue_entrant_id.clone(),
+            red_items: Default::default(),
+            blue_items: Default::default(),
             red_set_wins: payload.red_set_wins,
             blue_set_wins: payload.blue_set_wins,
             font_scale: payload.font_scale,
@@ -5536,19 +5681,6 @@ fn set_obs_overlay_font_scale(font_scale: f64) -> Result<ObsOverlayState, String
 }
 
 #[tauri::command]
-fn set_obs_overlay_name_fit_mode(name_fit_mode: String) -> Result<ObsOverlayState, String> {
-    start_obs_overlay_server_if_needed()?;
-
-    let mut guard = obs_overlay_state()
-        .lock()
-        .map_err(|_| "オーバーレイ状態のロック取得に失敗しました。".to_owned())?;
-
-    guard.name_fit_mode = normalize_name_fit_mode(&name_fit_mode).to_owned();
-    drop(guard);
-    snapshot_obs_overlay_state()
-}
-
-#[tauri::command]
 fn set_obs_overlay_show_set_info(show_set_info: bool) -> Result<ObsOverlayState, String> {
     start_obs_overlay_server_if_needed()?;
 
@@ -5660,8 +5792,21 @@ fn apply_obs_overlay_toggle(
             }
         };
 
+        let (red_items, blue_items) = if set_id == "__test__" {
+            input.resolve_items(None)
+        } else {
+            let workspace = storage::load_workspace(app, &input.slug, &input.event_id)?;
+            let meta = workspace.local_meta.events.iter().find(|meta| meta.event_id == input.event_id);
+            input.resolve_items(meta)
+        };
         guard.active_set = Some(ObsOverlayActiveSet {
             set_id,
+            slug: input.slug.clone(),
+            event_id: input.event_id.clone(),
+            red_entrant_id: input.red_entrant_id,
+            blue_entrant_id: input.blue_entrant_id,
+            red_items,
+            blue_items,
             event_name: input.event_name.trim().to_owned(),
             event_alias: input.event_alias.trim().to_owned(),
             round_text: input.round_text.trim().to_owned(),
@@ -6956,6 +7101,7 @@ fn save_event_management_meta(
 ) -> Result<TournamentWorkspace, String> {
     let local_meta = storage::save_event_management_meta(&app, input.clone())?;
     let snapshot = storage::load_snapshot(&app, &input.slug)?;
+    refresh_obs_overlay_items(&app, &input.event_id)?;
 
     Ok(TournamentWorkspace {
         snapshot,
@@ -7349,6 +7495,7 @@ fn save_local_player_meta(
 ) -> Result<TournamentWorkspace, String> {
     let local_meta = storage::upsert_local_player_meta(&app, input.clone())?;
     let snapshot = storage::load_snapshot(&app, &input.slug)?;
+    refresh_obs_overlay_items(&app, &input.event_id)?;
 
     Ok(TournamentWorkspace {
         snapshot,
@@ -7706,6 +7853,10 @@ async fn reset_set_result_cascade(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            overlay_layout::initialize(app.handle())?;
+            Ok(())
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -7727,8 +7878,11 @@ pub fn run() {
             load_mobile_result_requests_for_event,
             test_sender_network,
             get_obs_overlay_state,
+            overlay_layout::get_overlay_layouts,
+            overlay_layout::save_overlay_layouts,
+            overlay_layout::apply_overlay_preset,
+            overlay_layout::list_overlay_fonts,
             set_obs_overlay_font_scale,
-            set_obs_overlay_name_fit_mode,
             set_obs_overlay_show_set_info,
             set_obs_overlay_show_event_alias,
             set_obs_overlay_fully_stopped,

@@ -4,8 +4,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { AppTab } from "../components/AppShell";
 import type { SetSlot, SetSnapshot } from "../domain/bracketProgression";
+import type { OverlayRenderState } from "../domain/overlayRenderer.js";
+import { parseOverlayTestItems, type OverlayTestItemInputs } from "../domain/overlayLayout";
 
-export type ObsOverlayState = {
+export type ObsOverlayState = OverlayRenderState & {
   active: boolean;
   fullyStopped: boolean;
   currentSetId: string | null;
@@ -17,7 +19,6 @@ export type ObsOverlayState = {
   redSetWins: number;
   blueSetWins: number;
   fontScale: number;
-  nameFitMode: "truncate" | "shrink";
   showSetInfo: boolean;
   showEventAlias: boolean;
   overlayUrl: string;
@@ -38,6 +39,10 @@ export type ObsOverlaySetInput = {
   roundText: string;
   redPlayerName: string;
   bluePlayerName: string;
+  redEntrantId?: string | null;
+  blueEntrantId?: string | null;
+  redItems?: string[][];
+  blueItems?: string[][];
   redSetWins: number;
   blueSetWins: number;
   fontScale: number;
@@ -177,6 +182,8 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
   const [testOverlayEventAlias, setTestOverlayEventAlias] = useState(t("テスト大会"));
   const [testOverlayRedName, setTestOverlayRedName] = useState(t("テストプレイヤー1"));
   const [testOverlayBlueName, setTestOverlayBlueName] = useState(t("テストプレイヤー2"));
+  const [testOverlayRedItems, setTestOverlayRedItems] = useState<OverlayTestItemInputs>(["1P-A 1P-B", "1P-C 1P-D", "1P-E 1P-F"]);
+  const [testOverlayBlueItems, setTestOverlayBlueItems] = useState<OverlayTestItemInputs>(["2P-A 2P-B", "2P-C 2P-D", "2P-E 2P-F"]);
   const [testOverlayRedWins, setTestOverlayRedWins] = useState(0);
   const [testOverlayBlueWins, setTestOverlayBlueWins] = useState(0);
   const [isTestOverlayActive, setIsTestOverlayActive] = useState(false);
@@ -286,6 +293,8 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
               roundText: "Preview / Pool A\nPreview\nSet T",
               redPlayerName: testOverlayRedName.trim() || t("テストプレイヤー1"),
               bluePlayerName: testOverlayBlueName.trim() || t("テストプレイヤー2"),
+              redItems: parseOverlayTestItems(testOverlayRedItems),
+              blueItems: parseOverlayTestItems(testOverlayBlueItems),
               redSetWins: normalizeObsSetWins(testOverlayRedWins),
               blueSetWins: normalizeObsSetWins(testOverlayBlueWins),
               fontScale: normalizeObsFontScale(obsOverlayState.fontScale),
@@ -313,6 +322,8 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     obsOverlayState?.fontScale,
     testOverlayRedName,
     testOverlayBlueName,
+    testOverlayRedItems,
+    testOverlayBlueItems,
     testOverlayEventAlias,
     testOverlayRedWins,
     testOverlayBlueWins,
@@ -340,17 +351,6 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     const timer = window.setInterval(postPreviewSize, 500);
     return () => window.clearInterval(timer);
   }, [activeTab, obsOverlayState?.overlayUrl]);
-
-  async function updateObsOverlayNameFitMode(mode: "truncate" | "shrink") {
-    setObsOverlayBusy(true);
-    try {
-      applyOverlayState(await invoke<ObsOverlayState>("set_obs_overlay_name_fit_mode", { nameFitMode: mode }));
-    } catch (error) {
-      setError(String(error));
-    } finally {
-      setObsOverlayBusy(false);
-    }
-  }
 
   async function updateObsOverlayShowSetInfo(showSetInfo: boolean) {
     setObsOverlayBusy(true);
@@ -422,6 +422,8 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
       roundText: "Preview / Pool A\nPreview\nSet T",
       redPlayerName: testOverlayRedName.trim() || t("テストプレイヤー1"),
       bluePlayerName: testOverlayBlueName.trim() || t("テストプレイヤー2"),
+      redItems: parseOverlayTestItems(testOverlayRedItems),
+      blueItems: parseOverlayTestItems(testOverlayBlueItems),
       redSetWins: testOverlayRedWins,
       blueSetWins: testOverlayBlueWins,
       fontScale: obsOverlayState.fontScale,
@@ -474,6 +476,10 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     setTestOverlayEventAlias,
     testOverlayBlueName,
     setTestOverlayBlueName,
+    testOverlayRedItems,
+    setTestOverlayRedItems,
+    testOverlayBlueItems,
+    setTestOverlayBlueItems,
     testOverlayRedWins,
     setTestOverlayRedWins: (value: number) => setTestOverlayRedWins(normalizeObsSetWins(value)),
     testOverlayBlueWins,
@@ -482,7 +488,6 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     overlayPreviewWrapRef,
     overlayPreviewIframeRef,
     refreshObsOverlayState,
-    updateObsOverlayNameFitMode,
     updateObsOverlayShowSetInfo,
     updateObsOverlayShowEventAlias,
     setObsOverlayFullyStopped,
