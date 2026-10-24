@@ -2,6 +2,7 @@ export function formatOverlayClock(format, now = new Date()) {
   const pad = (value, length = 2) => String(value).padStart(length, "0");
   const hours = now.getHours();
   const weekdays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const japaneseWeekdays = ["日", "月", "火", "水", "木", "金", "土"];
   const tokens = {
     YYYY: pad(now.getFullYear(), 4), YY: pad(now.getFullYear() % 100),
     MM: pad(now.getMonth() + 1), M: String(now.getMonth() + 1),
@@ -10,7 +11,7 @@ export function formatOverlayClock(format, now = new Date()) {
     mm: pad(now.getMinutes()), m: String(now.getMinutes()),
     ss: pad(now.getSeconds()), s: String(now.getSeconds()),
     A: hours < 12 ? "AM" : "PM", a: hours < 12 ? "am" : "pm",
-    dddd: weekdays[now.getDay()], ddd: weekdays[now.getDay()].slice(0, 3), d: String(now.getDay()),
+    dddd: weekdays[now.getDay()], ddd: weekdays[now.getDay()].slice(0, 3), d: japaneseWeekdays[now.getDay()],
   };
   return format.replace(/\[([^\]]*)\]|YYYY|YY|MM|M|DD|D|HH|H|hh|h|mm|m|ss|s|A|a|dddd|ddd|d/g,
     (token, literal) => literal !== undefined ? literal : tokens[token]);

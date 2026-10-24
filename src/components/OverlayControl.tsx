@@ -17,8 +17,6 @@ export type ObsOverlayState = OverlayRenderState & {
   redSetWins: number;
   blueSetWins: number;
   fontScale: number;
-  showSetInfo: boolean;
-  showEventAlias: boolean;
   overlayUrl: string;
 };
 
@@ -37,8 +35,6 @@ type OverlayControlProps = {
   previewWrapRef: { current: HTMLDivElement | null };
   previewIframeRef: { current: HTMLIFrameElement | null };
   onOpenUrl: (url: string) => void;
-  onShowSetInfoChange: (checked: boolean) => void;
-  onShowEventAliasChange: (checked: boolean) => void;
   onTestRedNameChange: (value: string) => void;
   onTestEventAliasChange: (value: string) => void;
   onTestBlueNameChange: (value: string) => void;
@@ -66,8 +62,6 @@ export function OverlayControl({
   previewWrapRef,
   previewIframeRef,
   onOpenUrl,
-  onShowSetInfoChange,
-  onShowEventAliasChange,
   onTestRedNameChange,
   onTestEventAliasChange,
   onTestBlueNameChange,
@@ -151,23 +145,6 @@ export function OverlayControl({
                   ? (isTestOverlayActive ? t("テスト配信中") : t("配信中 ({setId})", { setId: overlayState.currentSetId ?? "-" }))
                   : (overlayState.fullyStopped ? t("完全停止中") : t("停止中")) })}</p>
               {activeSetLabel && <p className="meta">{t("配信中set: {value1}", { value1: activeSetLabel })}</p>}
-
-              <div className="obs-overlay-grid">
-                <label className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={overlayState.showSetInfo}
-                    onChange={(e) => onShowSetInfoChange(e.currentTarget.checked)}
-                    disabled={busy}
-                  />{t("中央のセット情報を表示")}</label>
-                <label className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={overlayState.showEventAlias}
-                    onChange={(e) => onShowEventAliasChange(e.currentTarget.checked)}
-                    disabled={busy}
-                  />{t("下部中央にイベントエイリアスを表示")}</label>
-              </div>
 
               <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--line)" }}>
                 <label>{t("適用するプリセット")}<select value={savedLayouts?.activePresetId ?? ""}

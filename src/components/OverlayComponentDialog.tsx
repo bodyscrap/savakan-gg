@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { newOverlayComponent, type OverlayComponent } from "../domain/overlayLayout";
+import { newOverlayComponent, overlayKindLabels, type OverlayComponent } from "../domain/overlayLayout";
 import { t } from "../i18n";
 
 type Props = {
@@ -11,7 +11,7 @@ export function OverlayComponentDialog({ onCreate, onClose }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const [kind, setKind] = useState<OverlayComponent["kind"]>("text");
-  const [name, setName] = useState("");
+  const [name, setName] = useState<string>();
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -47,7 +47,7 @@ export function OverlayComponentDialog({ onCreate, onClose }: Props) {
           <option value="clock">{t("時計")}</option>
           <option value="image">{t("画像")}</option>
         </select></label>
-        <label>{t("コンポーネント名")}<input ref={nameRef} autoFocus required maxLength={256} value={name}
+        <label>{t("コンポーネント名")}<input ref={nameRef} autoFocus required maxLength={256} value={name ?? t(overlayKindLabels[kind])}
           onChange={(event) => { setName(event.target.value); setError(""); }} /></label>
         <p className="meta">{t("識別用の名称です。オーバーレイには表示されません。")}</p>
       </div>

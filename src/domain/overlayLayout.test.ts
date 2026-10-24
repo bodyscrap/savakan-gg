@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   builtInOverlayPreset, copyOverlayPreset, isOverlayImage, MAX_IMAGE_BYTES, MAX_LAYOUT_BYTES, mergeOverlayLayouts, newOverlayComponent, newOverlayPreset,
-  overlayPreviewTransform, overlayResolutionAtAspect, overlayColorParts, overlayColorWithAlpha, overlayColorHsv, overlayColorFromHsv, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayNumberSources, overlayItemSources, overlaySources, parseOverlayLayouts, parseOverlayLayoutsFile, parseOverlayTestItems, type OverlayLayouts,
+  overlayPreviewTransform, overlayResolutionAtAspect, overlayColorParts, overlayColorWithAlpha, overlayColorHsv, overlayColorFromHsv, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, overlayComponentsIntersecting, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayNumberSources, overlayItemSources, overlaySources, parseOverlayLayouts, parseOverlayLayoutsFile, parseOverlayTestItems, type OverlayLayouts,
 } from "./overlayLayout";
 import { formatOverlayClock, resolveOverlayBackground, resolveOverlayText, resolveOverlayVerticalAlign, resolveOverlayTextOverflow } from "./overlayRenderer.js";
 
@@ -184,10 +184,12 @@ describe("clock overlay components", () => {
     expect(resolveOverlayText(component, state, now)).toBe("2026-01-04 00:05:09");
     expect(resolveOverlayText(component, { ...state, active: false }, now)).toBe("2026-01-04 00:05:09");
   });
-  it("supports padding, 12-hour time, English weekdays and escaped literals without reformatting output", () => {
+  it("supports padding, 12-hour time, Japanese and English weekdays and escaped literals", () => {
     const now = new Date(2026, 0, 4, 0, 5, 9);
     expect(formatOverlayClock("YYYY YY M MM D DD H HH h hh m mm s ss A a d ddd dddd", now))
-      .toBe("2026 26 1 01 4 04 0 00 12 12 5 05 9 09 AM am 0 Sun Sunday");
+      .toBe("2026 26 1 01 4 04 0 00 12 12 5 05 9 09 AM am 日 Sun Sunday");
+    expect(Array.from({ length: 7 }, (_, day) => formatOverlayClock("d", new Date(2026, 0, 4 + day))))
+      .toEqual(["日", "月", "火", "水", "木", "金", "土"]);
     expect(formatOverlayClock("[YYYY-MM-DD] YYYY年M月D日\n[<b>time</b>] HH:mm:ss", now))
       .toBe("YYYY-MM-DD 2026年1月4日\n<b>time</b> 00:05:09");
     expect(formatOverlayClock("HH H hh h A a", new Date(2026, 9, 22, 12))).toBe("12 12 12 12 PM pm");
@@ -390,16 +392,18 @@ describe("overlay selection adjustments", () => {
 });
 
 describe("overlay component multi-selection", () => {
-  it("preserves selection order and the first component when adding or removing other members", () => {
+  it("replaces, adds and toggles selection while preserving its primary component", () => {
     const original = ["a"];
-    expect(overlayComponentSelection(original, "b", true)).toEqual(["a", "b"]);
+    expect(overlayComponentSelection(original, "b", "add")).toEqual(["a", "b"]);
     expect(original).toEqual(["a"]);
-    expect(overlayComponentSelection(["a", "b", "c"], "b", true)).toEqual(["a", "c"]);
-    expect(overlayComponentSelection(["a", "b", "c"], "a", true)).toEqual(["b", "c"]);
-    expect(overlayComponentSelection(["a", "b"], "a", false)).toEqual(["a"]);
-    expect(overlayComponentSelection(["a", "b"], "c", false)).toEqual(["c"]);
-    expect(overlayComponentSelection(["a"], "a", true)).toEqual([]);
-    expect(overlayComponentSelection(["a", "b"], "", true)).toEqual([]);
+    expect(overlayComponentSelection(["a", "b"], "b", "add")).toEqual(["a", "b"]);
+    expect(overlayComponentSelection(["a", "b", "c"], "b", "toggle")).toEqual(["a", "c"]);
+    expect(overlayComponentSelection(["a", "b", "c"], "a", "toggle")).toEqual(["b", "c"]);
+    expect(overlayComponentSelection(["a", "b"], "c", "toggle")).toEqual(["a", "b", "c"]);
+    expect(overlayComponentSelection(["a", "b", "c"], "b", "primary")).toEqual(["b", "a", "c"]);
+    expect(overlayComponentSelection(["a"], "b", "primary")).toEqual(["a"]);
+    expect(overlayComponentSelection(["a", "b"], "c", "replace")).toEqual(["c"]);
+    expect(overlayComponentSelection(["a", "b"], "", "toggle")).toEqual([]);
   });
   it("computes the minimum rectangle around every selected component", () => {
     const components = [
@@ -410,6 +414,18 @@ describe("overlay component multi-selection", () => {
     expect(overlayComponentBounds(components)).toEqual({ x: 10, y: 5, width: 220, height: 65 });
     expect(overlayComponentBounds([components[0]])).toEqual(components[0]);
     expect(overlayComponentBounds([])).toBeNull();
+  });
+  it("returns rectangle-intersecting components in the provided display order", () => {
+    const components = [
+      { id: "front", x: 40, y: 40, width: 20, height: 20 },
+      { id: "middle", x: 20, y: 20, width: 30, height: 30 },
+      { id: "back", x: 0, y: 0, width: 10, height: 10 },
+    ];
+    expect(overlayComponentsIntersecting(components, { x: 25, y: 25, width: 20, height: 20 }))
+      .toEqual(["front", "middle"]);
+    expect(overlayComponentsIntersecting(components, { x: 10, y: 10, width: 10, height: 10 })).toEqual([]);
+    expect(overlayComponentsIntersecting(components, { x: 45, y: 45, width: -10, height: -10 }))
+      .toEqual(["front", "middle"]);
   });
   it.each([
     [30.4, 40.6, 30, 41],

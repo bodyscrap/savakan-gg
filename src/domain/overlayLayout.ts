@@ -147,9 +147,15 @@ export function overlayPreviewTransform(
   };
 }
 
-export function overlayComponentSelection(selected: readonly string[], id: string, additive: boolean): string[] {
+export function overlayComponentSelection(
+  selected: readonly string[],
+  id: string,
+  mode: "replace" | "add" | "toggle" | "primary",
+): string[] {
   if (!id) return [];
-  if (!additive) return [id];
+  if (mode === "replace") return [id];
+  if (mode === "add") return selected.includes(id) ? [...selected] : [...selected, id];
+  if (mode === "primary") return selected.includes(id) ? [id, ...selected.filter((item) => item !== id)] : [...selected];
   return selected.includes(id) ? selected.filter((item) => item !== id) : [...selected, id];
 }
 
@@ -180,6 +186,21 @@ export function overlayComponentBounds(
     width: Math.max(...components.map((item) => item.x + item.width)) - x,
     height: Math.max(...components.map((item) => item.y + item.height)) - y,
   };
+}
+
+export function overlayComponentsIntersecting(
+  components: readonly Pick<OverlayComponent, "id" | "x" | "y" | "width" | "height">[],
+  bounds: Pick<OverlayComponent, "x" | "y" | "width" | "height">,
+): string[] {
+  const left = Math.min(bounds.x, bounds.x + bounds.width);
+  const top = Math.min(bounds.y, bounds.y + bounds.height);
+  const right = Math.max(bounds.x, bounds.x + bounds.width);
+  const bottom = Math.max(bounds.y, bounds.y + bounds.height);
+  if (left === right || top === bottom) return [];
+  return components
+    .filter((item) => item.x < right && item.x + item.width > left
+      && item.y < bottom && item.y + item.height > top)
+    .map((item) => item.id);
 }
 
 export type OverlayCentering = "horizontal" | "vertical" | "both";

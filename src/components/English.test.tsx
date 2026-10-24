@@ -12,7 +12,7 @@ import { DqRequestDialog } from "./DqRequestDialog";
 import { ItemListEditor } from "./ItemListEditor";
 import { OverlayControl } from "./OverlayControl";
 import { OverlayComponentDialog } from "./OverlayComponentDialog";
-import { OverlayComponentSwitchDialog } from "./OverlayComponentSwitchDialog";
+import { OverlayPresetSwitchDialog } from "./OverlayPresetSwitchDialog";
 import { OverlayPresetCopyDialog } from "./OverlayPresetCopyDialog";
 import { OverlayPresetCreateDialog } from "./OverlayPresetCreateDialog";
 import { OverlayColorInput } from "./OverlayColorInput";
@@ -224,12 +224,12 @@ describe("English component rendering", () => {
     setLanguage("en");
     const html = renderToStaticMarkup(
       <OverlayControl
-        overlayState={{ active: true, fullyStopped: false, currentSetId: "set-id", eventName: "大会", eventAlias: "別名", roundText: "Round 1", redPlayerName: "赤", bluePlayerName: "青", redSetWins: 1, blueSetWins: 2, fontScale: 1, showSetInfo: true, showEventAlias: true, overlayUrl: "http://localhost/overlay" }}
+        overlayState={{ active: true, fullyStopped: false, currentSetId: "set-id", eventName: "大会", eventAlias: "別名", roundText: "Round 1", redPlayerName: "赤", bluePlayerName: "青", redSetWins: 1, blueSetWins: 2, fontScale: 1, overlayUrl: "http://localhost/overlay" }}
         isTestOverlayActive={false} activeSetLabel="日本語試合" busy={false}
         testEventAlias="テスト大会" testRedName="設定" testBlueName="青プレイヤー" testRedWins={1} testBlueWins={2}
         testRedItems={["選択A 選択B", "", "選択C"]} testBlueItems={["選択D", "選択E", ""]}
         previewWrapRef={{ current: null }} previewIframeRef={{ current: null }}
-        onOpenUrl={noop} onShowSetInfoChange={noop} onShowEventAliasChange={noop}
+        onOpenUrl={noop}
         onTestRedNameChange={noop} onTestEventAliasChange={noop} onTestBlueNameChange={noop}
         onTestRedItemsChange={noop} onTestBlueItemsChange={noop}
         onTestRedWinsChange={noop} onTestBlueWinsChange={noop} onToggleTestOverlay={noop} onFullyStop={noop} onPreviewLoad={noop}
@@ -260,6 +260,7 @@ describe("English component rendering", () => {
     expect(html).toContain('aria-label="Create component"');
     expect(html).toContain("Component type");
     expect(html).toContain("Component name");
+    expect(html).toMatch(/<label>Component name<input[^>]*value="Text"/);
     expect(html).toContain("Text");
     expect(html).toContain("Image");
     expect(html).toContain("Number");
@@ -405,13 +406,13 @@ describe("English component rendering", () => {
     expect(html).toContain('<fieldset class="overlay-centering-options" disabled=""');
   });
 
-  it("offers confirm, discard, and cancel when switching components with pending changes", () => {
+  it("offers save, discard, and cancel when switching presets with pending changes", () => {
     setLanguage("en");
-    const html = renderToStaticMarkup(<OverlayComponentSwitchDialog
+    const html = renderToStaticMarkup(<OverlayPresetSwitchDialog
       onConfirm={noop} onDiscard={noop} onCancel={noop} />);
-    expect(html).toContain("Unconfirmed changes");
-    expect(html).toContain("What would you like to do with the current changes before selecting another component?");
-    expect(html).toContain("Confirm and switch");
+    expect(html).toContain("Unsaved changes");
+    expect(html).toContain("What would you like to do with the current edits before selecting another preset?");
+    expect(html).toContain("Save and switch");
     expect(html).toContain("Discard and switch");
     expect(html).toContain("Cancel switching");
   });
@@ -432,7 +433,7 @@ describe("English component rendering", () => {
     expect(html).toContain('aria-label="Show Back"');
     expect(html.match(/draggable="true"/g)).toHaveLength(2);
     expect(html).toContain("Alt+Up/Down also changes the display order.");
-    expect(html).toContain("Shift-drag constrains movement to the horizontal or vertical axis");
+    expect(html).not.toContain("Shift-drag constrains movement");
     expect(html).toContain('aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"');
     expect(actions).not.toContain("Move backward");
     expect(actions).not.toContain("Move forward");
@@ -447,7 +448,7 @@ describe("English component rendering", () => {
     expect(radios).toHaveLength(3);
     expect(new Set(radios.map((radio) => radio.match(/name="([^"]+)"/)?.[1])).size).toBe(1);
     expect(radios.filter((radio) => radio.includes('checked=""'))).toHaveLength(1);
-    expect(radios.find((radio) => radio.includes('checked=""'))).toContain('value="both"');
+    expect(radios.find((radio) => radio.includes('checked=""'))).toContain('value="horizontal"');
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Center selection<\/button>/);
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Match sizes<\/button>/);
     expect(html).not.toContain("overlay-selection-actions");

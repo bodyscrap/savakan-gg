@@ -352,28 +352,6 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     return () => window.clearInterval(timer);
   }, [activeTab, obsOverlayState?.overlayUrl]);
 
-  async function updateObsOverlayShowSetInfo(showSetInfo: boolean) {
-    setObsOverlayBusy(true);
-    try {
-      applyOverlayState(await invoke<ObsOverlayState>("set_obs_overlay_show_set_info", { showSetInfo }));
-    } catch (error) {
-      setError(String(error));
-    } finally {
-      setObsOverlayBusy(false);
-    }
-  }
-
-  async function updateObsOverlayShowEventAlias(showEventAlias: boolean) {
-    setObsOverlayBusy(true);
-    try {
-      applyOverlayState(await invoke<ObsOverlayState>("set_obs_overlay_show_event_alias", { showEventAlias }));
-    } catch (error) {
-      setError(String(error));
-    } finally {
-      setObsOverlayBusy(false);
-    }
-  }
-
   async function setObsOverlayFullyStopped(fullyStopped: boolean) {
     setObsOverlayBusy(true);
     try {
@@ -488,8 +466,6 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     overlayPreviewWrapRef,
     overlayPreviewIframeRef,
     refreshObsOverlayState,
-    updateObsOverlayShowSetInfo,
-    updateObsOverlayShowEventAlias,
     setObsOverlayFullyStopped,
     toggleObsOverlaySet,
     startTestOverlay,

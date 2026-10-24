@@ -320,8 +320,6 @@ function App() {
     overlayPreviewWrapRef,
     overlayPreviewIframeRef,
     refreshObsOverlayState,
-    updateObsOverlayShowSetInfo,
-    updateObsOverlayShowEventAlias,
     setObsOverlayFullyStopped,
     toggleObsOverlaySet,
     toggleTestOverlay,
@@ -2923,8 +2921,6 @@ function App() {
               setError(t("URLをブラウザで開けませんでした: {p0}", { p0: String(err) }));
             });
           }}
-          onShowSetInfoChange={(checked) => void updateObsOverlayShowSetInfo(checked)}
-          onShowEventAliasChange={(checked) => void updateObsOverlayShowEventAlias(checked)}
           onTestRedNameChange={setTestOverlayRedName}
           onTestEventAliasChange={setTestOverlayEventAlias}
           onTestBlueNameChange={setTestOverlayBlueName}

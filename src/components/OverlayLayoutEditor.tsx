@@ -3,7 +3,7 @@ import { save as saveFile } from "@tauri-apps/plugin-dialog";
 import { t } from "../i18n";
 import {
   MAX_IMAGE_BYTES, MAX_LAYOUT_BYTES, builtInOverlayPreset, mergeOverlayLayouts,
-  overlayPreviewTransform, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayKindLabels, overlaySourceLabels, overlayTextSources, overlayNumberSources, overlayItemSources, parseOverlayLayouts, parseOverlayLayoutsFile,
+  overlayPreviewTransform, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, overlayComponentsIntersecting, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayKindLabels, overlaySourceLabels, overlayTextSources, overlayNumberSources, overlayItemSources, parseOverlayLayouts, parseOverlayLayoutsFile,
   type OverlayCentering, type OverlayComponent, type OverlayLayouts, type OverlayPreset,
 } from "../domain/overlayLayout";
 import { renderOverlayPreset, resolveOverlayVerticalAlign, resolveOverlayTextOverflow, type OverlayRenderState } from "../domain/overlayRenderer.js";
@@ -11,7 +11,7 @@ import { writeSnapshotExportFile } from "../domain/tournamentWorkspaceRepository
 import { OverlayComponentDialog } from "./OverlayComponentDialog";
 import { OverlayPresetCopyDialog } from "./OverlayPresetCopyDialog";
 import { OverlayPresetCreateDialog } from "./OverlayPresetCreateDialog";
-import { OverlayComponentSwitchDialog } from "./OverlayComponentSwitchDialog";
+import { OverlayPresetSwitchDialog } from "./OverlayPresetSwitchDialog";
 import { OverlayColorInput } from "./OverlayColorInput";
 import { OverlayFontControls } from "./OverlayFontControls";
 
@@ -31,16 +31,13 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
   const [selectedId, setSelectedId] = useState(savedLayouts.activePresetId ?? savedLayouts.presets[0]?.id ?? "");
   const [selectedComponentIds, setSelectedComponentIds] = useState<string[]>([]);
   const componentId = selectedComponentIds[0] ?? "";
-  const [componentDrafts, setComponentDrafts] = useState<Record<string, OverlayComponent>>({});
-  const [pendingComponentSelection, setPendingComponentSelection] = useState<string[] | null>(null);
+  const [componentUndoSnapshots, setComponentUndoSnapshots] = useState<Record<string, OverlayComponent>>({});
+  const [pendingPresetSelection, setPendingPresetSelection] = useState<string | null>(null);
   const [draggedRowId, setDraggedRowId] = useState("");
   const [rowDrop, setRowDrop] = useState<{ id: string; position: "above" | "below" } | null>(null);
   const orderHelpId = useId();
   const centeringName = useId();
-  const componentFormId = useId();
-  const componentFormRef = useRef<HTMLFormElement>(null);
-  const [centering, setCentering] = useState<OverlayCentering>("both");
-  const [componentEditVersion, setComponentEditVersion] = useState(0);
+  const [centering, setCentering] = useState<OverlayCentering>("horizontal");
   const [working, setBusy] = useState(false);
   const busy = working || disabled;
   const [dirty, setDirty] = useState(false);
@@ -50,29 +47,31 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [panMode, setPanMode] = useState(false);
   const [panning, setPanning] = useState(false);
+  const [marquee, setMarquee] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const active = savedLayouts.presets.find((item) => item.id === savedLayouts.activePresetId);
   const [showPresetDialog, setShowPresetDialog] = useState(false);
   const [copySource, setCopySource] = useState<OverlayPreset | null>(null);
   const [showComponentDialog, setShowComponentDialog] = useState(false);
   const stageRef = useRef<HTMLDivElement>(null);
+  const handlesRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{
     pointerId: number; x: number; y: number; originals: OverlayComponent[];
-    resize: boolean; scale: number; moved: boolean; collapseId?: string;
+    resize: boolean; scale: number; moved: boolean; primaryClickId?: string;
     axis?: "horizontal" | "vertical";
   } | null>(null);
   const panDrag = useRef<{ pointerId: number; x: number; y: number; original: { x: number; y: number } } | null>(null);
+  const selectionDrag = useRef<{
+    pointerId: number; x: number; y: number; clientX: number; clientY: number;
+    moved: boolean; additive: boolean;
+  } | null>(null);
   const preset = layouts.presets.find((item) => item.id === selectedId);
   const builtInPreset = useMemo(() => builtInOverlayPreset(), []);
   const canvasPreset = preset ?? builtInPreset;
   const savedComponent = preset?.components.find((item) => item.id === componentId);
-  const component = savedComponent ? componentDrafts[componentId] ?? savedComponent : undefined;
-  const hasComponentChanges = Object.keys(componentDrafts).length > 0;
-  const previewPreset = useMemo(() => {
-    if (!preset || !hasComponentChanges) return canvasPreset;
-    const components = preset.components.map((item) => componentDrafts[item.id] ?? item);
-    return { ...preset, components };
-  }, [preset, canvasPreset, componentDrafts, hasComponentChanges]);
+  const component = savedComponent;
+  const hasComponentUndo = Object.keys(componentUndoSnapshots).length > 0;
+  const previewPreset = canvasPreset;
   const selectedComponents = selectedComponentIds.flatMap((id) => {
     const item = previewPreset.components.find((entry) => entry.id === id);
     return item ? [item] : [];
@@ -109,11 +108,14 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
   useEffect(() => {
     resetView();
     setPanMode(false);
+    setCentering("horizontal");
     drag.current = null;
     panDrag.current = null;
+    selectionDrag.current = null;
     setPanning(false);
+    setMarquee(null);
     setSelectedComponentIds([]);
-    setComponentDrafts({});
+    setComponentUndoSnapshots({});
     endRowDrag();
   }, [canvasPreset.id]);
 
@@ -138,104 +140,213 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     setPan({ x: 0, y: 0 });
   }
 
+  function canvasPoint(clientX: number, clientY: number, clamp = false) {
+    const rect = handlesRef.current?.getBoundingClientRect();
+    if (!rect || !preset || scale <= 0) return null;
+    const x = (clientX - rect.left) / scale;
+    const y = (clientY - rect.top) / scale;
+    if (!clamp && (x < 0 || y < 0 || x > preset.width || y > preset.height)) return null;
+    return {
+      x: Math.max(0, Math.min(preset.width, x)),
+      y: Math.max(0, Math.min(preset.height, y)),
+    };
+  }
+
   function startPan(event: PointerEvent<HTMLDivElement>) {
-    if (busy || (event.button !== 1 && !(panMode && event.button === 0))) return;
+    if (busy) return;
+    if (event.button === 1 || (panMode && event.button === 0)) {
+      event.preventDefault();
+      event.currentTarget.focus();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      panDrag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, original: pan };
+      setPanning(true);
+      return;
+    }
+    if (event.button !== 0 || panMode || !preset) return;
+    if (event.target instanceof Element && event.target.closest(".overlay-layout-hit")) return;
+    const start = canvasPoint(event.clientX, event.clientY);
+    if (!start) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    panDrag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, original: pan };
-    setPanning(true);
+    selectionDrag.current = {
+      pointerId: event.pointerId, x: start.x, y: start.y,
+      clientX: event.clientX, clientY: event.clientY, moved: false,
+      additive: event.ctrlKey || event.metaKey,
+    };
+    setMarquee({ x: start.x, y: start.y, width: 0, height: 0 });
   }
 
   function movePan(event: PointerEvent<HTMLDivElement>) {
     const current = panDrag.current;
-    if (!current || current.pointerId !== event.pointerId) return;
-    setPan({
-      x: current.original.x + event.clientX - current.x,
-      y: current.original.y + event.clientY - current.y,
+    if (current?.pointerId === event.pointerId) {
+      setPan({
+        x: current.original.x + event.clientX - current.x,
+        y: current.original.y + event.clientY - current.y,
+      });
+      return;
+    }
+    const selection = selectionDrag.current;
+    if (!selection || selection.pointerId !== event.pointerId) return;
+    if (!selection.moved && Math.hypot(event.clientX - selection.clientX, event.clientY - selection.clientY) < 3) return;
+    selection.moved = true;
+    const point = canvasPoint(event.clientX, event.clientY, true);
+    if (!point) return;
+    setMarquee({
+      x: Math.min(selection.x, point.x), y: Math.min(selection.y, point.y),
+      width: Math.abs(point.x - selection.x), height: Math.abs(point.y - selection.y),
     });
   }
 
   function stopPan(event: PointerEvent<HTMLDivElement>) {
-    if (panDrag.current?.pointerId !== event.pointerId) return;
-    panDrag.current = null;
-    setPanning(false);
+    if (panDrag.current?.pointerId === event.pointerId) {
+      panDrag.current = null;
+      setPanning(false);
+      return;
+    }
+    const selection = selectionDrag.current;
+    if (!selection || selection.pointerId !== event.pointerId) return;
+    selectionDrag.current = null;
+    setMarquee(null);
+    if (event.type !== "pointerup") return;
+    const moved = Math.hypot(event.clientX - selection.clientX, event.clientY - selection.clientY) >= 3;
+    if (!moved) {
+      if (!selection.additive) setSelectedComponentIds([]);
+      return;
+    }
+    const point = canvasPoint(event.clientX, event.clientY, true);
+    if (!point || !preset) return;
+    const bounds = {
+      x: Math.min(selection.x, point.x), y: Math.min(selection.y, point.y),
+      width: Math.abs(point.x - selection.x), height: Math.abs(point.y - selection.y),
+    };
+    const hits = overlayComponentsIntersecting(
+      preset.components.slice().reverse().filter((item) => item.visible),
+      bounds,
+    );
+    setSelectedComponentIds(selection.additive
+      ? [...selectedComponentIds, ...hits.filter((id) => !selectedComponentIds.includes(id))]
+      : hits);
   }
 
   function change(next: OverlayLayouts) {
-    setLayouts(next); setDirty(true); setError("");
+    setLayouts(next);
+    setDirty(JSON.stringify(next) !== JSON.stringify(savedLayouts));
+    setError("");
   }
   function updatePreset(patch: Partial<Pick<OverlayPreset, "name" | "components">>) {
     change({ ...layouts, presets: layouts.presets.map((item) => item.id === selectedId ? { ...item, ...patch } : item) });
   }
+  function updateComponents(components: OverlayComponent[]) {
+    if (!preset || components.length === 0) return;
+    const updatedById = new Map(components.map((item) => [item.id, item]));
+    const snapshots = Object.fromEntries(components.flatMap((item) => {
+      const original = preset.components.find((entry) => entry.id === item.id);
+      return original && !componentUndoSnapshots[item.id] ? [[item.id, original]] : [];
+    }));
+    if (Object.keys(snapshots).length > 0) {
+      setComponentUndoSnapshots((current) => ({ ...current, ...snapshots }));
+    }
+    updatePreset({ components: preset.components.map((item) => updatedById.get(item.id) ?? item) });
+  }
   function updateComponent(patch: Partial<OverlayComponent>, id = componentId) {
     const original = preset?.components.find((item) => item.id === id);
-    if (original) {
-      setComponentDrafts((current) => ({ ...current, [id]: { ...(current[id] ?? original), ...patch } }));
-      setError("");
-    }
+    if (original) updateComponents([{ ...original, ...patch }]);
+  }
+  function undoComponentChanges() {
+    if (!preset || !hasComponentUndo) return;
+    updatePreset({
+      components: preset.components.map((item) => componentUndoSnapshots[item.id] ?? item),
+    });
+    setComponentUndoSnapshots({});
   }
   function setComponentVisibility(id: string, visible: boolean) {
     if (!preset || busy) return;
-    updatePreset({ components: preset.components.map((item) => item.id === id ? { ...item, visible } : item) });
-    setComponentDrafts((current) => current[id] ? { ...current, [id]: { ...current[id], visible } } : current);
+    updateComponent({ visible }, id);
   }
   function applyComponentSelection(next: string[]) {
-    if ((next[0] ?? "") !== componentId) cancelComponent();
-    else {
-      setComponentDrafts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => next.includes(key))));
-    }
     setSelectedComponentIds(next);
   }
-  function selectComponent(id: string, additive = false): string[] | null {
-    const next = overlayComponentSelection(selectedComponentIds, id, additive);
+  function selectComponent(id: string, mode: "replace" | "add" | "toggle" = "replace"): string[] {
+    const next = overlayComponentSelection(selectedComponentIds, id, mode);
     if (next.length === selectedComponentIds.length && next.every((item, index) => item === selectedComponentIds[index])) return next;
-    if (hasComponentChanges) {
-      setPendingComponentSelection(next);
-      return null;
-    }
     applyComponentSelection(next);
     return next;
   }
-  function discardAndSwitchComponent() {
-    if (!pendingComponentSelection) return;
-    const next = pendingComponentSelection;
-    setPendingComponentSelection(null);
-    cancelComponent();
+  function setComponentBase(id: string) {
+    const next = overlayComponentSelection(selectedComponentIds, id, "primary");
+    if (next.every((item, index) => item === selectedComponentIds[index])) return;
     setSelectedComponentIds(next);
   }
-  function confirmAndSwitchComponent() {
-    if (!pendingComponentSelection) return;
-    const form = componentFormRef.current;
-    if (!form || form.querySelector("input:invalid, select:invalid, textarea:invalid")) {
-      setPendingComponentSelection(null);
-      setError(t("入力内容を確認してから切り替えてください。"));
+  function requestPresetSelection(id: string) {
+    if (id === selectedId) return;
+    if (dirty) {
+      setPendingPresetSelection(id);
       return;
     }
-    if (!confirmComponent()) {
-      setPendingComponentSelection(null);
-      return;
-    }
-    setSelectedComponentIds(pendingComponentSelection);
-    setPendingComponentSelection(null);
+    setSelectedId(id);
+    applyComponentSelection([]);
   }
-  function cancelComponent() {
-    setComponentEditVersion((version) => version + 1);
-    setComponentDrafts({});
-    endRowDrag();
-    drag.current = null;
+  async function confirmAndSwitchPreset() {
+    if (pendingPresetSelection === null) return;
+    setBusy(true);
+    try {
+      const saved = await onSave(parseOverlayLayouts(layouts));
+      setLayouts(saved);
+      setDirty(false);
+      setComponentUndoSnapshots({});
+      setSelectedId(pendingPresetSelection);
+      setSelectedComponentIds([]);
+      setPendingPresetSelection(null);
+      setError("");
+    } catch (cause) {
+      setPendingPresetSelection(null);
+      setError(String(cause));
+    } finally { setBusy(false); }
+  }
+  function discardAndSwitchPreset() {
+    if (pendingPresetSelection === null) return;
+    const nextId = pendingPresetSelection === "" || savedLayouts.presets.some((item) => item.id === pendingPresetSelection)
+      ? pendingPresetSelection
+      : savedLayouts.activePresetId ?? savedLayouts.presets[0]?.id ?? "";
+    setLayouts(savedLayouts);
+    setDirty(false);
+    setComponentUndoSnapshots({});
+    setSelectedComponentIds([]);
+    setSelectedId(nextId);
+    setPendingPresetSelection(null);
     setError("");
   }
-  function confirmComponent() {
-    if (!previewPreset || !hasComponentChanges) return true;
-    try {
-      const next = parseOverlayLayouts({
-        ...layouts, presets: layouts.presets.map((item) => item.id === previewPreset.id ? previewPreset : item),
-      });
+  async function deletePreset() {
+    if (!preset || !window.confirm(t("このプリセットを削除しますか？"))) return;
+    const next = parseOverlayLayouts({
+      ...layouts,
+      activePresetId: layouts.activePresetId === preset.id ? null : layouts.activePresetId,
+      presets: layouts.presets.filter((item) => item.id !== preset.id),
+    });
+    const isSavedPreset = savedLayouts.presets.some((item) => item.id === preset.id);
+    if (!isSavedPreset) {
       change(next);
-      setComponentDrafts({});
-      return true;
-    } catch (cause) { setError(String(cause)); }
-    return false;
+      setSelectedId("");
+      applyComponentSelection([]);
+      return;
+    }
+    setBusy(true);
+    try {
+      const saved = await onSave(next);
+      setLayouts(saved);
+      setDirty(false);
+      setComponentUndoSnapshots({});
+      setSelectedId("");
+      applyComponentSelection([]);
+      setError("");
+    } catch (cause) {
+      setLayouts(next);
+      setDirty(true);
+      setComponentUndoSnapshots({});
+      setSelectedId("");
+      applyComponentSelection([]);
+      setError(String(cause));
+    } finally { setBusy(false); }
   }
   async function save() {
     setBusy(true);
@@ -243,14 +354,14 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       const next = parseOverlayLayouts(layouts);
       const saved = await onSave(next);
       setLayouts(saved);
-      setDirty(false); setError("");
+      setDirty(false); setComponentUndoSnapshots({}); setError("");
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   }
   function addPreset(next: OverlayPreset): boolean {
     if (layouts.presets.length >= 64) { setError(t("プリセットは64件まで、コンポーネントは128件までです。")); return false; }
     change({ ...layouts, presets: [...layouts.presets, next] });
-    setSelectedId(next.id); applyComponentSelection([]);
+    requestPresetSelection(next.id);
     return true;
   }
   function addComponent(next: OverlayComponent): boolean {
@@ -266,7 +377,9 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     try {
       if (file.size > MAX_LAYOUT_BYTES) throw new Error(t("プリセットファイルは32MB以下にしてください。"));
       const merged = mergeOverlayLayouts(layouts, parseOverlayLayoutsFile(await file.text()));
-      change(merged); setSelectedId(merged.presets[layouts.presets.length]?.id ?? selectedId); applyComponentSelection([]);
+      change(merged);
+      const importedPresetId = merged.presets[layouts.presets.length]?.id;
+      if (importedPresetId) requestPresetSelection(importedPresetId);
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   }
@@ -310,11 +423,13 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
   function startDrag(event: PointerEvent<HTMLDivElement>, item: OverlayComponent, resize: boolean) {
     if (!preset || busy || panMode || event.button !== 0) return;
     event.preventDefault(); event.stopPropagation();
-    if (event.ctrlKey || event.metaKey) { selectComponent(item.id, true); return; }
+    wrapRef.current?.focus();
+    if (event.ctrlKey || event.metaKey) { selectComponent(item.id, "toggle"); return; }
     if (resize && selectedComponentIds.length > 1) return;
     const alreadySelected = selectedComponentIds.includes(item.id);
-    const ids = alreadySelected ? selectedComponentIds : selectComponent(item.id);
-    if (!ids) return;
+    const ids = event.shiftKey
+      ? selectComponent(item.id, "add")
+      : alreadySelected ? selectedComponentIds : selectComponent(item.id);
     const originals = ids.flatMap((id) => {
       const original = previewPreset.components.find((entry) => entry.id === id);
       return original ? [original] : [];
@@ -322,7 +437,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = {
       pointerId: event.pointerId, x: event.clientX, y: event.clientY, originals, resize, scale, moved: false,
-      collapseId: alreadySelected && ids.length > 1 ? item.id : undefined,
+      primaryClickId: !event.shiftKey && alreadySelected && ids.length > 1 ? item.id : undefined,
     };
   }
   function move(event: PointerEvent<HTMLDivElement>) {
@@ -348,8 +463,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       } else {
         const moved = moveOverlayComponents(current.originals,
           current.axis === "vertical" ? 0 : dx, current.axis === "horizontal" ? 0 : dy, preset);
-        setComponentDrafts((drafts) => ({ ...drafts, ...Object.fromEntries(moved.map((entry) => [entry.id, entry])) }));
-        setError("");
+        updateComponents(moved);
       }
     } catch (cause) { setError(String(cause)); }
   }
@@ -357,7 +471,8 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     const current = drag.current;
     if (!current || current.pointerId !== event.pointerId) return;
     drag.current = null;
-    if (!cancelled && !current.moved && current.collapseId) selectComponent(current.collapseId);
+    if (cancelled || current.moved) return;
+    if (current.primaryClickId) setComponentBase(current.primaryClickId);
   }
   function reorderRow(id: string, targetId: string, position: "above" | "below") {
     if (!preset || busy) return;
@@ -389,34 +504,38 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
         return item.x !== original.x || item.y !== original.y || item.width !== original.width || item.height !== original.height;
       });
       if (changed.length > 0) {
-        setComponentDrafts((current) => ({ ...current, ...Object.fromEntries(changed.map((item) => [item.id, item])) }));
+        updateComponents(changed);
       }
-      setError("");
     } catch (cause) { setError(String(cause)); }
   }
 
-  return <section className="panel overlay-layout-editor">
+  return <section className="panel overlay-layout-editor" onKeyDown={(event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== "z"
+      || !hasComponentUndo) return;
+    const target = event.target;
+    if (target instanceof HTMLInputElement && ["text", "number", "search", "email", "url", "tel", "password"].includes(target.type)
+      || target instanceof HTMLTextAreaElement
+      || target instanceof HTMLElement && target.isContentEditable) return;
+    event.preventDefault();
+    event.stopPropagation();
+    undoComponentChanges();
+  }}>
     <h2>{t("オーバーレイのカスタマイズ")}</h2>
     {error && <p role="alert" className="error">{error}</p>}
     <fieldset disabled={busy}>
       <p className="meta">{t("編集後に保存してください。出力の切り替えはテスト配信設定の「適用するプリセット」を使います。画像はエクスポートに含まれます。")}</p>
       <div className="overlay-layout-toolbar">
-        <label>{t("編集するプリセット")}<select value={selectedId} onChange={(e) => { setSelectedId(e.target.value); applyComponentSelection([]); }}>
+        <label>{t("編集するプリセット")}<select value={selectedId} onChange={(e) => requestPresetSelection(e.target.value)}>
           <option value="">{t("デフォルト")}</option>
           {layouts.presets.map((item) => {
             const saved = savedLayouts.presets.find((entry) => entry.id === item.id);
-            const unsaved = (item.id === selectedId && hasComponentChanges)
-              || JSON.stringify(item) !== JSON.stringify(saved);
+            const unsaved = JSON.stringify(item) !== JSON.stringify(saved);
             return <option key={item.id} value={item.id}>{unsaved ? "*" : ""}{item.name}</option>;
           })}
         </select></label>
         <button type="button" onClick={() => setShowPresetDialog(true)}>{t("新規作成")}</button>
         <button type="button" onClick={() => setCopySource(canvasPreset)}>{t("複製")}</button>
-        <button type="button" disabled={!preset} onClick={() => {
-          if (!preset || !window.confirm(t("このプリセットを削除しますか？"))) return;
-          change({ ...layouts, activePresetId: layouts.activePresetId === preset.id ? null : layouts.activePresetId, presets: layouts.presets.filter((item) => item.id !== preset.id) });
-          setSelectedId(""); applyComponentSelection([]);
-        }}>{t("削除")}</button>
+        <button type="button" disabled={!preset} onClick={() => void deletePreset()}>{t("削除")}</button>
         <button type="button" onClick={() => void save()} disabled={!dirty}>{t("保存")}</button>
         <button type="button" disabled={!preset} onClick={() => void exportFile(true)}>{t("エクスポート(単体)")}</button>
         <button type="button" onClick={() => void exportFile(false)}>{t("エクスポート(全体)")}</button>
@@ -426,14 +545,11 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       </div>
       <p className="meta">{t("適用中: {name}", { name: active?.name ?? t("デフォルト") })} {dirty && t("（未保存）")}</p>
       {active && <p className="meta">{t("録画・配信ソフト側のブラウザソースの幅・高さも {width} × {height} に設定してください。", { width: active.width, height: active.height })}</p>}
-        <div className="obs-overlay-grid">
-          {preset && <label>{t("プリセット名")}<input value={preset.name} maxLength={256} onChange={(e) => updatePreset({ name: e.target.value })} /></label>}
-          <p className="meta">{t("解像度（固定）: {width} × {height}", { width: canvasPreset.width, height: canvasPreset.height })}</p>
-        </div>
-        {!preset && <p className="meta">{t("デフォルトは閲覧専用です。編集するには「複製」でプリセットを作成してください。")}</p>}
-        {preset && <p className="meta">{t("一覧やプレビューをCtrl＋クリックして選択を追加・解除できます。プレビュー上の選択済みの項目をドラッグするとまとめて移動します。リサイズハンドルは単独選択時だけ表示します。一覧の上の項目ほど手前に表示します。")}</p>}
-        {preset && <p className="meta">{t("Shift＋ドラッグで水平・垂直のどちらかに移動を制限します。最初の移動方向で固定し、Shiftを離すと解除します。複数選択にも適用します（サイズ変更・キャンバス移動は対象外）。")}</p>}
-        <div className="overlay-layout-toolbar">
+      <div className="obs-overlay-grid">
+        {preset && <label>{t("プリセット名")}<input value={preset.name} maxLength={256} onChange={(e) => updatePreset({ name: e.target.value })} /></label>}
+      </div>
+      {!preset && <p className="meta">{t("デフォルトは閲覧専用です。編集するには「複製」でプリセットを作成してください。")}</p>}
+      <div className="overlay-layout-toolbar">
           <label>{t("プレビュー倍率")}<input type="range" min={25} max={400} step={1} value={Math.round(zoom * 100)}
             onChange={(event) => setZoom(event.target.valueAsNumber / 100)} /></label>
           <output aria-live="polite">{Math.round(zoom * 100)}%</output>
@@ -445,7 +561,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
         <p className="meta">{t("プレビュー上でCtrl＋マウスホイールを操作すると25〜400%で拡大縮小します。通常のホイールはページスクロールです。ドラッグ中は倍率を変更しません。")}</p>
         <div className="overlay-layout-workspace">
         <div className={`overlay-layout-viewport${panMode ? " pan-mode" : ""}${panning ? " panning" : ""}`} ref={wrapRef}
-          aria-label={t("カスタマイズプレビュー")}
+          aria-label={t("カスタマイズプレビュー")} tabIndex={0}
           onPointerDown={startPan} onPointerMove={movePan} onPointerUp={stopPan}
           onPointerCancel={stopPan} onLostPointerCapture={stopPan}>
           <div className="overlay-layout-canvas" style={{
@@ -453,9 +569,9 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
             transform: `translate(${transform.x}px, ${transform.y}px) scale(${scale})`,
           }}>
           <div ref={stageRef} />
-          {preset && <div className="overlay-layout-handles" style={{ width: preset.width, height: preset.height }}>
+          {preset && <div ref={handlesRef} className="overlay-layout-handles" style={{ width: preset.width, height: preset.height }}>
             {previewPreset?.components.filter((item) => item.visible).map((item) => <div key={item.id}
-              className={`overlay-layout-hit${selectedComponentIds.includes(item.id) ? " selected" : ""}`}
+              className={`overlay-layout-hit${selectedComponentIds.includes(item.id) ? " selected" : ""}${item.id === componentId ? " primary" : ""}`}
               data-component-id={item.id}
               style={{ left: item.x, top: item.y, width: item.width, height: item.height, borderWidth: 1 / scale }}
               onPointerDown={(e) => startDrag(e, item, false)} onPointerMove={move}
@@ -470,6 +586,10 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
                 left: selectionBounds.x, top: selectionBounds.y, width: selectionBounds.width, height: selectionBounds.height,
                 borderWidth: 1 / scale, outlineWidth: 1 / scale, outlineOffset: 1 / scale,
               }} />}
+            {marquee && <div className="overlay-marquee" aria-hidden="true" style={{
+              left: marquee.x, top: marquee.y, width: marquee.width, height: marquee.height,
+              borderWidth: 1 / scale,
+            }} />}
           </div>}
           </div>
         </div>
@@ -495,6 +615,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
                 return <tr key={item.id}
                   className={[
                     selectedComponentIds.includes(item.id) ? "selected" : "",
+                    item.id === componentId ? "primary" : "",
                     draggedRowId === item.id ? "row-dragging" : "",
                     rowDrop?.id === item.id ? `drop-${rowDrop.position}` : "",
                   ].filter(Boolean).join(" ")}
@@ -520,7 +641,13 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
                     endRowDrag();
                   }}
                   onDragEnd={endRowDrag}
-                  onClick={(event) => { if (preset && !busy) selectComponent(item.id, event.ctrlKey || event.metaKey); }}>
+                  onClick={(event) => {
+                    if (!preset || busy) return;
+                    if (event.ctrlKey || event.metaKey) selectComponent(item.id, "toggle");
+                    else if (event.shiftKey) selectComponent(item.id, "add");
+                    else if (selectedComponentIds.length > 1 && selectedComponentIds.includes(item.id)) setComponentBase(item.id);
+                    else selectComponent(item.id);
+                  }}>
                   <td onClick={(event) => event.stopPropagation()}><input type="checkbox"
                     aria-label={t("{name}を表示", { name: item.name })} checked={item.visible} disabled={!preset}
                     onChange={(event) => setComponentVisibility(item.id, event.target.checked)} /></td>
@@ -553,10 +680,18 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
           <button type="button" disabled={!savedComponent} onClick={() => savedComponent && addComponent({
             ...savedComponent, id: crypto.randomUUID(), name: `${savedComponent.name.slice(0, 240)} (${t("複製")})`,
           })}>{t("複製")}</button>
-          <button type="button" disabled={!component} onClick={() => { if (preset) { updatePreset({ components: preset.components.filter((item) => item.id !== componentId) }); applyComponentSelection([]); } }}>{t("削除")}</button>
+          <button type="button" disabled={!component} onClick={() => {
+            if (!preset) return;
+            updatePreset({ components: preset.components.filter((item) => item.id !== componentId) });
+            setComponentUndoSnapshots((current) => Object.fromEntries(
+              Object.entries(current).filter(([id]) => id !== componentId),
+            ));
+            applyComponentSelection([]);
+          }}>{t("削除")}</button>
           <button type="button" disabled={busy || selectedComponents.length < 2}
             title={t("最初に選択したコンポーネントの幅・高さに合わせます。")}
             onClick={() => adjustSelection("size")}>{t("サイズ統一")}</button>
+          <button type="button" disabled={busy || !hasComponentUndo} onClick={undoComponentChanges}>{t("アンドゥ")}</button>
           </div>
           <fieldset className="overlay-centering-options" disabled={busy || !component}
             aria-label={t("センタリング種別")}
@@ -570,20 +705,13 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
               <button type="button" disabled={busy || !component} onClick={() => adjustSelection("center")}>{t("センタリング")}</button>
             </div>
           </fieldset>
-          {component && <div className="overlay-selection-actions">
-            {selectedComponents.length > 1 && <p className="meta">{t("選択中の{count}件をまとめて確定・キャンセルします。", { count: selectedComponents.length })}</p>}
-            <div className="overlay-component-actions">
-              <button type="submit" form={componentFormId} disabled={busy || !hasComponentChanges}>{t(selectedComponents.length > 1 ? "一括確定" : "確定")}</button>
-              <button type="button" disabled={busy || !hasComponentChanges} onClick={cancelComponent}>{t(selectedComponents.length > 1 ? "一括キャンセル" : "キャンセル")}</button>
-            </div>
-          </div>}
+          {component && selectedComponents.length > 1 && <p className="meta">{t("{count}件を選択中。編集欄・複製・削除は基準コンポーネント「{name}」が対象です。一括調整は即時反映されます。", {
+            count: selectedComponents.length, name: component.name,
+          })}</p>}
         </aside>
         </div>
-        {component && selectedComponentIds.length > 1 && <p className="meta">{t("{count}件を選択中。編集欄・複製・削除は最初の項目「{name}」が対象です。一括調整は確定・キャンセルでまとめて反映・取り消します。", {
-          count: selectedComponentIds.length, name: component.name,
-        })}</p>}
-        {component && <form id={componentFormId} ref={componentFormRef} onSubmit={(event) => { event.preventDefault(); confirmComponent(); }}>
-        <p className="meta">{t("コンポーネントの変更は「確定」でプリセットに反映します。別の項目を選択するときは、変更を確定するか破棄するかを選べます。ファイルへの保存は上部の「保存」を使ってください。")}{hasComponentChanges && ` ${t("（未確定）")}`}</p>
+        {component && <div>
+        <p className="meta">{t("パラメータ変更は即時反映されます。アンドゥで保存または前回のアンドゥ以降のコンポーネント編集を元に戻せます。ファイルへの保存は上部の「保存」を使ってください。")}</p>
         <div className="obs-overlay-grid">
           <div className="overlay-component-geometry">
           <label className="overlay-component-name">{t("コンポーネント名")}<input required maxLength={256} value={component.name}
@@ -599,7 +727,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
           {(["x", "y", "width", "height"] as const).map((key) => <label key={key}>{t({ x: "X座標", y: "Y座標", width: "幅", height: "高さ" }[key])}<input
             type="number" required min={key === "x" || key === "y" ? 0 : 1} max={16384} value={component[key]}
             onChange={(e) => { const value = e.target.valueAsNumber; if (Number.isFinite(value)) updateComponent({ [key]: value }); }} /></label>)}
-          <OverlayColorInput key={`${component.id}:${componentEditVersion}`} label="背景色" value={component.background} disabled={busy} onChange={(background) => updateComponent({ background })} />
+          <OverlayColorInput label="背景色" value={component.background} disabled={busy} onChange={(background) => updateComponent({ background })} />
           {component.kind !== "image" && <label className="overlay-component-style">{t("装飾スタイル")}<select value={component.frame === "glass" ? "glass" : component.frame ? "builtin" : "none"}
             onChange={(event) => {
               if (event.target.value === "none") updateComponent({ frame: undefined });
@@ -634,10 +762,10 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
               onChange={(event) => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) updateComponent({ numberValue: value }); }} /></label>}
             {component.source === "text" && <label>{t("固定テキスト")}<textarea maxLength={10000} value={component.text} onChange={(e) => updateComponent({ text: e.target.value })} /></label>}
             </>}
-            <OverlayFontControls key={`${component.id}:${componentEditVersion}`} disabled={busy} fontFamily={component.fontFamily} fontSize={component.fontSize}
+            <OverlayFontControls disabled={busy} fontFamily={component.fontFamily} fontSize={component.fontSize}
               onFontFamilyChange={(fontFamily) => updateComponent({ fontFamily })}
               onFontSizeChange={(fontSize) => updateComponent({ fontSize })}>
-            <OverlayColorInput key={`${component.id}:${componentEditVersion}`} label="文字色" value={component.color} disabled={busy} onChange={(color) => updateComponent({ color })} />
+            <OverlayColorInput label="文字色" value={component.color} disabled={busy} onChange={(color) => updateComponent({ color })} />
             <label className="overlay-font-align">{t("水平揃え")}<select value={component.align} onChange={(e) => {
               const value = e.target.value; if (value === "left" || value === "center" || value === "right") updateComponent({ align: value });
             }}><option value="left">{t("左")}</option><option value="center">{t("中央")}</option><option value="right">{t("右")}</option></select></label>
@@ -658,7 +786,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
             const file = e.target.files?.[0]; e.target.value = ""; if (file) void importImage(file);
           }} /></label>}
         </div>
-        </form>}
+        </div>}
         <p className="meta">{t("フォントは録画・配信ソフトを動かす端末にもインストールしてください。カスタム表示は各コンポーネントの表示設定を使います。")}</p>
     </fieldset>
     {showComponentDialog && preset && <OverlayComponentDialog
@@ -667,10 +795,10 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
         x: Math.max(0, Math.round((preset.width - next.width) / 2)),
         y: Math.max(0, Math.round((preset.height - next.height) / 2)),
       })} onClose={() => setShowComponentDialog(false)} />}
-    {pendingComponentSelection && <OverlayComponentSwitchDialog
-      onConfirm={confirmAndSwitchComponent}
-      onDiscard={discardAndSwitchComponent}
-      onCancel={() => setPendingComponentSelection(null)} />}
+    {pendingPresetSelection !== null && <OverlayPresetSwitchDialog
+      onConfirm={() => void confirmAndSwitchPreset()}
+      onDiscard={discardAndSwitchPreset}
+      onCancel={() => setPendingPresetSelection(null)} />}
     {showPresetDialog && <OverlayPresetCreateDialog
       onCreate={addPreset} onClose={() => setShowPresetDialog(false)} />}
     {copySource && <OverlayPresetCopyDialog source={copySource}

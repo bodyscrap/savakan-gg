@@ -2798,6 +2798,10 @@ button:disabled {
   background: #dbeafe;
 }
 
+.overlay-component-table tr.selected.primary {
+  background: #ffedd5;
+}
+
 .overlay-component-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2828,15 +2832,6 @@ button:disabled {
   padding: 0;
 }
 
-.overlay-selection-actions {
-  border-top: 1px solid var(--line);
-  padding-top: 0.5rem;
-}
-
-.overlay-selection-actions .meta {
-  margin: 0 0 0.35rem;
-}
-
 .overlay-component-dialog,
 .overlay-preset-create-dialog,
 .overlay-preset-copy-dialog {
@@ -2844,12 +2839,12 @@ button:disabled {
   box-sizing: border-box;
 }
 
-.overlay-component-switch-dialog {
+.overlay-preset-switch-dialog {
   width: min(520px, calc(100% - 2rem));
   box-sizing: border-box;
 }
 
-.overlay-component-switch-dialog .dialog-actions {
+.overlay-preset-switch-dialog .dialog-actions {
   gap: 0.5rem;
   flex-wrap: wrap;
 }
@@ -2857,7 +2852,7 @@ button:disabled {
 .overlay-component-dialog::backdrop,
 .overlay-preset-create-dialog::backdrop,
 .overlay-preset-copy-dialog::backdrop,
-.overlay-component-switch-dialog::backdrop {
+.overlay-preset-switch-dialog::backdrop {
   background: rgba(15, 23, 42, 0.42);
 }
 
@@ -2907,12 +2902,28 @@ button:disabled {
   border-color: #2563eb;
 }
 
+.overlay-layout-hit.selected {
+  border-color: #2563eb;
+}
+
+.overlay-layout-hit.primary {
+  border-color: #f97316;
+}
+
 .overlay-selection-bounds {
   position: absolute;
   box-sizing: border-box;
   border: 1px dashed #ffffff;
   outline: 1px dashed #111827;
   outline-offset: 1px;
+  pointer-events: none;
+}
+
+.overlay-marquee {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed #2563eb;
+  background: #3b82f633;
   pointer-events: none;
 }
 
