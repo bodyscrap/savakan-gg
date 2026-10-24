@@ -1,5 +1,6 @@
 import { t } from "../i18n";
 import type { SetSlot, SetSnapshot } from "../domain/bracketProgression";
+import { OverlayVisibilityButtons } from "./OverlayVisibilityButtons";
 
 export type MatchSideRandomNotice = {
   setId: string;
@@ -49,6 +50,7 @@ type MatchDetailDialogProps = {
   callingEntrantId: string;
   isDqDraft: boolean;
   overlayActive: boolean;
+  overlayVisibilityOverrides: Record<string, boolean>;
   onClose: () => void;
   onSwapSides: () => void;
   onRandomizeSides: () => void;
@@ -87,6 +89,7 @@ export function MatchDetailDialog({
   callingEntrantId,
   isDqDraft,
   overlayActive,
+  overlayVisibilityOverrides,
   onClose,
   onSwapSides,
   onRandomizeSides,
@@ -270,6 +273,10 @@ export function MatchDetailDialog({
             <button type="button" disabled={busy || completed || !matchupReady || hasUnresolvedCalls} onClick={onConfirm}>{t("確定")}</button>
           </div>
         </div>
+        <OverlayVisibilityButtons
+          visibilityOverrides={overlayVisibilityOverrides}
+          disabled={overlayBusy}
+        />
       </section>
     </div>
   );

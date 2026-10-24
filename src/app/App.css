@@ -2225,6 +2225,17 @@ button:disabled {
   gap: 0.5rem;
 }
 
+.overlay-layout-editor input[type="checkbox"] {
+  box-sizing: border-box;
+  width: 1rem;
+  min-width: 1rem;
+  max-width: 1rem;
+  height: 1rem;
+  padding: 0;
+  margin: 0;
+  flex: 0 0 1rem;
+}
+
 .overlay-component-geometry {
   grid-column: 1 / -1;
   display: flex;
@@ -2250,16 +2261,89 @@ button:disabled {
   min-width: 0;
 }
 
+.overlay-component-source-controls {
+  display: flex;
+  flex: 1 1 24rem;
+  align-items: flex-end;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.overlay-component-source-controls > .overlay-component-source {
+  flex: 0 1 12rem;
+}
+
+.overlay-component-source-controls > .overlay-component-fixed-text {
+  flex: 1 1 12rem;
+  width: auto;
+  min-width: 12rem;
+}
+
 .overlay-component-geometry .overlay-component-style {
   flex: 0 1 9rem;
   width: 9rem;
   min-width: 0;
 }
 
+.overlay-component-bottom-row {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.55rem;
+  padding-top: 0.55rem;
+}
+
+.overlay-component-bottom-row > .overlay-component-style {
+  flex: 0 1 9rem;
+  width: 9rem;
+  min-width: 0;
+}
+
+.overlay-component-bottom-row > .overlay-color-input {
+  flex: 0 1 12rem;
+}
+
 .overlay-component-geometry input,
 .overlay-component-geometry select {
   width: 100%;
   min-width: 0;
+}
+
+.overlay-component-geometry input:not([type="checkbox"]),
+.overlay-component-geometry select,
+.overlay-component-source-controls textarea {
+  height: 2.5rem;
+  padding-top: 0.45rem;
+  padding-bottom: 0.45rem;
+}
+
+.overlay-component-source-controls textarea {
+  resize: none;
+}
+
+.overlay-component-geometry .overlay-image-fit {
+  height: 2.5rem;
+  padding: 0 0.75rem;
+  align-self: flex-end;
+}
+
+.overlay-component-geometry .overlay-image-aspect {
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: max-content;
+  align-self: flex-end;
+  height: 2.5rem;
+  white-space: nowrap;
+}
+
+.overlay-component-geometry .overlay-image-flip {
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: max-content;
+  align-self: flex-end;
+  height: 2.5rem;
+  white-space: nowrap;
 }
 
 .overlay-clock-format {
@@ -2278,6 +2362,120 @@ button:disabled {
 }
 
 .overlay-text-overflow .meta {
+  margin: 0;
+}
+
+.overlay-frame-image-settings {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.overlay-image-file-control {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.overlay-image-file-control-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.overlay-image-file-control-row button {
+  flex: 0 0 auto;
+  height: 2.5rem;
+}
+
+.overlay-image-file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overlay-image-file-input {
+  display: none;
+}
+
+.obs-overlay-grid > .overlay-image-file-control {
+  grid-column: 1 / -1;
+}
+
+.overlay-frame-image-settings > .overlay-image-file-control {
+  flex: 0 1 10rem;
+  min-width: 9rem;
+}
+
+.overlay-frame-image-settings > .overlay-image-aspect {
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: max-content;
+  align-self: flex-end;
+  height: 2.5rem;
+  transform: none;
+  white-space: nowrap;
+}
+
+.overlay-frame-image-settings > .checkbox-row:not(.overlay-image-aspect) {
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: max-content;
+  height: 2.5rem;
+  white-space: nowrap;
+}
+
+.overlay-frame-image-settings > label:nth-child(3) {
+  flex: 0 1 9rem;
+}
+
+.overlay-frame-image-settings input[type="number"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.overlay-image-animation-triggers {
+  grid-column: 1 / -1;
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.overlay-image-animation-triggers > .overlay-color-label,
+.overlay-image-animation-triggers > .checkbox-row,
+.overlay-image-animation-triggers > .overlay-image-value-source {
+  align-self: center;
+}
+
+.overlay-image-value-source {
+  display: flex;
+  flex: 0 1 18rem;
+  flex-direction: column;
+  gap: 0.22rem;
+  min-width: 12rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.overlay-image-value-source select {
+  width: 100%;
+  min-width: 0;
+}
+
+.overlay-image-animation-triggers > .meta {
+  flex-basis: 100%;
   margin: 0;
 }
 
@@ -2404,6 +2602,18 @@ button:disabled {
   align-self: flex-end;
   min-height: 2.5rem;
   white-space: nowrap;
+}
+
+.overlay-font-controls .overlay-font-outline-toggle {
+  flex: 0 0 auto;
+  align-self: flex-end;
+  min-height: 2.5rem;
+  white-space: nowrap;
+}
+
+.overlay-font-controls .overlay-font-outline-width {
+  flex: 0 0 5.5rem;
+  min-width: 0;
 }
 
 .overlay-font-controls input:not([type="checkbox"]),
@@ -2624,6 +2834,32 @@ button:disabled {
   padding: 0.7rem;
 }
 
+.overlay-visibility-control {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.75rem 0;
+}
+
+.overlay-visibility-control > .meta {
+  margin: 0;
+}
+
+.overlay-visibility-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.35rem 0.75rem;
+}
+
+.overlay-visibility-slots label {
+  min-width: 0;
+}
+
+.overlay-visibility-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
 .overlay-preview-frame-wrap {
   width: 100%;
   max-width: 1100px;
@@ -2745,11 +2981,6 @@ button:disabled {
 
 .overlay-component-table td:first-child {
   text-align: center;
-}
-
-.overlay-component-table input[type="checkbox"] {
-  width: auto;
-  margin: 0;
 }
 
 .overlay-component-table tbody tr {

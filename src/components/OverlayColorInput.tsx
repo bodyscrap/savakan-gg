@@ -5,7 +5,7 @@ import {
 import { t } from "../i18n";
 
 type Props = {
-  label: "文字色" | "背景色";
+  label: "文字色" | "背景色" | "縁取り色";
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;

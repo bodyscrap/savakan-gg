@@ -229,6 +229,7 @@ export const appTranslations: Record<string, string> = {
   "テストプレイヤー1": "Test player 1",
   "テストプレイヤー2": "Test player 2",
   "テスト配信": "Test stream",
+  "配信設定": "Stream settings",
   "ローカル通信を行わない設定のため、プレイ中通知を解除できません。": "Playing notices cannot be cleared while local communication is disabled.",
   "プレイ中通知解除: {p0}": "Clear playing notice: {p0}",
   "プレイ中通知を解除しました。": "Cleared the playing notice.",

@@ -1,7 +1,7 @@
 import { t } from "../i18n";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { parseOverlayLayouts, parseOverlayTestItems, type OverlayLayouts, type OverlayTestItemInputs } from "../domain/overlayLayout";
+import { builtInOverlayPreset, parseOverlayLayouts, parseOverlayTestItems, type OverlayLayouts, type OverlayTestItemInputs } from "../domain/overlayLayout";
 import { OverlayLayoutEditor } from "./OverlayLayoutEditor";
 import type { OverlayRenderState } from "../domain/overlayRenderer.js";
 
@@ -77,8 +77,14 @@ export function OverlayControl({
   const [savedLayouts, setSavedLayouts] = useState<OverlayLayouts>();
   const [persisting, setPersisting] = useState(false);
   const [presetsError, setPresetsError] = useState("");
+  const defaultPreset = useMemo(() => builtInOverlayPreset(), []);
   const activePreset = savedLayouts?.presets.find((preset) => preset.id === savedLayouts.activePresetId);
+  const visibilityPreset = activePreset ?? defaultPreset;
   const resolution = activePreset ?? { width: 1920, height: 1080 };
+  const visibilityControlIds = activePreset?.visibilityControlIds ?? savedLayouts?.defaultVisibilityControlIds ?? [];
+  const visibilityOverridesKey = JSON.stringify(Object.entries(overlayState?.visibilityOverrides ?? {})
+    .sort(([left], [right]) => left.localeCompare(right)));
+  const [visibilityOverrides, setVisibilityOverrides] = useState<Record<string, boolean>>({});
   const isSwitchingFromLiveSet = Boolean(overlayState?.active && !isTestOverlayActive);
   const editorState = overlayState && !overlayState.active ? {
     ...overlayState,
@@ -93,6 +99,11 @@ export function OverlayControl({
     }).catch((cause) => { if (alive) setPresetsError(String(cause)); });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    const entries = JSON.parse(visibilityOverridesKey) as [string, boolean][];
+    setVisibilityOverrides(Object.fromEntries(entries));
+  }, [visibilityOverridesKey]);
 
   async function saveLayouts(layouts: OverlayLayouts): Promise<OverlayLayouts> {
     setPersisting(true);
@@ -111,6 +122,33 @@ export function OverlayControl({
       setSavedLayouts(parseOverlayLayouts(await invoke<unknown>("apply_overlay_preset", { presetId: presetId || null })));
     } catch (cause) { setPresetsError(String(cause)); }
     finally { setPersisting(false); }
+  }
+
+  async function saveVisibilityControlIds(ids: string[]) {
+    if (!savedLayouts) return;
+    try {
+      await saveLayouts(activePreset
+        ? {
+          ...savedLayouts,
+          presets: savedLayouts.presets.map((preset) => preset.id === activePreset.id
+            ? { ...preset, visibilityControlIds: ids } : preset),
+        }
+        : { ...savedLayouts, defaultVisibilityControlIds: ids });
+    } catch (cause) {
+      setPresetsError(String(cause));
+    }
+  }
+
+  async function setVisibilityControl(componentId: string, initialVisible: boolean) {
+    const nextVisible = !(visibilityOverrides[componentId] ?? initialVisible);
+    try {
+      const visible = await invoke<boolean>("set_overlay_component_visibility", {
+        componentId, visible: nextVisible,
+      });
+      setVisibilityOverrides((current) => ({ ...current, [componentId]: visible }));
+    } catch (cause) {
+      setPresetsError(String(cause));
+    }
   }
 
   return (
@@ -141,7 +179,7 @@ export function OverlayControl({
         ) : (
           <>
             <div className="overlay-preview-controls">
-              <p className="meta">{t("状態: {value1}", { value1: overlayState.active
+              <p className="meta">{t("配信設定")} {t("状態: {value1}", { value1: overlayState.active
                   ? (isTestOverlayActive ? t("テスト配信中") : t("配信中 ({setId})", { setId: overlayState.currentSetId ?? "-" }))
                   : (overlayState.fullyStopped ? t("完全停止中") : t("停止中")) })}</p>
               {activeSetLabel && <p className="meta">{t("配信中set: {value1}", { value1: activeSetLabel })}</p>}
@@ -152,10 +190,48 @@ export function OverlayControl({
                   <option value="">{t("デフォルト")}</option>
                   {savedLayouts?.presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
                 </select></label>
-                <p className="meta">{t("保存済みのプリセットを即座に適用します。未保存の編集内容は適用されません。")}</p>
                 {presetsError && <p role="alert" className="error">{presetsError}</p>}
                 {activePreset && <p className="meta">{t("録画・配信ソフト側のブラウザソースの幅・高さも {width} × {height} に設定してください。", { width: activePreset.width, height: activePreset.height })}</p>}
-                <p className="meta">{t("テスト配信（タブ離脱で自動停止）")}</p>
+                {savedLayouts && <div className="overlay-visibility-control">
+                  <strong>{t("表示切替コンポーネント")}</strong>
+                  <p className="meta">{t("プリセット上の表示状態を初期値として、表示状態にかかわらずコンポーネントを選択できます。各枠が対応する番号のボタンに割り当てられ、押すたびに表示が切り替わります。")}</p>
+                  <div className="overlay-visibility-slots">
+                    {Array.from({ length: 6 }, (_, index) => {
+                      const id = visibilityControlIds[index] ?? "";
+                      const assignedElsewhere = new Set(visibilityControlIds
+                        .filter((otherId, otherIndex) => otherIndex !== index && otherId !== ""));
+                      return <label key={index}>{t("表示切替 {number}", { number: index + 1 })}
+                        <select value={id} disabled={busy || persisting}
+                          onChange={(event) => {
+                            const next = Array.from({ length: 6 }, (_, slot) => visibilityControlIds[slot] ?? "");
+                            next[index] = event.currentTarget.value;
+                            void saveVisibilityControlIds(next);
+                          }}>
+                          <option value="">{t("未選択")}</option>
+                          {visibilityPreset.components.map((component) => <option key={component.id} value={component.id}
+                            disabled={assignedElsewhere.has(component.id)}>
+                            {component.name}
+                          </option>)}
+                        </select>
+                      </label>;
+                    })}
+                  </div>
+                  <div className="overlay-visibility-buttons">
+                    {Array.from({ length: 6 }, (_, index) => {
+                      const id = visibilityControlIds[index];
+                      if (!id) return <button key={index} type="button" disabled>{index + 1}</button>;
+                      const component = visibilityPreset.components.find((item) => item.id === id);
+                      if (!component) return null;
+                      const visible = visibilityOverrides[id] ?? component.visible;
+                      return <button key={id} type="button" className={!visible ? "ghost" : ""}
+                        aria-pressed={visible} aria-label={t("{number}: {name}の表示切替", {
+                          number: index + 1, name: component.name,
+                        })}
+                        title={component.name} disabled={busy || persisting}
+                        onClick={() => void setVisibilityControl(id, component.visible)}>{index + 1}</button>;
+                    })}
+                  </div>
+                </div>}
                 <div className="obs-overlay-grid">
                   <label>{t("ダミーイベントエイリアス")}<input
                       type="text"

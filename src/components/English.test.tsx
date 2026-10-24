@@ -222,20 +222,19 @@ describe("English component rendering", () => {
 
   it("translates overlay state and controls without changing test names", () => {
     setLanguage("en");
-    const html = renderToStaticMarkup(
-      <OverlayControl
-        overlayState={{ active: true, fullyStopped: false, currentSetId: "set-id", eventName: "大会", eventAlias: "別名", roundText: "Round 1", redPlayerName: "赤", bluePlayerName: "青", redSetWins: 1, blueSetWins: 2, fontScale: 1, overlayUrl: "http://localhost/overlay" }}
-        isTestOverlayActive={false} activeSetLabel="日本語試合" busy={false}
-        testEventAlias="テスト大会" testRedName="設定" testBlueName="青プレイヤー" testRedWins={1} testBlueWins={2}
-        testRedItems={["選択A 選択B", "", "選択C"]} testBlueItems={["選択D", "選択E", ""]}
-        previewWrapRef={{ current: null }} previewIframeRef={{ current: null }}
-        onOpenUrl={noop}
-        onTestRedNameChange={noop} onTestEventAliasChange={noop} onTestBlueNameChange={noop}
-        onTestRedItemsChange={noop} onTestBlueItemsChange={noop}
-        onTestRedWinsChange={noop} onTestBlueWinsChange={noop} onToggleTestOverlay={noop} onFullyStop={noop} onPreviewLoad={noop}
-      />,
-    );
-    expect(html).toContain("Status: Live (set-id)");
+    const props: ComponentProps<typeof OverlayControl> = {
+      overlayState: { active: true, fullyStopped: false, currentSetId: "set-id", eventName: "大会", eventAlias: "別名", roundText: "Round 1", redPlayerName: "赤", bluePlayerName: "青", redSetWins: 1, blueSetWins: 2, fontScale: 1, overlayUrl: "http://localhost/overlay" },
+      isTestOverlayActive: false, activeSetLabel: "日本語試合", busy: false,
+      testEventAlias: "テスト大会", testRedName: "設定", testBlueName: "青プレイヤー", testRedWins: 1, testBlueWins: 2,
+      testRedItems: ["選択A 選択B", "", "選択C"], testBlueItems: ["選択D", "選択E", ""],
+      previewWrapRef: { current: null }, previewIframeRef: { current: null },
+      onOpenUrl: noop,
+      onTestRedNameChange: noop, onTestEventAliasChange: noop, onTestBlueNameChange: noop,
+      onTestRedItemsChange: noop, onTestBlueItemsChange: noop,
+      onTestRedWinsChange: noop, onTestBlueWinsChange: noop, onToggleTestOverlay: noop, onFullyStop: noop, onPreviewLoad: noop,
+    };
+    const html = renderToStaticMarkup(<OverlayControl {...props} />);
+    expect(html).toContain("Stream settings Status: Live (set-id)");
     expect(html).toContain("Live set: 日本語試合");
     expect(html).toContain('title="Overlay preview"');
     expect(html).toContain('value="設定"');
@@ -248,10 +247,12 @@ describe("English component rendering", () => {
     }
     expect(html).toContain('value="選択A 選択B"');
     expect(html).toContain("Preset to apply");
-    expect(html).toContain("Saved presets are applied immediately. Unsaved edits are not applied.");
-    expect(html.indexOf("Preset to apply")).toBeLessThan(html.indexOf("Test stream (stops automatically when leaving this tab)"));
+    expect(html).not.toContain("Saved presets are applied immediately. Unsaved edits are not applied.");
+    expect(html).not.toContain("Test stream (stops automatically when leaving this tab)");
     expect(html).not.toContain("Save and apply");
     expect(html).not.toContain("Shrink player names to fit");
+    const testStreamHtml = renderToStaticMarkup(<OverlayControl {...props} isTestOverlayActive />);
+    expect(testStreamHtml).toContain("Stream settings Status: Test stream active");
   });
 
   it("translates the overlay component creation dialog", () => {

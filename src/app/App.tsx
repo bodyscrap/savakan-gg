@@ -3165,6 +3165,7 @@ function App() {
               canResolveCalls={activeMatchOwnCalls.length > 0 && activeMatchOtherCalls.length === 0}
               isDqDraft={isActiveMatchDqDraft}
               overlayActive={isOverlayActiveForSet(obsOverlayState, activeMatch.setId)}
+              overlayVisibilityOverrides={obsOverlayState?.visibilityOverrides ?? {}}
               onClose={closeMatchDialog}
               onSwapSides={() => swapMatchSides(activeMatch)}
               onRandomizeSides={() => void randomizeMatchSides(activeMatch)}

@@ -103,6 +103,13 @@ struct MobileOverlayToggleInput {
     font_scale: f64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MobileOverlayVisibilityInput {
+    component_id: String,
+    visible: bool,
+}
+
 fn emit_event_snapshot_progress(
     app: &tauri::AppHandle,
     progress: startgg::EventSnapshotFetchProgress,
@@ -185,6 +192,7 @@ fn obs_overlay_state() -> &'static Mutex<ObsOverlayRuntimeState> {
             show_set_info: true,
             show_event_alias: true,
             fully_stopped: false,
+            animation_session_revision: 0,
         })
     })
 }
@@ -221,6 +229,106 @@ struct MobileSetListItem {
     winner_id: Option<String>,
     entrant_names: Vec<String>,
     entrant_ids: Vec<Option<String>>,
+}
+
+fn mobile_alias_names_by_id(
+    event_meta: Option<&crate::models::EventLocalMeta>,
+) -> HashMap<String, String> {
+    event_meta
+        .filter(|event| {
+            event
+                .event_management
+                .as_ref()
+                .is_some_and(|setting| setting.use_alias_name)
+        })
+        .map(|event| {
+            event
+                .entrants
+                .iter()
+                .filter(|entrant| !entrant.alias_name.trim().is_empty())
+                .map(|entrant| {
+                    (
+                        entrant.entrant_id.clone(),
+                        entrant.alias_name.trim().to_owned(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn mobile_entrant_display_name<'a>(
+    entrant_id: Option<&str>,
+    entrant_name: &'a str,
+    alias_names_by_id: &'a HashMap<String, String>,
+) -> &'a str {
+    entrant_id
+        .and_then(|id| alias_names_by_id.get(id))
+        .map(String::as_str)
+        .unwrap_or(entrant_name)
+}
+
+#[cfg(test)]
+mod mobile_set_alias_tests {
+    use super::{mobile_alias_names_by_id, mobile_entrant_display_name};
+    use crate::models::EventLocalMeta;
+
+    fn event_meta(use_alias_name: bool) -> EventLocalMeta {
+        serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "eventName": "Event",
+            "eventManagement": {
+                "sideDecisionMethod": "random",
+                "itemListSnapshots": [],
+                "useAliasName": use_alias_name
+            },
+            "entrants": [
+                {
+                    "entrantId": "entrant",
+                    "entrantName": "Player",
+                    "aliasName": "Alias",
+                    "characterNames": [],
+                    "authCode": ""
+                },
+                {
+                    "entrantId": "no-alias",
+                    "entrantName": "Player without alias",
+                    "aliasName": "  ",
+                    "characterNames": [],
+                    "authCode": ""
+                }
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn uses_enabled_nonempty_aliases_and_falls_back_to_entrant_name() {
+        let aliases = mobile_alias_names_by_id(Some(&event_meta(true)));
+
+        assert_eq!(
+            mobile_entrant_display_name(Some("entrant"), "Player", &aliases),
+            "Alias"
+        );
+        assert_eq!(
+            mobile_entrant_display_name(Some("no-alias"), "Player without alias", &aliases),
+            "Player without alias"
+        );
+        assert_eq!(
+            mobile_entrant_display_name(None, "TBD", &aliases),
+            "TBD"
+        );
+    }
+
+    #[test]
+    fn ignores_aliases_when_alias_display_is_disabled() {
+        let aliases = mobile_alias_names_by_id(Some(&event_meta(false)));
+
+        assert_eq!(
+            mobile_entrant_display_name(Some("entrant"), "Player", &aliases),
+            "Player"
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1212,6 +1320,7 @@ impl ObsOverlaySetInput {
 struct ObsOverlayState {
     active: bool,
     fully_stopped: bool,
+    animation_session_revision: u64,
     current_set_id: Option<String>,
     event_name: Option<String>,
     event_alias: Option<String>,
@@ -1225,6 +1334,8 @@ struct ObsOverlayState {
     font_scale: f64,
     show_set_info: bool,
     show_event_alias: bool,
+    visibility_overrides: HashMap<String, bool>,
+    visibility_show_revisions: HashMap<String, u64>,
     overlay_url: String,
 }
 
@@ -1250,6 +1361,7 @@ struct ObsOverlayActiveSet {
 #[derive(Debug, Clone)]
 struct ObsOverlayRuntimeState {
     active_set: Option<ObsOverlayActiveSet>,
+    animation_session_revision: u64,
     event_alias: String,
     preview_font_scale: f64,
     show_set_info: bool,
@@ -1269,6 +1381,8 @@ fn overlay_url() -> String {
 }
 
 fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
+    let visibility_overrides = overlay_layout::visibility_overrides()?;
+    let visibility_show_revisions = overlay_layout::visibility_show_revisions()?;
     let guard = obs_overlay_state()
         .lock()
         .map_err(|_| "オーバーレイ状態のロック取得に失敗しました。".to_owned())?;
@@ -1277,6 +1391,7 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
         return Ok(ObsOverlayState {
             active: true,
             fully_stopped: false,
+            animation_session_revision: guard.animation_session_revision,
             current_set_id: Some(active.set_id.clone()),
             event_name: Some(active.event_name.clone()),
             event_alias: Some(active.event_alias.clone()),
@@ -1290,6 +1405,8 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
             font_scale: active.font_scale,
             show_set_info: guard.show_set_info,
             show_event_alias: guard.show_event_alias,
+            visibility_overrides,
+            visibility_show_revisions,
             overlay_url: overlay_url(),
         });
     }
@@ -1299,6 +1416,7 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
     Ok(ObsOverlayState {
         active: false,
         fully_stopped: guard.fully_stopped,
+        animation_session_revision: guard.animation_session_revision,
         current_set_id: None,
         event_name: None,
         event_alias: Some(guard.event_alias.clone()),
@@ -1312,6 +1430,8 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
         font_scale: preview_font_scale,
         show_set_info: guard.show_set_info,
         show_event_alias: guard.show_event_alias,
+        visibility_overrides,
+        visibility_show_revisions,
         overlay_url: overlay_url(),
     })
 }
@@ -1501,6 +1621,11 @@ fn build_overlay_html() -> &'static str {
         .plate-set {
             background: linear-gradient(180deg, rgba(75, 85, 99, 0.88), rgba(55, 65, 81, 0.88));
         }
+        .hud.hide-set-background .plate-set {
+            background: transparent;
+            border-color: transparent;
+            backdrop-filter: none;
+        }
         .player-cell.p1,
         .player-cell.p2 {
             text-align: center;
@@ -1586,12 +1711,12 @@ fn build_overlay_html() -> &'static str {
 <body>
   <div class="stage">
     <div id="hud" class="hud">
-      <section class="cell player-cell p1">
+      <section id="redPlayerCell" class="cell player-cell p1">
         <div class="plate plate-p1">
                     <div id="redName" class="name"></div>
         </div>
       </section>
-      <section class="cell score-cell">
+      <section id="redScoreCell" class="cell score-cell">
         <div class="plate plate-p1">
                     <div id="redCount" class="count"></div>
         </div>
@@ -1602,12 +1727,12 @@ fn build_overlay_html() -> &'static str {
           <div id="setSub" class="set-sub">-</div>
         </div>
       </section>
-      <section class="cell score-cell">
+      <section id="blueScoreCell" class="cell score-cell">
         <div class="plate plate-p2">
                     <div id="blueCount" class="count"></div>
         </div>
       </section>
-      <section class="cell player-cell p2">
+      <section id="bluePlayerCell" class="cell player-cell p2">
         <div class="plate plate-p2">
                     <div id="blueName" class="name"></div>
         </div>
@@ -1793,6 +1918,20 @@ fn build_overlay_html() -> &'static str {
                 const setSub = lines[1] || '-';
             const hud = document.getElementById('hud');
             hud?.classList.toggle('hide-set-info', !showSetInfo);
+            const visibilityOverrides = state.visibilityOverrides || {};
+            for (const [componentId, elementId] of [
+                ['builtin-redPlayerName', 'redPlayerCell'],
+                ['builtin-redSetWins', 'redScoreCell'],
+                ['builtin-setName', 'setMain'],
+                ['builtin-roundName', 'setSub'],
+                ['builtin-blueSetWins', 'blueScoreCell'],
+                ['builtin-bluePlayerName', 'bluePlayerCell'],
+                ['builtin-eventAlias', 'eventAlias'],
+            ]) {
+                const element = document.getElementById(elementId);
+                if (element) element.style.visibility = (visibilityOverrides[componentId] ?? true) ? '' : 'hidden';
+            }
+            hud?.classList.toggle('hide-set-background', visibilityOverrides['builtin-text'] === false);
             const redNameEl = document.getElementById('redName');
             const blueNameEl = document.getElementById('blueName');
             fitNameToPlate(redNameEl, redName);
@@ -2158,6 +2297,51 @@ fn mobile_input_html() -> String {
             flex: 1 1 0;
             min-width: 0;
         }
+        .overlay-visibility-control {
+            display: grid;
+            gap: 6px;
+            margin-top: 10px;
+        }
+        .overlay-visibility-buttons {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 5px;
+        }
+        .overlay-visibility-buttons button {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            min-width: 0;
+            padding: 6px 1px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            font-size: 0.7rem;
+            line-height: 1.1;
+            overflow-wrap: anywhere;
+        }
+        .overlay-visibility-buttons button .visibility-control-number {
+            font-size: 0.75rem;
+        }
+        .overlay-visibility-buttons button .visibility-control-state {
+            font-size: 0.58rem;
+        }
+        .overlay-visibility-buttons button.visibility-visible {
+            color: #166534;
+            background: #dcfce7;
+            border-color: #22c55e;
+        }
+        .overlay-visibility-buttons button.visibility-hidden {
+            color: #991b1b;
+            background: #fee2e2;
+            border-color: #ef4444;
+        }
+        .overlay-visibility-buttons button.visibility-unset {
+            color: #475569;
+            background: #e2e8f0;
+            border-color: #94a3b8;
+        }
         .slot-row {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2388,6 +2572,11 @@ fn mobile_input_html() -> String {
                     <button id="resolveCallsBtn" type="button" data-i18n="resolveCalls">呼出解決</button>
                     <button id="overlayStopBtn" type="button" data-i18n="stopCompletely" style="background: #e2e8f0; color: #0f172a; border-color: #cbd5e1;">完全停止</button>
                 </div>
+                <div id="overlayVisibilityControls" class="overlay-visibility-control" hidden>
+                    <strong data-i18n="visibilityControls">表示切替</strong>
+                    <div id="overlayVisibilityButtons" class="overlay-visibility-buttons"></div>
+                    <p id="overlayVisibilityError" class="status" role="alert"></p>
+                </div>
             </div>
 
             <div id="slotRows"></div>
@@ -2494,6 +2683,9 @@ fn mobile_input_html() -> String {
         const overlayStatus = document.getElementById('overlayStatus');
         const overlayToggleBtn = document.getElementById('overlayToggleBtn');
         const overlayStopBtn = document.getElementById('overlayStopBtn');
+        const overlayVisibilityControls = document.getElementById('overlayVisibilityControls');
+        const overlayVisibilityButtons = document.getElementById('overlayVisibilityButtons');
+        const overlayVisibilityError = document.getElementById('overlayVisibilityError');
         const resolveCallsBtn = document.getElementById('resolveCallsBtn');
         const slotRows = document.getElementById('slotRows');
         const discardBtn = document.getElementById('discardBtn');
@@ -2503,6 +2695,7 @@ fn mobile_input_html() -> String {
         const randomActionTime = document.getElementById('randomActionTime');
         let selectedSet = null;
         let overlayState = null;
+        let visibilityControls = [];
         let selectedSetCallStatus = null;
         let mobileEventAlias = '';
         let eventInfoPromise = Promise.resolve();
@@ -3389,8 +3582,105 @@ fn mobile_input_html() -> String {
             return await res.json();
         }
 
+        async function fetchOverlayVisibilityControls() {
+            const url = `/mobile/api/overlay-visibility?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&token=${encodeURIComponent(token)}`;
+            try {
+                const response = await fetch(url, { cache: 'no-store' });
+                if (!response.ok) {
+                    throw new Error(await response.text() || `HTTP ${response.status}`);
+                }
+                const result = await response.json();
+                visibilityControls = Array.isArray(result.controls) ? result.controls : [];
+                if (overlayState && result.visibilityOverrides) {
+                    overlayState.visibilityOverrides = result.visibilityOverrides;
+                }
+                if (overlayVisibilityError) {
+                    overlayVisibilityError.textContent = '';
+                }
+                renderOverlayVisibilityButtons();
+            } catch (error) {
+                if (overlayVisibilityError) {
+                    overlayVisibilityError.textContent = t('visibilityFailed', {
+                        error: mobileErrorDetail(error && error.message ? error.message : String(error)),
+                    });
+                }
+            }
+        }
+
+        function renderOverlayVisibilityButtons() {
+            if (!overlayVisibilityControls || !overlayVisibilityButtons) {
+                return;
+            }
+            overlayVisibilityControls.hidden = visibilityControls.length === 0;
+            overlayVisibilityButtons.replaceChildren();
+            for (let slot = 0; slot < 6; slot += 1) {
+                const control = visibilityControls.find((item) => Number(item.slot) === slot);
+                const button = document.createElement('button');
+                button.type = 'button';
+                const number = document.createElement('span');
+                number.className = 'visibility-control-number';
+                number.textContent = String(slot + 1);
+                const stateLabel = document.createElement('span');
+                stateLabel.className = 'visibility-control-state';
+                if (!control || !control.id) {
+                    button.classList.add('visibility-unset');
+                    stateLabel.textContent = t('visibilityUnset');
+                    button.append(number, stateLabel);
+                    button.disabled = true;
+                    button.setAttribute('aria-label', `${slot + 1}: ${t('visibilityUnset')}`);
+                    overlayVisibilityButtons.appendChild(button);
+                    continue;
+                }
+                const visible = (overlayState && overlayState.visibilityOverrides || {})[control.id] ?? Boolean(control.visible);
+                button.classList.add(visible ? 'visibility-visible' : 'visibility-hidden');
+                stateLabel.textContent = t(visible ? 'visibilityShow' : 'visibilityHide');
+                button.append(number, stateLabel);
+                button.setAttribute('aria-pressed', String(visible));
+                button.setAttribute('aria-label', `${slot + 1}: ${control.name} - ${stateLabel.textContent}`);
+                button.title = control.name;
+                button.addEventListener('click', () => {
+                    void toggleOverlayComponentVisibility(control, !visible);
+                });
+                overlayVisibilityButtons.appendChild(button);
+            }
+        }
+
+        async function toggleOverlayComponentVisibility(control, visible) {
+            if (overlayVisibilityError) {
+                overlayVisibilityError.textContent = '';
+            }
+            try {
+                const response = await fetch(`/mobile/api/overlay-visibility?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&token=${encodeURIComponent(token)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ componentId: control.id, visible }),
+                });
+                if (!response.ok) {
+                    throw new Error(await response.text() || `HTTP ${response.status}`);
+                }
+                const result = await response.json();
+                const overrides = { ...(overlayState && overlayState.visibilityOverrides || {}) };
+                if (Boolean(result.visible) === Boolean(control.visible)) {
+                    delete overrides[control.id];
+                } else {
+                    overrides[control.id] = Boolean(result.visible);
+                }
+                if (overlayState) {
+                    overlayState.visibilityOverrides = overrides;
+                }
+                renderOverlayVisibilityButtons();
+            } catch (error) {
+                if (overlayVisibilityError) {
+                    overlayVisibilityError.textContent = t('visibilityFailed', {
+                        error: mobileErrorDetail(error && error.message ? error.message : String(error)),
+                    });
+                }
+            }
+        }
+
         async function refreshOverlayState() {
             overlayState = await fetchOverlayState();
+            renderOverlayVisibilityButtons();
             if (!overlayBox) {
                 return;
             }
@@ -3605,6 +3895,7 @@ fn mobile_input_html() -> String {
             const detail = await res.json();
             const previousSetId = selectedSet && selectedSet.setId ? String(selectedSet.setId) : '';
             selectedSet = detail;
+            await fetchOverlayVisibilityControls();
             if (previousSetId !== String(detail.setId || '')) {
                 selectedSetCallStatus = null;
                 updateSetCallControls();
@@ -3969,6 +4260,9 @@ mod embedded_web_localization_tests {
         assert!(html.contains("String(state.redPlayerName || '')"));
         assert!(html.contains("String(state.bluePlayerName || '')"));
         assert!(html.contains("String(state.eventAlias || '')"));
+        assert!(html.contains("id=\"redPlayerCell\""));
+        assert!(html.contains("visibilityOverrides['builtin-text'] === false"));
+        assert!(html.contains("hide-set-background"));
     }
 }
 
@@ -4313,27 +4607,7 @@ fn hydrate_mobile_detail_with_local_meta(
                 .collect::<HashMap<String, String>>()
         })
         .unwrap_or_default();
-    let alias_name_by_id = event_meta
-        .filter(|event| {
-            event
-                .event_management
-                .as_ref()
-                .is_some_and(|setting| setting.use_alias_name)
-        })
-        .map(|event| {
-            event
-                .entrants
-                .iter()
-                .filter(|entrant| !entrant.alias_name.trim().is_empty())
-                .map(|entrant| {
-                    (
-                        entrant.entrant_id.clone(),
-                        entrant.alias_name.trim().to_owned(),
-                    )
-                })
-                .collect::<HashMap<String, String>>()
-        })
-        .unwrap_or_default();
+    let alias_name_by_id = mobile_alias_names_by_id(event_meta);
     let entrant_id_by_name = entrant_name_by_id
         .iter()
         .map(|(entrant_id, entrant_name)| (entrant_name.trim().to_lowercase(), entrant_id.clone()))
@@ -4727,6 +5001,12 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 return;
             }
         };
+        let event_meta = workspace
+            .local_meta
+            .events
+            .iter()
+            .find(|item| item.event_id == event_id);
+        let alias_name_by_id = mobile_alias_names_by_id(event_meta);
         let sets = event
             .sets
             .iter()
@@ -4772,6 +5052,14 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 }
                 for slot in &set.slots {
                     haystacks.push(slot.entrant_name.to_lowercase());
+                    let display_name = mobile_entrant_display_name(
+                        slot.entrant_id.as_deref(),
+                        &slot.entrant_name,
+                        &alias_name_by_id,
+                    );
+                    if display_name != slot.entrant_name {
+                        haystacks.push(display_name.to_lowercase());
+                    }
                 }
 
                 haystacks.into_iter().any(|value| value.contains(&query))
@@ -4802,7 +5090,14 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 entrant_names: set
                     .slots
                     .iter()
-                    .map(|slot| slot.entrant_name.clone())
+                    .map(|slot| {
+                        mobile_entrant_display_name(
+                            slot.entrant_id.as_deref(),
+                            &slot.entrant_name,
+                            &alias_name_by_id,
+                        )
+                        .to_owned()
+                    })
                     .collect::<Vec<String>>(),
                 entrant_ids: set
                     .slots
@@ -5317,6 +5612,81 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
         return;
     }
 
+    if path == "/mobile/api/overlay-visibility" && request.method() == &tiny_http::Method::Get {
+        let controls = match overlay_layout::visibility_controls() {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+        let visibility_overrides = match overlay_layout::visibility_overrides() {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    500,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+        let result = serde_json::json!({
+            "controls": controls,
+            "visibilityOverrides": visibility_overrides,
+        });
+        respond_json(request, 200, result.to_string());
+        return;
+    }
+
+    if path == "/mobile/api/overlay-visibility" && request.method() == &tiny_http::Method::Post {
+        let mut body = String::new();
+        if let Err(err) = request.as_reader().read_to_string(&mut body) {
+            respond_json(
+                request,
+                400,
+                format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
+            );
+            return;
+        }
+        let payload = match serde_json::from_str::<MobileOverlayVisibilityInput>(&body) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    400,
+                    format!("{{\"error\":\"{}\"}}", err.to_string().replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+        let visible = match overlay_layout::set_overlay_component_visibility(
+            payload.component_id,
+            payload.visible,
+        ) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    400,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+        emit_obs_overlay_state_changed(app);
+        respond_json(
+            request,
+            200,
+            serde_json::json!({ "visible": visible }).to_string(),
+        );
+        return;
+    }
+
     if path == "/mobile/api/overlay-state" && request.method() == &tiny_http::Method::Get {
         respond_json(
             request,
@@ -5325,6 +5695,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 ObsOverlayState {
                     active: false,
                     fully_stopped: false,
+                    animation_session_revision: 0,
                     current_set_id: None,
                     event_name: None,
                     event_alias: None,
@@ -5338,6 +5709,8 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     font_scale: 1.0,
                     show_set_info: true,
                     show_event_alias: true,
+                    visibility_overrides: HashMap::new(),
+                    visibility_show_revisions: HashMap::new(),
                     overlay_url: overlay_url(),
                 }
             }))
@@ -5799,6 +6172,13 @@ fn apply_obs_overlay_toggle(
             let meta = workspace.local_meta.events.iter().find(|meta| meta.event_id == input.event_id);
             input.resolve_items(meta)
         };
+        if guard
+            .active_set
+            .as_ref()
+            .map_or(true, |active| active.set_id != set_id)
+        {
+            guard.animation_session_revision = guard.animation_session_revision.wrapping_add(1);
+        }
         guard.active_set = Some(ObsOverlayActiveSet {
             set_id,
             slug: input.slug.clone(),
@@ -7881,6 +8261,7 @@ pub fn run() {
             overlay_layout::get_overlay_layouts,
             overlay_layout::save_overlay_layouts,
             overlay_layout::apply_overlay_preset,
+            overlay_layout::set_overlay_component_visibility,
             overlay_layout::list_overlay_fonts,
             set_obs_overlay_font_scale,
             set_obs_overlay_show_set_info,

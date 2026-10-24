@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   builtInOverlayPreset, copyOverlayPreset, isOverlayImage, MAX_IMAGE_BYTES, MAX_LAYOUT_BYTES, mergeOverlayLayouts, newOverlayComponent, newOverlayPreset,
-  overlayPreviewTransform, overlayResolutionAtAspect, overlayColorParts, overlayColorWithAlpha, overlayColorHsv, overlayColorFromHsv, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, overlayComponentsIntersecting, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayNumberSources, overlayItemSources, overlaySources, parseOverlayLayouts, parseOverlayLayoutsFile, parseOverlayTestItems, type OverlayLayouts,
+  overlayPreviewTransform, overlayResolutionAtAspect, overlayColorParts, overlayColorWithAlpha, overlayColorHsv, overlayColorFromHsv, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, overlayComponentsIntersecting, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayImageDimensions, fitOverlayImageToCanvas, overlayNumberSources, overlayItemSources, overlaySources, parseOverlayLayouts, parseOverlayLayoutsFile, parseOverlayTestItems, type OverlayLayouts,
 } from "./overlayLayout";
 import { formatOverlayClock, resolveOverlayBackground, resolveOverlayText, resolveOverlayVerticalAlign, resolveOverlayTextOverflow } from "./overlayRenderer.js";
 
@@ -569,6 +569,52 @@ describe("glass overlay decoration", () => {
   });
 });
 
+describe("image overlay decoration", () => {
+  it("persists and copies background image settings on text components", () => {
+    const value = layouts();
+    value.presets[0].components = [{
+      ...newOverlayComponent("text"), frame: "image", image: "data:image/png;base64,YQ==",
+      imageFileName: "background.png", preserveAspectRatio: false, imageAlpha: 128, flipHorizontal: true,
+      imageAnimationOnDisplay: true, imageAnimationValueSource: "redPlayerName",
+    }];
+    expect(parseOverlayLayoutsFile(JSON.stringify(value))).toEqual(value);
+    const imageSettings = {
+      frame: "image", image: "data:image/png;base64,YQ==", imageFileName: "background.png",
+      preserveAspectRatio: false, imageAlpha: 128, flipHorizontal: true,
+      imageAnimationOnDisplay: true, imageAnimationValueSource: "redPlayerName",
+    };
+    expect(copyOverlayPreset(value.presets[0]).components[0]).toMatchObject(imageSettings);
+    expect(mergeOverlayLayouts(layouts(), value).presets[1].components[0]).toMatchObject(imageSettings);
+  });
+  it("wraps text by default when using an image frame", () => {
+    expect(resolveOverlayTextOverflow({ frame: "image", source: "redPlayerName" })).toEqual({ wrap: true, shrink: false });
+  });
+  it("discards legacy broad text and number animation triggers", () => {
+    const value = layouts();
+    const image = newOverlayComponent("image");
+    Object.assign(image, {
+      image: "data:image/png;base64,YQ==",
+      imageAnimationOnTextChange: true,
+      imageAnimationOnNumberChange: true,
+    });
+    value.presets[0].components = [image];
+    const restored = parseOverlayLayoutsFile(JSON.stringify(value));
+    expect(restored.presets[0].components[0]).not.toHaveProperty("imageAnimationOnTextChange");
+    expect(restored.presets[0].components[0]).not.toHaveProperty("imageAnimationOnNumberChange");
+  });
+  it("clears a saved animation trigger for a removed event name source", () => {
+    const value = layouts();
+    const image = newOverlayComponent("image");
+    Object.assign(image, {
+      image: "data:image/png;base64,YQ==",
+      imageAnimationValueSource: "eventName",
+    });
+    value.presets[0].components = [image];
+    const restored = parseOverlayLayoutsFile(JSON.stringify(value));
+    expect(restored.presets[0].components[0]).not.toHaveProperty("imageAnimationValueSource");
+  });
+});
+
 describe("linked overlay resolution", () => {
   it.each([
     ["width", 1280, 1280, 720],
@@ -616,10 +662,12 @@ describe("overlay preset scaling", () => {
       { ...newOverlayComponent("number"), numberValue: -12.5, visible: false },
       { ...newOverlayComponent("image"), image: "data:image/png;base64,YQ==", imageFileName: "logo.png" },
     ];
+    original.visibilityControlIds = [original.components[0].id];
     const before = structuredClone(original);
     const copy = copyOverlayPreset(original, resolution);
     expect(copy).toMatchObject(resolution);
     expect(copy.id).not.toBe(original.id);
+    expect(copy.visibilityControlIds).toEqual([copy.components[0].id]);
     expect(copy.components[0]).toMatchObject(expected);
     copy.components.forEach(({ id, x, y, width, height, fontSize, ...metadata }, index) => {
       const { id: oldId, x: _x, y: _y, width: _width, height: _height, fontSize: _fontSize, ...originalMetadata } = original.components[index];
@@ -698,6 +746,58 @@ describe("overlay layout format", () => {
     expect(copyOverlayPreset(restored.presets[0]).components[0].imageFileName).toBe("配信ロゴ.png");
     expect(mergeOverlayLayouts(value, restored).presets[1].components[0].imageFileName).toBe("配信ロゴ.png");
   });
+  it("defaults images to a locked aspect ratio and full opacity", () => {
+    expect(newOverlayComponent("image")).toMatchObject({ preserveAspectRatio: true, imageAlpha: 255, flipHorizontal: false });
+  });
+  it("resizes images from either dimension while keeping their aspect ratio", () => {
+    expect(overlayImageDimensions(320, 100, 16 / 9, "width")).toEqual({ width: 320, height: 180 });
+    expect(overlayImageDimensions(100, 180, 16 / 9, "height")).toEqual({ width: 320, height: 180 });
+    expect(overlayImageDimensions(0, 180, 16 / 9, "height")).toEqual({ width: 320, height: 180 });
+    expect(() => overlayImageDimensions(320, 100, 0, "width")).toThrow();
+  });
+  it("fits locked images within the canvas and centers them", () => {
+    expect(fitOverlayImageToCanvas({ width: 1920, height: 1080 }, 1, true))
+      .toEqual({ x: 420, y: 0, width: 1080, height: 1080 });
+    expect(fitOverlayImageToCanvas({ width: 1920, height: 1080 }, 16 / 9, true))
+      .toEqual({ x: 0, y: 0, width: 1920, height: 1080 });
+    expect(fitOverlayImageToCanvas({ width: 1920, height: 1080 }, 16 / 9, false))
+      .toEqual({ x: 0, y: 0, width: 1920, height: 1080 });
+  });
+  it("persists image sizing options and accepts legacy images without them", () => {
+    const value = layouts();
+    const image = {
+      ...newOverlayComponent("image"), image: "data:image/png;base64,YQ==",
+      imageAspectRatio: 16 / 9, preserveAspectRatio: false, imageAlpha: 65,
+    };
+    value.presets[0].components = [image];
+    expect(parseOverlayLayoutsFile(JSON.stringify(value))).toEqual(value);
+    const legacy = structuredClone(value);
+    delete legacy.presets[0].components[0].imageAspectRatio;
+    delete legacy.presets[0].components[0].preserveAspectRatio;
+    delete legacy.presets[0].components[0].imageAlpha;
+    expect(parseOverlayLayouts(legacy).presets[0].components[0]).toMatchObject({
+      kind: "image", width: 400, height: 100,
+    });
+    expect(parseOverlayLayouts(legacy).presets[0].components[0].imageAlpha).toBe(255);
+  });
+  it("converts earlier image opacity settings into alpha values", () => {
+    const value = layouts();
+    const image = { ...newOverlayComponent("image"), image: "data:image/png;base64,YQ==" };
+    const legacyImage = { ...image, imageOpacity: 65 };
+    delete legacyImage.imageAlpha;
+    value.presets[0].components = [legacyImage];
+    expect(parseOverlayLayouts(value).presets[0].components[0].imageAlpha).toBe(166);
+  });
+  it.each([
+    { imageAspectRatio: 0 }, { imageAspectRatio: Infinity },
+    { preserveAspectRatio: "yes" }, { imageAlpha: -1 },
+    { imageAlpha: 256 }, { imageAlpha: 1.5 },
+  ])("rejects invalid image sizing options %s", (patch) => {
+    const value = layouts();
+    value.presets[0].components = [newOverlayComponent("image")];
+    Object.assign(value.presets[0].components[0], patch);
+    expect(() => parseOverlayLayouts(value)).toThrow();
+  });
   it("accepts legacy images without filenames and the exact filename length limit", () => {
     const value = layouts();
     value.presets[0].components = [newOverlayComponent("image")];
@@ -775,6 +875,14 @@ describe("overlay layout format", () => {
     value.presets[0].components.push({ ...newOverlayComponent("image"), image: "data:image/png;base64,YQ==" });
     expect(parseOverlayLayoutsFile(JSON.stringify(value))).toEqual(value);
   });
+  it("defaults missing display animation triggers to off", () => {
+    const component = newOverlayComponent("image");
+    expect(component.imageAnimationOnDisplay).toBe(false);
+    delete component.imageAnimationOnDisplay;
+    const value = layouts();
+    value.presets[0].components = [component];
+    expect(parseOverlayLayoutsFile(JSON.stringify(value)).presets[0].components[0].imageAnimationOnDisplay).toBe(false);
+  });
   it("creates independent component and preset identities", () => {
     expect(newOverlayPreset().id).not.toBe(newOverlayPreset().id);
     const preset = newOverlayPreset();
@@ -829,6 +937,63 @@ describe("overlay layout format", () => {
     expect(() => parseOverlayLayouts(value)).toThrow();
     value.presets.pop(); value.presets[0].components.push(value.presets[0].components[0]);
     expect(() => parseOverlayLayouts(value)).toThrow();
+  });
+  it("validates and preserves up to six display-toggle component IDs", () => {
+    const value = layouts();
+    const componentId = value.presets[0].components[0].id;
+    value.presets[0].visibilityControlIds = [componentId, ""];
+    expect(parseOverlayLayouts(value).presets[0].visibilityControlIds).toEqual([componentId, ""]);
+    const hiddenSelection = structuredClone(value);
+    hiddenSelection.presets[0].components[0].visible = false;
+    expect(parseOverlayLayouts(hiddenSelection).presets[0].visibilityControlIds).toEqual([componentId, ""]);
+    const copied = copyOverlayPreset(value.presets[0]);
+    expect(copied.visibilityControlIds).toEqual([copied.components[0].id, ""]);
+    const imported = mergeOverlayLayouts(layouts(), value).presets[1];
+    expect(imported.visibilityControlIds).toEqual([imported.components[0].id, ""]);
+    for (const ids of [
+      ["missing"],
+      [componentId, componentId],
+      Array.from({ length: 7 }, (_, index) => `missing-${index}`),
+    ]) {
+      const invalid = structuredClone(value);
+      invalid.presets[0].visibilityControlIds = ids;
+      expect(() => parseOverlayLayouts(invalid)).toThrow();
+    }
+  });
+  it("preserves six default-preset visibility slots and stable built-in IDs", () => {
+    const value = layouts();
+    const components = builtInOverlayPreset().components;
+    const ids = components.map((component) => component.id);
+    expect(ids).toEqual([
+      "builtin-redPlayerName", "builtin-redSetWins", "builtin-text", "builtin-setName",
+      "builtin-roundName", "builtin-blueSetWins", "builtin-bluePlayerName", "builtin-eventAlias",
+    ]);
+    value.defaultVisibilityControlIds = [ids[0], "", ids[7], "", "", ""];
+    expect(parseOverlayLayouts(value).defaultVisibilityControlIds).toEqual(value.defaultVisibilityControlIds);
+    for (const selected of [
+      ["missing"],
+      [ids[0], ids[0]],
+      Array.from({ length: 7 }, (_, index) => ids[index % ids.length]),
+    ]) {
+      const invalid = structuredClone(value);
+      invalid.defaultVisibilityControlIds = selected;
+      expect(() => parseOverlayLayouts(invalid)).toThrow();
+    }
+  });
+  it("preserves optional text outline settings and rejects invalid values", () => {
+    const value = layouts();
+    Object.assign(value.presets[0].components[0], { textOutlineWidth: 2.5, textOutlineColor: "#12345680" });
+    expect(parseOverlayLayouts(value)).toEqual(value);
+    for (const patch of [
+      { textOutlineWidth: -1 },
+      { textOutlineWidth: 0.25 },
+      { textOutlineWidth: 16.1 },
+      { textOutlineColor: "red" },
+    ]) {
+      const invalid = structuredClone(value);
+      Object.assign(invalid.presets[0].components[0], patch);
+      expect(() => parseOverlayLayouts(invalid)).toThrow();
+    }
   });
   it.each([
     { source: "__proto__" }, { kind: "html" }, { x: -1 }, { width: 0 }, { fontSize: 1001 },

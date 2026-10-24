@@ -5,6 +5,11 @@ export const overlayTextSources = [
   "roundText", "setName", "roundName", "eventName", "eventAlias", "text",
 ] as const;
 export const overlayNumberSources = ["redSetWins", "blueSetWins", "number"] as const;
+export const overlayAnimationValueSources = [
+  "redPlayerName", "bluePlayerName", "roundText", "setName", "roundName",
+  "redSetWins", "blueSetWins",
+] as const;
+export type OverlayAnimationValueSource = typeof overlayAnimationValueSources[number];
 export const overlayItemSources = ["redItems", "blueItems"] as const;
 export const overlaySources = [...overlayTextSources, ...overlayNumberSources, ...overlayItemSources, "clock"] as const;
 export type OverlaySource = typeof overlaySources[number];
@@ -23,6 +28,12 @@ export type OverlayComponent = {
   text: string;
   image: string;
   imageFileName?: string;
+  imageAspectRatio?: number;
+  preserveAspectRatio?: boolean;
+  imageAlpha?: number;
+  flipHorizontal?: boolean;
+  imageAnimationOnDisplay?: boolean;
+  imageAnimationValueSource?: OverlayAnimationValueSource;
   numberValue?: number;
   itemCategory?: 1 | 2 | 3;
   delimiter?: string;
@@ -36,12 +47,14 @@ export type OverlayComponent = {
   fontFamily: string;
   fontSize: number;
   color: string;
+  textOutlineWidth?: number;
+  textOutlineColor?: string;
   background: string;
   align: "left" | "center" | "right";
   verticalAlign?: "top" | "center" | "bottom";
   bold: boolean;
   visible: boolean;
-  frame?: "plate" | "setMain" | "setSub" | "eventAlias" | "glass";
+  frame?: "plate" | "setMain" | "setSub" | "eventAlias" | "glass" | "image";
 };
 export const overlayKindLabels: Record<OverlayComponent["kind"], string> = {
   text: "テキスト", number: "数値", image: "画像", item: "アイテム", clock: "時計",
@@ -52,11 +65,13 @@ export type OverlayPreset = {
   width: number;
   height: number;
   components: OverlayComponent[];
+  visibilityControlIds?: string[];
 };
 export type OverlayLayouts = {
   version: 1;
   activePresetId: string | null;
   presets: OverlayPreset[];
+  defaultVisibilityControlIds?: string[];
 };
 export const MAX_LAYOUT_BYTES = 32 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
@@ -211,6 +226,39 @@ export function matchOverlayComponentSizes(components: readonly OverlayComponent
   return components.map((item) => ({ ...item, width: first.width, height: first.height }));
 }
 
+export function overlayImageDimensions(
+  width: number,
+  height: number,
+  aspectRatio: number,
+  anchor: "width" | "height",
+): Pick<OverlayComponent, "width" | "height"> {
+  if (!Number.isFinite(aspectRatio) || aspectRatio < 1 / 16384 || aspectRatio > 16384) {
+    throw new Error(t("画像のアスペクト比が不正です。"));
+  }
+  const clamp = (value: number) => Math.max(1, Math.min(16384, Math.round(value)));
+  if (anchor === "width") {
+    const nextWidth = clamp(width);
+    return { width: nextWidth, height: clamp(nextWidth / aspectRatio) };
+  }
+  const nextHeight = clamp(height);
+  return { width: clamp(nextHeight * aspectRatio), height: nextHeight };
+}
+
+export function fitOverlayImageToCanvas(
+  canvas: Pick<OverlayPreset, "width" | "height">,
+  aspectRatio: number,
+  preserveAspectRatio: boolean,
+): Pick<OverlayComponent, "x" | "y" | "width" | "height"> {
+  const dimensions = preserveAspectRatio
+    ? overlayImageDimensions(Math.min(canvas.width, canvas.height * aspectRatio), canvas.height, aspectRatio, "width")
+    : { width: canvas.width, height: canvas.height };
+  return {
+    ...dimensions,
+    x: Math.round((canvas.width - dimensions.width) / 2),
+    y: Math.round((canvas.height - dimensions.height) / 2),
+  };
+}
+
 export function centerOverlayComponents(
   components: readonly OverlayComponent[],
   canvas: Pick<OverlayPreset, "width" | "height">,
@@ -259,6 +307,8 @@ export function newOverlayComponent(
   return {
     id: crypto.randomUUID(), name: trimmedName, kind, source: kind === "clock" ? "clock" : kind === "item" ? "redItems" : kind === "number" ? "number" : "text",
     text: t("テキスト"), image: "", ...(kind === "number" ? { numberValue: 0 } : {}),
+    imageAnimationOnDisplay: false,
+    ...(kind === "image" ? { preserveAspectRatio: true, imageAlpha: 255, flipHorizontal: false } : {}),
     ...(kind === "item" ? { itemCategory: 1 as const, delimiter: " / " } : {}),
     ...(kind === "clock" ? { clockFormat: "YYYY-MM-DD HH:mm:ss" } : {}),
     ...(kind === "text" || kind === "number" || kind === "item" ? { wrapText: true, shrinkText: false } : {}),
@@ -277,6 +327,7 @@ export function newOverlayPreset(
   const sources: OverlaySource[] = ["redPlayerName", "redSetWins", "roundText", "blueSetWins", "bluePlayerName", "eventAlias"];
   return {
     id: crypto.randomUUID(), name: t("新しいプリセット"), width, height,
+    visibilityControlIds: [],
     components: sources.map((source, index) => {
       const componentWidth = Math.max(1, [460, 100, 520, 100, 480, 640][index] * scaleX);
       const componentHeight = Math.max(1, (index === 5 ? 60 : 100) * scaleY);
@@ -302,16 +353,23 @@ export function copyOverlayPreset(
   const scale = Math.min(width / original.width, height / original.height);
   const offsetX = (width - original.width * scale) / 2;
   const offsetY = (height - original.height * scale) / 2;
+  const copiedComponentIds = original.components.map(() => crypto.randomUUID());
+  const componentIdMap = new Map(original.components.map((component, index) => [component.id, copiedComponentIds[index]]));
   return {
     ...original,
     id: crypto.randomUUID(),
     name: `${original.name.slice(0, 240)} (${t("複製")})`,
     width, height,
-    components: original.components.map((component) => {
+    visibilityControlIds: (original.visibilityControlIds ?? []).map((id) => {
+      if (id === "") return "";
+      const copiedId = componentIdMap.get(id);
+      return copiedId ?? "";
+    }),
+    components: original.components.map((component, index) => {
       const x = Math.max(0, Math.min(16384, Math.round(component.x * scale + offsetX)));
       const y = Math.max(0, Math.min(16384, Math.round(component.y * scale + offsetY)));
       return {
-        ...component, id: crypto.randomUUID(), x, y,
+        ...component, id: copiedComponentIds[index], x, y,
         width: Math.max(1, Math.min(16384, Math.round(component.width * scale))),
         height: Math.max(1, Math.min(16384, Math.round(component.height * scale))),
         fontSize: Math.max(1, Math.min(1000, Math.round(component.fontSize * scale))),
@@ -328,7 +386,7 @@ export function builtInOverlayPreset(): OverlayPreset {
   const text = (source: OverlaySource, patch: Partial<OverlayComponent>): OverlayComponent => ({
     ...newOverlayComponent(overlayNumberSources.some((item) => item === source) ? "number" : "text",
       source === "text" ? t("セット情報の背景") : t(overlaySourceLabels[source])),
-    source, text: "", fontFamily, frame: "plate", background: "transparent", verticalAlign: undefined,
+    id: `builtin-${source}`, source, text: "", fontFamily, frame: "plate", background: "transparent", verticalAlign: undefined,
     wrapText: false, shrinkText: source === "redPlayerName" || source === "bluePlayerName", ...patch,
   });
   const centerX = positions[2];
@@ -365,7 +423,13 @@ function numberIn(value: unknown, min: number, max: number): value is number {
 function stringIn(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length <= max;
 }
-type StoredOverlayComponent = Omit<OverlayComponent, "name"> & { name?: string };
+type StoredOverlayComponent = Omit<OverlayComponent, "name" | "imageAnimationValueSource"> & {
+  name?: string;
+  imageOpacity?: number;
+  imageAnimationOnTextChange?: boolean;
+  imageAnimationOnNumberChange?: boolean;
+  imageAnimationValueSource?: OverlaySource;
+};
 
 function legacyComponentName(component: StoredOverlayComponent): string {
   if (component.kind === "image") return t("画像");
@@ -397,17 +461,42 @@ function validComponent(value: unknown): value is StoredOverlayComponent {
     && (value.numberValue === undefined || typeof value.numberValue === "number" && Number.isFinite(value.numberValue))
     && stringIn(value.text, 10000) && typeof value.image === "string" && isOverlayImage(value.image)
     && (value.imageFileName === undefined || stringIn(value.imageFileName, 1024))
+    && (value.imageAspectRatio === undefined || numberIn(value.imageAspectRatio, 1 / 16384, 16384))
+    && (value.preserveAspectRatio === undefined || typeof value.preserveAspectRatio === "boolean")
+    && (value.imageAlpha === undefined || numberIn(value.imageAlpha, 0, 255) && Number.isInteger(value.imageAlpha))
+    && (value.flipHorizontal === undefined || typeof value.flipHorizontal === "boolean")
+    && (value.imageAnimationOnDisplay === undefined || typeof value.imageAnimationOnDisplay === "boolean")
+    && (value.imageAnimationValueSource === undefined
+      || overlaySources.some((source) => source === value.imageAnimationValueSource))
+    && (value.imageOpacity === undefined || numberIn(value.imageOpacity, 0, 100) && Number.isInteger(value.imageOpacity))
+    && !(value.imageAlpha !== undefined && value.imageOpacity !== undefined)
     && numberIn(value.x, 0, 16384) && numberIn(value.y, 0, 16384)
     && numberIn(value.width, 1, 16384) && numberIn(value.height, 1, 16384)
     && stringIn(value.fontFamily, 256) && numberIn(value.fontSize, 1, 1000)
     && typeof value.color === "string" && /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value.color)
+    && (value.textOutlineWidth === undefined || value.textOutlineWidth === 0
+      || numberIn(value.textOutlineWidth, 0.5, 16))
+    && (value.textOutlineColor === undefined
+      || typeof value.textOutlineColor === "string" && /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value.textOutlineColor))
     && typeof value.background === "string" && (value.background === "transparent" || /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value.background))
     && (value.align === "left" || value.align === "center" || value.align === "right")
     && (value.verticalAlign === undefined || value.verticalAlign === "top"
       || value.verticalAlign === "center" || value.verticalAlign === "bottom")
     && (value.frame === undefined || value.frame === "plate" || value.frame === "setMain"
-      || value.frame === "setSub" || value.frame === "eventAlias" || value.frame === "glass")
+      || value.frame === "setSub" || value.frame === "eventAlias" || value.frame === "glass" || value.frame === "image")
     && typeof value.bold === "boolean" && typeof value.visible === "boolean";
+}
+
+function validComponents(value: unknown): value is StoredOverlayComponent[] {
+  return Array.isArray(value) && value.every(validComponent);
+}
+
+function validVisibilityControlIds(value: unknown, components: readonly Pick<OverlayComponent, "id" | "visible">[]): value is string[] {
+  const selected = Array.isArray(value) ? value.filter((id) => id !== "") : [];
+  return Array.isArray(value) && value.length <= 6
+    && value.every((id) => typeof id === "string" && (id === ""
+      || components.some((component) => component.id === id)))
+    && new Set(selected).size === selected.length;
 }
 
 export function parseOverlayLayouts(value: unknown): OverlayLayouts {
@@ -423,25 +512,51 @@ export function parseOverlayLayouts(value: unknown): OverlayLayouts {
       || !stringIn(preset.name, 256) || !preset.name.trim()
       || !numberIn(preset.width, 1, 16384) || !Number.isInteger(preset.width)
       || !numberIn(preset.height, 1, 16384) || !Number.isInteger(preset.height)
-      || !Array.isArray(preset.components) || preset.components.length > 128
-      || !preset.components.every(validComponent)
+      || !validComponents(preset.components) || preset.components.length > 128
       || new Set(preset.components.map((component) => component.id)).size !== preset.components.length) {
+      throw new Error(t("オーバーレイプリセットの形式が不正です。"));
+    }
+    const visibilityControlIds = preset.visibilityControlIds === undefined ? [] : preset.visibilityControlIds;
+    if (!validVisibilityControlIds(visibilityControlIds, preset.components)) {
       throw new Error(t("オーバーレイプリセットの形式が不正です。"));
     }
     ids.add(preset.id);
     presets.push({
       id: preset.id, name: preset.name, width: preset.width, height: preset.height,
-      components: preset.components.map((component) => ({
-        ...component, name: component.name ?? legacyComponentName(component),
-        kind: component.kind === "text" && (component.source === "redSetWins" || component.source === "blueSetWins")
-          ? "number" : component.kind,
-      })),
+      visibilityControlIds,
+      components: preset.components.map((component) => {
+        const {
+          imageOpacity, imageAnimationOnTextChange: _legacyTextTrigger,
+          imageAnimationOnNumberChange: _legacyNumberTrigger,
+          imageAnimationValueSource, ...storedComponent
+        } = component;
+        const validAnimationValueSource = overlayAnimationValueSources.find(
+          (source) => source === imageAnimationValueSource,
+        );
+        return {
+          ...storedComponent,
+          imageAnimationOnDisplay: storedComponent.imageAnimationOnDisplay ?? false,
+          ...(validAnimationValueSource ? { imageAnimationValueSource: validAnimationValueSource } : {}),
+          ...(storedComponent.kind === "image" && storedComponent.imageAlpha === undefined
+            ? { imageAlpha: imageOpacity === undefined ? 255 : Math.round(imageOpacity * 255 / 100) } : {}),
+          name: component.name ?? legacyComponentName(component),
+          kind: component.kind === "text" && (component.source === "redSetWins" || component.source === "blueSetWins")
+            ? "number" : component.kind,
+        };
+      }),
     });
   }
   if (value.activePresetId !== null && !ids.has(value.activePresetId)) {
     throw new Error(t("オーバーレイプリセットの形式が不正です。"));
   }
-  return { version: 1, activePresetId: value.activePresetId, presets };
+  const defaultVisibilityControlIds = value.defaultVisibilityControlIds === undefined ? [] : value.defaultVisibilityControlIds;
+  if (!validVisibilityControlIds(defaultVisibilityControlIds, builtInOverlayPreset().components)) {
+    throw new Error(t("オーバーレイプリセットの形式が不正です。"));
+  }
+  return {
+    version: 1, activePresetId: value.activePresetId, presets,
+    ...(defaultVisibilityControlIds.length > 0 ? { defaultVisibilityControlIds } : {}),
+  };
 }
 
 export function parseOverlayLayoutsFile(text: string): OverlayLayouts {
@@ -454,9 +569,18 @@ export function parseOverlayLayoutsFile(text: string): OverlayLayouts {
 export function mergeOverlayLayouts(current: OverlayLayouts, imported: OverlayLayouts): OverlayLayouts {
   return parseOverlayLayouts({
     ...current,
-    presets: [...current.presets, ...imported.presets.map((preset) => ({
-      ...preset, id: crypto.randomUUID(),
-      components: preset.components.map((component) => ({ ...component, id: crypto.randomUUID() })),
-    }))],
+    presets: [...current.presets, ...imported.presets.map((preset) => {
+      const copiedComponentIds = preset.components.map(() => crypto.randomUUID());
+      const componentIdMap = new Map(preset.components.map((component, index) => [component.id, copiedComponentIds[index]]));
+      return {
+        ...preset, id: crypto.randomUUID(),
+        visibilityControlIds: (preset.visibilityControlIds ?? []).map((id) => {
+          if (id === "") return "";
+          const copiedId = componentIdMap.get(id);
+          return copiedId ?? "";
+        }),
+        components: preset.components.map((component, index) => ({ ...component, id: copiedComponentIds[index] })),
+      };
+    })],
   });
 }

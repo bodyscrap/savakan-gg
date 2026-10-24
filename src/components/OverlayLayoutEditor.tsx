@@ -3,11 +3,12 @@ import { save as saveFile } from "@tauri-apps/plugin-dialog";
 import { t } from "../i18n";
 import {
   MAX_IMAGE_BYTES, MAX_LAYOUT_BYTES, builtInOverlayPreset, mergeOverlayLayouts,
-  overlayPreviewTransform, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, overlayComponentsIntersecting, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayKindLabels, overlaySourceLabels, overlayTextSources, overlayNumberSources, overlayItemSources, parseOverlayLayouts, parseOverlayLayoutsFile,
+  overlayPreviewTransform, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, overlayComponentsIntersecting, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayImageDimensions, fitOverlayImageToCanvas, overlayKindLabels, overlaySourceLabels, overlayTextSources, overlayNumberSources, overlayAnimationValueSources, overlayItemSources, parseOverlayLayouts, parseOverlayLayoutsFile,
   type OverlayCentering, type OverlayComponent, type OverlayLayouts, type OverlayPreset,
 } from "../domain/overlayLayout";
 import { renderOverlayPreset, resolveOverlayVerticalAlign, resolveOverlayTextOverflow, type OverlayRenderState } from "../domain/overlayRenderer.js";
 import { writeSnapshotExportFile } from "../domain/tournamentWorkspaceRepository";
+import { inspectOverlayImageAnimation, setOverlayImageLooping } from "../domain/overlayImageAnimation";
 import { OverlayComponentDialog } from "./OverlayComponentDialog";
 import { OverlayPresetCopyDialog } from "./OverlayPresetCopyDialog";
 import { OverlayPresetCreateDialog } from "./OverlayPresetCreateDialog";
@@ -22,6 +23,39 @@ type Props = {
   disabled: boolean;
 };
 
+const MAX_COMPONENT_UNDO_STEPS = 100;
+
+type OverlayComponentUndoSnapshot = {
+  components: OverlayComponent[];
+  visibilityControlIds: string[];
+};
+
+function OverlayImageFileInput({
+  fileName,
+  hasImage,
+  onSelect,
+}: {
+  fileName?: string;
+  hasImage: boolean;
+  onSelect: (file: File) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const displayedName = fileName || (hasImage ? t("画像は設定済みです") : t("ファイルが選択されていません"));
+  return <div className="overlay-image-file-control">
+    <span className="overlay-color-label">{t("画像ファイル")}</span>
+    <div className="overlay-image-file-control-row">
+      <button type="button" onClick={() => inputRef.current?.click()}>{t("選択")}</button>
+      <span className="overlay-image-file-name" title={fileName}>{displayedName}</span>
+    </div>
+    <input ref={inputRef} className="overlay-image-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+      aria-label={t("画像ファイル")} tabIndex={-1} onChange={(event) => {
+        const file = event.currentTarget.files?.[0];
+        event.currentTarget.value = "";
+        if (file) onSelect(file);
+      }} />
+  </div>;
+}
+
 export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: Props) {
   const [draftLayouts, setLayouts] = useState<OverlayLayouts>(savedLayouts);
   const layouts: OverlayLayouts = {
@@ -31,7 +65,10 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
   const [selectedId, setSelectedId] = useState(savedLayouts.activePresetId ?? savedLayouts.presets[0]?.id ?? "");
   const [selectedComponentIds, setSelectedComponentIds] = useState<string[]>([]);
   const componentId = selectedComponentIds[0] ?? "";
-  const [componentUndoSnapshots, setComponentUndoSnapshots] = useState<Record<string, OverlayComponent>>({});
+  const [componentUndoStack, setComponentUndoStack] = useState<OverlayComponentUndoSnapshot[]>([]);
+  const [animationTestRequest, setAnimationTestRequest] = useState({
+    presetId: "", componentId: "", revision: 0, playing: false,
+  });
   const [pendingPresetSelection, setPendingPresetSelection] = useState<string | null>(null);
   const [draggedRowId, setDraggedRowId] = useState("");
   const [rowDrop, setRowDrop] = useState<{ id: string; position: "above" | "below" } | null>(null);
@@ -56,7 +93,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
   const handlesRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{
-    pointerId: number; x: number; y: number; originals: OverlayComponent[];
+    pointerId: number; x: number; y: number; originals: OverlayComponent[]; beforeComponents: OverlayComponent[];
     resize: boolean; scale: number; moved: boolean; primaryClickId?: string;
     axis?: "horizontal" | "vertical";
   } | null>(null);
@@ -70,7 +107,13 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
   const canvasPreset = preset ?? builtInPreset;
   const savedComponent = preset?.components.find((item) => item.id === componentId);
   const component = savedComponent;
-  const hasComponentUndo = Object.keys(componentUndoSnapshots).length > 0;
+  const isTextOrNumberComponent = component?.kind === "text" || component?.kind === "number";
+  const componentAnimation = useMemo(
+    () => component && (component.kind === "image" || component.frame === "image")
+      ? inspectOverlayImageAnimation(component.image) : null,
+    [component?.id, component?.image, component?.frame],
+  );
+  const hasComponentUndo = componentUndoStack.length > 0;
   const previewPreset = canvasPreset;
   const selectedComponents = selectedComponentIds.flatMap((id) => {
     const item = previewPreset.components.find((entry) => entry.id === id);
@@ -82,14 +125,50 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
 
   useEffect(() => {
     if (!previewPreset || !stageRef.current) return;
-    return renderOverlayPreset(stageRef.current, previewPreset, state.active ? { ...state, fullyStopped: false } : {
+    const previewState: OverlayRenderState = state.active ? { ...state, fullyStopped: false } : {
       active: true, fullyStopped: false, redPlayerName: t("テストプレイヤー1"),
       bluePlayerName: t("テストプレイヤー2"), redSetWins: 2, blueSetWins: 1,
       redItems: state.redItems ?? [],
       blueItems: state.blueItems ?? [],
       roundText: "Phase / Pool A / Set 1\nGrand Finals", eventName: t("テスト大会"), eventAlias: t("テスト大会"),
+    };
+    const isCurrentAnimationTest = animationTestRequest.presetId === selectedId
+      && animationTestRequest.componentId === componentId;
+    const previewAnimationTestRequest = isCurrentAnimationTest
+      ? animationTestRequest
+      : { ...animationTestRequest, presetId: "", componentId: "", playing: false };
+    return renderOverlayPreset(stageRef.current, previewPreset, {
+      ...previewState,
+      visibilityOverrides: isCurrentAnimationTest && animationTestRequest.playing && componentId
+        ? { [componentId]: true } : {},
+      visibilityShowRevisions: {},
+      suppressAnimationTriggers: true,
+      animationTestRequest: previewAnimationTestRequest,
     });
-  }, [previewPreset, state]);
+  }, [animationTestRequest, componentId, previewPreset, selectedId, state]);
+
+  useEffect(() => {
+    setAnimationTestRequest((current) => {
+      if (current.playing) return { ...current, revision: current.revision + 1, playing: false };
+      return current.componentId ? { ...current, presetId: "", componentId: "" } : current;
+    });
+  }, [componentId, selectedId]);
+
+  useEffect(() => {
+    setLayouts((current) => ({
+      ...current,
+      presets: current.presets.map((item) => {
+        const saved = savedLayouts.presets.find((entry) => entry.id === item.id);
+        if (!saved) return item;
+        return {
+          ...item,
+          visibilityControlIds: (saved.visibilityControlIds ?? []).map((id) => id === ""
+            || item.components.some((component) => component.id === id) ? id : ""),
+        };
+      }),
+      defaultVisibilityControlIds: savedLayouts.defaultVisibilityControlIds ?? [],
+    }));
+  }, [savedLayouts]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -115,7 +194,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     setPanning(false);
     setMarquee(null);
     setSelectedComponentIds([]);
-    setComponentUndoSnapshots({});
+    setComponentUndoStack([]);
     endRowDrag();
   }, [canvasPreset.id]);
 
@@ -233,31 +312,84 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     setDirty(JSON.stringify(next) !== JSON.stringify(savedLayouts));
     setError("");
   }
-  function updatePreset(patch: Partial<Pick<OverlayPreset, "name" | "components">>) {
-    change({ ...layouts, presets: layouts.presets.map((item) => item.id === selectedId ? { ...item, ...patch } : item) });
+  function updatePreset(patch: Partial<Pick<OverlayPreset, "name" | "components" | "visibilityControlIds">>) {
+    if (!preset) return;
+    const components = patch.components ?? preset.components;
+    change({ ...layouts, presets: layouts.presets.map((item) => item.id === selectedId ? {
+      ...item, ...patch,
+      visibilityControlIds: (patch.visibilityControlIds ?? item.visibilityControlIds ?? [])
+        .map((id) => id === "" || components.some((component) => component.id === id) ? id : ""),
+    } : item) });
+  }
+  function mergeSavedVisibilityControls(next: OverlayLayouts): OverlayLayouts {
+    return {
+      ...next,
+      presets: next.presets.map((item) => {
+        const saved = savedLayouts.presets.find((entry) => entry.id === item.id);
+        if (!saved) return item;
+        return {
+          ...item,
+          visibilityControlIds: (saved.visibilityControlIds ?? []).map((id) => id === ""
+            || item.components.some((component) => component.id === id) ? id : ""),
+        };
+      }),
+      defaultVisibilityControlIds: savedLayouts.defaultVisibilityControlIds ?? [],
+    };
   }
   function updateComponents(components: OverlayComponent[]) {
     if (!preset || components.length === 0) return;
-    const updatedById = new Map(components.map((item) => [item.id, item]));
-    const snapshots = Object.fromEntries(components.flatMap((item) => {
+    const changed = components.flatMap((item) => {
       const original = preset.components.find((entry) => entry.id === item.id);
-      return original && !componentUndoSnapshots[item.id] ? [[item.id, original]] : [];
-    }));
-    if (Object.keys(snapshots).length > 0) {
-      setComponentUndoSnapshots((current) => ({ ...current, ...snapshots }));
+      return original && JSON.stringify(original) !== JSON.stringify(item) ? [{ original, updated: item }] : [];
+    });
+    if (changed.length === 0) return;
+    const updatedById = new Map(changed.map(({ updated }) => [updated.id, updated]));
+    if (!drag.current?.moved) {
+      pushComponentUndoSnapshot(preset.components);
     }
     updatePreset({ components: preset.components.map((item) => updatedById.get(item.id) ?? item) });
+  }
+  function pushComponentUndoSnapshot(snapshot: OverlayComponent[]) {
+    setComponentUndoStack((current) => [...current, {
+      components: snapshot,
+      visibilityControlIds: preset?.visibilityControlIds ?? [],
+    }].slice(-MAX_COMPONENT_UNDO_STEPS));
   }
   function updateComponent(patch: Partial<OverlayComponent>, id = componentId) {
     const original = preset?.components.find((item) => item.id === id);
     if (original) updateComponents([{ ...original, ...patch }]);
   }
+  function toggleComponentAnimationTest() {
+    if (!preset || !component || !componentAnimation?.animated) return;
+    setAnimationTestRequest((current) => ({
+      presetId: preset.id,
+      componentId: component.id,
+      revision: current.revision + 1,
+      playing: !(current.playing && current.presetId === preset.id && current.componentId === component.id),
+    }));
+  }
+  function updateComponentFrame(selection: "none" | "builtin" | "glass" | "image") {
+    if (!component) return;
+    const frame = selection === "none" ? undefined
+      : selection === "glass" || selection === "image" ? selection
+        : component.source === "eventAlias" ? "eventAlias"
+          : component.source === "setName" ? "setMain" : component.source === "roundName" ? "setSub" : "plate";
+    updateComponent({
+      frame,
+      ...(frame === "image"
+        ? {
+          preserveAspectRatio: component.preserveAspectRatio ?? true,
+          imageAlpha: component.imageAlpha ?? 255,
+          flipHorizontal: component.flipHorizontal ?? false,
+        }
+        : {}),
+    });
+  }
   function undoComponentChanges() {
     if (!preset || !hasComponentUndo) return;
-    updatePreset({
-      components: preset.components.map((item) => componentUndoSnapshots[item.id] ?? item),
-    });
-    setComponentUndoSnapshots({});
+    const snapshot = componentUndoStack[componentUndoStack.length - 1];
+    updatePreset({ components: snapshot.components, visibilityControlIds: snapshot.visibilityControlIds });
+    setComponentUndoStack((current) => current.slice(0, -1));
   }
   function setComponentVisibility(id: string, visible: boolean) {
     if (!preset || busy) return;
@@ -290,10 +422,10 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     if (pendingPresetSelection === null) return;
     setBusy(true);
     try {
-      const saved = await onSave(parseOverlayLayouts(layouts));
+      const saved = await onSave(parseOverlayLayouts(mergeSavedVisibilityControls(layouts)));
       setLayouts(saved);
       setDirty(false);
-      setComponentUndoSnapshots({});
+      setComponentUndoStack([]);
       setSelectedId(pendingPresetSelection);
       setSelectedComponentIds([]);
       setPendingPresetSelection(null);
@@ -310,7 +442,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       : savedLayouts.activePresetId ?? savedLayouts.presets[0]?.id ?? "";
     setLayouts(savedLayouts);
     setDirty(false);
-    setComponentUndoSnapshots({});
+    setComponentUndoStack([]);
     setSelectedComponentIds([]);
     setSelectedId(nextId);
     setPendingPresetSelection(null);
@@ -332,17 +464,17 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     }
     setBusy(true);
     try {
-      const saved = await onSave(next);
+      const saved = await onSave(mergeSavedVisibilityControls(next));
       setLayouts(saved);
       setDirty(false);
-      setComponentUndoSnapshots({});
+      setComponentUndoStack([]);
       setSelectedId("");
       applyComponentSelection([]);
       setError("");
     } catch (cause) {
       setLayouts(next);
       setDirty(true);
-      setComponentUndoSnapshots({});
+      setComponentUndoStack([]);
       setSelectedId("");
       applyComponentSelection([]);
       setError(String(cause));
@@ -351,10 +483,10 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
   async function save() {
     setBusy(true);
     try {
-      const next = parseOverlayLayouts(layouts);
+      const next = parseOverlayLayouts(mergeSavedVisibilityControls(layouts));
       const saved = await onSave(next);
       setLayouts(saved);
-      setDirty(false); setComponentUndoSnapshots({}); setError("");
+      setDirty(false); setComponentUndoStack([]); setError("");
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   }
@@ -369,6 +501,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       setError(t("プリセットは64件まで、コンポーネントは128件までです。"));
       return false;
     }
+    pushComponentUndoSnapshot(preset.components);
     updatePreset({ components: [...preset.components, next] }); selectComponent(next.id);
     return true;
   }
@@ -416,9 +549,34 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
         reader.readAsDataURL(file);
       });
       const image = new Image(); image.src = data; await image.decode();
-      updateComponent({ image: data, imageFileName: file.name }, id);
+      const original = preset?.components.find((item) => item.id === id);
+      if (!original || original.kind !== "image" && original.frame !== "image") throw new Error(t("コンポーネントが見つかりません。"));
+      const imageAspectRatio = Math.max(1 / 16384, Math.min(16384, image.naturalWidth / image.naturalHeight));
+      updateComponent({
+        image: data, imageFileName: file.name,
+        ...(original.kind === "image" ? { imageAspectRatio } : {}),
+        ...(original.kind === "image" && original.preserveAspectRatio !== false
+          ? overlayImageDimensions(original.width, original.height, imageAspectRatio, "width")
+          : {}),
+      }, id);
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
+  }
+  function getImageAspectRatio(item: OverlayComponent): number {
+    const preview = Array.from(stageRef.current?.children ?? [])
+      .find((element) => element instanceof HTMLElement && element.dataset.componentId === item.id);
+    if (preview instanceof HTMLImageElement && preview.naturalWidth > 0 && preview.naturalHeight > 0) {
+      return Math.max(1 / 16384, Math.min(16384, preview.naturalWidth / preview.naturalHeight));
+    }
+    return item.imageAspectRatio ?? item.width / item.height;
+  }
+  function fitImageToBackground(item: OverlayComponent) {
+    if (!preset || item.kind !== "image") return;
+    const imageAspectRatio = getImageAspectRatio(item);
+    updateComponent({
+      ...fitOverlayImageToCanvas(preset, imageAspectRatio, item.preserveAspectRatio !== false),
+      imageAspectRatio,
+    }, item.id);
   }
   function startDrag(event: PointerEvent<HTMLDivElement>, item: OverlayComponent, resize: boolean) {
     if (!preset || busy || panMode || event.button !== 0) return;
@@ -437,6 +595,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = {
       pointerId: event.pointerId, x: event.clientX, y: event.clientY, originals, resize, scale, moved: false,
+      beforeComponents: preset.components,
       primaryClickId: !event.shiftKey && alreadySelected && ids.length > 1 ? item.id : undefined,
     };
   }
@@ -456,10 +615,22 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     if (!original) return;
     try {
       if (current.resize) {
-        updateComponent({
-          width: Math.round(Math.max(1, Math.min(16384, original.width + dx))),
-          height: Math.round(Math.max(1, Math.min(16384, original.height + dy))),
-        }, original.id);
+        if (original.kind === "image" && original.preserveAspectRatio !== false) {
+          const aspectRatio = getImageAspectRatio(original);
+          const scaleX = (original.width + dx) / original.width;
+          const scaleY = (original.height + dy) / original.height;
+          const width = Math.abs(scaleX - 1) >= Math.abs(scaleY - 1)
+            ? original.width + dx : (original.height + dy) * aspectRatio;
+          updateComponent({
+            ...overlayImageDimensions(width, original.height, aspectRatio, "width"),
+            imageAspectRatio: aspectRatio,
+          }, original.id);
+        } else {
+          updateComponent({
+            width: Math.round(Math.max(1, Math.min(16384, original.width + dx))),
+            height: Math.round(Math.max(1, Math.min(16384, original.height + dy))),
+          }, original.id);
+        }
       } else {
         const moved = moveOverlayComponents(current.originals,
           current.axis === "vertical" ? 0 : dx, current.axis === "horizontal" ? 0 : dy, preset);
@@ -470,6 +641,9 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
   function stopDrag(event: PointerEvent<HTMLDivElement>, cancelled = false) {
     const current = drag.current;
     if (!current || current.pointerId !== event.pointerId) return;
+    if (current.moved) {
+      pushComponentUndoSnapshot(current.beforeComponents);
+    }
     drag.current = null;
     if (cancelled || current.moved) return;
     if (current.primaryClickId) setComponentBase(current.primaryClickId);
@@ -483,6 +657,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       if (index === originalIndex) return;
       components.splice(index, 0, components.splice(originalIndex, 1)[0]);
       selectComponent(id);
+      pushComponentUndoSnapshot(preset.components);
       updatePreset({ components });
     } catch (cause) { setError(String(cause)); }
   }
@@ -508,11 +683,68 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       }
     } catch (cause) { setError(String(cause)); }
   }
+  const animationTriggerSettings = component && componentAnimation?.animated && <div className="overlay-image-animation-triggers"
+    role="group" aria-label={t("アニメーション開始トリガー")}>
+    <span className="overlay-color-label">{t("アニメーション開始トリガー")}</span>
+    <label className="checkbox-row"><input type="checkbox" checked={component.imageAnimationOnDisplay === true}
+      onChange={(event) => updateComponent({ imageAnimationOnDisplay: event.target.checked })} />{t("表示時")}</label>
+    <label className="overlay-image-value-source"><span>{t("値変化時")}</span><select
+      value={component.imageAnimationValueSource ?? ""}
+      onChange={(event) => {
+        const source = overlayAnimationValueSources.find((item) => item === event.target.value);
+        updateComponent({ imageAnimationValueSource: source });
+      }}>
+      <option value="">{t("指定なし")}</option>
+      {overlayAnimationValueSources.map((source) => <option key={source} value={source}>{t(overlaySourceLabels[source])}</option>)}
+    </select></label>
+    <label className="checkbox-row">
+      <input type="checkbox" checked={componentAnimation.looping} onChange={(event) => {
+        try {
+          updateComponent({ image: setOverlayImageLooping(component.image, event.currentTarget.checked) });
+        } catch (cause) { setError(String(cause)); }
+      }} />
+      {t("ループ再生")}
+    </label>
+    <p className="meta">{t("選択した表示情報の値が変わった時に再生します。表示時は、このコンポーネント自身が非表示から表示になった時（テキスト・数値の場合は内容が表示された時）に再生します。")}</p>
+    <p className="meta">{t("選択中にCtrl+Tを押すとテスト再生と停止を切り替えます。")}</p>
+  </div>;
+  const frameImageSettings = component?.frame === "image" && <div className="overlay-frame-image-settings">
+    <OverlayImageFileInput fileName={component.imageFileName} hasImage={!!component.image}
+      onSelect={(file) => void importImage(file)} />
+    <label className="checkbox-row overlay-image-aspect"><input type="checkbox"
+      checked={component.preserveAspectRatio !== false}
+      onChange={(event) => updateComponent({ preserveAspectRatio: event.target.checked })} />{t("アスペクト比を保持")}</label>
+    <label className="checkbox-row overlay-image-flip"><input type="checkbox" checked={component.flipHorizontal === true}
+      onChange={(event) => updateComponent({ flipHorizontal: event.target.checked })} />{t("左右反転")}</label>
+    <label>{t("画像の不透明度")}<input type="number" min={0} max={255} step={1} required value={component.imageAlpha ?? 255}
+      onChange={(event) => {
+        const imageAlpha = event.currentTarget.valueAsNumber;
+        if (Number.isInteger(imageAlpha) && imageAlpha >= 0 && imageAlpha <= 255) updateComponent({ imageAlpha });
+      }} /></label>
+  </div>;
 
   return <section className="panel overlay-layout-editor" onKeyDown={(event) => {
-    if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== "z"
-      || !hasComponentUndo) return;
+    if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return;
+    const key = event.key.toLowerCase();
     const target = event.target;
+    if (key === "t") {
+      if (busy || !componentAnimation?.animated
+        || target instanceof HTMLInputElement && ["text", "number", "search", "email", "url", "tel", "password"].includes(target.type)
+        || target instanceof HTMLTextAreaElement
+        || target instanceof HTMLSelectElement
+        || target instanceof HTMLElement && target.isContentEditable) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleComponentAnimationTest();
+      return;
+    }
+    if (key === "s") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (dirty && !busy) void save();
+      return;
+    }
+    if (key !== "z" || !hasComponentUndo) return;
     if (target instanceof HTMLInputElement && ["text", "number", "search", "email", "url", "tel", "password"].includes(target.type)
       || target instanceof HTMLTextAreaElement
       || target instanceof HTMLElement && target.isContentEditable) return;
@@ -682,10 +914,8 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
           })}>{t("複製")}</button>
           <button type="button" disabled={!component} onClick={() => {
             if (!preset) return;
+            pushComponentUndoSnapshot(preset.components);
             updatePreset({ components: preset.components.filter((item) => item.id !== componentId) });
-            setComponentUndoSnapshots((current) => Object.fromEntries(
-              Object.entries(current).filter(([id]) => id !== componentId),
-            ));
             applyComponentSelection([]);
           }}>{t("削除")}</button>
           <button type="button" disabled={busy || selectedComponents.length < 2}
@@ -711,35 +941,84 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
         </aside>
         </div>
         {component && <div>
-        <p className="meta">{t("パラメータ変更は即時反映されます。アンドゥで保存または前回のアンドゥ以降のコンポーネント編集を元に戻せます。ファイルへの保存は上部の「保存」を使ってください。")}</p>
+        <p className="meta">{t("パラメータ変更は即時反映されます。アンドゥでコンポーネントの編集・追加・削除を1操作ずつ元に戻せます。ファイルへの保存は上部の「保存」を使ってください。")}</p>
         <div className="obs-overlay-grid">
           <div className="overlay-component-geometry">
           <label className="overlay-component-name">{t("コンポーネント名")}<input required maxLength={256} value={component.name}
             onChange={(event) => updateComponent({ name: event.target.value })} /></label>
+          {component.kind === "image" && <label className="checkbox-row overlay-image-aspect"><input type="checkbox"
+            checked={component.preserveAspectRatio !== false} onChange={(event) => {
+              const preserveAspectRatio = event.target.checked;
+              if (component.kind !== "image" || !preserveAspectRatio) {
+                updateComponent({ preserveAspectRatio });
+                return;
+              }
+              const imageAspectRatio = getImageAspectRatio(component);
+              updateComponent({
+                preserveAspectRatio, imageAspectRatio,
+                ...overlayImageDimensions(component.width, component.height, imageAspectRatio, "width"),
+              });
+            }} />{t("アスペクト比を保持")}</label>}
+          {component.kind === "image" && <label className="checkbox-row overlay-image-flip"><input type="checkbox"
+            checked={component.flipHorizontal === true} onChange={(event) => updateComponent({ flipHorizontal: event.target.checked })} />
+            {t("左右反転")}
+          </label>}
+          {component.kind === "image" && <button type="button" className="overlay-image-fit"
+            onClick={() => fitImageToBackground(component)}>
+            {t("背景にフィット")}
+          </button>}
+          {(["x", "y", "width", "height"] as const).map((key) => <label key={key}>{t({ x: "X座標", y: "Y座標", width: "幅", height: "高さ" }[key])}<input
+            type="number" required min={key === "x" || key === "y" ? 0 : 1} max={16384} value={component[key]}
+            onChange={(event) => {
+              const value = event.target.valueAsNumber;
+              if (!Number.isFinite(value)) return;
+              if (component.kind === "image" && component.preserveAspectRatio !== false && (key === "width" || key === "height")) {
+                const imageAspectRatio = getImageAspectRatio(component);
+                updateComponent({
+                  ...overlayImageDimensions(
+                    key === "width" ? value : component.width,
+                    key === "height" ? value : component.height,
+                    imageAspectRatio,
+                    key,
+                  ),
+                  imageAspectRatio,
+                });
+              } else {
+                updateComponent({ [key]: value });
+              }
+            }} /></label>)}
+          {(component.kind === "text" || component.kind === "number") && <div className="overlay-component-source-controls">
+            <label className="overlay-component-source">{t("表示情報")}<select value={component.source} onChange={(event) => {
+              const source = (component.kind === "number" ? overlayNumberSources : overlayTextSources).find((item) => item === event.target.value);
+              if (source) updateComponent({ source, ...(source === "number" ? { numberValue: component.numberValue ?? 0 } : {}) });
+            }}>{(component.kind === "number" ? overlayNumberSources : overlayTextSources).map((source) => <option key={source} value={source}>{t(overlaySourceLabels[source])}</option>)}</select></label>
+            {component.kind === "text" && component.source === "text" && <label className="overlay-component-fixed-text">{t("固定テキスト")}<textarea rows={1} maxLength={10000} value={component.text}
+              onChange={(event) => updateComponent({ text: event.target.value })} /></label>}
+          </div>}
           {component.kind === "item" && <label className="overlay-component-source">{t("表示情報")}<select value={component.itemCategory} onChange={(event) => {
             const itemCategory = Number(event.target.value);
             if (itemCategory === 1 || itemCategory === 2 || itemCategory === 3) updateComponent({ itemCategory });
           }}>{([1, 2, 3] as const).map((category) => <option key={category} value={category}>{t("カテゴリ{p0}", { p0: category })}</option>)}</select></label>}
-          {(component.kind === "text" || component.kind === "number") && <label className="overlay-component-source">{t("表示情報")}<select value={component.source} onChange={(event) => {
-            const source = (component.kind === "number" ? overlayNumberSources : overlayTextSources).find((item) => item === event.target.value);
-            if (source) updateComponent({ source, ...(source === "number" ? { numberValue: component.numberValue ?? 0 } : {}) });
-          }}>{(component.kind === "number" ? overlayNumberSources : overlayTextSources).map((source) => <option key={source} value={source}>{t(overlaySourceLabels[source])}</option>)}</select></label>}
-          {(["x", "y", "width", "height"] as const).map((key) => <label key={key}>{t({ x: "X座標", y: "Y座標", width: "幅", height: "高さ" }[key])}<input
-            type="number" required min={key === "x" || key === "y" ? 0 : 1} max={16384} value={component[key]}
-            onChange={(e) => { const value = e.target.valueAsNumber; if (Number.isFinite(value)) updateComponent({ [key]: value }); }} /></label>)}
-          <OverlayColorInput label="背景色" value={component.background} disabled={busy} onChange={(background) => updateComponent({ background })} />
-          {component.kind !== "image" && <label className="overlay-component-style">{t("装飾スタイル")}<select value={component.frame === "glass" ? "glass" : component.frame ? "builtin" : "none"}
+          {component.kind === "image"
+            ? <label>{t("画像の不透明度")}<input type="number" min={0} max={255} step={1} required
+              value={component.imageAlpha ?? 255}
+              onChange={(event) => {
+                const imageAlpha = event.currentTarget.valueAsNumber;
+                if (Number.isInteger(imageAlpha) && imageAlpha >= 0 && imageAlpha <= 255) updateComponent({ imageAlpha });
+              }} /></label>
+            : !isTextOrNumberComponent && <OverlayColorInput label="背景色" value={component.background} disabled={busy} onChange={(background) => updateComponent({ background })} />}
+          {!isTextOrNumberComponent && frameImageSettings}
+          {component.kind !== "image" && !isTextOrNumberComponent && <label className="overlay-component-style">{t("装飾スタイル")}<select value={component.frame === "glass" ? "glass" : component.frame === "image" ? "image" : component.frame ? "builtin" : "none"}
             onChange={(event) => {
-              if (event.target.value === "none") updateComponent({ frame: undefined });
-              else if (event.target.value === "glass") updateComponent({ frame: "glass" });
-              else if (event.target.value === "builtin") updateComponent({
-                frame: component.source === "eventAlias" ? "eventAlias"
-                  : component.source === "setName" ? "setMain" : component.source === "roundName" ? "setSub" : "plate",
-              });
+              const selection = event.target.value;
+              if (selection === "none" || selection === "builtin" || selection === "glass" || selection === "image") {
+                updateComponentFrame(selection);
+              }
             }}>
             <option value="none">{t("装飾なし")}</option>
             <option value="builtin">{t("プレート")}</option>
             <option value="glass">{t("グラス")}</option>
+            <option value="image">{t("画像")}</option>
           </select></label>}
           </div>
           {component.kind !== "image" ? <>
@@ -760,12 +1039,28 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
             </> : <>
             {component.source === "number" && <label>{t("固定数値")}<input type="number" step="any" required value={component.numberValue ?? 0}
               onChange={(event) => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) updateComponent({ numberValue: value }); }} /></label>}
-            {component.source === "text" && <label>{t("固定テキスト")}<textarea maxLength={10000} value={component.text} onChange={(e) => updateComponent({ text: e.target.value })} /></label>}
             </>}
             <OverlayFontControls disabled={busy} fontFamily={component.fontFamily} fontSize={component.fontSize}
               onFontFamilyChange={(fontFamily) => updateComponent({ fontFamily })}
               onFontSizeChange={(fontSize) => updateComponent({ fontSize })}>
             <OverlayColorInput label="文字色" value={component.color} disabled={busy} onChange={(color) => updateComponent({ color })} />
+            <label className="checkbox-row overlay-font-outline-toggle"><input type="checkbox"
+              checked={(component.textOutlineWidth ?? 0) > 0}
+              onChange={(event) => updateComponent({
+                textOutlineWidth: event.target.checked ? (component.textOutlineWidth || 2) : 0,
+                ...(event.target.checked && !component.textOutlineColor ? { textOutlineColor: "#000000" } : {}),
+              })} />{t("縁取り")}</label>
+            {(component.textOutlineWidth ?? 0) > 0 && <>
+              <OverlayColorInput label="縁取り色" value={component.textOutlineColor ?? "#000000"} disabled={busy}
+                onChange={(textOutlineColor) => updateComponent({ textOutlineColor })} />
+              <label className="overlay-font-outline-width">{t("縁取り幅")}<input type="number" min={0.5} max={16} step="any"
+                value={component.textOutlineWidth} disabled={busy} onChange={(event) => {
+                  const textOutlineWidth = event.currentTarget.valueAsNumber;
+                  if (Number.isFinite(textOutlineWidth) && textOutlineWidth >= 0.5 && textOutlineWidth <= 16) {
+                    updateComponent({ textOutlineWidth });
+                  }
+                }} /></label>
+            </>}
             <label className="overlay-font-align">{t("水平揃え")}<select value={component.align} onChange={(e) => {
               const value = e.target.value; if (value === "left" || value === "center" || value === "right") updateComponent({ align: value });
             }}><option value="left">{t("左")}</option><option value="center">{t("中央")}</option><option value="right">{t("右")}</option></select></label>
@@ -782,9 +1077,28 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
                 onChange={(event) => updateComponent({ shrinkText: event.target.checked })} />{t("はみ出たら縮小")}</label>
               <p className="meta">{t("改行→縮小の順で適用します。縮小は元の文字サイズの50%までで、収まらない場合は末尾を「…」にします。")}</p>
             </div>}
-          </> : <label>{t("画像ファイル")}<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(e) => {
-            const file = e.target.files?.[0]; e.target.value = ""; if (file) void importImage(file);
-          }} /></label>}
+          </> : <>
+            <OverlayImageFileInput fileName={component.imageFileName} hasImage={!!component.image}
+              onSelect={(file) => void importImage(file)} />
+          </>}
+          {isTextOrNumberComponent && <div className="overlay-component-bottom-row">
+            <label className="overlay-component-style">{t("装飾スタイル")}<select value={component.frame === "glass" ? "glass" : component.frame === "image" ? "image" : component.frame ? "builtin" : "none"}
+              onChange={(event) => {
+                const selection = event.target.value;
+                if (selection === "none" || selection === "builtin" || selection === "glass" || selection === "image") {
+                  updateComponentFrame(selection);
+                }
+              }}>
+              <option value="none">{t("装飾なし")}</option>
+              <option value="builtin">{t("プレート")}</option>
+              <option value="glass">{t("グラス")}</option>
+              <option value="image">{t("画像")}</option>
+            </select></label>
+            <OverlayColorInput label="背景色" value={component.background} disabled={busy}
+              onChange={(background) => updateComponent({ background })} />
+            {frameImageSettings}
+          </div>}
+          {animationTriggerSettings}
         </div>
         </div>}
         <p className="meta">{t("フォントは録画・配信ソフトを動かす端末にもインストールしてください。カスタム表示は各コンポーネントの表示設定を使います。")}</p>

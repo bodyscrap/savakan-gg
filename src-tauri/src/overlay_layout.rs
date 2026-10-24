@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -11,9 +11,22 @@ use std::{
 use tauri::Manager;
 
 const MAX_BYTES: u64 = 32 * 1024 * 1024;
+const BUILT_IN_COMPONENT_IDS: [&str; 8] = [
+    "builtin-redPlayerName",
+    "builtin-redSetWins",
+    "builtin-text",
+    "builtin-setName",
+    "builtin-roundName",
+    "builtin-blueSetWins",
+    "builtin-bluePlayerName",
+    "builtin-eventAlias",
+];
 static STORE: OnceLock<Mutex<(PathBuf, Layouts)>> = OnceLock::new();
 static REVISION: AtomicU64 = AtomicU64::new(1);
+static VISIBILITY_SHOW_REVISION: AtomicU64 = AtomicU64::new(0);
 static FONT_FAMILIES: Mutex<Option<Vec<String>>> = Mutex::new(None);
+static VISIBILITY_OVERRIDES: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+static VISIBILITY_SHOW_REVISIONS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
 
 pub fn revision() -> String {
     REVISION.load(Ordering::SeqCst).to_string()
@@ -27,6 +40,7 @@ pub enum ComponentFrame {
     SetSub,
     EventAlias,
     Glass,
+    Image,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +67,18 @@ pub struct Component {
     image: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     image_file_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image_aspect_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preserve_aspect_ratio: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image_alpha: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    flip_horizontal: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image_animation_on_display: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image_animation_value_source: Option<String>,
     x: f64,
     y: f64,
     width: f64,
@@ -60,6 +86,10 @@ pub struct Component {
     font_family: String,
     font_size: f64,
     color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text_outline_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    text_outline_color: Option<String>,
     background: String,
     align: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,6 +107,8 @@ pub struct Preset {
     name: String,
     width: u32,
     height: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    visibility_control_ids: Vec<String>,
     components: Vec<Component>,
 }
 
@@ -86,6 +118,17 @@ pub struct Layouts {
     version: u32,
     active_preset_id: Option<String>,
     presets: Vec<Preset>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    default_visibility_control_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisibilityControl {
+    pub slot: usize,
+    pub id: String,
+    pub name: String,
+    pub visible: bool,
 }
 
 impl Default for Layouts {
@@ -94,6 +137,7 @@ impl Default for Layouts {
             version: 1,
             active_preset_id: None,
             presets: Vec::new(),
+            default_visibility_control_ids: Vec::new(),
         }
     }
 }
@@ -221,6 +265,21 @@ impl Layouts {
                     || c.image_file_name
                         .as_ref()
                         .is_some_and(|name| name.encode_utf16().count() > 1024)
+                    || c.image_aspect_ratio
+                        .is_some_and(|value| !within(value, 1. / 16384., 16384.))
+                    || c.image_alpha.is_some_and(|value| value > 255)
+                    || c.image_animation_value_source.as_ref().is_some_and(|source| {
+                        ![
+                            "redPlayerName",
+                            "bluePlayerName",
+                            "roundText",
+                            "setName",
+                            "roundName",
+                            "redSetWins",
+                            "blueSetWins",
+                        ]
+                        .contains(&source.as_str())
+                    })
                     || !within(c.x, 0., 16384.)
                     || !within(c.y, 0., 16384.)
                     || !within(c.width, 1., 16384.)
@@ -228,6 +287,11 @@ impl Layouts {
                     || !within(c.font_size, 1., 1000.)
                     || c.font_family.chars().count() > 256
                     || !color(&c.color)
+                    || c.text_outline_width
+                        .is_some_and(|value| value != 0. && !within(value, 0.5, 16.))
+                    || c.text_outline_color
+                        .as_ref()
+                        .is_some_and(|value| !color(value))
                     || !(c.background == "transparent" || color(&c.background))
                     || !["left", "center", "right"].contains(&c.align.as_str())
                     || c.vertical_align.as_ref().is_some_and(|value| !["top", "center", "bottom"].contains(&value.as_str()))
@@ -235,6 +299,26 @@ impl Layouts {
                     return Err(invalid());
                 }
             }
+            let mut visibility_control_ids = HashSet::new();
+            if preset.visibility_control_ids.len() > 6
+                || preset.visibility_control_ids.iter().any(|id| {
+                    !id.is_empty()
+                        && (!component_ids.contains(id)
+                            || !visibility_control_ids.insert(id))
+                })
+            {
+                return Err(invalid());
+            }
+        }
+        let mut default_visibility_control_ids = HashSet::new();
+        if self.default_visibility_control_ids.len() > 6
+            || self.default_visibility_control_ids.iter().any(|id| {
+                !id.is_empty()
+                    && (!BUILT_IN_COMPONENT_IDS.contains(&id.as_str())
+                        || !default_visibility_control_ids.insert(id))
+            })
+        {
+            return Err(invalid());
         }
         if self
             .active_preset_id
@@ -292,6 +376,62 @@ pub fn get_overlay_layouts() -> Result<Layouts, String> {
     Ok(store.1.clone())
 }
 
+pub fn visibility_controls() -> Result<Vec<VisibilityControl>, String> {
+    let layouts = get_overlay_layouts()?;
+    if let Some(preset) = layouts
+        .presets
+        .iter()
+        .find(|preset| Some(&preset.id) == layouts.active_preset_id.as_ref())
+    {
+        return Ok(preset
+            .visibility_control_ids
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, id)| {
+                preset
+                    .components
+                    .iter()
+                    .find(|component| component.id == *id)
+                    .map(|component| VisibilityControl {
+                        slot,
+                        id: id.clone(),
+                        name: component
+                            .name
+                            .clone()
+                            .filter(|name| !name.trim().is_empty())
+                            .unwrap_or_else(|| component.id.clone()),
+                        visible: component.visible,
+                    })
+            })
+            .collect());
+    }
+
+    Ok(layouts
+        .default_visibility_control_ids
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, id)| {
+            let name = match id.as_str() {
+                "builtin-redPlayerName" => "1P プレイヤー名",
+                "builtin-redSetWins" => "1P 取得ゲーム数",
+                "builtin-text" => "セット情報の背景",
+                "builtin-setName" => "Phase / Pool / Set名",
+                "builtin-roundName" => "ラウンド名",
+                "builtin-blueSetWins" => "2P 取得ゲーム数",
+                "builtin-bluePlayerName" => "2P プレイヤー名",
+                "builtin-eventAlias" => "イベントエイリアス",
+                _ => return None,
+            };
+            Some(VisibilityControl {
+                slot,
+                id: id.clone(),
+                name: name.to_owned(),
+                visible: true,
+            })
+        })
+        .collect())
+}
+
 fn unique_font_families<'a>(families: impl Iterator<Item = &'a str>) -> Vec<String> {
     families
         .map(str::trim)
@@ -340,8 +480,63 @@ fn persist_layouts(
     if data.len() as u64 > MAX_BYTES {
         return Err("Overlay settings exceed 32MB.".to_owned());
     }
+    let mut overrides = VISIBILITY_OVERRIDES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "Cannot lock overlay visibility settings.")?;
+    let mut show_revisions = VISIBILITY_SHOW_REVISIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "Cannot lock overlay visibility settings.")?;
+    let active_preset_changed = store.1.active_preset_id != layouts.active_preset_id;
+    let mut reset_overrides = HashSet::new();
+    if !active_preset_changed {
+        let previous = store.1.presets.iter().find(|preset| {
+            Some(&preset.id) == store.1.active_preset_id.as_ref()
+        });
+        let next = layouts
+            .presets
+            .iter()
+            .find(|preset| Some(&preset.id) == layouts.active_preset_id.as_ref());
+        if let (Some(previous), Some(next)) = (previous, next) {
+            for component in &previous.components {
+                if next.components.iter().any(|candidate| {
+                    candidate.id == component.id && candidate.visible != component.visible
+                }) {
+                    reset_overrides.insert(component.id.clone());
+                }
+            }
+        }
+    }
     write_layouts(&store.0, &data)?;
     store.1 = layouts.clone();
+    if active_preset_changed {
+        overrides.clear();
+        show_revisions.clear();
+    } else {
+        let allowed = layouts
+            .presets
+            .iter()
+            .find(|preset| Some(&preset.id) == layouts.active_preset_id.as_ref())
+            .map(|preset| {
+                preset
+                    .visibility_control_ids
+                    .iter()
+                    .filter(|id| !id.is_empty())
+                    .cloned()
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_else(|| {
+                layouts
+                    .default_visibility_control_ids
+                    .iter()
+                    .filter(|id| !id.is_empty())
+                    .cloned()
+                    .collect::<HashSet<_>>()
+            });
+        overrides.retain(|id, _| allowed.contains(id) && !reset_overrides.contains(id));
+            show_revisions.retain(|id, _| allowed.contains(id));
+    }
     REVISION.fetch_add(1, Ordering::SeqCst);
     Ok(layouts)
 }
@@ -373,6 +568,136 @@ pub fn apply_overlay_preset(preset_id: Option<String>) -> Result<Layouts, String
         .lock()
         .map_err(|_| "Cannot lock overlay settings.")?;
     apply_saved_preset(&mut store, preset_id)
+}
+
+#[tauri::command]
+pub fn set_overlay_component_visibility(
+    component_id: String,
+    visible: bool,
+) -> Result<bool, String> {
+    let store = STORE
+        .get()
+        .ok_or("Overlay settings are not initialized.")?
+        .lock()
+        .map_err(|_| "Cannot lock overlay settings.")?;
+    let preset = store
+        .1
+        .presets
+        .iter()
+        .find(|preset| Some(&preset.id) == store.1.active_preset_id.as_ref());
+    let initial_visibility = if let Some(preset) = preset {
+        if !preset.visibility_control_ids.contains(&component_id) {
+            return Err("The component is not available for display toggling.".to_owned());
+        }
+        preset
+            .components
+            .iter()
+            .find(|component| component.id == component_id)
+            .map(|component| component.visible)
+    } else {
+        (store
+            .1
+            .default_visibility_control_ids
+            .contains(&component_id)
+            && BUILT_IN_COMPONENT_IDS.contains(&component_id.as_str()))
+        .then_some(true)
+    };
+    let Some(initial_visibility) = initial_visibility else {
+        return Err("The component is not available for display toggling.".to_owned());
+    };
+    let mut overrides = VISIBILITY_OVERRIDES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "Cannot lock overlay visibility settings.")?;
+    let was_visible = overrides
+        .get(&component_id)
+        .copied()
+        .unwrap_or(initial_visibility);
+    if is_visibility_show_transition(was_visible, visible) {
+        let revision = VISIBILITY_SHOW_REVISION.fetch_add(1, Ordering::SeqCst) + 1;
+        VISIBILITY_SHOW_REVISIONS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|_| "Cannot lock overlay visibility settings.")?
+            .insert(component_id.clone(), revision);
+    }
+    set_visibility_override(&mut overrides, &component_id, initial_visibility, visible);
+    Ok(visible)
+}
+
+fn set_visibility_override(
+    overrides: &mut HashMap<String, bool>,
+    component_id: &str,
+    initial_visibility: bool,
+    visible: bool,
+) {
+    if visible == initial_visibility {
+        overrides.remove(component_id);
+    } else {
+        overrides.insert(component_id.to_owned(), visible);
+    }
+}
+
+fn is_visibility_show_transition(was_visible: bool, visible: bool) -> bool {
+    !was_visible && visible
+}
+
+pub fn visibility_overrides() -> Result<HashMap<String, bool>, String> {
+    let store = STORE
+        .get()
+        .ok_or("Overlay settings are not initialized.")?
+        .lock()
+        .map_err(|_| "Cannot lock overlay settings.")?;
+    let preset = store
+        .1
+        .presets
+        .iter()
+        .find(|preset| Some(&preset.id) == store.1.active_preset_id.as_ref());
+    let selected_ids = preset.map_or(&store.1.default_visibility_control_ids, |preset| {
+        &preset.visibility_control_ids
+    });
+    let overrides = VISIBILITY_OVERRIDES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "Cannot lock overlay visibility settings.")?;
+    Ok(selected_ids
+        .iter()
+        .filter_map(|id| {
+            if id.is_empty() {
+                return None;
+            }
+            overrides.get(id).map(|visible| (id.clone(), *visible))
+        })
+        .collect())
+}
+
+pub fn visibility_show_revisions() -> Result<HashMap<String, u64>, String> {
+    let store = STORE
+        .get()
+        .ok_or("Overlay settings are not initialized.")?
+        .lock()
+        .map_err(|_| "Cannot lock overlay settings.")?;
+    let preset = store
+        .1
+        .presets
+        .iter()
+        .find(|preset| Some(&preset.id) == store.1.active_preset_id.as_ref());
+    let selected_ids = preset.map_or(&store.1.default_visibility_control_ids, |preset| {
+        &preset.visibility_control_ids
+    });
+    let revisions = VISIBILITY_SHOW_REVISIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "Cannot lock overlay visibility settings.")?;
+    Ok(selected_ids
+        .iter()
+        .filter_map(|id| {
+            if id.is_empty() {
+                return None;
+            }
+            revisions.get(id).map(|revision| (id.clone(), *revision))
+        })
+        .collect())
 }
 
 pub fn active_json() -> Result<String, String> {
@@ -598,7 +923,7 @@ mod tests {
         for name in ["logo.png".to_owned(), "a".repeat(1024)] {
             let mut data = original.clone();
             data["presets"][0]["components"][0]["imageFileName"] = serde_json::json!(name);
-            let decoded: Layouts = serde_json::from_value(data).unwrap();
+            let decoded: Layouts = serde_json::from_value(data.clone()).unwrap();
             decoded.validate().unwrap();
             assert_eq!(
                 serde_json::to_value(decoded).unwrap()["presets"][0]["components"][0]
@@ -609,6 +934,33 @@ mod tests {
         let mut layouts = sample();
         layouts.presets[0].components[0].image_file_name = Some("a".repeat(1025));
         assert!(layouts.validate().is_err());
+    }
+    #[test]
+    fn preserves_and_validates_image_component_settings() {
+        let original = serde_json::to_value(sample()).unwrap();
+        let mut data = original.clone();
+        data["presets"][0]["components"][0]["imageAspectRatio"] = serde_json::json!(1.5);
+        data["presets"][0]["components"][0]["preserveAspectRatio"] = serde_json::json!(true);
+        data["presets"][0]["components"][0]["imageAlpha"] = serde_json::json!(128);
+        data["presets"][0]["components"][0]["flipHorizontal"] = serde_json::json!(true);
+        data["presets"][0]["components"][0]["imageAnimationOnDisplay"] = serde_json::json!(true);
+        data["presets"][0]["components"][0]["imageAnimationValueSource"] =
+            serde_json::json!("redPlayerName");
+        data["presets"][0]["components"][0]["frame"] = serde_json::json!("image");
+        let decoded: Layouts = serde_json::from_value(data.clone()).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), data);
+
+        for (field, value) in [
+            ("imageAspectRatio", serde_json::json!(0)),
+            ("imageAlpha", serde_json::json!(256)),
+            ("imageAnimationValueSource", serde_json::json!("eventAlias")),
+        ] {
+            let mut invalid = original.clone();
+            invalid["presets"][0]["components"][0][field] = value;
+            let decoded: Layouts = serde_json::from_value(invalid).unwrap();
+            assert!(decoded.validate().is_err());
+        }
     }
     #[test]
     fn accepts_legacy_missing_names_and_validates_new_names() {
@@ -639,7 +991,7 @@ mod tests {
         assert!(original["presets"][0]["components"][0]
             .get("frame")
             .is_none());
-        for frame in ["plate", "setMain", "setSub", "eventAlias", "glass"] {
+        for frame in ["plate", "setMain", "setSub", "eventAlias", "glass", "image"] {
             let mut data = original.clone();
             data["presets"][0]["components"][0]["frame"] = serde_json::json!(frame);
             let decoded: Layouts = serde_json::from_value(data).unwrap();
@@ -651,6 +1003,96 @@ mod tests {
         data["presets"][0]["components"][0]["frame"] = serde_json::json!("unknown");
         assert!(serde_json::from_value::<Layouts>(data).is_err());
     }
+    #[test]
+    fn preserves_optional_text_outlines_and_rejects_invalid_values() {
+        let original = serde_json::to_value(sample()).unwrap();
+        let mut data = original.clone();
+        data["presets"][0]["components"][0]["textOutlineWidth"] = serde_json::json!(2.5);
+        data["presets"][0]["components"][0]["textOutlineColor"] = serde_json::json!("#12345680");
+        let decoded: Layouts = serde_json::from_value(data).unwrap();
+        decoded.validate().unwrap();
+        let encoded = serde_json::to_value(decoded).unwrap();
+        assert_eq!(encoded["presets"][0]["components"][0]["textOutlineWidth"], 2.5);
+        assert_eq!(encoded["presets"][0]["components"][0]["textOutlineColor"], "#12345680");
+
+        for width in [-1.0, 0.25, 16.1] {
+            let mut data = original.clone();
+            data["presets"][0]["components"][0]["textOutlineWidth"] = serde_json::json!(width);
+            let decoded: Layouts = serde_json::from_value(data).unwrap();
+            assert!(decoded.validate().is_err());
+        }
+        let mut data = original;
+        data["presets"][0]["components"][0]["textOutlineColor"] = serde_json::json!("red");
+        let decoded: Layouts = serde_json::from_value(data).unwrap();
+        assert!(decoded.validate().is_err());
+    }
+    #[test]
+    fn validates_and_persists_display_toggle_component_ids() {
+        let original = serde_json::to_value(sample()).unwrap();
+        let mut data = original.clone();
+        data["presets"][0]["visibilityControlIds"] = serde_json::json!(["image"]);
+        let decoded: Layouts = serde_json::from_value(data.clone()).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap()["presets"][0]["visibilityControlIds"],
+            serde_json::json!(["image"])
+        );
+        data["presets"][0]["components"][0]["visible"] = serde_json::json!(false);
+        let decoded: Layouts = serde_json::from_value(data).unwrap();
+        decoded.validate().unwrap();
+
+        for ids in [
+            serde_json::json!(["missing"]),
+            serde_json::json!(["image", "image"]),
+            serde_json::json!(["a", "b", "c", "d", "e", "f", "g"]),
+        ] {
+            let mut data = original.clone();
+            data["presets"][0]["visibilityControlIds"] = ids;
+            let decoded: Layouts = serde_json::from_value(data).unwrap();
+            assert!(decoded.validate().is_err());
+        }
+        let mut data = original.clone();
+        data["defaultVisibilityControlIds"] =
+            serde_json::json!(["builtin-redPlayerName", "", "builtin-eventAlias", "", "", ""]);
+        let decoded: Layouts = serde_json::from_value(data.clone()).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap()["defaultVisibilityControlIds"],
+            data["defaultVisibilityControlIds"]
+        );
+        for ids in [
+            serde_json::json!(["missing"]),
+            serde_json::json!(["builtin-redPlayerName", "builtin-redPlayerName"]),
+            serde_json::json!(["a", "b", "c", "d", "e", "f", "g"]),
+        ] {
+            let mut data = original.clone();
+            data["defaultVisibilityControlIds"] = ids;
+            let decoded: Layouts = serde_json::from_value(data).unwrap();
+            assert!(decoded.validate().is_err());
+        }
+    }
+    #[test]
+    fn stores_only_visibility_values_that_differ_from_the_initial_state() {
+        let mut overrides = HashMap::new();
+        set_visibility_override(&mut overrides, "off", false, true);
+        assert_eq!(overrides.get("off"), Some(&true));
+        set_visibility_override(&mut overrides, "off", false, false);
+        assert!(!overrides.contains_key("off"));
+
+        set_visibility_override(&mut overrides, "on", true, false);
+        assert_eq!(overrides.get("on"), Some(&false));
+        set_visibility_override(&mut overrides, "on", true, true);
+        assert!(!overrides.contains_key("on"));
+    }
+
+    #[test]
+    fn identifies_only_off_to_on_visibility_transitions() {
+        assert!(!is_visibility_show_transition(true, true));
+        assert!(!is_visibility_show_transition(true, false));
+        assert!(!is_visibility_show_transition(false, false));
+        assert!(is_visibility_show_transition(false, true));
+    }
+
     fn sample() -> Layouts {
         serde_json::from_value(serde_json::json!({
             "version": 1, "activePresetId": "preset", "presets": [{
