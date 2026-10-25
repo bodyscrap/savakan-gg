@@ -257,7 +257,7 @@ export function BracketTab({
                   onDiscard={onDiscardDqRequest}
                 />
                 <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
-                  <label className="checkbox-row">
+                  <label className={`checkbox-row score-lock-toggle ${selectedPoolScoreEditLocked ? "is-locked" : ""}`}>
                     <input
                       type="checkbox"
                       checked={selectedPoolScoreEditLocked}
@@ -299,6 +299,12 @@ export function BracketTab({
                     </>
                   )}
                 </div>
+                {selectedPoolScoreEditLocked && (
+                  <div className="score-lock-notice" role="status" aria-live="polite">
+                    <strong>{t("このプールはスコア入力がロックされています")}</strong>
+                    <span>{t("スコアを入力するには、上の「スコア編集のロック」を解除してください。")}</span>
+                  </div>
+                )}
                 {selectedBracketModel === "round_robin" ? (
                   <RoundRobinBracket
                     scaleStyle={bracketScaleStyle}

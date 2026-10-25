@@ -633,6 +633,41 @@ button:disabled {
   margin: 0;
 }
 
+.score-lock-toggle {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.3rem 0.45rem;
+}
+
+.score-lock-toggle.is-locked {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+  font-weight: 700;
+}
+
+.score-lock-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.6rem;
+  margin-top: 0.65rem;
+  border: 1px solid #f59e0b;
+  border-left-width: 5px;
+  border-radius: 8px;
+  padding: 0.65rem 0.8rem;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.score-lock-notice strong {
+  font-weight: 800;
+}
+
+.match-score-lock-notice {
+  margin-top: 0.5rem;
+}
+
 .message {
   margin: 0;
   border: 1px solid;

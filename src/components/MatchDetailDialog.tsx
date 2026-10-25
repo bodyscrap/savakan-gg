@@ -128,6 +128,12 @@ export function MatchDetailDialog({
         {completed && (
           <p className="meta">{t("確定済みsetのスコアは変更できません。修正する場合は「影響setを取消」からやり直してください。")}</p>
         )}
+        {scoreEditLocked && (
+          <p className="score-lock-notice match-score-lock-notice" role="status" aria-live="polite">
+            <strong>{t("このプールはスコア入力がロックされています")}</strong>
+            <span>{t("スコアを入力するには、ブラケット画面で「スコア編集のロック」を解除してください。")}</span>
+          </p>
+        )}
         {!matchupReady && <p className="meta">{t("対戦カード確定後にプレイヤーサイドを変更できます。")}</p>}
         {randomNotice && randomNotice.setId === match.setId && (
           <p className={`meta side-random-notice ${randomNotice.changed ? "changed" : "unchanged"}`}>{t("ランダム実行済み ({value1}) : 上段 {value2} = {value3} / 下段 {value4} = {value5}{value6}", { value1: new Date(randomNotice.triggeredAt).toLocaleTimeString("ja-JP", { hour12: false }), value2: randomNotice.upperEntrantName, value3: randomNotice.upperSide, value4: randomNotice.lowerEntrantName, value5: randomNotice.lowerSide, value6: !randomNotice.changed ? t(" (結果は変更なし)") : "" })}</p>
