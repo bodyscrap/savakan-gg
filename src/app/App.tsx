@@ -2480,7 +2480,9 @@ function App() {
       return;
     }
     if (!window.confirm(
-      t("最初のPhaseのSeed順をローカルでシャッフルします。Seed設定対象の全PhaseGroupがReset済みであることを確認し、後の報告操作でこのSeed順をstart.ggへ反映します。続行しますか？"),
+      selectedEventMeta?.origin === "local"
+        ? t("最初のPhaseのSeed順をローカルでシャッフルします。Seed設定対象の全PhaseGroupが開始前であることを確認してください。続行しますか？")
+        : t("最初のPhaseのSeed順をローカルでシャッフルします。Seed設定対象の全PhaseGroupがReset済みであることを確認し、後の報告操作でこのSeed順をstart.ggへ反映します。続行しますか？"),
     )) {
       return;
     }
@@ -2489,7 +2491,11 @@ function App() {
     setError("");
     setMessage("");
     try {
-      const seedMapping = buildInitialPhaseSeedMapping(selectedEvent);
+      const seedMapping = buildInitialPhaseSeedMapping(
+        selectedEvent,
+        Math.random,
+        selectedEventMeta?.origin === "local",
+      );
       const result = await invoke<TournamentWorkspace>("shuffle_initial_phase_seeds", {
         input: {
           slug: snapshot?.slug ?? slug,
@@ -2513,7 +2519,9 @@ function App() {
       return;
     }
     if (!window.confirm(
-      t("スナップショット取得時の初期Phase Seed順に戻します。Reset済みの対象Poolを確認後、報告操作でこのSeed順をstart.ggへ反映します。続行しますか？"),
+      selectedEventMeta?.origin === "local"
+        ? t("スナップショット取得時の初期Phase Seed順に戻します。対象Poolが開始前であることを確認してください。続行しますか？")
+        : t("スナップショット取得時の初期Phase Seed順に戻します。Reset済みの対象Poolを確認後、報告操作でこのSeed順をstart.ggへ反映します。続行しますか？"),
     )) {
       return;
     }

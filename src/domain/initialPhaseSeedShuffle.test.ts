@@ -47,6 +47,36 @@ describe("initial phase seed shuffle", () => {
     ]);
   });
 
+  it("tracks destination pools when local pools reuse seed numbers", () => {
+    const event = eventFixture();
+    const [firstGroup] = event.phaseGroups ?? [];
+    event.phaseGroups = [
+      {
+        ...firstGroup,
+        phaseGroupId: "pool-a",
+        seeds: [
+          { seedId: "a1", seedNum: 1, entrantId: "entrant-a1", entrantName: "A1" },
+          { seedId: "a2", seedNum: 2, entrantId: "entrant-a2", entrantName: "A2" },
+        ],
+      },
+      {
+        ...firstGroup,
+        phaseGroupId: "pool-b",
+        seeds: [
+          { seedId: "b1", seedNum: 1, entrantId: "entrant-b1", entrantName: "B1" },
+          { seedId: "b2", seedNum: 2, entrantId: "entrant-b2", entrantName: "B2" },
+        ],
+      },
+    ];
+
+    expect(buildInitialPhaseSeedMapping(event, () => 0, true)).toEqual([
+      { seedId: "a1", seedNum: 2, phaseGroupId: "pool-b" },
+      { seedId: "a2", seedNum: 1, phaseGroupId: "pool-a" },
+      { seedId: "b1", seedNum: 1, phaseGroupId: "pool-b" },
+      { seedId: "b2", seedNum: 2, phaseGroupId: "pool-a" },
+    ]);
+  });
+
   it("only allows shuffling before any set has progressed", () => {
     expect(canShuffleInitialPhaseSeeds(eventFixture())).toBe(true);
     const started = eventFixture();

@@ -1407,18 +1407,22 @@ button:disabled {
 }
 
 .local-event-tiebreak {
-  display: grid;
-  gap: 0.45rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
   margin-top: 0.8rem;
   padding-top: 0.7rem;
   border-top: 1px solid var(--line);
 }
 
 .local-event-tiebreak ol {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.35rem;
   margin: 0;
-  padding-left: 1.7rem;
+  padding: 0;
+  list-style: none;
 }
 
 .local-event-tiebreak li {
@@ -1459,6 +1463,13 @@ button:disabled {
 
 .local-event-tiebreak-drag-handle:active {
   cursor: grabbing;
+}
+
+@media (max-width: 980px) {
+  .local-event-tiebreak {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 .local-event-tiebreak li > div {

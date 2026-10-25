@@ -38,10 +38,12 @@ fn applies_shared_seed_mapping_to_phase_groups_and_set_slots() {
         InitialPhaseSeedMappingEntry {
             seed_id: "seed-a".to_owned(),
             seed_num: 2,
+            phase_group_id: None,
         },
         InitialPhaseSeedMappingEntry {
             seed_id: "seed-b".to_owned(),
             seed_num: 1,
+            phase_group_id: None,
         },
     ];
 
@@ -77,10 +79,12 @@ fn rejects_shared_seed_mapping_without_mutating_event() {
         InitialPhaseSeedMappingEntry {
             seed_id: "seed-a".to_owned(),
             seed_num: 1,
+            phase_group_id: None,
         },
         InitialPhaseSeedMappingEntry {
             seed_id: "seed-b".to_owned(),
             seed_num: 1,
+            phase_group_id: None,
         },
     ];
     let original = serde_json::to_value(&event).expect("event should serialize");
@@ -121,6 +125,7 @@ fn share_archive_supports_legacy_and_seed_mapping_versions() {
         Some(vec![InitialPhaseSeedMappingEntry {
             seed_id: "seed-a".to_owned(),
             seed_num: 2,
+            phase_group_id: None,
         }])
     );
 }

@@ -772,6 +772,27 @@ fn balanced_indices(length: usize, count: usize) -> Vec<Vec<usize>> {
         .collect()
 }
 
+fn qualifier_pool_order(
+    placement: usize,
+    pool_count: usize,
+    snake_bracket_seeds: bool,
+) -> Vec<usize> {
+    if snake_bracket_seeds {
+        let start = if placement % 2 == 0 {
+            pool_count / 2
+        } else {
+            0
+        };
+        (0..pool_count)
+            .map(|offset| (start + offset) % pool_count)
+            .collect()
+    } else if placement % 2 == 1 {
+        (0..pool_count).collect()
+    } else {
+        (0..pool_count).rev().collect()
+    }
+}
+
 pub fn generate_local_snapshot(
     input: &CreateLocalEventSnapshotInput,
     tournament_id: &str,
@@ -949,12 +970,16 @@ pub fn generate_local_snapshot(
 
         if phase_index + 1 < input.phases.len() {
             let mut qualifiers = Vec::<SeedEntry>::new();
+            let next_phase = &input.phases[phase_index + 1];
+            let snake_bracket_seeds = config.bracket_type == "ROUND_ROBIN"
+                && next_phase.pool_count == 1
+                && matches!(
+                    next_phase.bracket_type.as_str(),
+                    "SINGLE_ELIMINATION" | "DOUBLE_ELIMINATION"
+                );
             for placement in 1..=config.qualifiers_per_pool {
-                let pool_order: Vec<usize> = if placement % 2 == 1 {
-                    (0..config.pool_count).collect()
-                } else {
-                    (0..config.pool_count).rev().collect()
-                };
+                let pool_order =
+                    qualifier_pool_order(placement, config.pool_count, snake_bracket_seeds);
                 for pool_index in pool_order {
                     let (group_id, display_identifier, _) = &phase_group_ids[pool_index];
                     qualifiers.push(SeedEntry {
@@ -1141,6 +1166,99 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn round_robin_qualifiers_are_snake_seeded_into_elimination_brackets() {
+        for bracket_type in ["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION"] {
+            let snapshot = generate(&input(
+                16,
+                vec![phase("ROUND_ROBIN", 4, 2), phase(bracket_type, 1, 0)],
+            ));
+            let event = &snapshot.events[0];
+            let final_group = event
+                .phase_groups
+                .iter()
+                .find(|group| group.phase_order == Some(2))
+                .expect("final phase group should exist");
+            let seed_names = final_group
+                .seeds
+                .iter()
+                .map(|seed| seed.placeholder_name.as_deref().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                seed_names,
+                [
+                    "Pool 1 #1",
+                    "Pool 2 #1",
+                    "Pool 3 #1",
+                    "Pool 4 #1",
+                    "Pool 3 #2",
+                    "Pool 4 #2",
+                    "Pool 1 #2",
+                    "Pool 2 #2",
+                ]
+            );
+
+            let first_round_matchups = event
+                .sets
+                .iter()
+                .filter(|set| set.phase_order == Some(2) && set.round == Some(1))
+                .map(|set| {
+                    (
+                        set.entrant1_source
+                            .as_ref()
+                            .and_then(|source| source.placeholder_name.as_deref())
+                            .unwrap(),
+                        set.entrant2_source
+                            .as_ref()
+                            .and_then(|source| source.placeholder_name.as_deref())
+                            .unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                first_round_matchups,
+                [
+                    ("Pool 1 #1", "Pool 2 #2"),
+                    ("Pool 4 #1", "Pool 3 #2"),
+                    ("Pool 2 #1", "Pool 1 #2"),
+                    ("Pool 3 #1", "Pool 4 #2"),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn round_robin_qualifiers_preserve_rank_then_snake_pool_order() {
+        let snapshot = generate(&input(
+            16,
+            vec![phase("ROUND_ROBIN", 4, 2), phase("ROUND_ROBIN", 1, 0)],
+        ));
+        let final_group = snapshot.events[0]
+            .phase_groups
+            .iter()
+            .find(|group| group.phase_order == Some(2))
+            .expect("final phase group should exist");
+        let qualifier_order = final_group
+            .seeds
+            .iter()
+            .map(|seed| seed.placeholder_name.as_deref().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            qualifier_order,
+            [
+                "Pool 1 #1",
+                "Pool 2 #1",
+                "Pool 3 #1",
+                "Pool 4 #1",
+                "Pool 4 #2",
+                "Pool 3 #2",
+                "Pool 2 #2",
+                "Pool 1 #2",
+            ]
+        );
     }
 
     #[test]

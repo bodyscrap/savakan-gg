@@ -509,6 +509,8 @@ pub struct RestoreEventGraphInput {
 pub struct InitialPhaseSeedMappingEntry {
     pub seed_id: String,
     pub seed_num: i64,
+    #[serde(default)]
+    pub phase_group_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -183,20 +183,24 @@ mod event_snapshot_scope_tests {
             InitialPhaseSeedMappingEntry {
                 seed_id: "seed-1".to_owned(),
                 seed_num: 1,
+                phase_group_id: None,
             },
             InitialPhaseSeedMappingEntry {
                 seed_id: "seed-2".to_owned(),
                 seed_num: 2,
+                phase_group_id: None,
             },
         ];
         let remote = vec![
             InitialPhaseSeedMappingEntry {
                 seed_id: "seed-1".to_owned(),
                 seed_num: 2,
+                phase_group_id: None,
             },
             InitialPhaseSeedMappingEntry {
                 seed_id: "seed-2".to_owned(),
                 seed_num: 1,
+                phase_group_id: None,
             },
         ];
 
@@ -209,20 +213,24 @@ mod event_snapshot_scope_tests {
             InitialPhaseSeedMappingEntry {
                 seed_id: "seed-1".to_owned(),
                 seed_num: 1,
+                phase_group_id: None,
             },
             InitialPhaseSeedMappingEntry {
                 seed_id: "seed-2".to_owned(),
                 seed_num: 2,
+                phase_group_id: None,
             },
         ];
         let remote = vec![
             InitialPhaseSeedMappingEntry {
                 seed_id: "seed-1".to_owned(),
                 seed_num: 1,
+                phase_group_id: None,
             },
             InitialPhaseSeedMappingEntry {
                 seed_id: "seed-3".to_owned(),
                 seed_num: 2,
+                phase_group_id: None,
             },
         ];
 
@@ -494,6 +502,7 @@ async fn fetch_phase_seed_mapping(
             .map(|seed| InitialPhaseSeedMappingEntry {
                 seed_id: seed.id.to_string(),
                 seed_num: seed.seed_num.unwrap_or_default() as i64,
+                phase_group_id: None,
             })
             .collect::<Vec<_>>();
         let page_count = page_entries.len();

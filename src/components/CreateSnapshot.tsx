@@ -60,6 +60,16 @@ function createPreviewEventSearchLabel(event: TournamentEventPreviewItem): strin
   return `${event.eventName} (${event.eventId})`;
 }
 
+function defaultLocalEventName(): string {
+  const now = new Date();
+  const date = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+  return `Local Event ${date}`;
+}
+
 const localRoundRobinTieBreakOptions: Array<{
   value: LocalEventTieBreakRule;
   label: string;
@@ -86,8 +96,8 @@ function LocalEventSnapshotForm({
   onCreateLocalSnapshot,
 }: LocalEventSnapshotFormProps) {
   const [localTournamentName, setLocalTournamentName] = useState("Local Tournament");
-  const [localEventName, setLocalEventName] = useState("Local Event");
-  const [localEventAlias, setLocalEventAlias] = useState(() => formatDefaultSnapshotName("Local Tournament", "Local Event"));
+  const [localEventName, setLocalEventName] = useState(defaultLocalEventName);
+  const [localEventAlias, setLocalEventAlias] = useState(() => formatDefaultSnapshotName("Local Tournament", localEventName));
   const [localEventAliasEdited, setLocalEventAliasEdited] = useState(false);
   const [participantCount, setParticipantCount] = useState(8);
   const [phaseCount, setPhaseCount] = useState(1);

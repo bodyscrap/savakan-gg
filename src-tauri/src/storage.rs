@@ -9034,6 +9034,16 @@ fn apply_initial_phase_seed_mapping(
                 .to_owned(),
         );
     }
+    if seed_mapping.iter().any(|entry| entry.phase_group_id.is_some()) {
+        return apply_grouped_initial_phase_seed_mapping(
+            event,
+            &first_phase_id,
+            &group_ids,
+            &original_seeds,
+            seed_mapping,
+            restore_to_snapshot,
+        );
+    }
     let original_numbers = original_seeds
         .values()
         .map(|seed| {
@@ -9123,6 +9133,126 @@ fn apply_initial_phase_seed_mapping(
                 continue;
             };
             source.type_id = Some(seed.seed_id.clone());
+        }
+    }
+    Ok(())
+}
+
+fn apply_grouped_initial_phase_seed_mapping(
+    event: &mut EventSnapshot,
+    first_phase_id: &str,
+    group_ids: &HashSet<String>,
+    original_seeds: &HashMap<String, PhaseGroupSeedSnapshot>,
+    seed_mapping: &[InitialPhaseSeedMappingEntry],
+    restore_to_snapshot: bool,
+) -> Result<(), String> {
+    if seed_mapping
+        .iter()
+        .any(|entry| entry.phase_group_id.is_none())
+    {
+        return Err("シャッフルSeedのPool情報が不足しています。".to_owned());
+    }
+
+    let expected_positions = event
+        .phase_groups
+        .iter()
+        .filter(|group| group_ids.contains(&group.phase_group_id))
+        .flat_map(|group| {
+            group.seeds.iter().filter_map(move |seed| {
+                Some((group.phase_group_id.clone(), seed.seed_num?))
+            })
+        })
+        .collect::<HashSet<_>>();
+    let mut mapped_seed_ids = HashSet::new();
+    let mut seed_by_position = HashMap::<(String, i64), PhaseGroupSeedSnapshot>::new();
+    for entry in seed_mapping {
+        let Some(target_group_id) = entry.phase_group_id.as_ref() else {
+            unreachable!("grouped mappings have been validated")
+        };
+        let Some(seed) = original_seeds.get(&entry.seed_id) else {
+            return Err("シャッフルSeedの対応が不正です。".to_owned());
+        };
+        let position = (target_group_id.clone(), entry.seed_num);
+        if !group_ids.contains(target_group_id)
+            || !expected_positions.contains(&position)
+            || !mapped_seed_ids.insert(entry.seed_id.as_str())
+            || seed_by_position.contains_key(&position)
+        {
+            return Err("シャッフルSeedの対応が不正です。".to_owned());
+        }
+        let mut mapped_seed = seed.clone();
+        mapped_seed.seed_num = Some(entry.seed_num);
+        mapped_seed.group_seed_num = Some(entry.seed_num);
+        seed_by_position.insert(position, mapped_seed);
+    }
+    if mapped_seed_ids.len() != original_seeds.len()
+        || seed_by_position.len() != expected_positions.len()
+    {
+        return Err("シャッフルSeedの対応が不正です。".to_owned());
+    }
+
+    for group in event
+        .phase_groups
+        .iter_mut()
+        .filter(|group| group_ids.contains(&group.phase_group_id))
+    {
+        let mut seeds = seed_by_position
+            .iter()
+            .filter(|((group_id, _), _)| group_id == &group.phase_group_id)
+            .map(|(_, seed)| seed.clone())
+            .collect::<Vec<_>>();
+        seeds.sort_by_key(|seed| seed.seed_num.unwrap_or(i64::MAX));
+        group.seed_order = seeds.iter().map(|seed| seed.seed_id.clone()).collect();
+        group.seeds = seeds;
+        group.initial_seed_restore_pending = restore_to_snapshot;
+        group.seed_update_awaiting_started_snapshot = false;
+    }
+
+    let first_phase_order = event
+        .phases
+        .iter()
+        .find(|phase| phase.phase_id == first_phase_id)
+        .and_then(|phase| phase.phase_order);
+    for set in event.sets.iter_mut().filter(|set| {
+        set.phase_group_id
+            .as_deref()
+            .is_some_and(|id| group_ids.contains(id))
+            || set.phase_order == first_phase_order
+    }) {
+        let Some(group_id) = set.phase_group_id.as_ref() else {
+            continue;
+        };
+        if !group_ids.contains(group_id) {
+            continue;
+        }
+        for slot in &mut set.slots {
+            let Some(seed_num) = slot.seed_num else {
+                continue;
+            };
+            let Some(seed) = seed_by_position.get(&(group_id.clone(), seed_num)) else {
+                continue;
+            };
+            slot.seed_id = Some(seed.seed_id.clone());
+            slot.entrant_id = seed.entrant_id.clone();
+            slot.entrant_name = seed
+                .entrant_name
+                .clone()
+                .or_else(|| seed.placeholder_name.clone())
+                .unwrap_or_else(|| "TBD".to_owned());
+            slot.seed_placeholder_name = seed.placeholder_name.clone();
+        }
+        for source in [&mut set.entrant1_source, &mut set.entrant2_source]
+            .into_iter()
+            .flatten()
+        {
+            let Some(seed_num) = source.seed_num else {
+                continue;
+            };
+            if let Some(seed) = seed_by_position.get(&(group_id.clone(), seed_num)) {
+                source.type_id = Some(seed.seed_id.clone());
+                source.seed_num = Some(seed_num);
+                source.group_seed_num = Some(seed_num);
+            }
         }
     }
     Ok(())
@@ -9376,27 +9506,54 @@ fn initial_phase_seed_mapping(
         .map(|phase| phase.phase_id.clone())
         .ok_or_else(|| "最初のPhase IDを取得できません。".to_owned())?;
     let mut entries = HashMap::new();
-    for seed in event
+    let mut group_ids_by_seed_num = HashMap::<i64, HashSet<String>>::new();
+    for group in event
         .phase_groups
         .iter()
         .filter(|group| group.phase_id.as_deref() == Some(phase_id.as_str()))
-        .flat_map(|group| &group.seeds)
     {
-        let seed_num = seed
-            .seed_num
-            .ok_or_else(|| "初期PhaseにSeed番号がありません。".to_owned())?;
-        let entry = InitialPhaseSeedMappingEntry {
-            seed_id: seed.seed_id.clone(),
-            seed_num,
-        };
-        if let Some(previous) = entries.insert(seed.seed_id.clone(), entry.clone()) {
-            if previous.seed_num != entry.seed_num {
-                return Err("初期Phaseに重複または不整合なSeed情報があります。".to_owned());
+        for seed in &group.seeds {
+            let seed_num = seed
+                .seed_num
+                .ok_or_else(|| "初期PhaseにSeed番号がありません。".to_owned())?;
+            let entry = InitialPhaseSeedMappingEntry {
+                seed_id: seed.seed_id.clone(),
+                seed_num,
+                phase_group_id: None,
+            };
+            if let Some(previous) = entries.insert(seed.seed_id.clone(), entry.clone()) {
+                if previous.seed_num != entry.seed_num {
+                    return Err("初期Phaseに重複または不整合なSeed情報があります。".to_owned());
+                }
+            }
+            group_ids_by_seed_num
+                .entry(seed_num)
+                .or_default()
+                .insert(group.phase_group_id.clone());
+        }
+    }
+    let has_cross_group_duplicate_seed_numbers =
+        group_ids_by_seed_num.values().any(|group_ids| group_ids.len() > 1);
+    if has_cross_group_duplicate_seed_numbers {
+        for group in event
+            .phase_groups
+            .iter()
+            .filter(|group| group.phase_id.as_deref() == Some(phase_id.as_str()))
+        {
+            for seed in &group.seeds {
+                if let Some(entry) = entries.get_mut(&seed.seed_id) {
+                    entry.phase_group_id = Some(group.phase_group_id.clone());
+                }
             }
         }
     }
     let mut entries = entries.into_values().collect::<Vec<_>>();
-    entries.sort_by_key(|entry| entry.seed_num);
+    entries.sort_by(|left, right| {
+        left.seed_num
+            .cmp(&right.seed_num)
+            .then_with(|| left.phase_group_id.cmp(&right.phase_group_id))
+            .then_with(|| left.seed_id.cmp(&right.seed_id))
+    });
     Ok((phase_id, entries))
 }
 
@@ -9568,6 +9725,107 @@ mod snapshot_restore_scope_tests {
         .expect("restore fixture should deserialize")
     }
 
+    #[test]
+    fn all_restore_preserves_local_shuffle_across_pools_with_reused_seed_numbers() {
+        let pristine: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Local event",
+            "phases": [{ "phaseId": "phase-1", "phaseOrder": 1 }],
+            "phaseGroups": [
+                {
+                    "phaseGroupId": "pool-a",
+                    "phaseId": "phase-1",
+                    "seedOrder": ["a1", "a2"],
+                    "seeds": [
+                        { "seedId": "a1", "seedNum": 1, "groupSeedNum": 1, "entrantId": "entrant-a1", "entrantName": "A1" },
+                        { "seedId": "a2", "seedNum": 2, "groupSeedNum": 2, "entrantId": "entrant-a2", "entrantName": "A2" }
+                    ]
+                },
+                {
+                    "phaseGroupId": "pool-b",
+                    "phaseId": "phase-1",
+                    "seedOrder": ["b1", "b2"],
+                    "seeds": [
+                        { "seedId": "b1", "seedNum": 1, "groupSeedNum": 1, "entrantId": "entrant-b1", "entrantName": "B1" },
+                        { "seedId": "b2", "seedNum": 2, "groupSeedNum": 2, "entrantId": "entrant-b2", "entrantName": "B2" }
+                    ]
+                }
+            ],
+            "sets": [
+                {
+                    "setId": "set-a", "phaseGroupId": "pool-a", "phaseOrder": 1,
+                    "fullRoundText": "Round 1", "state": 1, "slots": [
+                        { "entrantId": "entrant-a1", "entrantName": "A1", "seedId": "a1", "seedNum": 1 },
+                        { "entrantId": "entrant-a2", "entrantName": "A2", "seedId": "a2", "seedNum": 2 }
+                    ],
+                    "entrant1Source": { "typeId": "a1", "seedNum": 1 },
+                    "entrant2Source": { "typeId": "a2", "seedNum": 2 }
+                },
+                {
+                    "setId": "set-b", "phaseGroupId": "pool-b", "phaseOrder": 1,
+                    "fullRoundText": "Round 1", "state": 1, "slots": [
+                        { "entrantId": "entrant-b1", "entrantName": "B1", "seedId": "b1", "seedNum": 1 },
+                        { "entrantId": "entrant-b2", "entrantName": "B2", "seedId": "b2", "seedNum": 2 }
+                    ],
+                    "entrant1Source": { "typeId": "b1", "seedNum": 1 },
+                    "entrant2Source": { "typeId": "b2", "seedNum": 2 }
+                }
+            ]
+        }))
+        .expect("local multi-pool fixture should deserialize");
+        let mapping = vec![
+            InitialPhaseSeedMappingEntry {
+                seed_id: "a1".to_owned(),
+                seed_num: 2,
+                phase_group_id: Some("pool-b".to_owned()),
+            },
+            InitialPhaseSeedMappingEntry {
+                seed_id: "a2".to_owned(),
+                seed_num: 1,
+                phase_group_id: Some("pool-a".to_owned()),
+            },
+            InitialPhaseSeedMappingEntry {
+                seed_id: "b1".to_owned(),
+                seed_num: 1,
+                phase_group_id: Some("pool-b".to_owned()),
+            },
+            InitialPhaseSeedMappingEntry {
+                seed_id: "b2".to_owned(),
+                seed_num: 2,
+                phase_group_id: Some("pool-a".to_owned()),
+            },
+        ];
+        let mut current = pristine.clone();
+        apply_initial_phase_seed_mapping(&mut current, &mapping, false)
+            .expect("group-aware seed shuffle should apply");
+        for set in &mut current.sets {
+            set.state = 3;
+            set.winner_id = Some(set.slots[0].entrant_id.clone().unwrap());
+        }
+
+        let restored = prepare_snapshot_restore_event(&current, &pristine, false)
+            .expect("restore should keep the shuffled seed positions");
+
+        assert_eq!(
+            initial_phase_seed_mapping(&restored).unwrap(),
+            initial_phase_seed_mapping(&current).unwrap()
+        );
+        assert_eq!(restored.phase_groups[0].seed_order, ["a2", "b2"]);
+        assert_eq!(restored.phase_groups[1].seed_order, ["b1", "a1"]);
+        assert!(restored
+            .sets
+            .iter()
+            .all(|set| set.state == 1 && set.winner_id.is_none()));
+        assert_eq!(
+            restored.sets[0].slots[0].entrant_id.as_deref(),
+            Some("entrant-a2")
+        );
+        assert_eq!(
+            restored.sets[1].slots[1].entrant_id.as_deref(),
+            Some("entrant-a1")
+        );
+    }
+
     fn progressed_shuffled_event(pristine: &EventSnapshot) -> EventSnapshot {
         let mut current = pristine.clone();
         apply_initial_phase_seed_mapping(
@@ -9576,10 +9834,12 @@ mod snapshot_restore_scope_tests {
                 InitialPhaseSeedMappingEntry {
                     seed_id: "seed-a".to_owned(),
                     seed_num: 2,
+                    phase_group_id: None,
                 },
                 InitialPhaseSeedMappingEntry {
                     seed_id: "seed-b".to_owned(),
                     seed_num: 1,
+                    phase_group_id: None,
                 },
             ],
             false,
@@ -9759,8 +10019,20 @@ pub fn restore_event_graph_from_snapshot(
         .iter()
         .find(|event| event.event_id == input.event_id)
         .ok_or_else(|| format!("復元対象イベントが見つかりません: {}", input.event_id))?;
-    let pristine_event =
+    let is_local_event = workspace
+        .local_meta
+        .events
+        .iter()
+        .find(|event| event.event_id == input.event_id)
+        .is_some_and(|event| event.origin == EventOrigin::Local);
+    let mut pristine_event =
         prepare_snapshot_restore_event(current_event, &pristine_event, input.discard_seed_shuffle)?;
+    if is_local_event {
+        for group in &mut pristine_event.phase_groups {
+            group.initial_seed_restore_pending = false;
+            group.seed_update_awaiting_started_snapshot = false;
+        }
+    }
     let mut affected_set_ids = HashSet::new();
     let mut restored_phase_group_ids = HashSet::new();
 
