@@ -1,5 +1,11 @@
 import { t } from "../i18n";
-import type { FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import type {
+  CreateLocalEventSnapshotInput,
+  LocalEventPhaseConfig,
+  LocalEventTieBreakRule,
+} from "../domain/tournamentWorkspaceRepository";
+import { formatDefaultSnapshotName } from "../domain/snapshotDisplay";
 
 export type TournamentEventPreviewItem = {
   eventId: string;
@@ -28,8 +34,8 @@ export type EventSnapshotProgress = {
 type CreateSnapshotProps = {
   token: string;
   onTokenChange: (value: string) => void;
-  slug: string;
-  onSlugChange: (value: string) => void;
+  createTournamentSlug: string;
+  onCreateTournamentSlugChange: (value: string) => void;
   createBusy: boolean;
   canLoadPreview: boolean;
   onSaveToken: (event: FormEvent<HTMLFormElement>) => void;
@@ -45,17 +51,259 @@ type CreateSnapshotProps = {
   onEventAliasChange: (value: string) => void;
   canCreateSnapshot: boolean;
   onCreateSnapshot: () => void;
+  senderUserId: string;
+  canCreateLocalSnapshot: boolean;
+  onCreateLocalSnapshot: (input: CreateLocalEventSnapshotInput) => void;
 };
 
 function createPreviewEventSearchLabel(event: TournamentEventPreviewItem): string {
   return `${event.eventName} (${event.eventId})`;
 }
 
+const localRoundRobinTieBreakOptions: Array<{
+  value: LocalEventTieBreakRule;
+  label: string;
+  description: string;
+}> = [
+  { value: "TOTAL_SETS_WON", label: "総セット勝利数", description: "" },
+  { value: "GAME_RATIO", label: "総ゲーム勝率", description: "" },
+  { value: "HEAD_TO_HEAD", label: "head-to-head", description: "同じ条件で並んだ参加者同士の直接対戦結果で順位を決めます。" },
+];
+
+type LocalEventSnapshotFormProps = {
+  visible: boolean;
+  createBusy: boolean;
+  senderUserId: string;
+  canCreateLocalSnapshot: boolean;
+  onCreateLocalSnapshot: (input: CreateLocalEventSnapshotInput) => void;
+};
+
+function LocalEventSnapshotForm({
+  visible,
+  createBusy,
+  senderUserId,
+  canCreateLocalSnapshot,
+  onCreateLocalSnapshot,
+}: LocalEventSnapshotFormProps) {
+  const [localTournamentName, setLocalTournamentName] = useState("Local Tournament");
+  const [localEventName, setLocalEventName] = useState("Local Event");
+  const [localEventAlias, setLocalEventAlias] = useState(() => formatDefaultSnapshotName("Local Tournament", "Local Event"));
+  const [localEventAliasEdited, setLocalEventAliasEdited] = useState(false);
+  const [participantCount, setParticipantCount] = useState(8);
+  const [phaseCount, setPhaseCount] = useState(1);
+  const [draggedTieBreakRule, setDraggedTieBreakRule] = useState<{ phaseIndex: number; ruleIndex: number } | null>(null);
+  const [phases, setPhases] = useState<LocalEventPhaseConfig[]>([
+    { name: "Phase 1", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false },
+    { name: "Phase 2", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false },
+    { name: "Phase 3", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false },
+  ]);
+
+  useEffect(() => {
+    if (!localEventAliasEdited) {
+      setLocalEventAlias(formatDefaultSnapshotName(localTournamentName, localEventName));
+    }
+  }, [localEventAliasEdited, localEventName, localTournamentName]);
+
+  const participantCountForPhase = (index: number) => {
+    let count = participantCount;
+    for (let previous = 0; previous < index; previous += 1) {
+      count = phases[previous].poolCount * phases[previous].qualifiersPerPool;
+    }
+    return count;
+  };
+  const updatePhase = (index: number, update: Partial<LocalEventPhaseConfig>) => {
+    setPhases((current) => current.map((phase, phaseIndex) => (
+      phaseIndex === index ? { ...phase, ...update } : phase
+    )));
+  };
+  const moveTieBreakRule = (phaseIndex: number, fromIndex: number, toIndex: number) => {
+    const order = [...phases[phaseIndex].tiebreakOrder];
+    if (toIndex < 0 || toIndex >= order.length || fromIndex === toIndex) {
+      return;
+    }
+    const [movedRule] = order.splice(fromIndex, 1);
+    order.splice(toIndex, 0, movedRule);
+    updatePhase(phaseIndex, { tiebreakOrder: order });
+  };
+  const toggleTieBreakRule = (phaseIndex: number, rule: LocalEventTieBreakRule, enabled: boolean) => {
+    const current = phases[phaseIndex].enabledTiebreakRules;
+    if (!enabled && current.length === 1) {
+      return;
+    }
+    updatePhase(phaseIndex, {
+      enabledTiebreakRules: enabled
+        ? [...current, rule]
+        : current.filter((currentRule) => currentRule !== rule),
+    });
+  };
+  const submitLocalSnapshot = () => onCreateLocalSnapshot({
+    tournamentName: localTournamentName,
+    eventName: localEventName,
+    eventAlias: localEventAlias.trim() === "" ? null : localEventAlias.trim(),
+    participantCount,
+    phases: phases.slice(0, phaseCount).map((phase, index) => ({
+      ...phase,
+      qualifiersPerPool: index + 1 < phaseCount ? phase.qualifiersPerPool : 0,
+      thirdPlaceMatch: index + 1 === phaseCount
+        && phase.bracketType === "SINGLE_ELIMINATION"
+        && Math.floor(participantCountForPhase(index) / phase.poolCount) >= 4
+        && phase.thirdPlaceMatch,
+      fifthPlaceMatch: index + 1 === phaseCount
+        && phase.bracketType === "DOUBLE_ELIMINATION"
+        && Math.floor(participantCountForPhase(index) / phase.poolCount) >= 8
+        && phase.fifthPlaceMatch,
+    })),
+  });
+
+  if (!visible) {
+    return null;
+  }
+
+  return <>
+    <section className="panel create-layout-full">
+      <h2>{t("ローカルeventの基本設定")}</h2>
+      <div className="local-event-basic-fields">
+        <div className="local-event-name-fields">
+          <label>{t("tournament名")}<input value={localTournamentName} onChange={(event) => setLocalTournamentName(event.currentTarget.value)} /></label>
+          <label>{t("event名")}<input value={localEventName} onChange={(event) => setLocalEventName(event.currentTarget.value)} /></label>
+          <label>{t("エイリアス名")}<input value={localEventAlias} onChange={(event) => {
+            setLocalEventAliasEdited(true);
+            setLocalEventAlias(event.currentTarget.value);
+          }} placeholder={t("アプリ内表示用のevent alias")} /></label>
+        </div>
+        <div className="local-event-size-fields">
+          <label>{t("参加人数")}<input type="number" min={2} max={512} value={participantCount} onChange={(event) => setParticipantCount(Math.max(2, Math.min(512, Number(event.currentTarget.value) || 2)))} /></label>
+          <label>{t("フェーズ数")}
+            <select value={phaseCount} onChange={(event) => {
+              const nextCount = Number(event.currentTarget.value);
+              setPhases((current) => current.map((phase, index) => (
+                index < nextCount - 1 && phase.qualifiersPerPool === 0
+                  ? { ...phase, qualifiersPerPool: 1 }
+                  : phase
+              )));
+              setPhaseCount(nextCount);
+            }}>
+              {[1, 2, 3].map((count) => <option key={count} value={count}>{count}</option>)}
+            </select>
+          </label>
+        </div>
+      </div>
+      <p className="meta">{t("送信者ID")}: {senderUserId || t("未設定")}</p>
+      <p className="meta">{t("ローカルeventではPlayer 1などの仮名を作成します。作成後にエイリアスを編集できます。")}</p>
+      {!senderUserId && <p className="meta">{t("ローカルeventの作成には送信者IDの設定が必要です。")}</p>}
+    </section>
+    <section className="panel create-layout-full">
+      <h2>{t("フェーズ設定")}</h2>
+      <div className="local-event-phase-list">
+        {phases.slice(0, phaseCount).map((phase, index) => {
+          const phasePlayers = participantCountForPhase(index);
+          const lastPhase = index + 1 === phaseCount;
+          return <fieldset key={index} className="local-event-phase">
+            <legend>{t("Phase {p0}", { p0: index + 1 })}</legend>
+            <div className="local-event-phase-fields">
+              <label>{t("フェーズ名")}<input value={phase.name} onChange={(event) => updatePhase(index, { name: event.currentTarget.value })} /></label>
+              <label>{t("プール数")}<input type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / 2))} value={phase.poolCount} onChange={(event) => updatePhase(index, { poolCount: Math.max(1, Math.min(Math.floor(phasePlayers / 2), Number(event.currentTarget.value) || 1)) })} /></label>
+              <label>{t("形式")}<select value={phase.bracketType} onChange={(event) => updatePhase(index, { bracketType: event.currentTarget.value as LocalEventPhaseConfig["bracketType"] })}>
+                <option value="SINGLE_ELIMINATION">{t("シングルエリミネーション")}</option>
+                <option value="DOUBLE_ELIMINATION">{t("ダブルエリミネーション")}</option>
+                <option value="ROUND_ROBIN">{t("総当たり")}</option>
+              </select></label>
+              {!lastPhase && <label>{t("各プールからの進出人数")}<input type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / phase.poolCount))} value={phase.qualifiersPerPool} onChange={(event) => updatePhase(index, { qualifiersPerPool: Math.max(1, Math.min(Math.floor(phasePlayers / phase.poolCount), Number(event.currentTarget.value) || 1)) })} /></label>}
+              {lastPhase
+                && phase.bracketType === "SINGLE_ELIMINATION"
+                && Math.floor(phasePlayers / phase.poolCount) >= 4 && (
+                  <div className="local-event-phase-option-field">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={phase.thirdPlaceMatch}
+                        onChange={(event) => updatePhase(index, { thirdPlaceMatch: event.currentTarget.checked })}
+                      />
+                      {t("3位決定戦")}
+                    </label>
+                  </div>
+                )}
+              {lastPhase
+                && phase.bracketType === "DOUBLE_ELIMINATION"
+                && Math.floor(phasePlayers / phase.poolCount) >= 8 && (
+                  <div className="local-event-phase-option-field">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={phase.fifthPlaceMatch}
+                        onChange={(event) => updatePhase(index, { fifthPlaceMatch: event.currentTarget.checked })}
+                      />
+                      {t("5位決定戦")}
+                    </label>
+                  </div>
+                )}
+            </div>
+            {phase.bracketType === "ROUND_ROBIN" && (
+              <div className="local-event-tiebreak">
+                <strong>{t("勝利条件の優先度")}</strong>
+                <ol>
+                  {phase.tiebreakOrder.map((rule, ruleIndex) => {
+                    const option = localRoundRobinTieBreakOptions.find((candidate) => candidate.value === rule);
+                    const checked = phase.enabledTiebreakRules.includes(rule);
+                    return (
+                      <li
+                        key={rule}
+                        className={draggedTieBreakRule?.phaseIndex === index && draggedTieBreakRule.ruleIndex === ruleIndex ? "local-event-tiebreak-dragging" : ""}
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          if (draggedTieBreakRule?.phaseIndex === index) {
+                            moveTieBreakRule(index, draggedTieBreakRule.ruleIndex, ruleIndex);
+                          }
+                          setDraggedTieBreakRule(null);
+                        }}
+                      >
+                        <label title={t(option?.description ?? "")}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={checked && phase.enabledTiebreakRules.length === 1}
+                            onChange={(event) => toggleTieBreakRule(index, rule, event.currentTarget.checked)}
+                          />
+                          <span>{ruleIndex + 1}. {t(option?.label ?? rule)}</span>
+                        </label>
+                        <span
+                          className="local-event-tiebreak-drag-handle"
+                          draggable
+                          aria-label={t("ドラッグして順序を変更")}
+                          title={t("ドラッグして順序を変更")}
+                          onDragStart={(event) => {
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("text/plain", String(ruleIndex));
+                            setDraggedTieBreakRule({ phaseIndex: index, ruleIndex });
+                          }}
+                          onDragEnd={() => setDraggedTieBreakRule(null)}
+                        >
+                          ⠿
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+            )}
+          </fieldset>;
+        })}
+      </div>
+      <div style={{ display: "flex", justifyContent: "end", marginTop: "0.8rem" }}>
+        <button type="button" disabled={createBusy || !canCreateLocalSnapshot || localTournamentName.trim() === "" || localEventName.trim() === ""} onClick={submitLocalSnapshot}>{t("ローカルeventを作成")}</button>
+      </div>
+    </section>
+  </>;
+}
+
 export function CreateSnapshot({
   token,
   onTokenChange,
-  slug,
-  onSlugChange,
+  createTournamentSlug,
+  onCreateTournamentSlugChange,
   createBusy,
   canLoadPreview,
   onSaveToken,
@@ -71,13 +319,25 @@ export function CreateSnapshot({
   onEventAliasChange,
   canCreateSnapshot,
   onCreateSnapshot,
+  senderUserId,
+  canCreateLocalSnapshot,
+  onCreateLocalSnapshot,
 }: CreateSnapshotProps) {
   const selectedEventName = createPreview?.events.find((event) => event.eventId === createSelectedEventId)?.eventName ?? "-";
+  const [source, setSource] = useState<"startgg" | "local">("startgg");
 
   return (
-    <div className="create-layout">
+    <div className={`create-layout${source === "local" ? " create-layout--local" : ""}`}>
+      <section className="panel create-layout-full">
+        <h2>{t("イベントの作成方法")}</h2>
+        <div className="snapshot-source-options" role="group" aria-label={t("イベントの作成方法")}>
+          <label><input type="radio" checked={source === "startgg"} onChange={() => setSource("startgg")} /> {t("start.ggからeventを取り込む")}</label>
+          <label><input type="radio" checked={source === "local"} onChange={() => setSource("local")} /> {t("ローカルeventを作成する")}</label>
+        </div>
+      </section>
+      {source === "startgg" ? <>
       <section className="panel create-layout-half">
-        <h2>{t("1.APIトークンの設定")}</h2>
+        <h2>{t("APIトークンの設定")}</h2>
 
         <form
           className="form"
@@ -97,15 +357,15 @@ export function CreateSnapshot({
       </section>
 
       <section className="panel create-layout-half">
-        <h2>{t("2. tournamentの選択")}</h2>
+        <h2>{t("tournamentの選択")}</h2>
         <form
           className="form"
           onSubmit={onLoadPreview}
           style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}
         >
           <input
-            value={slug}
-            onChange={(e) => onSlugChange(e.currentTarget.value)}
+            value={createTournamentSlug}
+            onChange={(e) => onCreateTournamentSlugChange(e.currentTarget.value)}
             placeholder={t("大会ID (例: savakan-weekly-1)")}
             style={{ flex: "1 1 18rem" }}
           />
@@ -114,7 +374,7 @@ export function CreateSnapshot({
       </section>
 
       <section className="panel create-layout-full">
-        <h2>{t("3. tournament内のevent一覧")}</h2>
+        <h2>{t("tournament内のevent一覧")}</h2>
         {createPreviewLoadFailed ? (
           <p className="meta">{t("event一覧の取得に失敗しました")}</p>
         ) : !createPreview ? (
@@ -164,7 +424,7 @@ export function CreateSnapshot({
       </section>
 
       <section className="panel create-layout-full">
-        <h2>{t("4. 選択eventのスナップショット作成")}</h2>
+        <h2>{t("選択eventのスナップショット作成")}</h2>
         <div className="form" style={{ display: "flex", alignItems: "end", flexWrap: "wrap", marginTop: "0.8rem" }}>
           <label htmlFor="create-event-alias" style={{ display: "grid", gap: "0.3rem", flex: "1 1 18rem" }}>
             <span style={{ display: "flex", justifyContent: "space-between", gap: "0.6rem", flexWrap: "wrap" }}>
@@ -181,6 +441,14 @@ export function CreateSnapshot({
           <button type="button" disabled={createBusy || !canCreateSnapshot} onClick={onCreateSnapshot}>{t("スナップショット作成")}</button>
         </div>
       </section>
+      </> : null}
+      <LocalEventSnapshotForm
+        visible={source === "local"}
+        createBusy={createBusy}
+        senderUserId={senderUserId}
+        canCreateLocalSnapshot={canCreateLocalSnapshot}
+        onCreateLocalSnapshot={onCreateLocalSnapshot}
+      />
     </div>
   );
 }

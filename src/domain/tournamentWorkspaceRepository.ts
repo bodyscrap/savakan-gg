@@ -9,6 +9,7 @@ export type LocalSnapshotEventListItem = {
   updatedAt: string;
   eventId: string;
   eventName: string;
+  origin?: "startgg" | "local";
   eventAlias: string | null;
   lastSelectedPhaseName?: string | null;
   lastSelectedPhaseGroupName?: string | null;
@@ -51,6 +52,8 @@ export type EventEntrantMeta = {
 export type EventLocalMeta = {
   eventId: string;
   eventName: string;
+  origin?: "startgg" | "local";
+  ownerSenderUserId?: string | null;
   eventAlias: string | null;
   lastSelectedPhaseName?: string | null;
   lastSelectedPhaseGroupName?: string | null;
@@ -157,6 +160,8 @@ export type TournamentShareArchive = {
     seedNum: number;
   }> | null;
   eventSettings: {
+    origin?: "startgg" | "local";
+    ownerSenderUserId?: string | null;
     eventAlias: string | null;
     eventManagement: EventManagementMeta | null;
     entrants: Array<{
@@ -167,6 +172,30 @@ export type TournamentShareArchive = {
     }>;
     setPlaySides: SetPlaySideMeta[];
   };
+};
+
+export type LocalEventPhaseConfig = {
+  name: string;
+  poolCount: number;
+  bracketType: "SINGLE_ELIMINATION" | "DOUBLE_ELIMINATION" | "ROUND_ROBIN";
+  qualifiersPerPool: number;
+  tiebreakOrder: LocalEventTieBreakRule[];
+  enabledTiebreakRules: LocalEventTieBreakRule[];
+  thirdPlaceMatch: boolean;
+  fifthPlaceMatch: boolean;
+};
+
+export type LocalEventTieBreakRule =
+  | "TOTAL_SETS_WON"
+  | "GAME_RATIO"
+  | "HEAD_TO_HEAD";
+
+export type CreateLocalEventSnapshotInput = {
+  tournamentName: string;
+  eventName: string;
+  eventAlias: string | null;
+  participantCount: number;
+  phases: LocalEventPhaseConfig[];
 };
 
 export type SnapshotRestoreScope =
@@ -383,6 +412,12 @@ export async function persistEventSnapshot(input: CreateEventSnapshotInput): Pro
   await invoke("create_event_snapshot_by_slug", { input });
 }
 
+export async function persistLocalEventSnapshot(
+  input: CreateLocalEventSnapshotInput,
+): Promise<TournamentWorkspace> {
+  return invoke<TournamentWorkspace>("create_local_event_snapshot", { input });
+}
+
 export async function removeSnapshotEvent(slug: string, eventId: string): Promise<void> {
   await invoke("delete_local_snapshot_event", { slug, eventId });
 }
@@ -401,6 +436,14 @@ export async function loadLastSlug(): Promise<string | null> {
 
 export async function saveLastSlug(slug: string): Promise<void> {
   await invoke("save_last_slug", { slug });
+}
+
+export async function loadStartggCreateSlug(): Promise<string | null> {
+  return invoke<string | null>("load_startgg_create_slug");
+}
+
+export async function saveStartggCreateSlug(slug: string): Promise<void> {
+  await invoke("save_startgg_create_slug", { slug });
 }
 
 export async function saveEventPhasePoolSelection(input: SaveEventPhasePoolSelectionInput): Promise<void> {

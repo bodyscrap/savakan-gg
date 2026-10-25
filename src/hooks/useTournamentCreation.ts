@@ -1,5 +1,5 @@
 import { t, useLanguage } from "../i18n";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -13,13 +13,19 @@ import {
   formatDefaultSnapshotName,
   resolveCreatePreviewSelection,
 } from "../domain/snapshotDisplay";
-import { listLocalSnapshotEvents, persistEventSnapshot, saveLastSlug } from "../domain/tournamentWorkspaceRepository";
-import { toApiSlug, toEventApiSlug } from "../domain/slugUtils";
+import {
+  listLocalSnapshotEvents,
+  persistEventSnapshot,
+  persistLocalEventSnapshot,
+  loadStartggCreateSlug,
+  saveStartggCreateSlug,
+  type CreateLocalEventSnapshotInput,
+} from "../domain/tournamentWorkspaceRepository";
+import { toApiSlug, toEventApiSlug, toSlugInput } from "../domain/slugUtils";
 
 const EVENT_SNAPSHOT_PROGRESS_EVENT = "event_snapshot_progress";
 
 type UseTournamentCreationOptions = {
-  slug: string;
   perPage: number;
   setCreateBusy: (busy: boolean) => void;
   setBusy: (busy: boolean) => void;
@@ -29,7 +35,6 @@ type UseTournamentCreationOptions = {
 };
 
 export function useTournamentCreation({
-  slug,
   perPage,
   setCreateBusy,
   setBusy,
@@ -38,6 +43,8 @@ export function useTournamentCreation({
   onSnapshotCreated,
 }: UseTournamentCreationOptions) {
   const [token, setToken] = useState("");
+  const [createTournamentSlug, setCreateTournamentSlug] = useState("");
+  const createTournamentSlugEditedRef = useRef(false);
   const [createPreview, setCreatePreview] = useState<TournamentPreview | null>(null);
   const [createPreviewLoadFailed, setCreatePreviewLoadFailed] = useState(false);
   const [createSelectedEventId, setCreateSelectedEventId] = useState("");
@@ -59,6 +66,29 @@ export function useTournamentCreation({
       alive = false;
     };
   }, []);
+
+  useEffect(() => {
+    let alive = true;
+    void loadStartggCreateSlug()
+      .then((savedSlug) => {
+        if (alive && !createTournamentSlugEditedRef.current && savedSlug?.trim()) {
+          setCreateTournamentSlug(toSlugInput(savedSlug));
+        }
+      })
+      .catch((error) => {
+        if (alive) {
+          setError(String(error));
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [setError]);
+
+  function handleCreateTournamentSlugChange(value: string) {
+    createTournamentSlugEditedRef.current = true;
+    setCreateTournamentSlug(value);
+  }
 
   useEffect(() => {
     let alive = true;
@@ -119,7 +149,7 @@ export function useTournamentCreation({
 
   async function loadCreatePreview(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
-    const apiSlug = toApiSlug(slug);
+    const apiSlug = toApiSlug(createTournamentSlug);
     if (apiSlug === "") {
       setError(t("大会IDを入力してください。"));
       return;
@@ -134,6 +164,7 @@ export function useTournamentCreation({
     setCreateEventSearchInput("");
     try {
       await saveStartggToken();
+      await saveStartggCreateSlug(createTournamentSlug.trim());
       const preview = await invoke<TournamentPreview>("preview_tournament", { slug: apiSlug });
       setCreatePreview(preview);
       applyCreateEventSelection(resolveCreatePreviewSelection(preview.events, previousSelectedEventId), preview.name);
@@ -163,13 +194,14 @@ export function useTournamentCreation({
   );
 
   async function createEventSnapshotBySlug() {
-    const tournamentSlug = toApiSlug(slug);
+    const tournamentSlug = toApiSlug(createTournamentSlug);
     const selectedEvent = findCreatePreviewEvent(createPreview?.events ?? [], createSelectedEventId);
-    const eventSlug = selectedEvent ? toEventApiSlug(slug, selectedEvent.eventSlug ?? "") : "";
+    const eventSlug = selectedEvent ? toEventApiSlug(createTournamentSlug, selectedEvent.eventSlug ?? "") : "";
     if (tournamentSlug === "" || eventSlug === "") {
       setError(t("大会IDを入力し、event一覧からeventを選択してください。"));
       return;
     }
+
     if (createSelectedEventId !== "") {
       try {
         const existingItems = await listLocalSnapshotEvents();
@@ -200,7 +232,7 @@ export function useTournamentCreation({
     });
     try {
       await saveStartggToken();
-      await saveLastSlug(tournamentSlug);
+      await saveStartggCreateSlug(createTournamentSlug.trim());
       await persistEventSnapshot({
         tournamentSlug,
         eventSlug,
@@ -213,6 +245,21 @@ export function useTournamentCreation({
       setError(String(error));
     } finally {
       setCreateSnapshotProgress(null);
+      setCreateBusy(false);
+    }
+  }
+
+  async function createLocalEventSnapshot(input: CreateLocalEventSnapshotInput) {
+    setCreateBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      await persistLocalEventSnapshot(input);
+      await onSnapshotCreated();
+      setMessage(t("ローカルeventのスナップショットを作成しました。"));
+    } catch (error) {
+      setError(String(error));
+    } finally {
       setCreateBusy(false);
     }
   }
@@ -281,6 +328,8 @@ export function useTournamentCreation({
   return {
     token,
     setToken,
+    createTournamentSlug,
+    handleCreateTournamentSlugChange,
     createPreview,
     createPreviewLoadFailed,
     createSelectedEventId,
@@ -297,5 +346,6 @@ export function useTournamentCreation({
     loadCreatePreview,
     handleCreateEventDropdownChange,
     createEventSnapshotBySlug,
+    createLocalEventSnapshot,
   };
 }

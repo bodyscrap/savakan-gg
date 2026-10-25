@@ -482,7 +482,6 @@ function App() {
     stopDqCameraScan,
   } = useDqCameraScan();
   const tournamentCreation = useTournamentCreation({
-    slug,
     perPage: STARTGG_FETCH_PER_PAGE,
     setCreateBusy,
     setBusy,
@@ -498,6 +497,8 @@ function App() {
   const {
     token,
     setToken,
+    createTournamentSlug,
+    handleCreateTournamentSlugChange,
     createPreview,
     createPreviewLoadFailed,
     createSelectedEventId,
@@ -514,6 +515,7 @@ function App() {
     loadCreatePreview,
     handleCreateEventDropdownChange,
     createEventSnapshotBySlug,
+    createLocalEventSnapshot,
   } = tournamentCreation;
   const {
     snapshot,
@@ -560,6 +562,25 @@ function App() {
     setHasLocalInitialSeedShuffle(false);
     setSeedSnapshotRefreshRequired(false);
     setIsInitialSeedStatusLoading(true);
+    if (selectedEventMeta?.origin === "local") {
+      void invoke<boolean>("has_local_initial_phase_seed_shuffle", {
+        slug: normalizedSeedSlug,
+        eventId,
+      }).then((hasLocal) => {
+        if (active) {
+          setHasLocalInitialSeedShuffle(hasLocal);
+          setIsInitialSeedStatusLoading(false);
+        }
+      }).catch((checkError) => {
+        if (active) {
+          setIsInitialSeedStatusLoading(false);
+          setError(t("初期Seedの状態確認に失敗しました: {p0}", { p0: String(checkError) }));
+        }
+      });
+      return () => {
+        active = false;
+      };
+    }
     const remoteSeedStatus = token.trim() === ""
       ? Promise.resolve({ hasUnreported: false, hasLocal: false })
       : Promise.all([
@@ -601,6 +622,7 @@ function App() {
     initialSeedStatusKey,
     normalizedSeedSlug,
     selectedEvent?.eventId,
+    selectedEventMeta?.origin,
     seedStatusRefreshRevision,
     snapshot?.updatedAt,
     token,
@@ -2549,10 +2571,10 @@ function App() {
             <CreateSnapshot
               token={token}
               onTokenChange={setToken}
-              slug={slug}
-              onSlugChange={setSlug}
+              createTournamentSlug={createTournamentSlug}
+              onCreateTournamentSlugChange={handleCreateTournamentSlugChange}
               createBusy={createBusy}
-              canLoadPreview={toApiSlug(slug) !== "" && token.trim() !== ""}
+              canLoadPreview={toApiSlug(createTournamentSlug) !== "" && token.trim() !== ""}
               onSaveToken={saveToken}
               onLoadPreview={loadCreatePreview}
               createPreview={createPreview}
@@ -2564,8 +2586,11 @@ function App() {
               onEventDropdownChange={handleCreateEventDropdownChange}
               createEventAlias={createEventAlias}
               onEventAliasChange={setCreateEventAlias}
-              canCreateSnapshot={token.trim() !== "" && toApiSlug(slug) !== "" && createSelectedEventId !== "" && toEventApiSlug(slug, createPreview?.events.find((event) => event.eventId === createSelectedEventId)?.eventSlug ?? "") !== ""}
+              canCreateSnapshot={token.trim() !== "" && toApiSlug(createTournamentSlug) !== "" && createSelectedEventId !== "" && toEventApiSlug(createTournamentSlug, createPreview?.events.find((event) => event.eventId === createSelectedEventId)?.eventSlug ?? "") !== ""}
               onCreateSnapshot={() => void createEventSnapshotBySlug()}
+              senderUserId={senderProfile.senderUserId}
+              canCreateLocalSnapshot={/^\d{8}$/.test(senderProfile.senderUserId.trim())}
+              onCreateLocalSnapshot={(input) => void createLocalEventSnapshot(input)}
             />
             <EventSelector
               items={localSnapshotEvents}
@@ -2595,7 +2620,7 @@ function App() {
               tournamentName: snapshot?.name ?? "-",
               eventName: selectedEvent?.name ?? "",
               busy,
-              canUpdateSnapshot: toApiSlug(slug) !== "",
+              canUpdateSnapshot: toApiSlug(slug) !== "" && selectedEventMeta?.origin !== "local",
               eventAliasDraft,
               initialSeedPhaseName: selectedEvent?.phases
                 ?.slice()
@@ -3087,7 +3112,7 @@ function App() {
             onOpenMobileInput={() => void openMobileInputPortalDialog()}
             canRestore={!busy && toApiSlug(slug) !== "" && Boolean(selectedEvent)}
             onOpenRestore={() => setRestoreDialogOpen(true)}
-            canReport={!busy && !isInitialSeedStatusLoading && toApiSlug(slug) !== "" && (confirmedReportableCount > 0 || hasUnreportedInitialSeedShuffle)}
+            canReport={selectedEventMeta?.origin !== "local" && !busy && !isInitialSeedStatusLoading && toApiSlug(slug) !== "" && (confirmedReportableCount > 0 || hasUnreportedInitialSeedShuffle)}
             onReport={() => void bracketReport.startReport()}
             roundRobin={{
               entrantNames: roundRobinEntrantNames,
@@ -3210,7 +3235,7 @@ function App() {
               }
             }}
             seedSnapshotPromptOpen={bracketReport.seedSnapshotPromptOpen}
-            canReportWithoutSnapshot={confirmedReportableCount > 0}
+            canReportWithoutSnapshot={selectedEventMeta?.origin !== "local" && confirmedReportableCount > 0}
             onCloseSeedSnapshotPrompt={bracketReport.dismissSeedSnapshotPrompt}
             onUpdateSeedSnapshot={() => void updateSnapshot()}
             onReportWithoutSnapshot={() => {
@@ -3231,7 +3256,7 @@ function App() {
               && lockedPoolGroupIdsForCurrentPhase.length > 0
             }
             canRestoreAll={!busy && Boolean(selectedEvent)}
-            canUpdateSnapshot={!busy && toApiSlug(slug) !== ""}
+            canUpdateSnapshot={!busy && toApiSlug(slug) !== "" && selectedEventMeta?.origin !== "local"}
             canDiscardAllDrafts={!busy && toApiSlug(slug) !== "" && Boolean(selectedEvent)}
             onCloseRestore={() => setRestoreDialogOpen(false)}
             onRestoreCurrentPool={() => void restoreGraphAndRefreshDisplay(

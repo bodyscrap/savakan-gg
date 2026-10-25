@@ -7,6 +7,7 @@ mod startgg;
 mod startgg_scalars;
 mod storage;
 mod overlay_layout;
+mod local_event;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, UdpSocket};
@@ -19,7 +20,8 @@ use if_addrs::get_if_addrs;
 use models::{
     ApplyExternalScoreReportInput, BracketBatchReportInput, BracketBatchReportResult,
     ClearLocalSetResultDraftInput, ClearPhaseGroupExternalEditorInput,
-    CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, FeatureMessage, ItemListConfig,
+    CreateEventSnapshotBySlugInput, CreateEventSnapshotInput, CreateLocalEventSnapshotInput,
+    FeatureMessage, ItemListConfig,
     LocalPlayerMetaInput, LocalSetPlaySideInput, LocalSetResultInput, LocalSetScoreInput,
     LocalSetScoreUpdateInput, LocalSnapshotEventListItem, MobileResultRequestInput,
     MobileResultRequestItem, PlaySide, ReportSetResultInput, ResetSetResultCascadeInput,
@@ -875,6 +877,7 @@ mod tests {
             phase_group_display_identifier: None,
             phase_group_set_name: None,
             is_intermediate: false,
+            is_bye: false,
             state: 0,
             winner_id: None,
             winner_placement: None,
@@ -7382,6 +7385,16 @@ fn load_last_slug(app: tauri::AppHandle) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn save_startgg_create_slug(app: tauri::AppHandle, slug: String) -> Result<(), String> {
+    storage::save_startgg_create_slug(&app, &slug)
+}
+
+#[tauri::command]
+fn load_startgg_create_slug(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    storage::load_startgg_create_slug(&app)
+}
+
+#[tauri::command]
 fn save_last_snapshot_selection(
     app: tauri::AppHandle,
     slug: String,
@@ -7730,12 +7743,21 @@ async fn create_event_snapshot_by_slug(
 }
 
 #[tauri::command]
+fn create_local_event_snapshot(
+    app: tauri::AppHandle,
+    input: CreateLocalEventSnapshotInput,
+) -> Result<TournamentWorkspace, String> {
+    storage::create_local_event_snapshot(&app, input)
+}
+
+#[tauri::command]
 async fn refresh_local_event_snapshot_from_remote(
     app: tauri::AppHandle,
     slug: String,
     event_id: String,
     per_page: Option<u32>,
 ) -> Result<TournamentWorkspace, String> {
+    storage::require_startgg_event(&app, &slug, &event_id)?;
     let token = storage::load_token(&app)?;
     let snapshot = fetch_event_snapshot_for_manual_refresh(
         &app,
@@ -8038,6 +8060,7 @@ async fn has_unreported_initial_phase_seed_shuffle(
     slug: String,
     event_id: String,
 ) -> Result<bool, String> {
+    storage::require_startgg_event(&app, &slug, &event_id)?;
     let Some((phase_id, _original, desired, _restore_requested)) =
         storage::initial_phase_seed_shuffle_for_report(&app, &slug, &event_id)?
     else {
@@ -8081,6 +8104,7 @@ async fn sync_tournament(
     slug: String,
     per_page: Option<u32>,
 ) -> Result<TournamentWorkspace, String> {
+    storage::require_startgg_tournament(&app, &slug)?;
     let token = storage::load_token(&app)?;
     let mut snapshot = startgg::sync_tournament(&token, &slug, per_page.unwrap_or(200)).await?;
     snapshot.slug = slug.clone();
@@ -8103,6 +8127,7 @@ async fn report_set_result(
     app: tauri::AppHandle,
     input: ReportSetResultInput,
 ) -> Result<TournamentWorkspace, String> {
+    storage::require_startgg_tournament(&app, &input.slug)?;
     let token = storage::load_token(&app)?;
 
     startgg::report_set_result(
@@ -8136,6 +8161,9 @@ async fn reset_set_result_cascade(
     app: tauri::AppHandle,
     input: ResetSetResultCascadeInput,
 ) -> Result<ResetSetResultCascadeResult, String> {
+    if input.reset_remote.unwrap_or(false) {
+        storage::require_startgg_event(&app, &input.slug, &input.event_id)?;
+    }
     let affected_set_ids = storage::list_affected_set_ids_for_reset(
         &app,
         &input.slug,
@@ -8244,6 +8272,8 @@ pub fn run() {
             load_saved_startgg_token,
             save_last_slug,
             load_last_slug,
+            save_startgg_create_slug,
+            load_startgg_create_slug,
             save_last_snapshot_selection,
             load_last_snapshot_selection,
             save_event_last_phase_pool_selection,
@@ -8289,6 +8319,7 @@ pub fn run() {
             delete_local_snapshot_event,
             create_event_snapshot,
             create_event_snapshot_by_slug,
+            create_local_event_snapshot,
             refresh_local_event_snapshot_from_remote,
             restore_local_event_graph_from_snapshot,
             clear_local_set_result_drafts,

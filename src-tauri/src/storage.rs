@@ -13,7 +13,8 @@ use tauri::{AppHandle, Manager};
 use crate::models::{
     ApplyExternalScoreReportInput, BracketGraphEdge, BracketGraphSnapshot,
     ClearPhaseGroupExternalEditorInput, EventEntrantMeta, EventLocalMeta, EventManagementMeta,
-    EventSnapshot, FeatureMessage, InitialPhaseSeedMappingEntry, ItemListConfig,
+    CreateLocalEventSnapshotInput, EventOrigin, EventSnapshot, FeatureMessage,
+    InitialPhaseSeedMappingEntry, ItemListConfig,
     LocalGrandFinalResetResultMeta, LocalPlayerMetaInput, LocalSetPlaySideInput,
     LocalSetResultInput, LocalSetResultMeta, LocalSetScoreMeta, LocalSetScoreUpdateInput,
     LocalSnapshotEventListItem, MobileResultRequestInput, MobileResultRequestItem,
@@ -29,16 +30,19 @@ use crate::models::{
 const STORAGE_DIR_NAME: &str = "savakan-gg";
 const TOKEN_FILE: &str = "startgg-token.txt";
 const SLUG_FILE: &str = "last-slug.txt";
+const STARTGG_CREATE_SLUG_FILE: &str = "last-startgg-create-slug.txt";
 const ITEM_LISTS_FILE: &str = "item-lists.json";
 const EVENT_MGMT_FILE: &str = "event-mgmt-settings.json";
 const SENDER_PROFILE_FILE: &str = "sender-profile.json";
 const GENERIC_MESSAGES_FILE: &str = "generic-messages.json";
 const MOBILE_RESULT_REQUESTS_FILE: &str = "mobile-result-requests.json";
 const LAST_SNAPSHOT_SELECTION_FILE: &str = "last-snapshot-selection.json";
+const LOCAL_EVENT_SEQUENCE_FILE: &str = "local-event-sequences.json";
 const TEMP_TOKEN_FILE: &str = "token.txt";
 const SETTINGS_DIR_NAME: &str = "settings";
 const SNAPSHOTS_DIR_NAME: &str = "snapshots";
 const EVENT_SETTING_CATEGORY_SLOT_COUNT: usize = 3;
+static LOCAL_EVENT_SEQUENCE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn storage_perf_log(message: impl FnOnce() -> String) {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -217,6 +221,10 @@ fn slug_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(settings_dir(app)?.join(SLUG_FILE))
 }
 
+fn startgg_create_slug_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(settings_dir(app)?.join(STARTGG_CREATE_SLUG_FILE))
+}
+
 fn item_lists_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(settings_dir(app)?.join(ITEM_LISTS_FILE))
 }
@@ -245,6 +253,10 @@ fn last_snapshot_selection_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(settings_dir(app)?.join(LAST_SNAPSHOT_SELECTION_FILE))
 }
 
+fn local_event_sequence_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(settings_dir(app)?.join(LOCAL_EVENT_SEQUENCE_FILE))
+}
+
 fn mobile_result_requests_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(settings_dir(app)?.join(MOBILE_RESULT_REQUESTS_FILE))
 }
@@ -257,6 +269,8 @@ fn build_empty_meta(slug: &str, event_id: &str) -> TournamentLocalMeta {
         events: vec![EventLocalMeta {
             event_id: event_id.to_owned(),
             event_name: String::new(),
+            origin: Default::default(),
+            owner_sender_user_id: None,
             event_alias: None,
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
@@ -835,6 +849,106 @@ mod score_edit_lock_tests {
         assert!(!is_set_score_edit_locked(&workspace, "event", "set-a"));
         assert!(is_set_score_edit_locked(&workspace, "event", "set-b"));
     }
+
+    #[test]
+    fn loser_bracket_bye_advances_after_the_playable_source_set_finishes() {
+        let input = crate::models::CreateLocalEventSnapshotInput {
+            tournament_name: "Local".to_owned(),
+            event_name: "Event".to_owned(),
+            event_alias: None,
+            participant_count: 31,
+            phases: vec![
+                crate::models::LocalEventPhaseConfig {
+                    name: "Phase 1".to_owned(),
+                    pool_count: 1,
+                    bracket_type: "DOUBLE_ELIMINATION".to_owned(),
+                    qualifiers_per_pool: 2,
+                    tiebreak_order: vec![
+                        "TOTAL_SETS_WON".to_owned(),
+                        "GAME_RATIO".to_owned(),
+                        "HEAD_TO_HEAD".to_owned(),
+                    ],
+                    enabled_tiebreak_rules: vec![
+                        "TOTAL_SETS_WON".to_owned(),
+                        "GAME_RATIO".to_owned(),
+                        "HEAD_TO_HEAD".to_owned(),
+                    ],
+                    third_place_match: false,
+                    fifth_place_match: false,
+                },
+                crate::models::LocalEventPhaseConfig {
+                    name: "Final".to_owned(),
+                    pool_count: 1,
+                    bracket_type: "DOUBLE_ELIMINATION".to_owned(),
+                    qualifiers_per_pool: 0,
+                    tiebreak_order: vec![
+                        "TOTAL_SETS_WON".to_owned(),
+                        "GAME_RATIO".to_owned(),
+                        "HEAD_TO_HEAD".to_owned(),
+                    ],
+                    enabled_tiebreak_rules: vec![
+                        "TOTAL_SETS_WON".to_owned(),
+                        "GAME_RATIO".to_owned(),
+                        "HEAD_TO_HEAD".to_owned(),
+                    ],
+                    third_place_match: false,
+                    fifth_place_match: false,
+                },
+            ],
+        };
+        let mut snapshot = crate::local_event::generate_local_snapshot(
+            &input,
+            "local-test",
+            "local-test",
+            "event",
+        )
+        .expect("local event should generate");
+        let event = &mut snapshot.events[0];
+        let bye_index = event
+            .sets
+            .iter()
+            .position(|set| {
+                set.is_bye
+                    && set.round == Some(-1)
+                    && set.slots.iter().filter(|slot| slot.entrant_id.is_some()).count() == 0
+            })
+            .expect("losers opening round should contain a bye");
+        let loser_bye = event.sets[bye_index].clone();
+        let played_source_id = [
+            loser_bye.entrant1_source.as_ref(),
+            loser_bye.entrant2_source.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|source| source.condition.as_deref() == Some("loser"))
+        .and_then(|source| source.resolved_set_id.clone())
+        .expect("one losers bye slot should be fed by a played winners set");
+        let played_source = event
+            .sets
+            .iter_mut()
+            .find(|set| set.set_id == played_source_id)
+            .expect("winners source set should exist");
+        let winner_id = played_source.slots[0]
+            .entrant_id
+            .clone()
+            .expect("played set should have its first entrant");
+        let loser_id = played_source.slots[1]
+            .entrant_id
+            .clone()
+            .expect("played set should have its second entrant");
+        played_source.winner_id = Some(winner_id);
+        played_source.state = 3;
+
+        rebuild_progression_from_completed_sets(&mut snapshot);
+
+        let advanced = snapshot.events[0]
+            .sets
+            .iter()
+            .find(|set| set.set_id == loser_bye.set_id)
+            .expect("losers bye should remain in the bracket");
+        assert_eq!(advanced.state, 3);
+        assert_eq!(advanced.winner_id.as_deref(), Some(loser_id.as_str()));
+    }
 }
 
 pub fn is_set_score_edit_locked(
@@ -950,6 +1064,8 @@ fn merge_snapshot_into_meta(
         meta.events.push(EventLocalMeta {
             event_id: event.event_id.clone(),
             event_name: event.name.clone(),
+            origin: Default::default(),
+            owner_sender_user_id: None,
             event_alias: None,
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
@@ -1092,6 +1208,28 @@ pub fn load_slug(app: &AppHandle) -> Result<Option<String>, String> {
     }
 
     let raw = fs::read_to_string(path).map_err(|e| format!("slug読込に失敗しました: {e}"))?;
+    let trimmed = raw.trim().to_owned();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed))
+    }
+}
+
+pub fn save_startgg_create_slug(app: &AppHandle, slug: &str) -> Result<(), String> {
+    let path = startgg_create_slug_path(app)?;
+    fs::write(path, slug.trim())
+        .map_err(|e| format!("start.gg作成用slug保存に失敗しました: {e}"))
+}
+
+pub fn load_startgg_create_slug(app: &AppHandle) -> Result<Option<String>, String> {
+    let path = startgg_create_slug_path(app)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("start.gg作成用slug読込に失敗しました: {e}"))?;
     let trimmed = raw.trim().to_owned();
     if trimmed.is_empty() {
         Ok(None)
@@ -1516,6 +1654,105 @@ pub fn load_token(app: &AppHandle) -> Result<String, String> {
     )
 }
 
+fn next_local_event_sequence(app: &AppHandle, owner_sender_user_id: &str) -> Result<u64, String> {
+    let lock = LOCAL_EVENT_SEQUENCE_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock
+        .lock()
+        .map_err(|_| "ローカルイベント採番ロックを取得できませんでした。".to_owned())?;
+    let path = local_event_sequence_path(app)?;
+    let mut sequences = match fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str::<HashMap<String, u64>>(&raw)
+            .map_err(|error| format!("ローカルイベント採番情報を読み込めません: {error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+        Err(error) => return Err(format!("ローカルイベント採番情報を読み込めません: {error}")),
+    };
+    let sequence = sequences
+        .get(owner_sender_user_id)
+        .copied()
+        .unwrap_or_default()
+        .checked_add(1)
+        .ok_or_else(|| "ローカルイベントの採番上限に達しました。".to_owned())?;
+    sequences.insert(owner_sender_user_id.to_owned(), sequence);
+    let serialized = serde_json::to_string_pretty(&sequences)
+        .map_err(|error| format!("ローカルイベント採番情報を保存できません: {error}"))?;
+    fs::write(&path, serialized)
+        .map_err(|error| format!("ローカルイベント採番情報を保存できません: {error}"))?;
+    Ok(sequence)
+}
+
+pub fn create_local_event_snapshot(
+    app: &AppHandle,
+    input: CreateLocalEventSnapshotInput,
+) -> Result<TournamentWorkspace, String> {
+    let owner_sender_user_id = load_sender_profile(app)?
+        .map(|profile| profile.sender_user_id.trim().to_owned())
+        .filter(|sender_id| {
+            sender_id.len() == 8 && sender_id.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .ok_or_else(|| {
+            "ローカルイベントを作成する前に、送信者IDを設定してください。".to_owned()
+        })?;
+    let sequence = next_local_event_sequence(app, &owner_sender_user_id)?;
+    let namespace = format!("local-{owner_sender_user_id}-{sequence}");
+    let snapshot = crate::local_event::generate_local_snapshot(
+        &input,
+        &namespace,
+        &namespace,
+        &format!("{namespace}-event"),
+    )?;
+    let event_id = snapshot
+        .events
+        .first()
+        .map(|event| event.event_id.clone())
+        .ok_or_else(|| "ローカルイベントの生成結果にeventがありません。".to_owned())?;
+    save_event_snapshot(app, &snapshot, &event_id, None)?;
+    let mut local_meta = load_local_meta(app, &snapshot.slug, &event_id)?;
+    let event_meta = local_meta
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| "ローカルイベントの設定を保存できません。".to_owned())?;
+    event_meta.origin = EventOrigin::Local;
+    event_meta.owner_sender_user_id = Some(owner_sender_user_id);
+    event_meta.event_alias = input
+        .event_alias
+        .as_deref()
+        .map(str::trim)
+        .filter(|alias| !alias.is_empty())
+        .map(str::to_owned);
+    save_local_meta(app, &event_id, &local_meta)?;
+    load_workspace(app, &snapshot.slug, &event_id)
+}
+
+pub fn event_origin(
+    app: &AppHandle,
+    slug: &str,
+    event_id: &str,
+) -> Result<(EventOrigin, Option<String>), String> {
+    let meta = load_local_meta(app, slug, event_id)?;
+    let event = meta
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("イベント設定が見つかりません: {event_id}"))?;
+    Ok((event.origin, event.owner_sender_user_id.clone()))
+}
+
+pub fn require_startgg_event(app: &AppHandle, slug: &str, event_id: &str) -> Result<(), String> {
+    if event_origin(app, slug, event_id)?.0 == EventOrigin::Local {
+        return Err("ローカルイベントではstart.gg連携機能を利用できません。".to_owned());
+    }
+    Ok(())
+}
+
+pub fn require_startgg_tournament(app: &AppHandle, slug: &str) -> Result<(), String> {
+    let snapshot = load_snapshot(app, slug)?;
+    for event in &snapshot.events {
+        require_startgg_event(app, slug, &event.event_id)?;
+    }
+    Ok(())
+}
+
 pub fn save_snapshot(app: &AppHandle, snapshot: &TournamentSnapshot) -> Result<(), String> {
     invalidate_progression_cache(&snapshot.slug);
     let normalized_slug = normalize_slug_for_storage(&snapshot.slug);
@@ -1616,6 +1853,9 @@ pub fn export_tournament_share_archive(
         .iter()
         .find(|event_meta| event_meta.event_id == event_id);
     let event_settings = TournamentShareEventSettings {
+        origin: event_meta.map_or(EventOrigin::Startgg, |meta| meta.origin),
+        owner_sender_user_id: event_meta
+            .and_then(|event_meta| event_meta.owner_sender_user_id.clone()),
         event_alias: event_meta.and_then(|event_meta| event_meta.event_alias.clone()),
         event_management: event_meta.and_then(|event_meta| event_meta.event_management.clone()),
         entrants: event_meta
@@ -1753,6 +1993,8 @@ pub fn import_tournament_share_archive(
         .iter_mut()
         .find(|event_meta| event_meta.event_id == event_id)
     {
+        event_meta.origin = event_settings.origin;
+        event_meta.owner_sender_user_id = event_settings.owner_sender_user_id;
         event_meta.event_alias = event_settings.event_alias;
         event_meta.event_management = event_settings.event_management;
         event_meta.score_edit_enabled_phase_group_ids.clear();
@@ -3942,6 +4184,43 @@ fn build_progression_targets_by_source(
     targets_by_source
 }
 
+fn bye_slot_is_resolved_absent(
+    event: &EventSnapshot,
+    set: &crate::models::SetSnapshot,
+    slot_index: usize,
+) -> bool {
+    let source = match slot_index {
+        0 => set.entrant1_source.as_ref(),
+        1 => set.entrant2_source.as_ref(),
+        _ => None,
+    };
+    let Some(source) = source else {
+        return true;
+    };
+    if source.source_type.as_deref() != Some("set")
+        || source.condition.as_deref() != Some("loser")
+    {
+        return false;
+    }
+    let source_set_id = source
+        .resolved_set_id
+        .as_deref()
+        .or(source.type_id.as_deref());
+    let Some(source_set) = source_set_id
+        .and_then(|source_set_id| event.sets.iter().find(|candidate| candidate.set_id == source_set_id))
+    else {
+        return false;
+    };
+    source_set.is_bye
+        && source_set.state == 3
+        && source_set.winner_id.is_some()
+        && source_set.slots.iter().all(|slot| {
+            slot.entrant_id
+                .as_ref()
+                .is_none_or(|entrant_id| Some(entrant_id) == source_set.winner_id.as_ref())
+        })
+}
+
 fn rebuild_progression_from_completed_sets(
     snapshot: &mut TournamentSnapshot,
 ) -> HashSet<(String, String)> {
@@ -4224,6 +4503,68 @@ fn rebuild_progression_from_completed_sets(
                     slot.score = Some(*score);
                 }
             }
+        }
+    }
+    loop {
+        let automatic_byes = snapshot
+            .events
+            .iter()
+            .flat_map(|event| {
+                event.sets.iter().filter_map(move |set| {
+                    if !set.is_bye || set.state == 3 || set.winner_id.is_some() {
+                        return None;
+                    }
+                    let entrant_slots = set
+                        .slots
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, slot)| slot.entrant_id.is_some())
+                        .collect::<Vec<_>>();
+                    if entrant_slots.len() != 1 {
+                        return None;
+                    }
+                    let (winner_slot_index, winner_slot) = entrant_slots[0];
+                    let missing_slot_index = 1 - winner_slot_index;
+                    bye_slot_is_resolved_absent(event, set, missing_slot_index)
+                        .then(|| {
+                            (
+                                event.event_id.clone(),
+                                set.set_id.clone(),
+                                winner_slot.entrant_id.clone().unwrap_or_default(),
+                            )
+                        })
+                })
+            })
+            .collect::<Vec<_>>();
+        if automatic_byes.is_empty() {
+            break;
+        }
+        for (event_id, set_id, winner_id) in automatic_byes {
+            if let Some(set) = snapshot
+                .events
+                .iter_mut()
+                .find(|event| event.event_id == event_id)
+                .and_then(|event| event.sets.iter_mut().find(|set| set.set_id == set_id))
+            {
+                if set.state == 3 || set.winner_id.is_some() {
+                    continue;
+                }
+                set.state = 3;
+                set.winner_id = Some(winner_id.clone());
+            }
+            if let Some(targets_by_source) = progression_targets_by_event.get(&event_id) {
+                apply_local_progression(
+                    snapshot,
+                    &event_id,
+                    &set_id,
+                    &winner_id,
+                    targets_by_source,
+                );
+            }
+        }
+        for event in &mut snapshot.events {
+            normalize_completed_source_slots(event);
+            apply_seed_sources_to_set_slots(event);
         }
     }
     let normalize_sources_elapsed_us = normalize_sources_started_at.elapsed().as_micros();
@@ -4695,6 +5036,7 @@ pub fn list_local_snapshot_events(
                 updated_at: meta.updated_at,
                 event_id: event.event_id.clone(),
                 event_name: event.event_name.clone(),
+                origin: event.origin,
                 event_alias: event.event_alias.clone(),
                 last_selected_phase_name: event.last_selected_phase_name.clone(),
                 last_selected_phase_group_name: event.last_selected_phase_group_name.clone(),
@@ -4774,6 +5116,7 @@ pub fn list_local_snapshot_events(
                         updated_at: graph.updated_at,
                         event_id: graph.event.event_id,
                         event_name: graph.event.name,
+                        origin: EventOrigin::Startgg,
                         event_alias: None,
                         last_selected_phase_name: None,
                         last_selected_phase_group_name: None,
@@ -5770,6 +6113,7 @@ fn ensure_virtual_grand_final_reset_set(
         phase_group_display_identifier: grand_final_set.phase_group_display_identifier.clone(),
         phase_group_set_name: None,
         is_intermediate: false,
+        is_bye: false,
         state: if has_empty { 1 } else { 2 },
         winner_id: None,
         winner_placement: None,
@@ -8117,6 +8461,8 @@ pub fn set_event_alias(
         local_meta.events.push(EventLocalMeta {
             event_id: event_id.to_owned(),
             event_name: String::new(),
+            origin: Default::default(),
+            owner_sender_user_id: None,
             event_alias: None,
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
@@ -8321,6 +8667,8 @@ pub fn save_local_meta(
         normalized.events.push(EventLocalMeta {
             event_id: event_id.to_owned(),
             event_name: String::new(),
+            origin: Default::default(),
+            owner_sender_user_id: None,
             event_alias: None,
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
@@ -8464,6 +8812,8 @@ pub fn load_local_meta(
         parsed.events.push(EventLocalMeta {
             event_id: event_id.to_owned(),
             event_name: String::new(),
+            origin: Default::default(),
+            owner_sender_user_id: None,
             event_alias: None,
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
@@ -9614,6 +9964,15 @@ fn upsert_local_set_result_inner(
         .events
         .iter()
         .find(|event| event.event_id == input.event_id)
+        .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
+        .is_some_and(|set| set.is_bye)
+    {
+        return Err("BYEによる自動進出に試合結果は登録できません。".to_owned());
+    }
+    if snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == input.event_id)
         .and_then(|event| {
             event
                 .sets
@@ -10373,6 +10732,8 @@ pub fn upsert_local_player_meta(
         local_meta.events.push(EventLocalMeta {
             event_id: input.event_id.clone(),
             event_name: input.event_name.clone(),
+            origin: Default::default(),
+            owner_sender_user_id: None,
             event_alias: None,
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
@@ -10509,6 +10870,8 @@ pub fn save_event_management_meta(
         local_meta.events.push(EventLocalMeta {
             event_id: input.event_id.clone(),
             event_name: input.event_name.clone(),
+            origin: Default::default(),
+            owner_sender_user_id: None,
             event_alias: None,
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,
@@ -10566,6 +10929,8 @@ pub fn set_phase_group_score_edit_lock(
             local_meta.events.push(EventLocalMeta {
                 event_id: input.event_id.clone(),
                 event_name: input.event_name.clone(),
+                origin: Default::default(),
+                owner_sender_user_id: None,
                 event_alias: None,
                 last_selected_phase_name: None,
                 last_selected_phase_group_name: None,
@@ -10635,6 +11000,8 @@ pub fn set_phase_group_external_score_broadcast(
             local_meta.events.push(EventLocalMeta {
                 event_id: input.event_id.clone(),
                 event_name: input.event_name.clone(),
+                origin: Default::default(),
+                owner_sender_user_id: None,
                 event_alias: None,
                 last_selected_phase_name: None,
                 last_selected_phase_group_name: None,
@@ -10711,6 +11078,8 @@ pub fn set_phase_group_external_editor(
             local_meta.events.push(EventLocalMeta {
                 event_id: input.event_id.clone(),
                 event_name: input.event_name.clone(),
+                origin: Default::default(),
+                owner_sender_user_id: None,
                 event_alias: None,
                 last_selected_phase_name: None,
                 last_selected_phase_group_name: None,
@@ -10815,6 +11184,8 @@ pub fn set_event_last_phase_pool_selection(
         local_meta.events.push(EventLocalMeta {
             event_id: event_id.to_owned(),
             event_name: event_name.to_owned(),
+            origin: Default::default(),
+            owner_sender_user_id: None,
             event_alias: None,
             last_selected_phase_name: None,
             last_selected_phase_group_name: None,

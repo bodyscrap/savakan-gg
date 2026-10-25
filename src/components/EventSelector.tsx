@@ -49,7 +49,7 @@ export function EventSelector({
 
   return (
     <section className="panel">
-      <h2>{t("5.スナップショットの選択")}</h2>
+      <h2>{t("スナップショットの選択")}</h2>
       <div className="panel-toolbar compact">
         <button
           type="button"
@@ -76,7 +76,7 @@ export function EventSelector({
       {loading ? (
         <p className="meta">{t("ローカルevent一覧を読み込んでいます...")}</p>
       ) : items.length === 0 ? (
-        <p className="meta">{t("保存済みイベントがありません。大会管理タブから start.gg 同期を実行してください。")}</p>
+        <p className="meta">{t("保存済みイベントがありません。スナップショット作成タブからstart.ggイベントを取り込むか、ローカルイベントを作成してください。")}</p>
       ) : (
         <>
           <div className="home-selector-grid">
@@ -103,7 +103,7 @@ export function EventSelector({
                 </option>
                 {filteredItems.map((item) => (
                   <option key={localSnapshotItemKey(item)} value={localSnapshotItemKey(item)}>
-                    {localSnapshotAliasLabel(item)}
+                    {item.origin === "local" ? t("ローカル") : t("start.gg")} / {localSnapshotAliasLabel(item)}
                   </option>
                 ))}
               </select>
@@ -131,7 +131,7 @@ export function EventSelector({
                     <h3>{localSnapshotAliasLabel(selectedItem)}</h3>
                     <span className="meta">{new Date(selectedItem.updatedAt).toLocaleString()}</span>
                   </div>
-                  <p className="meta">{t("tournament名: {value1}, event名: {value2}, 前回選択Phase/Pool: {value3}", { value1: selectedItem.tournamentName, value2: selectedItem.eventName, value3: selectedPhasePoolLabel })}</p>
+                  <p className="meta">{selectedItem.origin === "local" ? t("ローカルイベント") : t("start.ggイベント")} / {t("tournament名: {value1}, event名: {value2}, 前回選択Phase/Pool: {value3}", { value1: selectedItem.tournamentName, value2: selectedItem.eventName, value3: selectedPhasePoolLabel })}</p>
                 </article>
                 <div className="home-detail-actions">
                   <button type="button" className="ghost" disabled={busy || isDeleting} onClick={() => onSelectEvent(selectedItem)}>{t("スナップショットを選択")}</button>

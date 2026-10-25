@@ -37,6 +37,7 @@ export type SetSnapshot = {
   phaseGroupDisplayIdentifier: string | null;
   phaseGroupSetName?: string | null;
   isIntermediate?: boolean;
+  isBye?: boolean;
   state: number;
   winnerId: string | null;
   winnerProgressionSeedId?: string | null;

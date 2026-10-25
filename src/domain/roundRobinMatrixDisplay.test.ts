@@ -301,6 +301,27 @@ describe("buildRoundRobinSeedIndexes", () => {
 });
 
 describe("aggregateRoundRobinSetResults", () => {
+  it("does not count a BYE advancement as a match or win", () => {
+    const set = { ...makeSet(), isBye: true };
+    const entrants = set.slots.map((slot) => ({
+      slot,
+      entrantId: slot.entrantId as string,
+      entrantName: slot.entrantName,
+      isPlaceholder: false,
+    }));
+
+    const result = aggregateRoundRobinSetResults([{
+      set,
+      entrants,
+      hasUnassignedSlot: false,
+    }]);
+
+    expect(result.twoSlotSetCount).toBe(0);
+    expect(result.resolvedSetCount).toBe(0);
+    expect(result.registeredSetCount).toBe(0);
+    expect(result.standingStatsByEntrantId.size).toBe(0);
+  });
+
   it("indexes resolved sets and aggregates set, game, and head-to-head results", () => {
     const set = makeSet();
     const firstSlot = { ...set.slots[0], seedId: "seed-a" };

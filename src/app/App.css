@@ -1316,6 +1316,190 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+.create-layout--local {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.create-layout--local .create-layout-half,
+.create-layout--local .create-layout-full {
+  grid-column: 1;
+}
+
+.snapshot-source-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.25rem;
+}
+
+.snapshot-source-options label,
+.local-event-phase-option-field label {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 0.45rem;
+  white-space: nowrap;
+}
+
+.local-event-phase-option-field input {
+  flex: 0 0 auto;
+}
+
+.snapshot-source-options input,
+.local-event-phase-option-field input {
+  margin: 0;
+}
+
+.local-event-phase-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.local-event-phase {
+  min-width: 0;
+  margin: 0;
+  padding: 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.local-event-phase legend {
+  padding: 0 0.35rem;
+  font-weight: 700;
+}
+
+.local-event-phase-fields {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.2fr) minmax(7rem, 0.6fr) minmax(14rem, 1.2fr) minmax(11rem, 1fr);
+  align-items: end;
+  gap: 0.7rem;
+}
+
+.local-event-phase-fields label {
+  display: grid;
+  align-content: start;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.local-event-phase-fields input,
+.local-event-phase-fields select {
+  width: 100%;
+  min-width: 0;
+}
+
+.local-event-phase-option-field {
+  display: flex;
+  align-items: end;
+  min-height: 2.6rem;
+}
+
+.local-event-phase-option-field label {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 0.45rem;
+  white-space: nowrap;
+}
+
+.local-event-phase-option-field input {
+  flex: 0 0 auto;
+}
+
+.local-event-tiebreak {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.8rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--line);
+}
+
+.local-event-tiebreak ol {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.7rem;
+}
+
+.local-event-tiebreak li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-height: 2.1rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.local-event-tiebreak li.local-event-tiebreak-dragging {
+  opacity: 0.5;
+}
+
+.local-event-tiebreak li > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 1;
+  cursor: pointer;
+}
+
+.local-event-tiebreak li > label input {
+  margin: 0;
+}
+
+.local-event-tiebreak-drag-handle {
+  color: var(--muted);
+  cursor: grab;
+  user-select: none;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.local-event-tiebreak-drag-handle:active {
+  cursor: grabbing;
+}
+
+.local-event-tiebreak li > div {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.local-event-basic-fields {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.local-event-name-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.local-event-size-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(150px, 220px));
+  gap: 0.7rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--line);
+}
+
+.local-event-name-fields label,
+.local-event-size-fields label {
+  display: grid;
+  align-content: start;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.local-event-name-fields input,
+.local-event-size-fields input,
+.local-event-size-fields select {
+  width: 100%;
+  min-width: 0;
+}
+
 .create-snapshot-progress {
   margin-top: 0.75rem;
   display: grid;
@@ -3458,6 +3642,10 @@ li {
 }
 
 @media (max-width: 980px) {
+  .local-event-phase-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .app-shell {
     grid-template-columns: 1fr;
   }
@@ -3533,6 +3721,20 @@ li {
 
   .form {
     grid-template-columns: 1fr;
+  }
+
+  .local-event-phase-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .local-event-name-fields,
+  .local-event-size-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .snapshot-source-options {
+    display: grid;
+    gap: 0.55rem;
   }
 
   .form.sender-profile-form {

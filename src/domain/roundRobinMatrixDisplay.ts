@@ -586,6 +586,9 @@ export function aggregateRoundRobinSetResults(
   };
 
   for (const { set, entrants, hasUnassignedSlot } of resolvedSets) {
+    if (set.isBye) {
+      continue;
+    }
     if (set.slots.length === 2) {
       twoSlotSetCount += 1;
     }

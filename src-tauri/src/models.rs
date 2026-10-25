@@ -42,6 +42,10 @@ pub struct TournamentShareArchive {
 #[serde(rename_all = "camelCase")]
 pub struct TournamentShareEventSettings {
     #[serde(default)]
+    pub origin: EventOrigin,
+    #[serde(default)]
+    pub owner_sender_user_id: Option<String>,
+    #[serde(default)]
     pub event_alias: Option<String>,
     #[serde(default)]
     pub event_management: Option<EventManagementMeta>,
@@ -49,6 +53,14 @@ pub struct TournamentShareEventSettings {
     pub entrants: Vec<TournamentShareEntrantMeta>,
     #[serde(default)]
     pub set_play_sides: Vec<SetPlaySideMeta>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum EventOrigin {
+    #[default]
+    Startgg,
+    Local,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +192,10 @@ pub struct EventLocalMeta {
     pub event_id: String,
     pub event_name: String,
     #[serde(default)]
+    pub origin: EventOrigin,
+    #[serde(default)]
+    pub owner_sender_user_id: Option<String>,
+    #[serde(default)]
     pub event_alias: Option<String>,
     #[serde(default)]
     pub last_selected_phase_name: Option<String>,
@@ -194,6 +210,35 @@ pub struct EventLocalMeta {
     #[serde(default)]
     pub external_editors: Vec<PhaseGroupExternalEditor>,
     pub entrants: Vec<EventEntrantMeta>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLocalEventSnapshotInput {
+    pub tournament_name: String,
+    pub event_name: String,
+    #[serde(default)]
+    pub event_alias: Option<String>,
+    pub participant_count: usize,
+    pub phases: Vec<LocalEventPhaseConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalEventPhaseConfig {
+    pub name: String,
+    pub pool_count: usize,
+    pub bracket_type: String,
+    #[serde(default)]
+    pub qualifiers_per_pool: usize,
+    #[serde(default)]
+    pub tiebreak_order: Vec<String>,
+    #[serde(default)]
+    pub enabled_tiebreak_rules: Vec<String>,
+    #[serde(default)]
+    pub third_place_match: bool,
+    #[serde(default)]
+    pub fifth_place_match: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -621,6 +666,8 @@ pub struct SetSnapshot {
     pub phase_group_set_name: Option<String>,
     #[serde(default, alias = "isHiddenIntermediate")]
     pub is_intermediate: bool,
+    #[serde(default)]
+    pub is_bye: bool,
     pub state: i64,
     pub winner_id: Option<String>,
     #[serde(default)]
@@ -839,6 +886,8 @@ pub struct LocalSnapshotEventListItem {
     pub updated_at: DateTime<Utc>,
     pub event_id: String,
     pub event_name: String,
+    #[serde(default)]
+    pub origin: EventOrigin,
     #[serde(default)]
     pub event_alias: Option<String>,
     #[serde(default)]

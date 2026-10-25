@@ -266,6 +266,7 @@ pub(crate) async fn report_confirmed_sets_from_bracket(
     app: tauri::AppHandle,
     input: BracketBatchReportInput,
 ) -> Result<BracketBatchReportResult, String> {
+    storage::require_startgg_event(&app, &input.slug, &input.event_id)?;
     let token = storage::load_token(&app)?;
     let workspace = storage::load_workspace(&app, &input.slug, &input.event_id)?;
     let local_event = workspace
@@ -857,6 +858,7 @@ pub(crate) async fn report_initial_phase_seed_shuffle(
     slug: &str,
     event_id: &str,
 ) -> Result<crate::models::TournamentWorkspace, String> {
+    storage::require_startgg_event(&app, slug, event_id)?;
     let token = storage::load_token(&app)?;
     if let Some((phase_id, original, desired, restore_requested)) =
         storage::initial_phase_seed_shuffle_for_report(&app, slug, event_id)?
