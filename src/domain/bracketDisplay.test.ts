@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildBracketSections,
+  buildRoundColumns,
   buildSetDisplayCodeById,
   getBracketVerticalLayoutScale,
   scaleBracketSectionsForZoom,
@@ -14,6 +16,7 @@ import {
   resolveTbdSourceLabel,
   selectPhaseScopedPoolGroups,
 } from "./bracketDisplay";
+import { buildPositionedRoundColumns } from "./bracketLayout";
 import type { BracketSectionForView, PhasePoolGroup } from "./bracketDisplay";
 import type { SetSnapshot } from "./bracketProgression";
 
@@ -164,6 +167,181 @@ describe("bracket source labels", () => {
     });
 
     expect(result.map(({ slot }) => slot.entrantId)).toEqual(["player-b", "player-a"]);
+  });
+});
+
+describe("double-elimination bracket lane order", () => {
+  it("keeps a 31-player bracket's 16 first-round sets in numeric ID order", () => {
+    const firstRoundSets = Array.from({ length: 16 }, (_, index) => ({
+      setId: String(index + 1),
+      fullRoundText: "Winners Round 1",
+      round: 1,
+      slots: [],
+    } as unknown as SetSnapshot));
+    const columns = buildPositionedRoundColumns(
+      buildRoundColumns(firstRoundSets),
+      "winners",
+    );
+
+    expect(columns[0]?.positionedSets.map(({ set }) => set.setId)).toEqual(
+      Array.from({ length: 16 }, (_, index) => String(index + 1)),
+    );
+    expect(columns[0]?.positionedSets.map(({ y }) => y)).toEqual(
+      Array.from({ length: 16 }, (_, index) => 10 + index * 106),
+    );
+  });
+
+  it("hides BYE sets and positions the fullest visible round in each bracket", () => {
+    const createSet = (
+      setId: string,
+      round: number,
+      isBye = false,
+    ): SetSnapshot => ({
+      setId,
+      fullRoundText: round < 0 ? `Losers Round ${Math.abs(round)}` : `Winners Round ${round}`,
+      round,
+      phaseName: "Bracket",
+      phaseGroupName: "A",
+      phaseOrder: 1,
+      phaseGroupDisplayIdentifier: "A",
+      isBye,
+      state: 1,
+      winnerId: null,
+      entrant1Source: null,
+      entrant2Source: null,
+      slots: [],
+    });
+    const sets = [
+      ...Array.from({ length: 16 }, (_, index) => createSet(`w1-${index}`, 1, index !== 0)),
+      ...Array.from({ length: 8 }, (_, index) => createSet(`w2-${index}`, 2)),
+      ...Array.from({ length: 8 }, (_, index) => createSet(`l1-${index}`, -1, index === 0)),
+      ...Array.from({ length: 8 }, (_, index) => createSet(`l2-${index}`, -2)),
+    ];
+    const group: PhasePoolGroup = {
+      key: "bracket-a",
+      phaseGroupId: "phase-group-a",
+      phaseName: "Bracket",
+      phaseGroupName: "A",
+      bracketType: "DOUBLE_ELIMINATION",
+      phaseOrder: 1,
+      phaseGroupDisplayIdentifier: "A",
+      progressionsOut: [],
+      seedMap: null,
+      seedOrder: [],
+      seeds: [],
+      sets,
+      columns: [],
+    };
+
+    const sections = buildBracketSections(group);
+    const winners = sections.find((section) => section.key === "winners");
+    const losers = sections.find((section) => section.key === "losers");
+    expect(winners?.columns.map((column) => column.sets.length)).toEqual([1, 8]);
+    expect(losers?.columns.map((column) => column.sets.length)).toEqual([8, 7]);
+
+    for (const section of [winners, losers]) {
+      const columns = buildPositionedRoundColumns(section!.columns, section!.key);
+      const fullestColumn = columns.reduce((fullest, column) => (
+        column.positionedSets.length > fullest.positionedSets.length ? column : fullest
+      ));
+      expect(fullestColumn.round).toBe(section!.key === "winners" ? 2 : -2);
+      expect(fullestColumn.positionedSets.map(({ y }) => y)).toEqual(
+        Array.from({ length: fullestColumn.positionedSets.length }, (_, index) => 10 + index * 106),
+      );
+      for (const column of columns) {
+        const positions = column.positionedSets.map(({ y }) => y).sort((left, right) => left - right);
+        expect(positions.every(
+          (position, index) => index === 0 || position - positions[index - 1] >= 106,
+        )).toBe(true);
+      }
+      expect(columns.flatMap((column) => column.positionedSets).some(
+        ({ set }) => set.isBye,
+      )).toBe(false);
+    }
+  });
+
+  it("uses Losers Round 2 as the anchor when it ties for the maximum set count", () => {
+    const sets = [
+      ...Array.from({ length: 8 }, (_, index) => ({
+        setId: `l1-${index}`,
+        fullRoundText: "Losers Round 1",
+        round: -1,
+        isBye: false,
+        slots: [],
+      } as unknown as SetSnapshot)),
+      ...Array.from({ length: 8 }, (_, index) => ({
+        setId: `l2-${index}`,
+        fullRoundText: "Losers Round 2",
+        round: -2,
+        isBye: false,
+        slots: [],
+      } as unknown as SetSnapshot)),
+    ];
+
+    const columns = buildPositionedRoundColumns(buildRoundColumns(sets), "losers");
+    const roundTwo = columns.find((column) => column.round === -2);
+
+    expect(roundTwo?.positionedSets.map(({ y }) => y)).toEqual(
+      Array.from({ length: 8 }, (_, index) => 10 + index * 106),
+    );
+  });
+
+  it("anchors on the fullest Losers round without reversing source progression", () => {
+    const createSet = (
+      setId: string,
+      round: number,
+      sourceSetIds: string[] = [],
+    ): SetSnapshot => ({
+      setId,
+      fullRoundText: `Losers Round ${Math.abs(round)}`,
+      round,
+      phaseName: "Bracket",
+      phaseGroupName: "A",
+      phaseOrder: 1,
+      phaseGroupDisplayIdentifier: "A",
+      state: 1,
+      winnerId: null,
+      entrant1Source: sourceSetIds[0]
+        ? {
+          typeId: sourceSetIds[0],
+          resolvedSetId: sourceSetIds[0],
+          condition: "winner",
+          conditionString: null,
+        }
+        : null,
+      entrant2Source: sourceSetIds[1]
+        ? {
+          typeId: sourceSetIds[1],
+          resolvedSetId: sourceSetIds[1],
+          condition: "winner",
+          conditionString: null,
+        }
+        : null,
+      slots: [],
+    });
+    const columns = buildPositionedRoundColumns(
+      buildRoundColumns([
+        createSet("AV-source-1", -1),
+        createSet("AV-source-2", -1),
+        createSet("round-two-1", -2, ["AV-source-1"]),
+        createSet("round-two-2", -2),
+        createSet("round-two-3", -2, ["AV-source-2"]),
+        createSet("round-three-final", -3, ["round-two-1", "round-two-3"]),
+      ]),
+      "losers",
+    );
+    const roundOne = columns.find((column) => column.round === -1);
+    const roundTwo = columns.find((column) => column.round === -2);
+    const roundThree = columns.find((column) => column.round === -3);
+    const yFor = (column: typeof columns[number] | undefined, setId: string) => (
+      column?.positionedSets.find(({ set }) => set.setId === setId)?.y
+    );
+
+    expect(columns.map((column) => column.round)).toEqual([-3, -2, -1]);
+    expect(roundTwo?.positionedSets.map(({ y }) => y)).toEqual([10, 116, 222]);
+    expect(yFor(roundOne, "AV-source-1")).toBe(yFor(roundTwo, "round-two-1"));
+    expect(yFor(roundOne, "AV-source-2")).toBe(yFor(roundTwo, "round-two-3"));
+    expect(yFor(roundThree, "round-three-final")).toBe(116);
   });
 });
 

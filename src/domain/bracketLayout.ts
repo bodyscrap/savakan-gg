@@ -121,6 +121,53 @@ function buildLosersRoundPositions(
   });
 }
 
+function buildPreviousLosersRoundPositions(
+  previousColumnSets: SetSnapshot[],
+  currentColumnSets: SetSnapshot[],
+  currentPositions: number[],
+): number[] {
+  if (previousColumnSets.length === 0 || currentPositions.length === 0) {
+    return [];
+  }
+
+  const previousSetIndexByEntrantId = new Map<string, number>();
+  const previousSetIndexBySetId = new Map<string, number>();
+  previousColumnSets.forEach((set, setIndex) => {
+    previousSetIndexBySetId.set(set.setId, setIndex);
+    set.slots.forEach((slot) => {
+      if (slot.entrantId && !previousSetIndexByEntrantId.has(slot.entrantId)) {
+        previousSetIndexByEntrantId.set(slot.entrantId, setIndex);
+      }
+    });
+  });
+
+  const currentIndexesByPreviousIndex = previousColumnSets.map(() => [] as number[]);
+  currentColumnSets.forEach((set, currentIndex) => {
+    const previousIndexes = new Set([
+      ...sourceSetIdsForSet(set).map((sourceSetId) => previousSetIndexBySetId.get(sourceSetId)),
+      ...set.slots.map((slot) => (
+        slot.entrantId ? previousSetIndexByEntrantId.get(slot.entrantId) : undefined
+      )),
+    ].filter((value): value is number => value !== undefined));
+
+    for (const previousIndex of previousIndexes) {
+      currentIndexesByPreviousIndex[previousIndex]?.push(currentIndex);
+    }
+  });
+
+  const fallback = interpolateLanePositions(currentPositions, previousColumnSets.length);
+  return previousColumnSets.map((_, previousIndex) => {
+    const currentIndexes = currentIndexesByPreviousIndex[previousIndex] ?? [];
+    if (currentIndexes.length === 0) {
+      return fallback[previousIndex] ?? (BRACKET_TOP_PADDING + previousIndex * BRACKET_ROW_STEP);
+    }
+
+    return currentIndexes.reduce((sum, currentIndex) => (
+      sum + currentPositions[currentIndex]
+    ), 0) / currentIndexes.length;
+  });
+}
+
 function buildWinnersExpandedRoundPositions(
   previousColumnSets: SetSnapshot[],
   previousPositions: number[],
@@ -287,6 +334,26 @@ function averagePairPositions(previousPositions: number[], nextCount: number): n
   });
 }
 
+function fitPositionsToAvailableLanes(
+  positions: number[],
+  laneCount: number,
+): number[] {
+  if (positions.length <= 1 || positions.length > laneCount) {
+    return positions;
+  }
+
+  let previousLane = -1;
+  return positions.map((position, index) => {
+    const remaining = positions.length - index - 1;
+    const minLane = previousLane + 1;
+    const maxLane = laneCount - remaining - 1;
+    const preferredLane = Math.round((position - BRACKET_TOP_PADDING) / BRACKET_ROW_STEP);
+    const lane = clampIndex(preferredLane, minLane, maxLane);
+    previousLane = lane;
+    return BRACKET_TOP_PADDING + lane * BRACKET_ROW_STEP;
+  });
+}
+
 export function buildPositionedRoundColumns(
   columns: RoundColumn[],
   sectionKey: string,
@@ -297,7 +364,14 @@ export function buildPositionedRoundColumns(
   );
   const resolvedPositions: number[][] = Array.from({ length: columns.length }, () => []);
   const maxSetCount = Math.max(0, ...columns.map((column) => column.sets.length));
-  const maxSetCountIndex = columns.findIndex((column) => column.sets.length === maxSetCount && column.sets.length > 0);
+  const maxSetCountIndexes = columns
+    .map((column, index) => ({ column, index }))
+    .filter(({ column }) => column.sets.length === maxSetCount && column.sets.length > 0);
+  const maxSetCountIndex = sectionKey === "losers"
+    ? (maxSetCountIndexes.find(({ column }) => column.round === -2)?.index
+      ?? maxSetCountIndexes[0]?.index
+      ?? -1)
+    : (maxSetCountIndexes[0]?.index ?? -1);
 
   const assignDefaultPositions = (columnIndex: number): number[] => {
     const column = columns[columnIndex];
@@ -336,10 +410,19 @@ export function buildPositionedRoundColumns(
     const referencePositions = resolvedPositions[columnIndex + 1];
     const lanePositions =
       sectionKey === "losers"
-        ? buildLosersRoundPositions(nextColumn.sets, referencePositions, column.sets)
+        ? buildPreviousLosersRoundPositions(
+          column.sets,
+          nextColumn.sets,
+          referencePositions,
+        )
         : buildWinnersExpandedRoundPositions(nextColumn.sets, referencePositions, column.sets);
 
-    resolvedPositions[columnIndex] = lanePositions.length > 0 ? lanePositions : assignDefaultPositions(columnIndex);
+    const adjustedPositions = sectionKey === "losers"
+      ? fitPositionsToAvailableLanes(lanePositions, maxSetCount)
+      : lanePositions;
+    resolvedPositions[columnIndex] = adjustedPositions.length > 0
+      ? adjustedPositions
+      : assignDefaultPositions(columnIndex);
   }
 
   for (let columnIndex = maxSetCountIndex + 1; columnIndex < columns.length; columnIndex += 1) {
@@ -357,7 +440,12 @@ export function buildPositionedRoundColumns(
           : buildWinnersExpandedRoundPositions(previousColumn.sets, previousPositions, column.sets)
         : assignDefaultPositions(columnIndex);
 
-    resolvedPositions[columnIndex] = lanePositions.length > 0 ? lanePositions : assignDefaultPositions(columnIndex);
+    const adjustedPositions = sectionKey === "losers"
+      ? fitPositionsToAvailableLanes(lanePositions, maxSetCount)
+      : lanePositions;
+    resolvedPositions[columnIndex] = adjustedPositions.length > 0
+      ? adjustedPositions
+      : assignDefaultPositions(columnIndex);
   }
 
   for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {

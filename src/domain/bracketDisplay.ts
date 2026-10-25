@@ -483,8 +483,9 @@ export function buildBracketSections(group: PhasePoolGroup | null): BracketSecti
     return [];
   }
 
-  const winnersSets = group.sets.filter((set) => !isLosersBracketSet(set));
-  const losersSets = group.sets.filter((set) => isLosersBracketSet(set));
+  const displayableSets = group.sets.filter((set) => !set.isBye);
+  const winnersSets = displayableSets.filter((set) => !isLosersBracketSet(set));
+  const losersSets = displayableSets.filter((set) => isLosersBracketSet(set));
   const sections: BracketSection[] = [];
 
   if (winnersSets.length > 0) {
@@ -959,6 +960,17 @@ export function isDisplayableSet(set: SetSnapshot, event: EventSnapshot | null):
 }
 
 export function compareSetsForStableLane(left: SetSnapshot, right: SetSnapshot): number {
+  const leftSetId = left.setId.trim();
+  const rightSetId = right.setId.trim();
+  const leftIsNumeric = /^\d+$/.test(leftSetId);
+  const rightIsNumeric = /^\d+$/.test(rightSetId);
+
+  if (leftIsNumeric && rightIsNumeric) {
+    return leftSetId.length - rightSetId.length
+      || leftSetId.localeCompare(rightSetId, "en")
+      || left.setId.localeCompare(right.setId, "ja");
+  }
+
   return left.setId.localeCompare(right.setId, "ja");
 }
 
