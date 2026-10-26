@@ -60,6 +60,25 @@ function createPreviewEventSearchLabel(event: TournamentEventPreviewItem): strin
   return `${event.eventName} (${event.eventId})`;
 }
 
+type SnapshotSource = "startgg" | "local";
+const SNAPSHOT_SOURCE_STORAGE_KEY = "savakan-gg.snapshot-source.v1";
+
+function readStoredSnapshotSource(): SnapshotSource {
+  if (typeof window === "undefined") {
+    return "startgg";
+  }
+  try {
+    const value = window.localStorage.getItem(SNAPSHOT_SOURCE_STORAGE_KEY);
+    if (value === null || value === "startgg" || value === "local") {
+      return value ?? "startgg";
+    }
+    console.error("Invalid stored snapshot source preference.", value);
+  } catch (error) {
+    console.error("Unable to read the snapshot source preference.", error);
+  }
+  return "startgg";
+}
+
 function defaultLocalEventName(): string {
   const now = new Date();
   const date = [
@@ -67,7 +86,7 @@ function defaultLocalEventName(): string {
     String(now.getMonth() + 1).padStart(2, "0"),
     String(now.getDate()).padStart(2, "0"),
   ].join("-");
-  return `Local Event ${date}`;
+  return `${date} Local Event`;
 }
 
 const localRoundRobinTieBreakOptions: Array<{
@@ -204,29 +223,39 @@ function LocalEventSnapshotForm({
     </section>
     <section className="panel create-layout-full">
       <h2>{t("フェーズ設定")}</h2>
+      <div className="local-event-phase-scroll">
       <div className="local-event-phase-list">
+        <div className="local-event-phase-fields local-event-phase-header" aria-hidden="true">
+          <span />
+          <span>{t("フェーズ名")}</span>
+          <span>{t("プール数")}</span>
+          <span>{t("形式")}</span>
+          <span>{phaseCount > 1 ? t("各プールからの進出人数") : ""}</span>
+        </div>
         {phases.slice(0, phaseCount).map((phase, index) => {
           const phasePlayers = participantCountForPhase(index);
           const lastPhase = index + 1 === phaseCount;
-          return <fieldset key={index} className="local-event-phase">
-            <legend>{t("Phase {p0}", { p0: index + 1 })}</legend>
+          const playersPerPool = Math.floor(phasePlayers / phase.poolCount);
+          const phaseLabel = t("Phase {p0}", { p0: index + 1 });
+          return <div key={index} className="local-event-phase" role="group" aria-label={phaseLabel}>
             <div className="local-event-phase-fields">
-              <label>{t("フェーズ名")}<input value={phase.name} onChange={(event) => updatePhase(index, { name: event.currentTarget.value })} /></label>
-              <label>{t("プール数")}<input type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / 2))} value={phase.poolCount} onChange={(event) => updatePhase(index, { poolCount: Math.max(1, Math.min(Math.floor(phasePlayers / 2), Number(event.currentTarget.value) || 1)) })} /></label>
-              <label>{t("形式")}<select value={phase.bracketType} onChange={(event) => updatePhase(index, { bracketType: event.currentTarget.value as LocalEventPhaseConfig["bracketType"] })}>
+              <strong className="local-event-phase-number">{phaseLabel} ({phasePlayers})</strong>
+              <input aria-label={t("フェーズ名")} value={phase.name} onChange={(event) => updatePhase(index, { name: event.currentTarget.value })} />
+              <input aria-label={t("プール数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / 2))} value={phase.poolCount} onChange={(event) => updatePhase(index, { poolCount: Math.max(1, Math.min(Math.floor(phasePlayers / 2), Number(event.currentTarget.value) || 1)) })} />
+              <select aria-label={t("形式")} value={phase.bracketType} onChange={(event) => updatePhase(index, { bracketType: event.currentTarget.value as LocalEventPhaseConfig["bracketType"] })}>
                 <option value="SINGLE_ELIMINATION">{t("シングルエリミネーション")}</option>
                 <option value="DOUBLE_ELIMINATION">{t("ダブルエリミネーション")}</option>
                 <option value="ROUND_ROBIN">{t("総当たり")}</option>
-              </select></label>
-              {!lastPhase && <label>{t("各プールからの進出人数")}<input type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / phase.poolCount))} value={phase.qualifiersPerPool} onChange={(event) => updatePhase(index, { qualifiersPerPool: Math.max(1, Math.min(Math.floor(phasePlayers / phase.poolCount), Number(event.currentTarget.value) || 1)) })} /></label>}
+              </select>
+              {!lastPhase && <input aria-label={t("各プールからの進出人数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / phase.poolCount))} value={phase.qualifiersPerPool} onChange={(event) => updatePhase(index, { qualifiersPerPool: Math.max(1, Math.min(Math.floor(phasePlayers / phase.poolCount), Number(event.currentTarget.value) || 1)) })} />}
               {lastPhase
-                && phase.bracketType === "SINGLE_ELIMINATION"
-                && Math.floor(phasePlayers / phase.poolCount) >= 4 && (
-                  <div className="local-event-phase-option-field">
+                && phase.bracketType === "SINGLE_ELIMINATION" && (
+                  <div className="local-event-phase-option-field" title={playersPerPool < 4 ? t("各プールに{count}人以上必要です。", { count: 4 }) : undefined}>
                     <label>
                       <input
                         type="checkbox"
-                        checked={phase.thirdPlaceMatch}
+                        disabled={playersPerPool < 4}
+                        checked={playersPerPool >= 4 && phase.thirdPlaceMatch}
                         onChange={(event) => updatePhase(index, { thirdPlaceMatch: event.currentTarget.checked })}
                       />
                       {t("3位決定戦")}
@@ -234,13 +263,13 @@ function LocalEventSnapshotForm({
                   </div>
                 )}
               {lastPhase
-                && phase.bracketType === "DOUBLE_ELIMINATION"
-                && Math.floor(phasePlayers / phase.poolCount) >= 8 && (
-                  <div className="local-event-phase-option-field">
+                && phase.bracketType === "DOUBLE_ELIMINATION" && (
+                  <div className="local-event-phase-option-field" title={playersPerPool < 8 ? t("各プールに{count}人以上必要です。", { count: 8 }) : undefined}>
                     <label>
                       <input
                         type="checkbox"
-                        checked={phase.fifthPlaceMatch}
+                        disabled={playersPerPool < 8}
+                        checked={playersPerPool >= 8 && phase.fifthPlaceMatch}
                         onChange={(event) => updatePhase(index, { fifthPlaceMatch: event.currentTarget.checked })}
                       />
                       {t("5位決定戦")}
@@ -299,8 +328,9 @@ function LocalEventSnapshotForm({
                 </ol>
               </div>
             )}
-          </fieldset>;
+          </div>;
         })}
+      </div>
       </div>
       <div style={{ display: "flex", justifyContent: "end", marginTop: "0.8rem" }}>
         <button type="button" disabled={createBusy || !canCreateLocalSnapshot || localTournamentName.trim() === "" || localEventName.trim() === ""} onClick={submitLocalSnapshot}>{t("ローカルeventを作成")}</button>
@@ -334,15 +364,25 @@ export function CreateSnapshot({
   onCreateLocalSnapshot,
 }: CreateSnapshotProps) {
   const selectedEventName = createPreview?.events.find((event) => event.eventId === createSelectedEventId)?.eventName ?? "-";
-  const [source, setSource] = useState<"startgg" | "local">("startgg");
+  const [source, setSource] = useState<SnapshotSource>(readStoredSnapshotSource);
+  const changeSource = (value: SnapshotSource) => {
+    setSource(value);
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(SNAPSHOT_SOURCE_STORAGE_KEY, value);
+      }
+    } catch (error) {
+      console.error("Unable to save the snapshot source preference.", error);
+    }
+  };
 
   return (
     <div className={`create-layout${source === "local" ? " create-layout--local" : ""}`}>
       <section className="panel create-layout-full">
         <h2>{t("イベントの作成方法")}</h2>
         <div className="snapshot-source-options" role="group" aria-label={t("イベントの作成方法")}>
-          <label><input type="radio" checked={source === "startgg"} onChange={() => setSource("startgg")} /> {t("start.ggからeventを取り込む")}</label>
-          <label><input type="radio" checked={source === "local"} onChange={() => setSource("local")} /> {t("ローカルeventを作成する")}</label>
+          <label><input type="radio" checked={source === "startgg"} onChange={() => changeSource("startgg")} /> {t("start.ggからeventを取り込む")}</label>
+          <label><input type="radio" checked={source === "local"} onChange={() => changeSource("local")} /> {t("ローカルeventを作成する")}</label>
         </div>
       </section>
       {source === "startgg" ? <>

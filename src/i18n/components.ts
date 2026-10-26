@@ -32,6 +32,7 @@ export const componentTranslations: Record<string, string> = {
   "下へ": "Move down",
   "3位決定戦": "Third-place match",
   "5位決定戦": "Fifth-place match",
+  "各プールに{count}人以上必要です。": "Each pool requires at least {count} participants.",
   "ローカルeventを作成": "Create local event",
   "ローカルeventのスナップショットを作成しました。": "Created the local event snapshot.",
   "ローカル": "Local",
