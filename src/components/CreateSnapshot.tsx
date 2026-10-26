@@ -199,10 +199,7 @@ function LocalEventSnapshotForm({
             setLocalEventAliasEdited(true);
             setLocalEventAlias(event.currentTarget.value);
           }} placeholder={t("アプリ内表示用のevent alias")} /></label>
-        </div>
-        <div className="local-event-size-fields">
-          <label>{t("参加人数")}<input type="number" min={2} max={512} value={participantCount} onChange={(event) => setParticipantCount(Math.max(2, Math.min(512, Number(event.currentTarget.value) || 2)))} /></label>
-          <label>{t("フェーズ数")}
+          <label className="local-event-phase-count-field">{t("フェーズ数")}
             <select value={phaseCount} onChange={(event) => {
               const nextCount = Number(event.currentTarget.value);
               setPhases((current) => current.map((phase, index) => (
@@ -215,6 +212,9 @@ function LocalEventSnapshotForm({
               {[1, 2, 3].map((count) => <option key={count} value={count}>{count}</option>)}
             </select>
           </label>
+        </div>
+        <div className="local-event-size-fields">
+          <label>{t("参加人数")}<input type="number" min={2} max={512} value={participantCount} onChange={(event) => setParticipantCount(Math.max(2, Math.min(512, Number(event.currentTarget.value) || 2)))} /></label>
         </div>
       </div>
       <p className="meta">{t("送信者ID")}: {senderUserId || t("未設定")}</p>

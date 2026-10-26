@@ -68,6 +68,12 @@ function snapshotElement() {
 describe("snapshot creation defaults", () => {
   const storageKey = "savakan-gg.snapshot-source.v1";
 
+  it("places the compact phase count after the name fields and keeps participants below", () => {
+    const html = renderLocalPhases(1, "DOUBLE_ELIMINATION", 8);
+    expect(html).toMatch(/class="local-event-name-fields">[\s\S]*tournament名[\s\S]*event名[\s\S]*エイリアス名[\s\S]*class="local-event-phase-count-field">フェーズ数<select/);
+    expect(html).toMatch(/<\/select><\/label><\/div><div class="local-event-size-fields"><label>参加人数/);
+  });
+
   it.each(["startgg", "local"] as const)("restores the saved %s creation method", (source) => {
     const getItem = vi.fn(() => source);
     vi.stubGlobal("window", { localStorage: { getItem } });

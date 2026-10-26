@@ -1535,13 +1535,19 @@ button:disabled {
 
 .local-event-name-fields {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr)) max-content;
   gap: 0.7rem;
+}
+
+.local-event-phase-count-field {
+  width: max-content;
+  min-width: 4.5rem;
+  white-space: nowrap;
 }
 
 .local-event-size-fields {
   display: grid;
-  grid-template-columns: repeat(2, minmax(150px, 220px));
+  grid-template-columns: minmax(150px, 220px);
   gap: 0.7rem;
   padding-top: 0.8rem;
   border-top: 1px solid var(--line);
@@ -1556,6 +1562,7 @@ button:disabled {
 }
 
 .local-event-name-fields input,
+.local-event-name-fields select,
 .local-event-size-fields input,
 .local-event-size-fields select {
   width: 100%;
