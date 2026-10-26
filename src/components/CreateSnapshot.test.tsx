@@ -233,10 +233,14 @@ describe("local event phase settings", () => {
   it("shows column headings only once above all phase inputs", () => {
     const html = renderLocalPhases(3, "DOUBLE_ELIMINATION", 8);
     expect(html.match(/local-event-phase-header/g)).toHaveLength(1);
-    for (const heading of ["フェーズ名", "プール数", "形式", "進出人数"]) {
+    const headings = ["フェーズ名", "プール数", "進出人数", "形式"];
+    for (const heading of headings) {
       expect(html.match(new RegExp(`<span>${heading}</span>`, "g"))).toHaveLength(1);
       expect(html).not.toContain(`<label>${heading}`);
     }
+    expect(headings.map((heading) => html.indexOf(`<span>${heading}</span>`))).toEqual(
+      [...headings].map((heading) => html.indexOf(`<span>${heading}</span>`)).sort((a, b) => a - b),
+    );
   });
 
   it("shows the total participants rather than the per-pool count beside each phase", () => {

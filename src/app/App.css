@@ -1480,7 +1480,7 @@ button:disabled {
 
 .local-event-phase-fields {
   display: grid;
-  grid-template-columns: 7rem minmax(7rem, 1fr) 4.5rem minmax(12rem, 1fr) 5rem minmax(14rem, max-content);
+  grid-template-columns: 7rem minmax(7rem, 10rem) 4.5rem 5rem max-content minmax(14rem, max-content);
   align-items: center;
   gap: 0.5rem;
 }
@@ -1512,6 +1512,11 @@ button:disabled {
   width: 100%;
   min-width: 0;
   height: 2.6rem;
+}
+
+.local-event-phase-fields select {
+  width: max-content;
+  max-width: 100%;
 }
 
 .local-event-phase-option-field {

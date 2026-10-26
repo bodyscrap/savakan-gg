@@ -250,8 +250,8 @@ function LocalEventSnapshotForm({
           <span />
           <span>{t("フェーズ名")}</span>
           <span>{t("プール数")}</span>
-          <span>{t("形式")}</span>
           <span>{phaseCount > 1 ? t("進出人数") : ""}</span>
+          <span>{t("形式")}</span>
           <span />
         </div>
         {effectivePhases.slice(0, phaseCount).map((phase, index) => {
@@ -264,12 +264,12 @@ function LocalEventSnapshotForm({
               <strong className="local-event-phase-number">{phaseLabel} ({phasePlayers})</strong>
               <input aria-label={t("フェーズ名")} value={phase.name} onChange={(event) => updatePhase(index, { name: event.currentTarget.value })} />
               <input aria-label={t("プール数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / 2))} value={phase.poolCount} disabled={phasePlayers < 2} onChange={(event) => updatePhase(index, { poolCount: Math.max(1, Math.min(Math.floor(phasePlayers / 2), Number(event.currentTarget.value) || 1)) })} />
+              {!lastPhase ? <input aria-label={t("進出人数")} title={t("各プールからの進出人数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / phase.poolCount))} value={phase.qualifiersPerPool} disabled={phasePlayers < 2} onChange={(event) => updatePhase(index, { qualifiersPerPool: Math.max(1, Math.min(Math.floor(phasePlayers / phase.poolCount), Number(event.currentTarget.value) || 1)) })} /> : <span />}
               <select aria-label={t("形式")} value={phase.bracketType} onChange={(event) => updatePhase(index, { bracketType: event.currentTarget.value as LocalEventPhaseConfig["bracketType"] })}>
                 <option value="SINGLE_ELIMINATION">{t("シングルエリミネーション")}</option>
                 <option value="DOUBLE_ELIMINATION">{t("ダブルエリミネーション")}</option>
                 <option value="ROUND_ROBIN">{t("総当たり")}</option>
               </select>
-              {!lastPhase ? <input aria-label={t("進出人数")} title={t("各プールからの進出人数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / phase.poolCount))} value={phase.qualifiersPerPool} disabled={phasePlayers < 2} onChange={(event) => updatePhase(index, { qualifiersPerPool: Math.max(1, Math.min(Math.floor(phasePlayers / phase.poolCount), Number(event.currentTarget.value) || 1)) })} /> : <span />}
               <div className="local-event-phase-options">
               {lastPhase
                 && phase.bracketType === "SINGLE_ELIMINATION" && (
