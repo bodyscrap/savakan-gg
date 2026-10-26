@@ -6,6 +6,9 @@ import type {
   LocalEventTieBreakRule,
 } from "../domain/tournamentWorkspaceRepository";
 import { formatDefaultSnapshotName } from "../domain/snapshotDisplay";
+import type { ItemListConfig } from "../domain/itemList";
+import { canRegisterParticipant, defaultLocalEventRegistration } from "../domain/localEventRegistration";
+import { LocalEventRegistration } from "./LocalEventRegistration";
 
 export type TournamentEventPreviewItem = {
   eventId: string;
@@ -32,6 +35,7 @@ export type EventSnapshotProgress = {
 };
 
 type CreateSnapshotProps = {
+  itemLists: ItemListConfig[];
   token: string;
   onTokenChange: (value: string) => void;
   createTournamentSlug: string;
@@ -100,6 +104,7 @@ const localRoundRobinTieBreakOptions: Array<{
 ];
 
 type LocalEventSnapshotFormProps = {
+  itemLists: ItemListConfig[];
   visible: boolean;
   createBusy: boolean;
   senderUserId: string;
@@ -108,6 +113,7 @@ type LocalEventSnapshotFormProps = {
 };
 
 function LocalEventSnapshotForm({
+  itemLists,
   visible,
   createBusy,
   senderUserId,
@@ -118,14 +124,25 @@ function LocalEventSnapshotForm({
   const [localEventName, setLocalEventName] = useState(defaultLocalEventName);
   const [localEventAlias, setLocalEventAlias] = useState(() => formatDefaultSnapshotName("Local Tournament", localEventName));
   const [localEventAliasEdited, setLocalEventAliasEdited] = useState(false);
-  const [participantCount, setParticipantCount] = useState(8);
+  const [registration, setRegistration] = useState(defaultLocalEventRegistration);
+  const participantCount = registration.participants.length;
   const [phaseCount, setPhaseCount] = useState(1);
   const [draggedTieBreakRule, setDraggedTieBreakRule] = useState<{ phaseIndex: number; ruleIndex: number } | null>(null);
   const [phases, setPhases] = useState<LocalEventPhaseConfig[]>([
-    { name: "Phase 1", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false },
-    { name: "Phase 2", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false },
-    { name: "Phase 3", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false },
+    { name: "Phase 1", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false, grandFinalReset: true },
+    { name: "Phase 2", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false, grandFinalReset: true },
+    { name: "Phase 3", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false, grandFinalReset: true },
   ]);
+  const [registrationPending, setRegistrationPending] = useState(false);
+  const registrationComplete = participantCount >= 2 && participantCount <= 512
+    && registration.participants.every((player) => canRegisterParticipant(player, registration));
+  let availablePlayers = participantCount;
+  const effectivePhases = phases.map((phase, index) => {
+    const poolCount = Math.max(1, Math.min(phase.poolCount, Math.floor(availablePlayers / 2)));
+    const qualifiersPerPool = Math.min(Math.max(1, phase.qualifiersPerPool), Math.floor(availablePlayers / poolCount));
+    if (index + 1 < phaseCount) availablePlayers = poolCount * qualifiersPerPool;
+    return { ...phase, poolCount, qualifiersPerPool };
+  });
 
   useEffect(() => {
     if (!localEventAliasEdited) {
@@ -136,10 +153,14 @@ function LocalEventSnapshotForm({
   const participantCountForPhase = (index: number) => {
     let count = participantCount;
     for (let previous = 0; previous < index; previous += 1) {
-      count = phases[previous].poolCount * phases[previous].qualifiersPerPool;
+      count = effectivePhases[previous].poolCount * effectivePhases[previous].qualifiersPerPool;
     }
     return count;
   };
+  const phasePlayerErrors = effectivePhases.slice(0, phaseCount).flatMap((_, index) =>
+    participantCountForPhase(index) < 2
+      ? [t("Phase {phase}: 参加人数は2人以上必要です。", { phase: index + 1 })]
+      : []);
   const updatePhase = (index: number, update: Partial<LocalEventPhaseConfig>) => {
     setPhases((current) => current.map((phase, phaseIndex) => (
       phaseIndex === index ? { ...phase, ...update } : phase
@@ -169,8 +190,10 @@ function LocalEventSnapshotForm({
     tournamentName: localTournamentName,
     eventName: localEventName,
     eventAlias: localEventAlias.trim() === "" ? null : localEventAlias.trim(),
-    participantCount,
-    phases: phases.slice(0, phaseCount).map((phase, index) => ({
+    participants: registration.participants.map(({ entrantId, name, categorySelections }) => ({ entrantId, name, categorySelections })),
+    eventManagement: registration.setting,
+    requireItemSelections: registration.requireItemSelections,
+    phases: effectivePhases.slice(0, phaseCount).map((phase, index) => ({
       ...phase,
       qualifiersPerPool: index + 1 < phaseCount ? phase.qualifiersPerPool : 0,
       thirdPlaceMatch: index + 1 === phaseCount
@@ -213,14 +236,12 @@ function LocalEventSnapshotForm({
             </select>
           </label>
         </div>
-        <div className="local-event-size-fields">
-          <label>{t("参加人数")}<input type="number" min={2} max={512} value={participantCount} onChange={(event) => setParticipantCount(Math.max(2, Math.min(512, Number(event.currentTarget.value) || 2)))} /></label>
-        </div>
       </div>
       <p className="meta">{t("送信者ID")}: {senderUserId || t("未設定")}</p>
-      <p className="meta">{t("ローカルeventではPlayer 1などの仮名を作成します。作成後にエイリアスを編集できます。")}</p>
       {!senderUserId && <p className="meta">{t("ローカルeventの作成には送信者IDの設定が必要です。")}</p>}
     </section>
+    <LocalEventRegistration itemLists={itemLists} registration={registration} onChange={setRegistration}
+      busy={createBusy} onPendingChange={setRegistrationPending} />
     <section className="panel create-layout-full">
       <h2>{t("フェーズ設定")}</h2>
       <div className="local-event-phase-scroll">
@@ -230,9 +251,10 @@ function LocalEventSnapshotForm({
           <span>{t("フェーズ名")}</span>
           <span>{t("プール数")}</span>
           <span>{t("形式")}</span>
-          <span>{phaseCount > 1 ? t("各プールからの進出人数") : ""}</span>
+          <span>{phaseCount > 1 ? t("進出人数") : ""}</span>
+          <span />
         </div>
-        {phases.slice(0, phaseCount).map((phase, index) => {
+        {effectivePhases.slice(0, phaseCount).map((phase, index) => {
           const phasePlayers = participantCountForPhase(index);
           const lastPhase = index + 1 === phaseCount;
           const playersPerPool = Math.floor(phasePlayers / phase.poolCount);
@@ -241,13 +263,14 @@ function LocalEventSnapshotForm({
             <div className="local-event-phase-fields">
               <strong className="local-event-phase-number">{phaseLabel} ({phasePlayers})</strong>
               <input aria-label={t("フェーズ名")} value={phase.name} onChange={(event) => updatePhase(index, { name: event.currentTarget.value })} />
-              <input aria-label={t("プール数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / 2))} value={phase.poolCount} onChange={(event) => updatePhase(index, { poolCount: Math.max(1, Math.min(Math.floor(phasePlayers / 2), Number(event.currentTarget.value) || 1)) })} />
+              <input aria-label={t("プール数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / 2))} value={phase.poolCount} disabled={phasePlayers < 2} onChange={(event) => updatePhase(index, { poolCount: Math.max(1, Math.min(Math.floor(phasePlayers / 2), Number(event.currentTarget.value) || 1)) })} />
               <select aria-label={t("形式")} value={phase.bracketType} onChange={(event) => updatePhase(index, { bracketType: event.currentTarget.value as LocalEventPhaseConfig["bracketType"] })}>
                 <option value="SINGLE_ELIMINATION">{t("シングルエリミネーション")}</option>
                 <option value="DOUBLE_ELIMINATION">{t("ダブルエリミネーション")}</option>
                 <option value="ROUND_ROBIN">{t("総当たり")}</option>
               </select>
-              {!lastPhase && <input aria-label={t("各プールからの進出人数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / phase.poolCount))} value={phase.qualifiersPerPool} onChange={(event) => updatePhase(index, { qualifiersPerPool: Math.max(1, Math.min(Math.floor(phasePlayers / phase.poolCount), Number(event.currentTarget.value) || 1)) })} />}
+              {!lastPhase ? <input aria-label={t("進出人数")} title={t("各プールからの進出人数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / phase.poolCount))} value={phase.qualifiersPerPool} disabled={phasePlayers < 2} onChange={(event) => updatePhase(index, { qualifiersPerPool: Math.max(1, Math.min(Math.floor(phasePlayers / phase.poolCount), Number(event.currentTarget.value) || 1)) })} /> : <span />}
+              <div className="local-event-phase-options">
               {lastPhase
                 && phase.bracketType === "SINGLE_ELIMINATION" && (
                   <div className="local-event-phase-option-field" title={playersPerPool < 4 ? t("各プールに{count}人以上必要です。", { count: 4 }) : undefined}>
@@ -276,7 +299,15 @@ function LocalEventSnapshotForm({
                     </label>
                   </div>
                 )}
-            </div>
+            {phase.bracketType === "DOUBLE_ELIMINATION" && (
+              <div className="local-event-phase-option-field">
+                <label>
+                  <input type="checkbox" checked={phase.grandFinalReset}
+                    onChange={(event) => updatePhase(index, { grandFinalReset: event.currentTarget.checked })} />
+                  {t("GF Reset")}
+                </label>
+              </div>
+            )}
             {phase.bracketType === "ROUND_ROBIN" && (
               <div className="local-event-tiebreak">
                 <strong>{t("勝利条件の優先度")}</strong>
@@ -328,18 +359,25 @@ function LocalEventSnapshotForm({
                 </ol>
               </div>
             )}
+              </div>
+            </div>
           </div>;
         })}
       </div>
       </div>
       <div style={{ display: "flex", justifyContent: "end", marginTop: "0.8rem" }}>
-        <button type="button" disabled={createBusy || !canCreateLocalSnapshot || localTournamentName.trim() === "" || localEventName.trim() === ""} onClick={submitLocalSnapshot}>{t("ローカルeventを作成")}</button>
+        <button type="button" disabled={createBusy || !canCreateLocalSnapshot || !registrationComplete || registrationPending || phasePlayerErrors.length > 0 || localTournamentName.trim() === "" || localEventName.trim() === ""} onClick={submitLocalSnapshot}>{t("ローカルeventを作成")}</button>
       </div>
+      {!registrationComplete && <p className="meta error-text">{registration.requireItemSelections
+        ? t("2〜512人の参加者を登録し、全員のアイテム選択を完了してください。")
+        : t("2〜512人の参加者を登録してください。")}</p>}
+      {phasePlayerErrors.length > 0 && <p className="meta error-text">{phasePlayerErrors.join(" ")}</p>}
     </section>
   </>;
 }
 
 export function CreateSnapshot({
+  itemLists,
   token,
   onTokenChange,
   createTournamentSlug,
@@ -493,6 +531,7 @@ export function CreateSnapshot({
       </section>
       </> : null}
       <LocalEventSnapshotForm
+        itemLists={itemLists}
         visible={source === "local"}
         createBusy={createBusy}
         senderUserId={senderUserId}

@@ -183,6 +183,7 @@ export type LocalEventPhaseConfig = {
   enabledTiebreakRules: LocalEventTieBreakRule[];
   thirdPlaceMatch: boolean;
   fifthPlaceMatch: boolean;
+  grandFinalReset: boolean;
 };
 
 export type LocalEventTieBreakRule =
@@ -194,8 +195,16 @@ export type CreateLocalEventSnapshotInput = {
   tournamentName: string;
   eventName: string;
   eventAlias: string | null;
-  participantCount: number;
+  participants: LocalEventParticipantInput[];
+  requireItemSelections: boolean;
+  eventManagement: EventManagementMeta;
   phases: LocalEventPhaseConfig[];
+};
+
+export type LocalEventParticipantInput = {
+  entrantId: string;
+  name: string;
+  categorySelections: string[][];
 };
 
 export type SnapshotRestoreScope =

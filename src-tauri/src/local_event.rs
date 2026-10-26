@@ -113,6 +113,7 @@ struct SnapshotBuilder {
     next_seed_id: usize,
     next_set_id: usize,
     next_set_identifier_by_group: HashMap<String, usize>,
+    possible_set_outputs: HashMap<String, (bool, bool)>,
 }
 
 impl SnapshotBuilder {
@@ -133,12 +134,23 @@ impl SnapshotBuilder {
     ) -> String {
         let set_id = self.next_set_id.to_string();
         self.next_set_id += 1;
-        let identifier_index = self
-            .next_set_identifier_by_group
-            .entry(group_id.to_owned())
-            .or_default();
-        let identifier = format_set_identifier(*identifier_index);
-        *identifier_index += 1;
+        let possible_entrants = sources.iter().flatten().filter(|slot| match &slot.source {
+            SetSource::Seed(_) => true,
+            SetSource::Set { set_id, condition } => {
+                let (winner, loser) = self.possible_set_outputs[set_id];
+                if *condition == "loser" { loser } else { winner }
+            }
+        }).count();
+        let is_bye = is_bye || possible_entrants < 2;
+        self.possible_set_outputs.insert(set_id.clone(), (possible_entrants > 0, !is_bye));
+        let identifier = if is_bye {
+            None
+        } else {
+            let index = self.next_set_identifier_by_group.entry(group_id.to_owned()).or_default();
+            let identifier = format_set_identifier(*index);
+            *index += 1;
+            Some(identifier)
+        };
         let slots = sources
             .iter()
             .map(|slot| match slot {
@@ -191,7 +203,7 @@ impl SnapshotBuilder {
         self.sets.push(SetSnapshot {
             set_id: set_id.clone(),
             phase_group_id: Some(group_id.to_owned()),
-            identifier: Some(identifier),
+            identifier,
             full_round_text: round_text,
             round: Some(round),
             phase_name: Some(phase_name.to_owned()),
@@ -661,16 +673,17 @@ fn validate_input(input: &CreateLocalEventSnapshotInput) -> Result<(), String> {
     if input.tournament_name.trim().is_empty() || input.event_name.trim().is_empty() {
         return Err("大会名とイベント名を入力してください。".to_owned());
     }
-    if input.participant_count < 2 {
+    if input.participants.len() < 2 {
         return Err("参加人数は2人以上を指定してください。".to_owned());
     }
-    if input.participant_count > 512 {
+    if input.participants.len() > 512 {
         return Err("参加人数は512人以下を指定してください。".to_owned());
     }
     if !(1..=3).contains(&input.phases.len()) {
         return Err("フェーズ数は1〜3で指定してください。".to_owned());
     }
-    let mut participant_count = input.participant_count;
+    validate_registration(input)?;
+    let mut participant_count = input.participants.len();
     for (index, phase) in input.phases.iter().enumerate() {
         if phase.name.trim().is_empty() {
             return Err(format!("Phase {} の名前が空です。", index + 1));
@@ -758,6 +771,63 @@ fn validate_input(input: &CreateLocalEventSnapshotInput) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_registration(input: &CreateLocalEventSnapshotInput) -> Result<(), String> {
+    let setting = &input.event_management;
+    if setting.item_list_snapshots.len() > 3
+        || setting.category_min_counts.len() > 3
+        || setting.category_max_counts.len() > 3
+        || setting.category_allow_duplicates.len() > 3
+        || setting.total_min_count > setting.total_max_count
+    {
+        return Err("アイテム選択の設定が不正です。".to_owned());
+    }
+    let mut list_ids = std::collections::HashSet::new();
+    for (index, list) in setting.item_list_snapshots.iter().enumerate() {
+        if list.id.is_empty() {
+            continue;
+        }
+        let min = setting.category_min_counts.get(index).copied().unwrap_or(0);
+        let max = setting.category_max_counts.get(index).copied().unwrap_or(1);
+        if !list_ids.insert(&list.id) || min > max {
+            return Err("カテゴリが重複しているか、件数条件が不正です。".to_owned());
+        }
+    }
+    let mut entrant_ids = std::collections::HashSet::new();
+    for participant in &input.participants {
+        if participant.name.trim().is_empty()
+            || participant.entrant_id.trim().is_empty()
+            || !entrant_ids.insert(&participant.entrant_id)
+            || participant.category_selections.len() != 3
+        {
+            return Err("参加者の名前・識別子・アイテム選択が不正です。".to_owned());
+        }
+        let mut total = 0;
+        for (index, selections) in participant.category_selections.iter().enumerate() {
+            let list = setting.item_list_snapshots.get(index).filter(|list| !list.id.is_empty());
+            let Some(list) = list else {
+                if !selections.is_empty() {
+                    return Err(format!("{}: 未設定カテゴリのアイテムは選択できません。", participant.name));
+                }
+                continue;
+            };
+            let min = setting.category_min_counts.get(index).copied().unwrap_or(0) as usize;
+            let max = setting.category_max_counts.get(index).copied().unwrap_or(1) as usize;
+            let duplicates = setting.category_allow_duplicates.get(index).copied().unwrap_or(false);
+            let mut seen = std::collections::HashSet::new();
+            if (input.require_item_selections && selections.len() < min) || selections.len() > max
+                || selections.iter().any(|item| !list.items.contains(item) || (!duplicates && !seen.insert(item)))
+            {
+                return Err(format!("{}: カテゴリ{}の選択条件を満たしていません。", participant.name, index + 1));
+            }
+            total += selections.len();
+        }
+        if (input.require_item_selections && total < setting.total_min_count as usize) || total > setting.total_max_count as usize {
+            return Err(format!("{}: アイテム全体の選択数条件を満たしていません。", participant.name));
+        }
+    }
+    Ok(())
+}
+
 fn balanced_indices(length: usize, count: usize) -> Vec<Vec<usize>> {
     let base_size = length / count;
     let extra = length % count;
@@ -808,14 +878,15 @@ pub fn generate_local_snapshot(
         next_seed_id: 1,
         next_set_id: 1,
         next_set_identifier_by_group: HashMap::new(),
+        possible_set_outputs: HashMap::new(),
     };
 
-    let mut current_entrants = (0..input.participant_count)
-        .map(|index| SeedEntry {
+    let mut current_entrants = input.participants.iter().enumerate()
+        .map(|(index, participant)| SeedEntry {
             seed_id: String::new(),
             seed_num: (index + 1) as i64,
-            entrant_id: Some(format!("entrant-{}", index + 1)),
-            entrant_name: Some(format!("Player {}", index + 1)),
+            entrant_id: Some(participant.entrant_id.clone()),
+            entrant_name: Some(participant.name.trim().to_owned()),
             placeholder_name: None,
             origin_phase_order: None,
             origin_phase_group_id: None,
@@ -878,6 +949,7 @@ pub fn generate_local_snapshot(
                 Vec::new()
             };
             builder.phase_groups.push(PhaseGroupSnapshot {
+                grand_final_reset: config.grand_final_reset,
                 phase_group_id: group_id.clone(),
                 set_ids: Vec::new(),
                 bracket_type: Some(config.bracket_type.clone()),
@@ -1054,6 +1126,7 @@ mod tests {
             ],
             third_place_match: false,
             fifth_place_match: false,
+            grand_final_reset: true,
         }
     }
 
@@ -1062,10 +1135,22 @@ mod tests {
         phases: Vec<LocalEventPhaseConfig>,
     ) -> CreateLocalEventSnapshotInput {
         CreateLocalEventSnapshotInput {
+            require_item_selections: true,
             tournament_name: "Local tournament".to_owned(),
             event_name: "Local event".to_owned(),
             event_alias: None,
-            participant_count,
+            participants: (0..participant_count).map(|index| crate::models::LocalEventParticipantInput {
+                entrant_id: format!("entrant-{}", index + 1),
+                name: format!("Player {}", index + 1),
+                category_selections: vec![Vec::new(); 3],
+            }).collect(),
+            event_management: crate::models::EventManagementMeta {
+                side_decision_method: "upper_1p".to_owned(),
+                item_list_snapshots: Vec::new(), use_alias_name: false,
+                category_min_counts: vec![0; 3], category_max_counts: vec![0; 3],
+                category_allow_duplicates: vec![false; 3],
+                total_min_count: 0, total_max_count: 3,
+            },
             phases,
         }
     }
@@ -1085,6 +1170,107 @@ mod tests {
     }
 
     #[test]
+    fn grand_final_reset_setting_is_saved_for_each_pool() {
+        for enabled in [false, true] {
+            let mut config = input(16, vec![phase("DOUBLE_ELIMINATION", 2, 0)]);
+            config.phases[0].grand_final_reset = enabled;
+            let snapshot = generate(&config);
+            assert!(snapshot.events[0].phase_groups.iter().all(|group| group.grand_final_reset == enabled));
+        }
+        let legacy: LocalEventPhaseConfig = serde_json::from_value(serde_json::json!({
+            "name": "Phase 1", "poolCount": 1, "bracketType": "DOUBLE_ELIMINATION"
+        })).unwrap();
+        assert!(legacy.grand_final_reset);
+    }
+
+    #[test]
+    fn registered_names_and_ids_are_used_for_seeds_and_slots() {
+        for bracket_type in ["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION", "ROUND_ROBIN"] {
+            let mut config = input(5, vec![phase(bracket_type, 1, 0)]);
+            config.participants[0].name = "  登録プレイヤー  ".to_owned();
+            config.participants[0].entrant_id = "registered-id".to_owned();
+            let snapshot = generate(&config);
+            let event = &snapshot.events[0];
+            let seeds = &event.phase_groups[0].seeds;
+            assert_eq!(seeds.len(), 5);
+            assert!(seeds.iter().any(|seed| seed.entrant_id.as_deref() == Some("registered-id")
+                && seed.entrant_name.as_deref() == Some("登録プレイヤー")));
+            assert!(event.sets.iter().flat_map(|set| &set.slots).any(|slot|
+                slot.entrant_id.as_deref() == Some("registered-id") && slot.entrant_name == "登録プレイヤー"));
+        }
+    }
+
+    #[test]
+    fn registration_rejects_empty_names_duplicate_ids_and_invalid_item_choices() {
+        let valid = input(2, vec![phase("SINGLE_ELIMINATION", 1, 0)]);
+        let mut empty_name = valid.clone();
+        empty_name.participants[0].name = " ".to_owned();
+        assert!(validate_input(&empty_name).is_err());
+        let mut duplicate_id = valid.clone();
+        duplicate_id.participants[1].entrant_id = duplicate_id.participants[0].entrant_id.clone();
+        assert!(validate_input(&duplicate_id).is_err());
+        let mut unknown_item = valid.clone();
+        unknown_item.participants[0].category_selections[0].push("Unknown".to_owned());
+        assert!(validate_input(&unknown_item).is_err());
+        let mut empty = valid;
+        empty.participants.clear();
+        assert!(validate_input(&empty).is_err());
+    }
+
+    #[test]
+    fn registration_validates_category_and_total_counts_and_allowed_duplicates() {
+        let mut config = input(2, vec![phase("SINGLE_ELIMINATION", 1, 0)]);
+        config.event_management.item_list_snapshots = vec![crate::models::ItemListConfig {
+            id: "characters".to_owned(), name: "Characters".to_owned(),
+            category_name: "Character".to_owned(), items: vec!["A".to_owned(), "B".to_owned()],
+        }];
+        config.event_management.category_min_counts[0] = 1;
+        config.event_management.category_max_counts[0] = 2;
+        config.event_management.total_min_count = 1;
+        config.event_management.total_max_count = 2;
+        assert!(validate_input(&config).is_err());
+        for player in &mut config.participants {
+            player.category_selections[0] = vec!["A".to_owned()];
+        }
+        assert!(validate_input(&config).is_ok());
+        config.participants[0].category_selections[0].push("A".to_owned());
+        assert!(validate_input(&config).is_err());
+        config.event_management.category_allow_duplicates[0] = true;
+        assert!(validate_input(&config).is_ok());
+        config.event_management.total_max_count = 1;
+        assert!(validate_input(&config).is_err());
+        config.event_management.total_max_count = 3;
+        config.participants[0].category_selections[0].push("B".to_owned());
+        assert!(validate_input(&config).is_err());
+    }
+
+    #[test]
+    fn registration_only_requires_minimum_item_counts_when_enabled() {
+        let mut config = input(2, vec![phase("SINGLE_ELIMINATION", 1, 0)]);
+        config.event_management.item_list_snapshots = vec![crate::models::ItemListConfig {
+            id: "characters".to_owned(), name: "Characters".to_owned(),
+            category_name: "Character".to_owned(), items: vec!["A".to_owned(), "B".to_owned()],
+        }];
+        config.event_management.category_min_counts[0] = 2;
+        config.event_management.category_max_counts[0] = 2;
+        config.event_management.total_min_count = 2;
+        config.event_management.total_max_count = 2;
+        config.participants[0].category_selections[0] = vec!["A".to_owned()];
+        assert!(validate_input(&config).is_err());
+        config.require_item_selections = false;
+        let snapshot = generate(&config);
+        assert_eq!(snapshot.events[0].phase_groups[0].seeds.len(), 2);
+        config.participants[0].category_selections[0] = vec!["A".to_owned(), "A".to_owned()];
+        assert!(validate_input(&config).is_err());
+        config.participants[0].category_selections[0] = vec!["unknown".to_owned()];
+        assert!(validate_input(&config).is_err());
+        config.participants[0].category_selections[0] = vec!["A".to_owned(), "B".to_owned()];
+        config.event_management.total_max_count = 1;
+        config.event_management.total_min_count = 0;
+        assert!(validate_input(&config).is_err());
+    }
+
+    #[test]
     fn set_identifiers_are_sequential_within_each_phase_group() {
         let snapshot = generate(&input(
             124,
@@ -1099,6 +1285,7 @@ mod tests {
                 .sets
                 .iter()
                 .filter(|set| set.phase_group_id.as_deref() == Some(&group.phase_group_id))
+                .filter(|set| !set.is_bye)
                 .map(|set| set.identifier.as_deref().unwrap())
                 .collect::<Vec<_>>();
             let expected = (0..identifiers.len())
@@ -1108,6 +1295,27 @@ mod tests {
                 identifiers,
                 expected.iter().map(String::as_str).collect::<Vec<_>>()
             );
+        }
+    }
+
+    #[test]
+    fn only_potentially_playable_sets_receive_identifiers() {
+        for bracket_type in ["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION", "ROUND_ROBIN"] {
+            for count in [3, 5, 6, 7, 8, 9, 12, 16, 31] {
+                let snapshot = generate(&input(count, vec![phase(bracket_type, 1, 0)]));
+                let event = &snapshot.events[0];
+                let playable = event.sets.iter().filter(|set| !set.is_bye).collect::<Vec<_>>();
+                let expected_count = match bracket_type {
+                    "SINGLE_ELIMINATION" => count - 1,
+                    "DOUBLE_ELIMINATION" => count * 2 - 2,
+                    _ => count * (count - 1) / 2,
+                };
+                assert_eq!(playable.len(), expected_count, "{bracket_type}, {count}");
+                assert!(event.sets.iter().filter(|set| set.is_bye).all(|set| set.identifier.is_none()));
+                for (index, set) in playable.iter().enumerate() {
+                    assert_eq!(set.identifier.as_deref(), Some(format_set_identifier(index).as_str()));
+                }
+            }
         }
     }
 

@@ -1422,6 +1422,7 @@ async fn query_tournament_snapshot(
                 .into_iter()
                 .flatten()
                 .map(|group| PhaseGroupSnapshot {
+                    grand_final_reset: true,
                     phase_group_id: group.id.to_string(),
                     set_ids: group
                         .sets
@@ -2068,6 +2069,7 @@ async fn fetch_event_snapshot_by_slug_with_policy(
                 .into_iter()
                 .flatten()
                 .map(|group| PhaseGroupSnapshot {
+                    grand_final_reset: true,
                     phase_group_id: group.id.to_string(),
                     set_ids: group
                         .sets

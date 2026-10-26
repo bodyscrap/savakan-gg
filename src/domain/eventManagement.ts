@@ -1,4 +1,5 @@
 import { MAX_CATEGORY_SLOTS, type ItemListConfig } from "./itemList";
+import { t } from "../i18n";
 
 export type EventManagementSetting = {
   sideDecisionMethod: "upper_1p" | "upper_2p" | "random";
@@ -89,6 +90,39 @@ export type ConfiguredCategorySlot = {
   maxCount: number;
   allowDuplicates: boolean;
 };
+
+export function validateCategorySelections(
+  categorySelections: string[][],
+  slots: ConfiguredCategorySlot[],
+  totalItemMinCount: number,
+  totalItemMaxCount: number,
+): { normalizedBySlot: string[][]; flattened: string[]; errors: string[] } {
+  const normalizedBySlot = emptyCategorySelections();
+  const flattened: string[] = [];
+  const errors: string[] = [];
+  for (const slot of slots) {
+    let selections = (categorySelections[slot.slotIndex] ?? [])
+      .map((value) => value.trim()).filter((value) => value !== "" && slot.list.items.includes(value));
+    if (!slot.allowDuplicates) selections = [...new Set(selections)];
+    if (selections.length < slot.minCount) {
+      errors.push(t("{p0}: 最低 {p1} 件必要です。", { p0: slot.list.categoryName, p1: slot.minCount }));
+    }
+    if (selections.length > slot.maxCount) {
+      errors.push(t("{p0}: 最大 {p1} 件までです。", { p0: slot.list.categoryName, p1: slot.maxCount }));
+    }
+    normalizedBySlot[slot.slotIndex] = selections;
+    flattened.push(...selections);
+  }
+  const totalMin = clampNonNegativeInteger(totalItemMinCount, 0);
+  const totalMax = Math.max(clampNonNegativeInteger(totalItemMaxCount, 0), totalMin);
+  if (flattened.length < totalMin) {
+    errors.push(t("全体の選択数が不足しています (最低 {p0} 件)。", { p0: totalMin }));
+  }
+  if (flattened.length > totalMax) {
+    errors.push(t("全体の選択数が超過しています (最大 {p0} 件)。", { p0: totalMax }));
+  }
+  return { normalizedBySlot, flattened, errors };
+}
 
 export function buildConfiguredCategorySlots(
   setting: EventManagementSetting | undefined,

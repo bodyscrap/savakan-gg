@@ -1,6 +1,7 @@
 import { t } from "../i18n";
 import type { ItemListConfig } from "../domain/itemList";
 import { YoutubeChapters } from "./YoutubeChapters";
+import { CategorySettingsFields, PlayerItemSelectionFields } from "./ItemSelectionFields";
 
 export type EventSettingEntrant = {
   entrantId: string;
@@ -39,6 +40,7 @@ export type EventSettingProps = {
     initialSeedEntrantCount: number;
     canShuffleInitialSeeds: boolean;
     canRestoreInitialSeeds: boolean;
+    isLocalEvent?: boolean;
   };
   rules: {
     sideDecisionMethod: SideDecisionMethod;
@@ -101,16 +103,10 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
     initialSeedEntrantCount,
     canShuffleInitialSeeds,
     canRestoreInitialSeeds,
+    isLocalEvent,
   } = event;
   const {
     sideDecisionMethod,
-    itemLists,
-    categorySlotListIds,
-    categorySlotMinCounts,
-    categorySlotMaxCounts,
-    categorySlotAllowDuplicates,
-    totalItemMinCount,
-    totalItemMaxCount,
     useAliasName,
   } = rules;
   const {
@@ -133,18 +129,10 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
     onSaveEventAlias,
     onSideDecisionMethodChange,
     onApplySideDecisionMethod,
-    onCategoryListChange,
-    onCategoryMinChange,
-    onCategoryMaxChange,
-    onCategoryAllowDuplicatesChange,
-    onTotalItemMinChange,
-    onTotalItemMaxChange,
     onUseAliasNameChange,
     onRefreshPlayerDisplay,
     onSaveEventManagementSetting,
     onSelectEntrant,
-    onAddDraftSelection,
-    onRemoveDraftSelection,
     onSavePlayerAliasName,
     onSavePlayerSelections,
     onEntrantAliasNameChange,
@@ -202,94 +190,10 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
               </div>
             </div>
 
-            {Array.from({ length: 3 }, (_, slotIndex) => {
-              const listId = categorySlotListIds[slotIndex] ?? "";
-              const minCount = categorySlotMinCounts[slotIndex] ?? 0;
-              const maxCount = categorySlotMaxCounts[slotIndex] ?? 0;
-              const allowDuplicates = categorySlotAllowDuplicates[slotIndex] ?? false;
-              const disabledSlot = listId.trim() === "";
-
-              return (
-                <div className="setting-row" key={`category-setting-${slotIndex}`}>
-                  <p className="setting-row-title">{t("カテゴリ{value1}", { value1: slotIndex + 1 })}</p>
-                  <div className="setting-row-fields">
-                    <label htmlFor={`item-list-slot-${slotIndex}`}>{t("使用リスト")}</label>
-                    <select
-                      id={`item-list-slot-${slotIndex}`}
-                      value={listId}
-                      onChange={(e) => onCategoryListChange(slotIndex, e.currentTarget.value)}
-                    >
-                      <option value="">{t("未選択")}</option>
-                      {itemLists
-                        .slice()
-                        .sort((a, b) => a.name.localeCompare(b.name, "ja"))
-                        .map((itemList) => (
-                          <option key={`slot-${slotIndex}-${itemList.id}`} value={itemList.id}>
-                            {itemList.name} / {itemList.categoryName} ({itemList.items.length})
-                          </option>
-                        ))}
-                    </select>
-
-                    <label htmlFor={`item-list-slot-min-${slotIndex}`}>{t("カテゴリ下限")}</label>
-                    <input
-                      id={`item-list-slot-min-${slotIndex}`}
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={minCount}
-                      disabled={disabledSlot}
-                      onChange={(e) => onCategoryMinChange(slotIndex, e.currentTarget.value)}
-                    />
-
-                    <label htmlFor={`item-list-slot-max-${slotIndex}`}>{t("カテゴリ上限")}</label>
-                    <input
-                      id={`item-list-slot-max-${slotIndex}`}
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={maxCount}
-                      disabled={disabledSlot}
-                      onChange={(e) => onCategoryMaxChange(slotIndex, e.currentTarget.value)}
-                    />
-
-                    <label htmlFor={`item-list-slot-allow-dup-${slotIndex}`}>{t("重複可否")}</label>
-                    <label className="setting-checkbox" htmlFor={`item-list-slot-allow-dup-${slotIndex}`}>
-                      <input
-                        id={`item-list-slot-allow-dup-${slotIndex}`}
-                        type="checkbox"
-                        checked={allowDuplicates}
-                        disabled={disabledSlot}
-                        onChange={(e) => onCategoryAllowDuplicatesChange(slotIndex, e.currentTarget.checked)}
-                      />{t("許可")}</label>
-                  </div>
-                </div>
-              );
-            })}
-
-            <div className="setting-row">
-              <p className="setting-row-title">{t("アイテム全体選択")}</p>
-              <div className="setting-row-fields total">
-                <label htmlFor="total-item-min">{t("下限")}</label>
-                <input
-                  id="total-item-min"
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={totalItemMinCount}
-                  onChange={(e) => onTotalItemMinChange(e.currentTarget.value)}
-                />
-
-                <label htmlFor="total-item-max">{t("上限")}</label>
-                <input
-                  id="total-item-max"
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={totalItemMaxCount}
-                  onChange={(e) => onTotalItemMaxChange(e.currentTarget.value)}
-                />
-              </div>
-            </div>
+            <details className="item-category-settings">
+            <summary><h3>{t("アイテム選択カテゴリの設定")}</h3></summary>
+            <div className="tournament-settings">
+            <CategorySettingsFields rules={rules} actions={actions} />
 
             <div className="setting-row">
               <p className="setting-row-title">{t("プレイヤー表示")}</p>
@@ -308,13 +212,17 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
             <div className="setting-row save">
               <button type="button" className="ghost" onClick={onSaveEventManagementSetting}>{t("設定の適用&保存")}</button>
             </div>
-          </div>
+            </div>
           <p className="meta">{t("カテゴリは最大3つまで設定できます。カテゴリ重複は不可で、カテゴリごとの件数条件と全体件数条件を設定します。")}</p>
+            </details>
+          </div>
 
           <div className="setting-row" style={{ marginTop: "0.9rem" }}>
             <p className="setting-row-title">{t("初期PhaseのプレイヤーSeedシャッフル")}</p>
             <div className="setting-row-fields single" style={{ gridTemplateColumns: "minmax(220px, 1fr) auto auto" }}>
-              <p className="meta">{t("対象: {value1} / {value2}人。 試合開始前のみ実行でき、結果報告時にstart.ggへSeedを反映します。", { value1: initialSeedPhaseName || "-", value2: initialSeedEntrantCount })}</p>
+              <p className="meta">{isLocalEvent
+                ? t("対象: {value1} / {value2}人。 試合開始前のみ実行できます。不戦勝は開始済みに含みません。", { value1: initialSeedPhaseName || "-", value2: initialSeedEntrantCount })
+                : t("対象: {value1} / {value2}人。 試合開始前のみ実行でき、結果報告時にstart.ggへSeedを反映します。", { value1: initialSeedPhaseName || "-", value2: initialSeedEntrantCount })}</p>
               <button
                 type="button"
                 className="ghost"
@@ -336,8 +244,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
             <div className="tournament-manager-grid" style={{ marginTop: "0.8rem" }}>
               <div className="tournament-manager-left-stack">
                 <section className="panel" style={{ padding: "0.75rem" }}>
-                  <h3>{t("プレイヤー一覧 (seed順)")}</h3>
-                  <p className="meta">{t("参加人数: {value1}", { value1: selectedEventEntrants.length })}</p>
+                  <h3>{t("参加者一覧({count} 人)", { count: selectedEventEntrants.length })}</h3>
                   <p className="meta">{t("メタ情報の保存数: {value1}", { value1: selectedEventMetaEntrantCount })}</p>
                   <div className={`event-list player-list-scroll ${selectedEventEntrants.length > 8 ? "enabled" : ""}`}>
                     {selectedEventEntrants.map((entrant) => {
@@ -439,51 +346,8 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                           {t("プレイヤーエイリアス名を保存")}
                         </button>
                       </div>
-                      {configuredCategorySlots.length === 0 ? (
-                        <p className="meta">{t("先に上部でカテゴリ(最大3つ)を選択してください。")}</p>
-                      ) : (
-                        configuredCategorySlots.map((slot) => {
-                          const currentSelections = draftSelectionsBySlot[slot.slotIndex] ?? [];
-                          const canAddMore = currentSelections.length < slot.maxCount;
-                          const selectableItems = slot.allowDuplicates
-                            ? slot.list.items
-                            : slot.list.items.filter((itemName) => !currentSelections.includes(itemName));
-
-                          return (
-                            <div key={`${selectedEntrantId}-${slot.list.id}-${slot.slotIndex}`} style={{ border: "1px solid var(--line)", borderRadius: "10px", padding: "0.55rem" }}>
-                              <p className="meta" style={{ marginBottom: "0.35rem" }}>{t("{value1} ({value2}) / {value3} 件{value4}", { value1: slot.list.categoryName, value2: slot.list.name, value3: currentSelections.length, value4: t(" / 下限 {value1} / 上限 {value2} / 重複 {value3}", { value1: slot.minCount, value2: slot.maxCount, value3: slot.allowDuplicates ? t("可") : t("不可") }) })}</p>
-
-                              <select
-                                value=""
-                                disabled={!canAddMore || selectableItems.length === 0}
-                                onChange={(e) => onAddDraftSelection(slot, e.currentTarget.value)}
-                              >
-                                <option value="">{t("アイテムを追加")}</option>
-                                {selectableItems.map((itemName) => (
-                                  <option key={`${slot.list.id}-${slot.slotIndex}-${itemName}`} value={itemName}>
-                                    {itemName}
-                                  </option>
-                                ))}
-                              </select>
-
-                              {currentSelections.length > 0 && (
-                                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.45rem" }}>
-                                  {currentSelections.map((itemName, index) => (
-                                    <button
-                                      key={`${slot.list.id}-${slot.slotIndex}-${itemName}-${index}`}
-                                      type="button"
-                                      className="ghost tiny"
-                                      onClick={() => onRemoveDraftSelection(slot.slotIndex, index)}
-                                    >
-                                      {itemName} ×
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })
-                      )}
+                      <PlayerItemSelectionFields slots={configuredCategorySlots} selections={draftSelectionsBySlot}
+                        onAdd={actions.onAddDraftSelection} onRemove={actions.onRemoveDraftSelection} />
                     </div>
 
                     {validationErrors.length > 0 && (

@@ -75,12 +75,15 @@ export function buildInitialPhaseSeedMapping(
   });
 }
 
-export function canShuffleInitialPhaseSeeds(event: EventSnapshot): boolean {
+export function canShuffleInitialPhaseSeeds(event: EventSnapshot, isLocalEvent = false): boolean {
   const firstPhase = [...(event.phases ?? [])]
     .filter((phase) => phase.phaseOrder !== null)
     .sort((left, right) => (left.phaseOrder ?? 0) - (right.phaseOrder ?? 0))[0];
   if (!firstPhase || event.sets.length === 0
-    || !event.sets.every((set) => set.state === 1 && set.winnerId === null)) {
+    || !event.sets.every((set) => isLocalEvent
+      ? set.isBye || ((set.state === 1 || set.state === 2)
+        && set.winnerId === null && set.slots.every((slot) => slot.score === null || slot.score === undefined))
+      : set.state === 1 && set.winnerId === null)) {
     return false;
   }
   const entrantIds = new Set(

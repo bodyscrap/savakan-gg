@@ -2468,7 +2468,9 @@ function App() {
   const { ownCalls: activeMatchOwnCalls, otherCalls: activeMatchOtherCalls } =
     splitSetCalls(activeMatchCalls);
   const canShuffleSelectedInitialSeeds = selectedEvent !== null
-    && canShuffleInitialPhaseSeeds(selectedEvent)
+    && canShuffleInitialPhaseSeeds(selectedEvent, selectedEventMeta?.origin === "local")
+    && !(selectedEventMeta?.origin === "local"
+      && workspace?.localMeta.setStreamStarts?.some((start) => start.eventId === selectedEvent.eventId))
     && !pendingSetResults.some((result) => result.eventId === selectedEvent.eventId)
     && !pendingGrandFinalResetResults.some((result) => result.eventId === selectedEvent.eventId);
   const canRestoreSelectedInitialSeeds = canShuffleSelectedInitialSeeds
@@ -2577,6 +2579,7 @@ function App() {
         {activeTab === "create" && (
           <>
             <CreateSnapshot
+              itemLists={itemLists}
               token={token}
               onTokenChange={setToken}
               createTournamentSlug={createTournamentSlug}
@@ -2646,6 +2649,7 @@ function App() {
                 : 0,
               canShuffleInitialSeeds: canShuffleSelectedInitialSeeds,
               canRestoreInitialSeeds: canRestoreSelectedInitialSeeds,
+              isLocalEvent: selectedEventMeta?.origin === "local",
             }}
             rules={{
               sideDecisionMethod,

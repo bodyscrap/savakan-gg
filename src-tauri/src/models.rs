@@ -219,8 +219,18 @@ pub struct CreateLocalEventSnapshotInput {
     pub event_name: String,
     #[serde(default)]
     pub event_alias: Option<String>,
-    pub participant_count: usize,
+    pub participants: Vec<LocalEventParticipantInput>,
+    pub require_item_selections: bool,
+    pub event_management: EventManagementMeta,
     pub phases: Vec<LocalEventPhaseConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalEventParticipantInput {
+    pub entrant_id: String,
+    pub name: String,
+    pub category_selections: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,6 +249,12 @@ pub struct LocalEventPhaseConfig {
     pub third_place_match: bool,
     #[serde(default)]
     pub fifth_place_match: bool,
+    #[serde(default = "default_grand_final_reset")]
+    pub grand_final_reset: bool,
+}
+
+fn default_grand_final_reset() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -587,6 +603,8 @@ pub struct PhaseGroupSnapshot {
     pub set_ids: Vec<String>,
     #[serde(default)]
     pub bracket_type: Option<String>,
+    #[serde(default = "default_grand_final_reset")]
+    pub grand_final_reset: bool,
     pub phase_id: Option<String>,
     pub phase_name: Option<String>,
     pub phase_order: Option<i64>,

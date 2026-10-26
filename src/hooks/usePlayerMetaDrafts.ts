@@ -1,6 +1,6 @@
 import { t } from "../i18n";
 import { useEffect, useRef, useState } from "react";
-import { clampNonNegativeInteger, emptyCategorySelections } from "../domain/eventManagement";
+import { emptyCategorySelections, validateCategorySelections } from "../domain/eventManagement";
 import type { EventSettingCategorySlot } from "../components/EventSetting";
 import type { EventSnapshot } from "../domain/bracketDisplay";
 import { MAX_CATEGORY_SLOTS, resolveEventItemList, type ItemListConfig } from "../domain/itemList";
@@ -280,36 +280,7 @@ export function usePlayerMetaDrafts({
     draft: PlayerMetaDraft,
     slots: EventSettingCategorySlot[],
   ): { normalizedBySlot: string[][]; flattened: string[]; errors: string[] } {
-    const normalizedBySlot = emptyCategorySelections();
-    const flattened: string[] = [];
-    const errors: string[] = [];
-
-    for (const slot of slots) {
-      const allowedItems = new Set(slot.list.items);
-      let selections = getDraftCategorySelections(draft, slot.slotIndex)
-        .filter((value) => allowedItems.has(value));
-      if (!slot.allowDuplicates) {
-        selections = [...new Set(selections)];
-      }
-      if (selections.length < slot.minCount) {
-        errors.push(t("{p0}: 最低 {p1} 件必要です。", { p0: slot.list.categoryName, p1: slot.minCount }));
-      }
-      if (selections.length > slot.maxCount) {
-        errors.push(t("{p0}: 最大 {p1} 件までです。", { p0: slot.list.categoryName, p1: slot.maxCount }));
-      }
-      normalizedBySlot[slot.slotIndex] = selections;
-      flattened.push(...selections);
-    }
-
-    const totalMin = clampNonNegativeInteger(totalItemMinCount, 0);
-    const totalMax = Math.max(clampNonNegativeInteger(totalItemMaxCount, 0), totalMin);
-    if (flattened.length < totalMin) {
-      errors.push(t("全体の選択数が不足しています (最低 {p0} 件)。", { p0: totalMin }));
-    }
-    if (flattened.length > totalMax) {
-      errors.push(t("全体の選択数が超過しています (最大 {p0} 件)。", { p0: totalMax }));
-    }
-    return { normalizedBySlot, flattened, errors };
+    return validateCategorySelections(draft.categorySelections, slots, totalItemMinCount, totalItemMaxCount);
   }
 
   function clearDirtyDraft(eventId: string, entrantId: string) {

@@ -83,4 +83,18 @@ describe("initial phase seed shuffle", () => {
     started.sets[0].state = 2;
     expect(canShuffleInitialPhaseSeeds(started)).toBe(false);
   });
+
+  it("allows automatic local byes without changing start.gg eligibility", () => {
+    const event = eventFixture();
+    event.sets.push({ ...event.sets[0], setId: "bye", isBye: true, state: 3, winnerId: "entrant-1" });
+    expect(canShuffleInitialPhaseSeeds(event)).toBe(false);
+    expect(canShuffleInitialPhaseSeeds(event, true)).toBe(true);
+    event.sets[0].state = 2;
+    expect(canShuffleInitialPhaseSeeds(event, true)).toBe(true);
+    event.sets[0].slots = [{ entrantId: "entrant-1", entrantName: "One", seedId: "seed-1", seedNum: 1, score: 0 }];
+    expect(canShuffleInitialPhaseSeeds(event, true)).toBe(false);
+    event.sets[0].state = 3;
+    event.sets[0].winnerId = "entrant-1";
+    expect(canShuffleInitialPhaseSeeds(event, true)).toBe(false);
+  });
 });

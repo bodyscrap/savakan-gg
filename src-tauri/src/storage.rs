@@ -465,6 +465,53 @@ mod player_item_selection_tests {
         assert_eq!(normalize_player_item_selections(&selections), ["B", "A", "B"]);
         assert_eq!(normalize_character_names(&selections), ["B", "A"]);
     }
+
+    #[test]
+    fn local_registration_saves_names_items_and_category_rules_for_every_entrant() {
+        for count in [2, 3, 5, 8] {
+            let participants = (1..=count).map(|index| serde_json::json!({
+                "entrantId": format!("registered-{index}"),
+                "name": format!("登録者 {index}"),
+                "categorySelections": [["B", "A", "B"], [], []],
+            })).collect::<Vec<_>>();
+            let input: CreateLocalEventSnapshotInput = serde_json::from_value(serde_json::json!({
+                "tournamentName": "Local", "eventName": "Registered event", "participants": participants,
+                "requireItemSelections": true,
+                "eventManagement": {
+                    "sideDecisionMethod": "upper_1p",
+                    "itemListSnapshots": [{"id": "characters", "name": "Characters", "categoryName": "Character", "items": ["A", "B"]}],
+                    "categoryMinCounts": [1, 0, 0], "categoryMaxCounts": [3, 0, 0],
+                    "categoryAllowDuplicates": [true, false, false], "totalMinCount": 1, "totalMaxCount": 3,
+                },
+                "phases": [{
+                    "name": "Final", "poolCount": 1, "bracketType": "DOUBLE_ELIMINATION",
+                    "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+                    "enabledTiebreakRules": ["TOTAL_SETS_WON"],
+                }],
+            })).expect("valid registration should deserialize");
+            let snapshot = crate::local_event::generate_local_snapshot(&input, "local-test", "local-test", "event")
+                .expect("registered event should generate");
+            let mut meta = merge_snapshot_into_meta(&snapshot, "event", build_empty_meta("local-test", "event"));
+            let event_meta = &mut meta.events[0];
+            apply_local_registration_meta(event_meta, &input).expect("all participants should have metadata");
+            assert_eq!(event_meta.entrants.len(), count);
+            for participant in &input.participants {
+                let entrant = event_meta.entrants.iter().find(|entrant| entrant.entrant_id == participant.entrant_id).unwrap();
+                assert_eq!(entrant.entrant_name, participant.name);
+                assert_eq!(entrant.character_names, ["B", "A", "B"]);
+                assert!(!entrant.auth_code.is_empty());
+            }
+            let setting = event_meta.event_management.as_ref().unwrap();
+            assert_eq!(setting.item_list_snapshots[0].id, "characters");
+            assert_eq!(setting.category_min_counts, [1, 0, 0]);
+            assert_eq!(setting.category_max_counts, [3, 0, 0]);
+            assert!(setting.category_allow_duplicates[0]);
+            let serialized = serde_json::to_string(&meta).unwrap();
+            let restored: TournamentLocalMeta = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(restored.events[0].entrants.len(), count);
+            assert!(restored.events[0].entrants.iter().all(|entrant| entrant.character_names == ["B", "A", "B"]));
+        }
+    }
 }
 
 fn normalize_item_list_snapshot(item_list: &ItemListConfig) -> ItemListConfig {
@@ -853,10 +900,21 @@ mod score_edit_lock_tests {
     #[test]
     fn loser_bracket_bye_advances_after_the_playable_source_set_finishes() {
         let input = crate::models::CreateLocalEventSnapshotInput {
+            require_item_selections: true,
             tournament_name: "Local".to_owned(),
             event_name: "Event".to_owned(),
             event_alias: None,
-            participant_count: 31,
+            participants: (1..=31).map(|index| crate::models::LocalEventParticipantInput {
+                entrant_id: format!("entrant-{index}"),
+                name: format!("Player {index}"),
+                category_selections: vec![Vec::new(); 3],
+            }).collect(),
+            event_management: EventManagementMeta {
+                side_decision_method: "upper_1p".to_owned(), item_list_snapshots: Vec::new(),
+                use_alias_name: false, category_min_counts: vec![0; 3],
+                category_max_counts: vec![0; 3], category_allow_duplicates: vec![false; 3],
+                total_min_count: 0, total_max_count: 3,
+            },
             phases: vec![
                 crate::models::LocalEventPhaseConfig {
                     name: "Phase 1".to_owned(),
@@ -875,6 +933,7 @@ mod score_edit_lock_tests {
                     ],
                     third_place_match: false,
                     fifth_place_match: false,
+                    grand_final_reset: true,
                 },
                 crate::models::LocalEventPhaseConfig {
                     name: "Final".to_owned(),
@@ -893,6 +952,7 @@ mod score_edit_lock_tests {
                     ],
                     third_place_match: false,
                     fifth_place_match: false,
+                    grand_final_reset: true,
                 },
             ],
         };
@@ -1720,8 +1780,24 @@ pub fn create_local_event_snapshot(
         .map(str::trim)
         .filter(|alias| !alias.is_empty())
         .map(str::to_owned);
+    apply_local_registration_meta(event_meta, &input)?;
     save_local_meta(app, &event_id, &local_meta)?;
     load_workspace(app, &snapshot.slug, &event_id)
+}
+
+fn apply_local_registration_meta(
+    event_meta: &mut EventLocalMeta,
+    input: &CreateLocalEventSnapshotInput,
+) -> Result<(), String> {
+    event_meta.event_management = Some(normalize_event_management_meta(input.event_management.clone()));
+    for participant in &input.participants {
+        let entrant = event_meta.entrants.iter_mut()
+            .find(|entrant| entrant.entrant_id == participant.entrant_id)
+            .ok_or_else(|| format!("登録した参加者の保存先がありません: {}", participant.name))?;
+        entrant.entrant_name = participant.name.trim().to_owned();
+        entrant.character_names = participant.category_selections.iter().flatten().cloned().collect();
+    }
+    Ok(())
 }
 
 pub fn event_origin(
@@ -7825,6 +7901,9 @@ fn apply_local_progression_inner(
 
     if source_is_grand_final
         && !source_is_grand_final_reset
+        && event.phase_groups.iter()
+            .find(|group| Some(&group.phase_group_id) == source_set.phase_group_id.as_ref())
+            .is_none_or(|group| group.grand_final_reset)
         && !crate::models::is_intermediate_set(&event.phase_groups, &source_set)
         && winner_is_from_losers_side(event, &source_set, winner_id)
     {
@@ -8939,21 +9018,15 @@ pub fn shuffle_initial_phase_seeds(
     {
         return Err("ローカルに未報告の試合結果があるeventの初期Seedは変更できません。".to_owned());
     }
-    let event = workspace
-        .snapshot
-        .events
-        .iter_mut()
-        .find(|event| event.event_id == input.event_id)
-        .ok_or_else(|| format!("指定イベントが見つかりません: {}", input.event_id))?;
-    if event
-        .sets
-        .iter()
-        .any(|set| set.state != 1 || set.winner_id.is_some())
-    {
-        return Err("試合が進行したeventの初期Seedはシャッフルできません。".to_owned());
+    let is_local_event = workspace.local_meta.events.iter()
+        .any(|event| event.event_id == input.event_id && event.origin == EventOrigin::Local);
+    if is_local_event && workspace.local_meta.set_stream_starts.iter().any(|start| start.event_id == input.event_id) {
+        return Err("試合の配信開始記録があるeventの初期Seedは変更できません。".to_owned());
     }
-
-    apply_initial_phase_seed_mapping(event, &input.seed_mapping, input.restore_to_snapshot)?;
+    apply_prestart_initial_phase_seed_mapping(
+        &mut workspace.snapshot, &input.event_id, &input.seed_mapping,
+        input.restore_to_snapshot, is_local_event,
+    )?;
 
     workspace.snapshot.updated_at = Utc::now();
     let event_snapshot = workspace
@@ -8988,6 +9061,48 @@ pub fn shuffle_initial_phase_seeds(
         &event_snapshot.name,
     )?;
     Ok(workspace)
+}
+
+fn apply_prestart_initial_phase_seed_mapping(
+    snapshot: &mut TournamentSnapshot,
+    event_id: &str,
+    seed_mapping: &[InitialPhaseSeedMappingEntry],
+    restore_to_snapshot: bool,
+    is_local_event: bool,
+) -> Result<(), String> {
+    let event = snapshot.events.iter_mut()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| format!("指定イベントが見つかりません: {event_id}"))?;
+    if event.sets.iter().any(|set| {
+        if is_local_event {
+            !set.is_bye && (!matches!(set.state, 1 | 2) || set.winner_id.is_some()
+                || set.slots.iter().any(|slot| slot.score.is_some()))
+        } else {
+            set.state != 1 || set.winner_id.is_some()
+        }
+    }) {
+        return Err("試合が進行したeventの初期Seedはシャッフルできません。".to_owned());
+    }
+    apply_initial_phase_seed_mapping(event, seed_mapping, restore_to_snapshot)?;
+    if is_local_event {
+        for set in &mut event.sets {
+            if set.is_bye {
+                clear_set_result_state(set);
+            }
+            for (index, slot) in set.slots.iter_mut().enumerate() {
+                let source = if index == 0 { &set.entrant1_source } else { &set.entrant2_source };
+                if source.as_ref().is_some_and(|source| source.source_type.as_deref() == Some("set")) {
+                    slot.entrant_id = None;
+                    slot.entrant_name = source.as_ref()
+                        .and_then(|source| source.placeholder_name.clone())
+                        .unwrap_or_else(|| "TBD".to_owned());
+                    slot.score = None;
+                }
+            }
+        }
+        rebuild_event_progression_from_completed_sets(snapshot, event_id);
+    }
+    Ok(())
 }
 
 fn apply_initial_phase_seed_mapping(
@@ -9693,6 +9808,78 @@ fn restore_event_pools_from_snapshot(
 #[cfg(test)]
 mod snapshot_restore_scope_tests {
     use super::*;
+
+    #[test]
+    fn local_seed_shuffle_recomputes_byes_and_can_restore_registration_order() {
+        for bracket_type in ["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION", "ROUND_ROBIN"] {
+            for (count, pools) in [(3, 1), (5, 1), (7, 2), (8, 1), (11, 2)] {
+                let input: CreateLocalEventSnapshotInput = serde_json::from_value(serde_json::json!({
+                    "tournamentName": "Local", "eventName": "Event", "requireItemSelections": false,
+                    "participants": (1..=count).map(|index| serde_json::json!({
+                        "entrantId": format!("p-{index}"), "name": format!("Player {index}"),
+                        "categorySelections": [[], [], []],
+                    })).collect::<Vec<_>>(),
+                    "eventManagement": {
+                        "sideDecisionMethod": "upper_1p", "itemListSnapshots": [],
+                        "totalMinCount": 0, "totalMaxCount": 3,
+                    },
+                    "phases": [{
+                        "name": "Pools", "poolCount": pools, "bracketType": bracket_type,
+                        "qualifiersPerPool": 2,
+                        "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+                        "enabledTiebreakRules": ["TOTAL_SETS_WON"],
+                    }, {
+                        "name": "Final", "poolCount": 1, "bracketType": "SINGLE_ELIMINATION",
+                        "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+                        "enabledTiebreakRules": ["TOTAL_SETS_WON"],
+                    }],
+                })).unwrap();
+                let mut snapshot = crate::local_event::generate_local_snapshot(&input, "local-test", "local-test", "event").unwrap();
+                rebuild_progression_from_completed_sets(&mut snapshot);
+                let original = snapshot.events[0].clone();
+                let (_, original_mapping) = initial_phase_seed_mapping(&original).unwrap();
+                let mut shuffled_mapping = original_mapping.clone();
+                for (entry, position) in shuffled_mapping.iter_mut().zip(original_mapping.iter().rev()) {
+                    entry.seed_num = position.seed_num;
+                    entry.phase_group_id = position.phase_group_id.clone();
+                }
+                apply_prestart_initial_phase_seed_mapping(&mut snapshot, "event", &shuffled_mapping, false, true)
+                    .unwrap_or_else(|error| panic!("{bracket_type} count={count} pools={pools}: {error}"));
+                for set in &snapshot.events[0].sets {
+                    if set.is_bye && set.state == 3 {
+                        assert_eq!(set.winner_id, set.slots.iter().find_map(|slot| slot.entrant_id.clone()));
+                    }
+                    for (index, slot) in set.slots.iter().enumerate() {
+                        let source = if index == 0 { &set.entrant1_source } else { &set.entrant2_source };
+                        let Some(source) = source.as_ref().filter(|source|
+                            source.source_type.as_deref() == Some("set") && source.condition.as_deref() == Some("winner")) else { continue };
+                        let source_set = snapshot.events[0].sets.iter()
+                            .find(|source_set| Some(source_set.set_id.as_str()) == source.type_id.as_deref()).unwrap();
+                        assert_eq!(slot.entrant_id, source_set.winner_id);
+                    }
+                }
+                let serialized = serde_json::to_string(&snapshot).unwrap();
+                let mut restored: TournamentSnapshot = serde_json::from_str(&serialized).unwrap();
+                rebuild_progression_from_completed_sets(&mut restored);
+                apply_prestart_initial_phase_seed_mapping(&mut restored, "event", &original_mapping, true, true).unwrap();
+                for (original_set, restored_set) in original.sets.iter().zip(&restored.events[0].sets) {
+                    assert_eq!(original_set.winner_id, restored_set.winner_id);
+                    assert_eq!(original_set.state, restored_set.state);
+                    assert_eq!(original_set.slots.iter().map(|slot| &slot.entrant_id).collect::<Vec<_>>(),
+                        restored_set.slots.iter().map(|slot| &slot.entrant_id).collect::<Vec<_>>());
+                }
+                let mut started = snapshot.clone();
+                let played_set = started.events[0].sets.iter_mut().find(|set| !set.is_bye).unwrap();
+                played_set.state = 2;
+                played_set.slots[0].score = Some(0.0);
+                assert!(apply_prestart_initial_phase_seed_mapping(&mut started, "event", &original_mapping, false, true).is_err());
+                if original.sets.iter().any(|set| set.is_bye && set.state == 3) {
+                    let mut remote = snapshot.clone();
+                    assert!(apply_prestart_initial_phase_seed_mapping(&mut remote, "event", &original_mapping, false, false).is_err());
+                }
+            }
+        }
+    }
 
     fn event_fixture() -> EventSnapshot {
         serde_json::from_value(serde_json::json!({

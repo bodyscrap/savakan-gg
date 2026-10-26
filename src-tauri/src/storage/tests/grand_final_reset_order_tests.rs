@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn local_grand_final_reset_setting_controls_creation_and_survives_reload() {
+    for enabled in [false, true] {
+        let mut losers_final = make_set("lf", "Losers Final", Some("lower"), &["lower", "other"]);
+        losers_final.phase_group_id = Some("pool".to_owned());
+        let mut grand_final = make_set("gf", "Grand Final", Some("lower"), &["upper", "lower"]);
+        grand_final.phase_group_id = Some("pool".to_owned());
+        let group = serde_json::from_value(serde_json::json!({
+            "phaseGroupId": "pool",
+            "setIds": ["lf", "gf"],
+            "grandFinalReset": enabled
+        })).unwrap();
+        let snapshot = TournamentSnapshot {
+            tournament_id: "local".to_owned(), slug: "local".to_owned(), name: "Local".to_owned(),
+            updated_at: Utc::now(),
+            events: vec![EventSnapshot {
+                event_id: "event".to_owned(), name: "Event".to_owned(),
+                phases: Vec::new(), phase_groups: vec![group], sets: vec![losers_final, grand_final],
+            }],
+        };
+        let mut reloaded: TournamentSnapshot =
+            serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+        apply_local_progression_incremental(&mut reloaded, "event", "gf", "lower", &HashMap::new());
+        assert_eq!(reloaded.events[0].sets.iter().any(is_grand_final_reset_set), enabled);
+        assert_eq!(reloaded.events[0].phase_groups[0].grand_final_reset, enabled);
+    }
+    let legacy_group: crate::models::PhaseGroupSnapshot =
+        serde_json::from_value(serde_json::json!({ "phaseGroupId": "legacy" })).unwrap();
+    assert!(legacy_group.grand_final_reset);
+}
+
+#[test]
 fn replaces_only_the_requested_event_from_pristine_snapshot() {
     let mut snapshot = TournamentSnapshot {
         tournament_id: "tournament".to_owned(),

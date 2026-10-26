@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBracketSections,
+  buildBracketSectionsForView,
   buildRoundColumns,
   buildSetDisplayCodeById,
   getBracketVerticalLayoutScale,
@@ -21,6 +22,30 @@ import type { BracketSectionForView, PhasePoolGroup } from "./bracketDisplay";
 import type { SetSnapshot } from "./bracketProgression";
 
 describe("bracket source labels", () => {
+  it.each([false, true])("only reserves a GF Reset column when enabled=%s", (enabled) => {
+    const grandFinal: SetSnapshot = {
+      setId: "gf", fullRoundText: "Grand Final", phaseGroupId: "pool",
+      round: 3, phaseName: "Phase 1", phaseGroupName: "Pool 1",
+      phaseOrder: 1, phaseGroupDisplayIdentifier: "1",
+      state: 1, winnerId: null, entrant1Source: null, entrant2Source: null, slots: [],
+    };
+    const sections = buildBracketSectionsForView({
+      sections: [{
+        key: "winners", title: "Winners", setCount: 1,
+        columns: [{ key: "gf", title: "Grand Final", round: 3, seq: 0, sets: [grandFinal] }],
+      }],
+      phaseGroupSets: [grandFinal], pendingResetSetIds: new Set(),
+      event: {
+        eventId: "event", name: "Event", sets: [grandFinal],
+        phaseGroups: [{
+          phaseGroupId: "pool", grandFinalReset: enabled, phaseName: null, phaseOrder: null,
+          displayIdentifier: null, bracketType: "DOUBLE_ELIMINATION",
+        }],
+      },
+    });
+    expect(sections[0].columns.some((column) => column.title === "Grand Final Reset")).toBe(enabled);
+  });
+
   it("uses a non-empty alias only when alias display is enabled", () => {
     expect(resolveEntrantDisplayName("Player", "Alias", true)).toBe("Alias");
     expect(resolveEntrantDisplayName("Player", "Alias", false)).toBe("Player");

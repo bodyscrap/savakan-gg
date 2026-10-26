@@ -53,6 +53,25 @@ function buttons(node: ReactNode): Array<{ label: string; disabled?: boolean; cl
 afterEach(() => setLanguage("ja"));
 
 describe("player metadata save controls", () => {
+  it("collapses item category settings by default and combines the participant heading and count", () => {
+    const html = renderToStaticMarkup(<EventSetting {...setup()} />);
+    expect(html).toMatch(/<details class="item-category-settings"><summary><h3>アイテム選択カテゴリの設定<\/h3><\/summary>[\s\S]*設定の適用&amp;保存[\s\S]*<\/details>/);
+    expect(html).not.toMatch(/<details[^>]*\bopen\b/);
+    expect(html).toContain("<h3>参加者一覧(1 人)</h3>");
+    expect(html).not.toContain("参加人数:");
+    expect(html).not.toContain("プレイヤー一覧 (seed順)");
+  });
+
+  it("describes local seed shuffle without promising start.gg reporting", () => {
+    const props = setup();
+    props.event.isLocalEvent = true;
+    props.event.canShuffleInitialSeeds = true;
+    const html = renderToStaticMarkup(<EventSetting {...props} />);
+    expect(html).toContain("不戦勝は開始済みに含みません。");
+    expect(html).not.toContain("結果報告時にstart.ggへSeedを反映します。");
+    expect(buttons(EventSetting(props)).find((button) => button.label === "Seedをシャッフル")?.disabled).toBe(false);
+  });
+
   it("keeps the alias save enabled while invalid selections cannot be saved", () => {
     const props = setup();
     props.playerMeta.validationErrors = ["選択数が不足しています。"];
@@ -86,6 +105,8 @@ describe("player metadata save controls", () => {
     const html = renderToStaticMarkup(<EventSetting {...setup()} />);
     expect(html).toContain("Save player alias");
     expect(html).toContain("Save item selections");
+    expect(html).toContain("Item selection category settings");
+    expect(html).toContain("Participants (1)");
     expect(html).toContain('value="日本語の名前"');
   });
 });

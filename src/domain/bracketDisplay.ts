@@ -27,6 +27,7 @@ export type PhaseGroupSnapshot = {
   phaseId?: string | null;
   setIds?: string[];
   tiebreakOrder?: string[];
+  grandFinalReset?: boolean;
   phaseName: string | null;
   phaseOrder: number | null;
   displayIdentifier: string | null;
@@ -538,7 +539,8 @@ export function buildBracketSectionsForView(input: {
     const hasResetColumn = preparedColumns.some((item) => item.column.sets.some((set) => isGrandFinalResetSet(set)));
     if (!hasResetColumn) {
       const grandFinalColumnIndex = preparedColumns.findIndex((item) =>
-        item.column.sets.some((set) => isGrandFinalText(set.fullRoundText) && !isGrandFinalResetSet(set)),
+        item.column.sets.some((set) => isGrandFinalText(set.fullRoundText) && !isGrandFinalResetSet(set)
+          && input.event?.phaseGroups?.find((group) => group.phaseGroupId === set.phaseGroupId)?.grandFinalReset !== false),
       );
 
       if (grandFinalColumnIndex >= 0) {
