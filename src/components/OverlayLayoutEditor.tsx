@@ -1,13 +1,15 @@
 import { useEffect, useId, useMemo, useRef, useState, type DragEvent, type PointerEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { save as saveFile } from "@tauri-apps/plugin-dialog";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { t } from "../i18n";
 import {
   MAX_IMAGE_BYTES, MAX_LAYOUT_BYTES, builtInOverlayPreset, mergeOverlayLayouts,
   overlayPreviewTransform, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, overlayComponentsIntersecting, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayImageDimensions, fitOverlayImageToCanvas, overlayKindLabels, overlaySourceLabels, overlayTextSources, overlayNumberSources, overlayAnimationValueSources, overlayItemSources, parseOverlayLayouts, parseOverlayLayoutsFile,
   type OverlayCentering, type OverlayComponent, type OverlayLayouts, type OverlayPreset,
 } from "../domain/overlayLayout";
+import { createOverlayPresetArchive, overlayPresetArchiveBase64, parseOverlayPresetArchive } from "../domain/overlayPresetArchive";
 import { renderOverlayPreset, resolveOverlayVerticalAlign, resolveOverlayTextOverflow, type OverlayRenderState } from "../domain/overlayRenderer.js";
-import { writeSnapshotExportFile } from "../domain/tournamentWorkspaceRepository";
 import { inspectOverlayImageAnimation, setOverlayImageLooping } from "../domain/overlayImageAnimation";
 import { OverlayComponentDialog } from "./OverlayComponentDialog";
 import { OverlayPresetCopyDialog } from "./OverlayPresetCopyDialog";
@@ -509,7 +511,10 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     setBusy(true);
     try {
       if (file.size > MAX_LAYOUT_BYTES) throw new Error(t("プリセットファイルは32MB以下にしてください。"));
-      const merged = mergeOverlayLayouts(layouts, parseOverlayLayoutsFile(await file.text()));
+      const imported = file.name.toLocaleLowerCase().endsWith(".zip")
+        ? parseOverlayPresetArchive(new Uint8Array(await file.arrayBuffer()))
+        : parseOverlayLayoutsFile(await file.text());
+      const merged = mergeOverlayLayouts(layouts, imported);
       change(merged);
       const importedPresetId = merged.presets[layouts.presets.length]?.id;
       if (importedPresetId) requestPresetSelection(importedPresetId);
@@ -522,15 +527,14 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       const exported = selectedOnly && preset
         ? { version: 1, activePresetId: preset.id, presets: [preset] }
         : layouts;
-      const data = JSON.stringify(parseOverlayLayouts(exported));
-      if (new TextEncoder().encode(data).length > MAX_LAYOUT_BYTES) throw new Error(t("プリセットファイルは32MB以下にしてください。"));
+      const data = createOverlayPresetArchive(exported);
       const path = await saveFile({
         title: t(selectedOnly ? "エクスポート(単体)" : "エクスポート(全体)"),
-        defaultPath: selectedOnly ? "overlay-preset.json" : "overlay-presets.json",
-        filters: [{ name: "JSON", extensions: ["json"] }],
+        defaultPath: selectedOnly ? "overlay-preset.zip" : "overlay-presets.zip",
+        filters: [{ name: t("ZIPファイル"), extensions: ["zip"] }],
       });
       if (!path) return;
-      await writeSnapshotExportFile(path, data);
+      await invoke("write_overlay_preset_archive", { path, archiveBase64: overlayPresetArchiveBase64(data) });
       setError("");
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
@@ -542,18 +546,24 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type) || file.size > MAX_IMAGE_BYTES) {
         throw new Error(t("画像は4MB以下のPNG・JPEG・GIF・WebPを選択してください。"));
       }
+      const original = preset?.components.find((item) => item.id === id);
+      if (!preset || !original || original.kind !== "image" && original.frame !== "image") {
+        throw new Error(t("コンポーネントが見つかりません。"));
+      }
       const data = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error(t("画像を読み込めませんでした。")));
         reader.onerror = () => reject(reader.error ?? new Error(t("画像を読み込めませんでした。")));
         reader.readAsDataURL(file);
       });
-      const image = new Image(); image.src = data; await image.decode();
-      const original = preset?.components.find((item) => item.id === id);
-      if (!original || original.kind !== "image" && original.frame !== "image") throw new Error(t("コンポーネントが見つかりません。"));
+      const sourceImage = new Image(); sourceImage.src = data; await sourceImage.decode();
+      const workspaceImage = await invoke<string>("copy_overlay_image_to_workspace", {
+        presetId: preset.id, componentId: id, imageData: data,
+      });
+      const image = new Image(); image.src = workspaceImage; await image.decode();
       const imageAspectRatio = Math.max(1 / 16384, Math.min(16384, image.naturalWidth / image.naturalHeight));
       updateComponent({
-        image: data, imageFileName: file.name,
+        image: workspaceImage, imageFileName: file.name,
         ...(original.kind === "image" ? { imageAspectRatio } : {}),
         ...(original.kind === "image" && original.preserveAspectRatio !== false
           ? overlayImageDimensions(original.width, original.height, imageAspectRatio, "width")
@@ -561,6 +571,14 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       }, id);
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
+  }
+  async function openPresetWorkspace() {
+    if (!preset) return;
+    try {
+      const path = await invoke<string>("get_overlay_preset_workspace", { presetId: preset.id });
+      await openPath(path);
+      setError("");
+    } catch (cause) { setError(String(cause)); }
   }
   function getImageAspectRatio(item: OverlayComponent): number {
     const preview = Array.from(stageRef.current?.children ?? [])
@@ -755,7 +773,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     <h2>{t("オーバーレイのカスタマイズ")}</h2>
     {error && <p role="alert" className="error">{error}</p>}
     <fieldset disabled={busy}>
-      <p className="meta">{t("編集後に保存してください。出力の切り替えはテスト配信設定の「適用するプリセット」を使います。画像はエクスポートに含まれます。")}</p>
+      <p className="meta">{t("編集後に保存してください。出力の切り替えはテスト配信設定の「適用するプリセット」を使います。エクスポートは画像を含むZIP形式です。JSON形式のプリセットもインポートできます。")}</p>
       <div className="overlay-layout-toolbar">
         <label>{t("編集するプリセット")}<select value={selectedId} onChange={(e) => requestPresetSelection(e.target.value)}>
           <option value="">{t("デフォルト")}</option>
@@ -771,7 +789,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
         <button type="button" onClick={() => void save()} disabled={!dirty}>{t("保存")}</button>
         <button type="button" disabled={!preset} onClick={() => void exportFile(true)}>{t("エクスポート(単体)")}</button>
         <button type="button" onClick={() => void exportFile(false)}>{t("エクスポート(全体)")}</button>
-        <label>{t("プリセットをインポート")}<input type="file" accept=".json,application/json" onChange={(e) => {
+        <label>{t("プリセットをインポート")}<input type="file" accept=".zip,.json,application/zip,application/json" onChange={(e) => {
           const file = e.target.files?.[0]; e.target.value = ""; if (file) void importFile(file);
         }} /></label>
       </div>
@@ -779,6 +797,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       {active && <p className="meta">{t("録画・配信ソフト側のブラウザソースの幅・高さも {width} × {height} に設定してください。", { width: active.width, height: active.height })}</p>}
       <div className="obs-overlay-grid">
         {preset && <label>{t("プリセット名")}<input value={preset.name} maxLength={256} onChange={(e) => updatePreset({ name: e.target.value })} /></label>}
+        {preset && <button type="button" onClick={() => void openPresetWorkspace()}>{t("ワークディレクトリを開く")}</button>}
       </div>
       {!preset && <p className="meta">{t("デフォルトは閲覧専用です。編集するには「複製」でプリセットを作成してください。")}</p>}
       <div className="overlay-layout-toolbar">

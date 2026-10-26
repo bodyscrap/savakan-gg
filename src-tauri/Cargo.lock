@@ -3344,6 +3344,7 @@ dependencies = [
 name = "savakan-gg"
 version = "0.18.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "fontdb",
  "graphql_client",

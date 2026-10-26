@@ -1,4 +1,6 @@
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     fs,
@@ -11,6 +13,7 @@ use std::{
 use tauri::Manager;
 
 const MAX_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 const BUILT_IN_COMPONENT_IDS: [&str; 8] = [
     "builtin-redPlayerName",
     "builtin-redSetWins",
@@ -246,7 +249,9 @@ impl Layouts {
                     } else {
                         c.source == "clock"
                     })
-                    || c.clock_format.as_ref().is_some_and(|value| value.is_empty() || value.encode_utf16().count() > 256)
+                    || c.clock_format
+                        .as_ref()
+                        .is_some_and(|value| value.is_empty() || value.encode_utf16().count() > 256)
                     || (if c.kind == "item" {
                         !["redItems", "blueItems"].contains(&c.source.as_str())
                             || !matches!(c.item_category, Some(1..=3))
@@ -254,8 +259,11 @@ impl Layouts {
                     } else {
                         ["redItems", "blueItems"].contains(&c.source.as_str())
                     })
-                    || c.item_category.is_some_and(|value| !(1..=3).contains(&value))
-                    || c.delimiter.as_ref().is_some_and(|value| value.encode_utf16().count() > 256)
+                    || c.item_category
+                        .is_some_and(|value| !(1..=3).contains(&value))
+                    || c.delimiter
+                        .as_ref()
+                        .is_some_and(|value| value.encode_utf16().count() > 256)
                     || (c.kind == "number"
                         && !["redSetWins", "blueSetWins", "number"].contains(&c.source.as_str()))
                     || (c.source == "number" && (c.kind != "number" || c.number_value.is_none()))
@@ -268,18 +276,20 @@ impl Layouts {
                     || c.image_aspect_ratio
                         .is_some_and(|value| !within(value, 1. / 16384., 16384.))
                     || c.image_alpha.is_some_and(|value| value > 255)
-                    || c.image_animation_value_source.as_ref().is_some_and(|source| {
-                        ![
-                            "redPlayerName",
-                            "bluePlayerName",
-                            "roundText",
-                            "setName",
-                            "roundName",
-                            "redSetWins",
-                            "blueSetWins",
-                        ]
-                        .contains(&source.as_str())
-                    })
+                    || c.image_animation_value_source
+                        .as_ref()
+                        .is_some_and(|source| {
+                            ![
+                                "redPlayerName",
+                                "bluePlayerName",
+                                "roundText",
+                                "setName",
+                                "roundName",
+                                "redSetWins",
+                                "blueSetWins",
+                            ]
+                            .contains(&source.as_str())
+                        })
                     || !within(c.x, 0., 16384.)
                     || !within(c.y, 0., 16384.)
                     || !within(c.width, 1., 16384.)
@@ -294,7 +304,9 @@ impl Layouts {
                         .is_some_and(|value| !color(value))
                     || !(c.background == "transparent" || color(&c.background))
                     || !["left", "center", "right"].contains(&c.align.as_str())
-                    || c.vertical_align.as_ref().is_some_and(|value| !["top", "center", "bottom"].contains(&value.as_str()))
+                    || c.vertical_align
+                        .as_ref()
+                        .is_some_and(|value| !["top", "center", "bottom"].contains(&value.as_str()))
                 {
                     return Err(invalid());
                 }
@@ -303,8 +315,7 @@ impl Layouts {
             if preset.visibility_control_ids.len() > 6
                 || preset.visibility_control_ids.iter().any(|id| {
                     !id.is_empty()
-                        && (!component_ids.contains(id)
-                            || !visibility_control_ids.insert(id))
+                        && (!component_ids.contains(id) || !visibility_control_ids.insert(id))
                 })
             {
                 return Err(invalid());
@@ -337,9 +348,158 @@ pub fn initialize(app: &tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("Cannot create overlay settings directory: {e}"))?;
     let path = dir.join("overlay-layouts.json");
     let layouts = read_layouts(&path)?;
+    copy_preset_images_to_workspaces(&dir, &layouts)?;
     STORE
         .set(Mutex::new((path, layouts)))
         .map_err(|_| "Overlay settings already initialized.".to_owned())
+}
+
+fn preset_workspace_path(data_dir: &Path, preset_id: &str) -> PathBuf {
+    let encoded_id = Sha256::digest(preset_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    data_dir
+        .join("overlay-presets")
+        .join(format!("preset-{encoded_id}"))
+}
+
+fn parse_image_data_url(value: &str) -> Result<(&'static str, &'static str, Vec<u8>), String> {
+    let (mime_type, extension, prefix) = [
+        ("image/png", "png", "data:image/png;base64,"),
+        ("image/jpeg", "jpg", "data:image/jpeg;base64,"),
+        ("image/gif", "gif", "data:image/gif;base64,"),
+        ("image/webp", "webp", "data:image/webp;base64,"),
+    ]
+    .into_iter()
+    .find(|(_, _, prefix)| value.starts_with(prefix))
+    .ok_or_else(|| "The selected file is not a supported image.".to_owned())?;
+    let encoded = value
+        .strip_prefix(prefix)
+        .ok_or_else(|| "The selected image data is invalid.".to_owned())?;
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|error| format!("Cannot decode the selected image: {error}"))?;
+    if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
+        return Err("The selected image must be no larger than 4MB.".to_owned());
+    }
+    Ok((mime_type, extension, bytes))
+}
+
+fn write_preset_image(
+    data_dir: &Path,
+    preset_id: &str,
+    component_id: &str,
+    image_data: &str,
+) -> Result<String, String> {
+    let (_, extension, bytes) = parse_image_data_url(image_data)?;
+    let component_file_id = Sha256::digest(component_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let directory = preset_workspace_path(data_dir, preset_id);
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Cannot create preset work directory: {error}"))?;
+    let path = directory.join(format!("image-{component_file_id}.{extension}"));
+    let current = fs::read(&path).ok();
+    if current.as_deref() != Some(bytes.as_slice()) {
+        fs::write(&path, &bytes)
+            .map_err(|error| format!("Cannot copy image into preset work directory: {error}"))?;
+    }
+    Ok(format!(
+        "data:image/{};base64,{}",
+        match extension {
+            "jpg" => "jpeg",
+            other => other,
+        },
+        STANDARD.encode(bytes)
+    ))
+}
+
+fn copy_preset_images_to_workspaces(data_dir: &Path, layouts: &Layouts) -> Result<(), String> {
+    if !data_dir.is_dir() {
+        return Err("The overlay settings directory does not exist.".to_owned());
+    }
+    for preset in &layouts.presets {
+        let directory = preset_workspace_path(data_dir, &preset.id);
+        fs::create_dir_all(&directory)
+            .map_err(|error| format!("Cannot create preset work directory: {error}"))?;
+        for component in &preset.components {
+            if !component.image.is_empty() {
+                write_preset_image(data_dir, &preset.id, &component.id, &component.image)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn copy_overlay_image_to_workspace(
+    preset_id: String,
+    component_id: String,
+    image_data: String,
+) -> Result<String, String> {
+    let store = STORE
+        .get()
+        .ok_or("Overlay settings are not initialized.")?
+        .lock()
+        .map_err(|_| "Cannot lock overlay settings.")?;
+    if preset_id.is_empty()
+        || preset_id.encode_utf16().count() > 128
+        || component_id.is_empty()
+        || component_id.encode_utf16().count() > 128
+    {
+        return Err("The overlay preset or component identifier is invalid.".to_owned());
+    }
+    if let Some(component) = store
+        .1
+        .presets
+        .iter()
+        .find(|preset| preset.id == preset_id)
+        .and_then(|preset| {
+            preset
+                .components
+                .iter()
+                .find(|component| component.id == component_id)
+        })
+    {
+        if component.kind != "image"
+            && !matches!(component.frame.as_ref(), Some(ComponentFrame::Image))
+        {
+            return Err("The selected component does not support images.".to_owned());
+        }
+    }
+    if !image(&image_data) {
+        return Err("The selected image data is invalid.".to_owned());
+    }
+    let data_dir = store
+        .0
+        .parent()
+        .ok_or("Cannot locate the overlay settings directory.")?;
+    write_preset_image(data_dir, &preset_id, &component_id, &image_data)
+}
+
+#[tauri::command]
+pub fn get_overlay_preset_workspace(preset_id: String) -> Result<String, String> {
+    let store = STORE
+        .get()
+        .ok_or("Overlay settings are not initialized.")?
+        .lock()
+        .map_err(|_| "Cannot lock overlay settings.")?;
+    if preset_id.is_empty() || preset_id.encode_utf16().count() > 128 {
+        return Err("The overlay preset identifier is invalid.".to_owned());
+    }
+    let data_dir = store
+        .0
+        .parent()
+        .ok_or("Cannot locate the overlay settings directory.")?;
+    let directory = preset_workspace_path(data_dir, &preset_id);
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Cannot create preset work directory: {error}"))?;
+    directory
+        .to_str()
+        .map(str::to_owned)
+        .ok_or("Cannot convert the preset work directory path.".to_owned())
 }
 
 fn read_layouts(path: &Path) -> Result<Layouts, String> {
@@ -457,7 +617,9 @@ fn system_font_families() -> Result<Vec<String>, String> {
             .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str())),
     );
     if families.is_empty() {
-        return Err("No system font families were found in the standard font directories.".to_owned());
+        return Err(
+            "No system font families were found in the standard font directories.".to_owned(),
+        );
     }
     *cached = Some(families.clone());
     Ok(families)
@@ -480,6 +642,11 @@ fn persist_layouts(
     if data.len() as u64 > MAX_BYTES {
         return Err("Overlay settings exceed 32MB.".to_owned());
     }
+    let data_dir = store
+        .0
+        .parent()
+        .ok_or("Cannot locate the overlay settings directory.")?;
+    copy_preset_images_to_workspaces(data_dir, &layouts)?;
     let mut overrides = VISIBILITY_OVERRIDES
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -491,9 +658,11 @@ fn persist_layouts(
     let active_preset_changed = store.1.active_preset_id != layouts.active_preset_id;
     let mut reset_overrides = HashSet::new();
     if !active_preset_changed {
-        let previous = store.1.presets.iter().find(|preset| {
-            Some(&preset.id) == store.1.active_preset_id.as_ref()
-        });
+        let previous = store
+            .1
+            .presets
+            .iter()
+            .find(|preset| Some(&preset.id) == store.1.active_preset_id.as_ref());
         let next = layouts
             .presets
             .iter()
@@ -535,7 +704,7 @@ fn persist_layouts(
                     .collect::<HashSet<_>>()
             });
         overrides.retain(|id, _| allowed.contains(id) && !reset_overrides.contains(id));
-            show_revisions.retain(|id, _| allowed.contains(id));
+        show_revisions.retain(|id, _| allowed.contains(id));
     }
     REVISION.fetch_add(1, Ordering::SeqCst);
     Ok(layouts)
@@ -713,6 +882,28 @@ pub fn active_json() -> Result<String, String> {
 mod tests {
     use super::*;
     #[test]
+    fn writes_selected_images_to_the_preset_workspace() {
+        let directory =
+            std::env::temp_dir().join(format!("savakan-overlay-image-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let image_data = "data:image/png;base64,aGVsbG8=";
+        let normalized =
+            write_preset_image(&directory, "preset/unsafe", "component/unsafe", image_data)
+                .unwrap();
+        let workspace = preset_workspace_path(&directory, "preset/unsafe");
+        let image_path = fs::read_dir(&workspace)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(normalized, image_data);
+        assert_eq!(fs::read(image_path).unwrap(), b"hello");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn applies_only_saved_presets_and_persists_selection_without_changing_contents() {
         let directory =
             std::env::temp_dir().join(format!("savakan-apply-test-{}", std::process::id()));
@@ -743,8 +934,7 @@ mod tests {
         let mut failed_store = (directory.join("missing").join("layouts.json"), selected);
         assert!(apply_saved_preset(&mut failed_store, None).is_err());
         assert_eq!(failed_store.1.active_preset_id.as_deref(), Some("preset"));
-        fs::remove_file(&path).unwrap();
-        fs::remove_dir(&directory).unwrap();
+        fs::remove_dir_all(directory).unwrap();
     }
     #[test]
     fn migrates_legacy_text_scores_without_changing_display_fields() {
@@ -798,14 +988,27 @@ mod tests {
         component.kind = "clock".to_owned();
         component.source = "clock".to_owned();
         assert!(layouts.validate().is_err());
-        for format in ["YYYY-MM-DD HH:mm:ss", "YYYY年MM月DD日\nHH:mm:ss", &"x".repeat(256)] {
+        for format in [
+            "YYYY-MM-DD HH:mm:ss",
+            "YYYY年MM月DD日\nHH:mm:ss",
+            &"x".repeat(256),
+        ] {
             layouts.presets[0].components[0].clock_format = Some(format.to_owned());
             layouts.validate().unwrap();
-            let decoded: Layouts = serde_json::from_slice(&serde_json::to_vec(&layouts).unwrap()).unwrap();
-            assert_eq!(decoded.presets[0].components[0].clock_format.as_deref(), Some(format));
+            let decoded: Layouts =
+                serde_json::from_slice(&serde_json::to_vec(&layouts).unwrap()).unwrap();
+            assert_eq!(
+                decoded.presets[0].components[0].clock_format.as_deref(),
+                Some(format)
+            );
         }
         let valid = layouts.clone();
-        for format in [None, Some(String::new()), Some("x".repeat(257)), Some("\u{1f600}".repeat(129))] {
+        for format in [
+            None,
+            Some(String::new()),
+            Some("x".repeat(257)),
+            Some("\u{1f600}".repeat(129)),
+        ] {
             layouts.presets[0].components[0].clock_format = format;
             assert!(layouts.validate().is_err());
         }
@@ -819,12 +1022,16 @@ mod tests {
             layouts.presets[0].components[0].kind = kind.to_owned();
             assert!(layouts.validate().is_err());
         }
-        let directory = std::env::temp_dir().join(format!("savakan-clock-test-{}", std::process::id()));
+        let directory =
+            std::env::temp_dir().join(format!("savakan-clock-test-{}", std::process::id()));
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("layouts.json");
         write_layouts(&path, &serde_json::to_vec(&valid).unwrap()).unwrap();
         let restored = read_layouts(&path).unwrap();
-        assert_eq!(serde_json::to_value(restored).unwrap(), serde_json::to_value(valid).unwrap());
+        assert_eq!(
+            serde_json::to_value(restored).unwrap(),
+            serde_json::to_value(valid).unwrap()
+        );
         fs::remove_file(&path).unwrap();
         fs::remove_dir(&directory).unwrap();
     }
@@ -840,9 +1047,16 @@ mod tests {
                     component.item_category = Some(category);
                     component.delimiter = Some(delimiter.to_owned());
                     layouts.validate().unwrap();
-                    let decoded: Layouts = serde_json::from_slice(&serde_json::to_vec(&layouts).unwrap()).unwrap();
-                    assert_eq!(decoded.presets[0].components[0].item_category, Some(category));
-                    assert_eq!(decoded.presets[0].components[0].delimiter.as_deref(), Some(delimiter));
+                    let decoded: Layouts =
+                        serde_json::from_slice(&serde_json::to_vec(&layouts).unwrap()).unwrap();
+                    assert_eq!(
+                        decoded.presets[0].components[0].item_category,
+                        Some(category)
+                    );
+                    assert_eq!(
+                        decoded.presets[0].components[0].delimiter.as_deref(),
+                        Some(delimiter)
+                    );
                 }
             }
         }
@@ -866,11 +1080,15 @@ mod tests {
             layouts.presets[0].components[0].kind = kind.to_owned();
             assert!(layouts.validate().is_err());
         }
-        let directory = std::env::temp_dir().join(format!("savakan-items-test-{}", std::process::id()));
+        let directory =
+            std::env::temp_dir().join(format!("savakan-items-test-{}", std::process::id()));
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("layouts.json");
         write_layouts(&path, &serde_json::to_vec(&valid).unwrap()).unwrap();
-        assert_eq!(serde_json::to_value(read_layouts(&path).unwrap()).unwrap(), serde_json::to_value(valid).unwrap());
+        assert_eq!(
+            serde_json::to_value(read_layouts(&path).unwrap()).unwrap(),
+            serde_json::to_value(valid).unwrap()
+        );
         fs::remove_file(&path).unwrap();
         fs::remove_dir(&directory).unwrap();
     }
@@ -891,7 +1109,11 @@ mod tests {
         assert!(legacy.presets[0].components[0].wrap_text.is_none());
         assert!(legacy.presets[0].components[0].shrink_text.is_none());
         for field in ["wrapText", "shrinkText"] {
-            for invalid in [serde_json::json!(0), serde_json::json!("true"), serde_json::json!([])] {
+            for invalid in [
+                serde_json::json!(0),
+                serde_json::json!("true"),
+                serde_json::json!([]),
+            ] {
                 let mut data = original.clone();
                 data["presets"][0]["components"][0][field] = invalid;
                 assert!(serde_json::from_value::<Layouts>(data).is_err());
@@ -906,8 +1128,12 @@ mod tests {
         for value in ["top", "center", "bottom"] {
             layouts.presets[0].components[0].vertical_align = Some(value.to_owned());
             layouts.validate().unwrap();
-            let decoded: Layouts = serde_json::from_slice(&serde_json::to_vec(&layouts).unwrap()).unwrap();
-            assert_eq!(decoded.presets[0].components[0].vertical_align.as_deref(), Some(value));
+            let decoded: Layouts =
+                serde_json::from_slice(&serde_json::to_vec(&layouts).unwrap()).unwrap();
+            assert_eq!(
+                decoded.presets[0].components[0].vertical_align.as_deref(),
+                Some(value)
+            );
         }
         for value in ["", "left", "middle", "unknown"] {
             layouts.presets[0].components[0].vertical_align = Some(value.to_owned());
@@ -1012,8 +1238,14 @@ mod tests {
         let decoded: Layouts = serde_json::from_value(data).unwrap();
         decoded.validate().unwrap();
         let encoded = serde_json::to_value(decoded).unwrap();
-        assert_eq!(encoded["presets"][0]["components"][0]["textOutlineWidth"], 2.5);
-        assert_eq!(encoded["presets"][0]["components"][0]["textOutlineColor"], "#12345680");
+        assert_eq!(
+            encoded["presets"][0]["components"][0]["textOutlineWidth"],
+            2.5
+        );
+        assert_eq!(
+            encoded["presets"][0]["components"][0]["textOutlineColor"],
+            "#12345680"
+        );
 
         for width in [-1.0, 0.25, 16.1] {
             let mut data = original.clone();
@@ -1052,8 +1284,14 @@ mod tests {
             assert!(decoded.validate().is_err());
         }
         let mut data = original.clone();
-        data["defaultVisibilityControlIds"] =
-            serde_json::json!(["builtin-redPlayerName", "", "builtin-eventAlias", "", "", ""]);
+        data["defaultVisibilityControlIds"] = serde_json::json!([
+            "builtin-redPlayerName",
+            "",
+            "builtin-eventAlias",
+            "",
+            "",
+            ""
+        ]);
         let decoded: Layouts = serde_json::from_value(data.clone()).unwrap();
         decoded.validate().unwrap();
         assert_eq!(
@@ -1190,7 +1428,13 @@ mod tests {
             layouts.presets[0].components[0].background = value.to_owned();
             layouts.validate().unwrap();
         }
-        for value in ["#abc", "#aabbccd", "#aabbccddff", "#aabbccgg", "rgba(0,0,0,0.5)"] {
+        for value in [
+            "#abc",
+            "#aabbccd",
+            "#aabbccddff",
+            "#aabbccgg",
+            "rgba(0,0,0,0.5)",
+        ] {
             assert!(!color(value));
             let mut layouts = sample();
             layouts.presets[0].components[0].background = value.to_owned();
@@ -1204,8 +1448,17 @@ mod tests {
         let too_long = "a".repeat(257);
         let too_many_utf16_units = "\u{1f600}".repeat(129);
         let names = unique_font_families(
-            ["Yu Gothic", "Arial", "Arial", " 游ゴシック ", "", " ", &too_long, &too_many_utf16_units]
-                .into_iter(),
+            [
+                "Yu Gothic",
+                "Arial",
+                "Arial",
+                " 游ゴシック ",
+                "",
+                " ",
+                &too_long,
+                &too_many_utf16_units,
+            ]
+            .into_iter(),
         );
         assert_eq!(names, vec!["Arial", "Yu Gothic", "游ゴシック"]);
     }

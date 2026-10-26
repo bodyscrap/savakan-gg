@@ -17,6 +17,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use if_addrs::get_if_addrs;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use models::{
     ApplyExternalScoreReportInput, BracketBatchReportInput, BracketBatchReportResult,
     ClearLocalSetResultDraftInput, ClearPhaseGroupExternalEditorInput,
@@ -7874,6 +7875,29 @@ fn write_snapshot_export_file(path: String, contents: String) -> Result<(), Stri
 }
 
 #[tauri::command]
+fn write_overlay_preset_archive(path: String, archive_base64: String) -> Result<(), String> {
+    let target = std::path::PathBuf::from(path);
+    if !target
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+    {
+        return Err("保存先はZIPファイルを指定してください。".to_owned());
+    }
+    if archive_base64.len() > 44_739_244 {
+        return Err("プリセットファイルは32MB以下にしてください。".to_owned());
+    }
+    let archive = STANDARD
+        .decode(archive_base64)
+        .map_err(|error| format!("圧縮プリセットのデータが不正です: {error}"))?;
+    if archive.len() > 32 * 1024 * 1024 {
+        return Err("プリセットファイルは32MB以下にしてください。".to_owned());
+    }
+    std::fs::write(&target, archive)
+        .map_err(|error| format!("圧縮プリセットの保存に失敗しました: {error}"))
+}
+
+#[tauri::command]
 fn import_tournament_share_archive(
     app: tauri::AppHandle,
     archive_json: String,
@@ -8290,6 +8314,8 @@ pub fn run() {
             get_obs_overlay_state,
             overlay_layout::get_overlay_layouts,
             overlay_layout::save_overlay_layouts,
+            overlay_layout::copy_overlay_image_to_workspace,
+            overlay_layout::get_overlay_preset_workspace,
             overlay_layout::apply_overlay_preset,
             overlay_layout::set_overlay_component_visibility,
             overlay_layout::list_overlay_fonts,
@@ -8315,6 +8341,7 @@ pub fn run() {
             list_local_snapshot_events,
             export_tournament_share_archive,
             write_snapshot_export_file,
+            write_overlay_preset_archive,
             import_tournament_share_archive,
             delete_local_snapshot_event,
             create_event_snapshot,
