@@ -1425,6 +1425,23 @@ button:disabled {
   margin-top: 1rem;
 }
 
+.local-registration-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.csv-import-dialog {
+  width: min(40rem, 90vw);
+}
+
+.csv-import-columns,
+.csv-import-columns label {
+  display: grid;
+  gap: 0.5rem;
+}
+
 .local-registration-player {
   display: flex;
   justify-content: space-between;

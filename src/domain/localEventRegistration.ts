@@ -57,10 +57,16 @@ export function applyRegistrationSetting(current: LocalEventRegistration, settin
     ...current,
     setting,
     participants: current.participants.map((participant) => {
+      const categorySelections = emptyCategorySelections();
+      for (const slot of registrationCategorySlots(setting)) {
+        categorySelections[slot.slotIndex] = (participant.categorySelections[slot.slotIndex] ?? [])
+          .filter((item) => slot.list.items.includes(item));
+      }
+      if (JSON.stringify(categorySelections) !== JSON.stringify(participant.categorySelections)) {
+        return { ...participant, categorySelections, selectionsConfirmed: false };
+      }
       const validated = validateRegisteredSelections(participant, setting);
-      const changedSelectedList = participant.categorySelections.some((items, index) =>
-        items.length > 0 && current.setting.itemListSnapshots[index]?.id !== setting.itemListSnapshots[index]?.id);
-      if (changedSelectedList || validated.errors.length > 0
+      if (validated.errors.length > 0
         || JSON.stringify(participant.categorySelections) !== JSON.stringify(validated.normalizedBySlot)) {
         return { ...participant, categorySelections: emptyCategorySelections(), selectionsConfirmed: false };
       }

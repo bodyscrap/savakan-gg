@@ -5,6 +5,26 @@ import { defaultLocalEventRegistration, type RegisteredLocalParticipant } from "
 import { LocalEventRegistration } from "./LocalEventRegistration";
 import type { EventManagementMeta } from "../domain/tournamentWorkspaceRepository";
 import { setLanguage } from "../i18n";
+import { LocalRegistrationCsvImport } from "./LocalRegistrationCsvImport";
+import { importRegistrationCsv, parseRegistrationCsv } from "../domain/localRegistrationCsv";
+
+function csvImport(node: React.ReactNode): React.ReactElement<React.ComponentProps<typeof LocalRegistrationCsvImport>> {
+  const found = findCsvImport(node);
+  if (found) return found;
+  throw new Error("CSV import control not found");
+}
+
+function findCsvImport(node: React.ReactNode): React.ReactElement<React.ComponentProps<typeof LocalRegistrationCsvImport>> | undefined {
+  for (const child of React.Children.toArray(node)) {
+    if (!React.isValidElement<{ children?: React.ReactNode }>(child)) continue;
+    if (child.type === LocalRegistrationCsvImport) {
+      return child as React.ReactElement<React.ComponentProps<typeof LocalRegistrationCsvImport>>;
+    }
+    const found = findCsvImport(child.props.children);
+    if (found) return found;
+  }
+  return undefined;
+}
 
 vi.mock("react", { spy: true });
 afterEach(() => {
@@ -25,7 +45,7 @@ function buttons(node: React.ReactNode): Array<{ label: string; click?: () => vo
   return React.Children.toArray(node).flatMap((child) => {
     if (!React.isValidElement<{ children?: React.ReactNode; onClick?: () => void }>(child)) return [];
     return child.type === "button"
-      ? [{ label: React.Children.toArray(child.props.children).join(""), click: child.props.onClick }]
+      ? [{ label: renderToStaticMarkup(<>{child.props.children}</>).replace(/<[^>]*>/g, "").replace(/&amp;/g, "&"), click: child.props.onClick }]
       : buttons(child.props.children);
   });
 }
@@ -36,16 +56,72 @@ function setup(draft: RegisteredLocalParticipant | null = null, settingDraft = s
   vi.mocked(React.useState)
     .mockImplementationOnce(() => [settingDraft, vi.fn()])
     .mockImplementationOnce(() => [draft, vi.fn()])
-    .mockImplementationOnce(() => ["", vi.fn()]);
+    .mockImplementationOnce(() => ["", vi.fn()])
+    .mockImplementationOnce(() => [false, vi.fn()]);
   vi.mocked(React.useEffect).mockImplementation((effect) => { effect(); });
   const tree = LocalEventRegistration({
     itemLists: setting.itemListSnapshots, registration: { requireItemSelections, setting, participants: [player] },
-    onChange, onPendingChange, busy: false,
+    onChange, onPendingChange, busy: false, onImportEventName: vi.fn(),
   });
   return { tree, onChange, onPendingChange, controls: buttons(tree) };
 }
 
 describe("local registration editor", () => {
+  it("clears all participants while preserving category settings", () => {
+    const { controls, onChange } = setup(player);
+    const clear = controls.find((button) => button.label === "参加者を全員クリア");
+    expect(clear).toBeDefined();
+    clear?.click?.();
+    expect(onChange).toHaveBeenCalledWith({ requireItemSelections: true, setting, participants: [] });
+  });
+
+  it("disables clearing when no participants are registered", () => {
+    const registration = { requireItemSelections: true, setting, participants: [] };
+    const html = renderToStaticMarkup(<LocalEventRegistration itemLists={setting.itemListSnapshots}
+      registration={registration} onChange={vi.fn()} onPendingChange={vi.fn()} onImportEventName={vi.fn()} busy={false} />);
+    expect(html).toContain('<button type="button" class="ghost" disabled="">参加者を全員クリア</button>');
+  });
+
+  it("keeps CSV import enabled while a participant is selected for editing", () => {
+    const { tree, onChange } = setup({ ...player, name: "Unsaved edit" });
+    const control = csvImport(tree);
+    expect(control.props.disabled).toBe(false);
+    const replacements = [{ ...player, entrantId: "imported", name: "Imported" }];
+    control.props.onImport(replacements, "大会");
+    expect(onChange.mock.calls[0][0].participants).toEqual(replacements);
+  });
+
+  it("keeps CSV import enabled after committing imported category settings", () => {
+    const { tree } = setup();
+    const control = csvImport(tree);
+    expect(control.props.disabled).toBe(false);
+    expect(control.props.registration.setting).toEqual(setting);
+  });
+
+  it("imports using unapplied category settings and commits settings with replacement participants", () => {
+    const changed = { ...setting, itemListSnapshots: [
+      { id: "robots", name: "Robots", categoryName: "Robot", items: ["ジャッカル"] },
+    ] };
+    const { tree, onChange } = setup(null, changed);
+    const control = csvImport(tree);
+    expect(control.props.disabled).toBe(false);
+    expect(control.props.registration.setting.itemListSnapshots).toEqual(changed.itemListSnapshots);
+    expect(onChange).not.toHaveBeenCalled();
+    const players = importRegistrationCsv(parseRegistrationCsv("name,item\nBob,ジャッカル"),
+      { name: 0, categories: [1, null, null] }, control.props.registration);
+    control.props.onImport(players, "大会");
+    expect(onChange.mock.calls[0][0]).toMatchObject({
+      setting: changed,
+      participants: [{ name: "Bob", categorySelections: [["ジャッカル"], [], []] }],
+    });
+    expect(onChange.mock.calls[0][0].participants).toHaveLength(1);
+  });
+
+  it("does not allow importing with invalid draft category limits", () => {
+    const { tree } = setup(null, { ...setting, categoryMinCounts: [3, 0, 0], categoryMaxCounts: [2, 0, 0] });
+    expect(csvImport(tree).props.disabled).toBe(true);
+  });
+
   it("collapses category settings through the save button by default and puts the count in the list heading", () => {
     const { tree } = setup();
     const html = renderToStaticMarkup(tree);
@@ -97,16 +173,41 @@ describe("local registration editor", () => {
   it("renders a visible incomplete status", () => {
     const registration = { requireItemSelections: true, setting, participants: [{ ...player, selectionsConfirmed: false }] };
     const html = renderToStaticMarkup(<LocalEventRegistration itemLists={setting.itemListSnapshots}
-      registration={registration} onChange={vi.fn()} onPendingChange={vi.fn()} busy={false} />);
+      registration={registration} onChange={vi.fn()} onPendingChange={vi.fn()} onImportEventName={vi.fn()} busy={false} />);
     expect(html).toContain("local-registration-player incomplete");
     expect(html).toContain("選択未完了");
     expect(html).not.toContain("選択完了");
   });
 
-  it("disables registration during unapplied category changes", () => {
-    const { tree } = setup(null, { ...setting, categoryMinCounts: [2, 0, 0] });
+  it("allows registration and applies pending category changes before adding", () => {
+    const { tree, controls, onChange } = setup(null, { ...setting, categoryMinCounts: [2, 0, 0] });
     const html = renderToStaticMarkup(tree);
-    expect(html).toContain('<button type="button" disabled="">参加登録</button>');
+    expect(html).toContain('<button type="button">参加登録</button>');
+    controls.find((button) => button.label === "参加登録")?.click?.();
+    expect(onChange.mock.calls[0][0].setting.categoryMinCounts).toEqual([2, 0, 0]);
+  });
+
+  it("allows selecting an imported participant after changing category lists", () => {
+    const changed = { ...setting, itemListSnapshots: [
+      { id: "new", name: "New", categoryName: "New", items: ["C"] },
+    ] };
+    const { tree, onChange } = setup(null, changed);
+    expect(renderToStaticMarkup(tree)).toContain("Alice");
+    const playerButton = buttons(tree).find((button) => button.label.includes("選択未完了"));
+    expect(playerButton).toBeDefined();
+    playerButton?.click?.();
+    expect(onChange.mock.calls[0][0].participants[0].categorySelections).toEqual([[], [], []]);
+    expect(onChange.mock.calls[0][0].setting.itemListSnapshots).toEqual(changed.itemListSnapshots);
+  });
+
+  it("saves an open editor against pending settings without restoring removed items", () => {
+    const changed = { ...setting, itemListSnapshots: [
+      { ...setting.itemListSnapshots[0], items: ["B"] },
+    ], categoryMinCounts: [0, 0, 0] };
+    const { controls, onChange } = setup(player, changed, false);
+    controls.find((button) => button.label === "参加者を保存")?.click?.();
+    expect(onChange.mock.calls[0][0].setting).toEqual(changed);
+    expect(onChange.mock.calls[0][0].participants[0].categorySelections).toEqual([[], [], []]);
   });
 
   it("disables saving an incomplete participant when item registration is required", () => {

@@ -57,10 +57,25 @@ describe("local event participant registration", () => {
     expect(isRegistrationComplete({ ...next.participants[0], selectionsConfirmed: true }, next.setting)).toBe(true);
   });
 
-  it("clears selections if a different list has the same item names", () => {
+  it("preserves matching items when switching lists", () => {
     const nextSetting = { ...setting, itemListSnapshots: [{ ...setting.itemListSnapshots[0], id: "different" }] };
     const next = applyRegistrationSetting({ requireItemSelections: true, setting, participants: [participant()] }, nextSetting);
-    expect(next.participants[0].categorySelections).toEqual([[], [], []]);
+    expect(next.participants[0].categorySelections).toEqual([["A"], [], []]);
+    expect(next.participants[0].selectionsConfirmed).toBe(true);
+  });
+
+  it("removes only items absent from the new list and preserves other categories", () => {
+    const oldSetting = { ...setting, itemListSnapshots: [
+      setting.itemListSnapshots[0],
+      { id: "colors", name: "Colors", categoryName: "Color", items: ["Red"] },
+    ], categoryMinCounts: [2, 0, 0], categoryMaxCounts: [2, 1, 0] };
+    const player = { ...participant(["A", "B"]), categorySelections: [["A", "B"], ["Red"], []] };
+    const nextSetting = { ...oldSetting, itemListSnapshots: [
+      { ...oldSetting.itemListSnapshots[0], id: "new", items: ["A"] },
+      oldSetting.itemListSnapshots[1],
+    ] };
+    const next = applyRegistrationSetting({ requireItemSelections: true, setting: oldSetting, participants: [player] }, nextSetting);
+    expect(next.participants[0].categorySelections).toEqual([["A"], ["Red"], []]);
     expect(next.participants[0].selectionsConfirmed).toBe(false);
   });
 

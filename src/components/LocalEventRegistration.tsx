@@ -8,6 +8,7 @@ import {
 } from "../domain/localEventRegistration";
 import { CategorySettingsFields, PlayerItemSelectionFields } from "./ItemSelectionFields";
 import type { EventManagementMeta } from "../domain/tournamentWorkspaceRepository";
+import { LocalRegistrationCsvImport } from "./LocalRegistrationCsvImport";
 
 type Props = {
   itemLists: ItemListConfig[];
@@ -15,17 +16,17 @@ type Props = {
   onChange: (registration: Registration) => void;
   busy: boolean;
   onPendingChange: (pending: boolean) => void;
+  onImportEventName: (name: string) => void;
 };
 
-export function LocalEventRegistration({ itemLists, registration, onChange, busy, onPendingChange }: Props) {
+export function LocalEventRegistration({ itemLists, registration, onChange, busy, onPendingChange, onImportEventName }: Props) {
   const [settingDraft, setSettingDraft] = useState(registration.setting);
-  const [draft, setDraft] = useState<RegisteredLocalParticipant | null>(null);
+  const [participantDraft, setDraft] = useState<RegisteredLocalParticipant | null>(null);
   const [notice, setNotice] = useState("");
-  const slots = registrationCategorySlots(registration.setting);
-  const errors = draft ? validateRegisteredSelections(draft, registration.setting).errors : [];
+  const [csvPending, setCsvPending] = useState(false);
   const settingsChanged = JSON.stringify(settingDraft) !== JSON.stringify(registration.setting);
-  const editing = draft !== null;
-  useEffect(() => onPendingChange(settingsChanged || editing), [settingsChanged, editing, onPendingChange]);
+  const editing = participantDraft !== null;
+  useEffect(() => onPendingChange(settingsChanged || editing || csvPending), [settingsChanged, editing, csvPending, onPendingChange]);
   const listSnapshots = settingDraft.itemListSnapshots;
   const updateSetting = (update: Partial<EventManagementMeta>) => setSettingDraft((current) => ({ ...current, ...update }));
   const updateCount = (key: "categoryMinCounts" | "categoryMaxCounts", index: number, raw: string) => {
@@ -46,13 +47,34 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
       settingErrors.push(t("カテゴリは重複して設定できません。"));
     }
   }
+  const normalized = normalizeEventManagementSetting({
+    ...settingDraft, itemListIds: listSnapshots.map((list) => list.id),
+  });
+  const setting = { ...settingDraft,
+    categoryMinCounts: normalized.categoryMinCounts, categoryMaxCounts: normalized.categoryMaxCounts,
+    categoryAllowDuplicates: normalized.categoryAllowDuplicates,
+  };
+  const activeRegistration = settingsChanged && settingErrors.length === 0
+    ? applyRegistrationSetting(registration, setting) : registration;
+  const draft = participantDraft && settingsChanged && settingErrors.length === 0
+    ? applyRegistrationSetting({ ...registration, participants: [participantDraft] }, setting).participants[0]
+    : participantDraft;
+  const slots = registrationCategorySlots(activeRegistration.setting);
+  const errors = draft ? validateRegisteredSelections(draft, activeRegistration.setting).errors : [];
+  const applyPendingSetting = () => {
+    if (settingsChanged) {
+      onChange(activeRegistration);
+      setSettingDraft(activeRegistration.setting);
+    }
+  };
   const saveParticipant = () => {
     if (!draft || !draft.name.trim()) return;
     const participant = { ...draft, name: draft.name.trim(), selectionsConfirmed: errors.length === 0 };
     const existing = registration.participants.some((player) => player.entrantId === participant.entrantId);
-    onChange({ ...registration, participants: existing
-      ? registration.participants.map((player) => player.entrantId === participant.entrantId ? participant : player)
-      : [...registration.participants, participant] });
+    onChange({ ...activeRegistration, participants: existing
+      ? activeRegistration.participants.map((player) => player.entrantId === participant.entrantId ? participant : player)
+      : [...activeRegistration.participants, participant] });
+    setSettingDraft(activeRegistration.setting);
     setDraft(null);
   };
   return <section className="panel create-layout-full">
@@ -99,38 +121,51 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
         {settingErrors.length > 0 && <p role="alert" className="error-text">{settingErrors.join(" ")}</p>}
         <button type="button" className="ghost" disabled={!settingsChanged || settingErrors.length > 0}
           onClick={() => {
-            const normalized = normalizeEventManagementSetting({
-              ...settingDraft, itemListIds: listSnapshots.map((list) => list.id),
-            });
-            const setting = { ...settingDraft,
-              categoryMinCounts: normalized.categoryMinCounts, categoryMaxCounts: normalized.categoryMaxCounts,
-              categoryAllowDuplicates: normalized.categoryAllowDuplicates,
-            };
             const next = applyRegistrationSetting(registration, setting);
             onChange(next);
             setSettingDraft(setting);
             setDraft((current) => current
               ? applyRegistrationSetting({ ...registration, participants: [current] }, setting).participants[0]
               : null);
-            setNotice(t("カテゴリ設定を適用しました。条件に合わない参加者の選択はクリアしました。"));
+            setNotice(t("カテゴリ設定を適用しました。対象リストにないアイテムは除去しました。選択条件を満たさない参加者は確認してください。"));
           }}>{t("設定の適用&保存")}</button>
-        {settingsChanged && <p className="meta">{t("カテゴリ設定の変更を適用してから参加登録してください。")}</p>}
+        {settingsChanged && <p className="meta">{t("参加者の編集・追加時にもカテゴリ設定の変更を適用します。")}</p>}
         {notice && <p role="status" className="meta">{notice}</p>}
       </div>
       </details>
       <div className="tournament-manager-grid local-registration-grid">
         <section>
           <h3>{t("参加者一覧({count} 人)", { count: registration.participants.length })}</h3>
-          <button type="button" disabled={settingsChanged || registration.participants.length >= 512}
-            onClick={() => setDraft({ entrantId: crypto.randomUUID(), name: "", categorySelections: emptyCategorySelections(), selectionsConfirmed: false })}>
+          <div className="local-registration-actions">
+          <button type="button" disabled={settingErrors.length > 0 || registration.participants.length >= 512 || csvPending}
+            onClick={() => {
+              applyPendingSetting();
+              setDraft({ entrantId: crypto.randomUUID(), name: "", categorySelections: emptyCategorySelections(), selectionsConfirmed: false });
+            }}>
             {t("参加登録")}
           </button>
+          <LocalRegistrationCsvImport registration={{ ...registration, setting }} disabled={busy || settingErrors.length > 0}
+            onPendingChange={setCsvPending} onImport={(participants, eventName) => {
+              onChange({ ...registration, setting, participants });
+              setSettingDraft(setting);
+              setDraft(null);
+              onImportEventName(eventName);
+            }} />
+          <button type="button" className="ghost" disabled={csvPending || registration.participants.length === 0}
+            onClick={() => {
+              onChange({ ...registration, participants: [] });
+              setDraft(null);
+            }}>{t("参加者を全員クリア")}</button>
+          </div>
           <div className="event-list player-list-scroll enabled">
-            {registration.participants.map((player) => {
-              const complete = isRegistrationComplete(player, registration.setting);
-              return <button type="button" key={player.entrantId} disabled={settingsChanged}
+            {activeRegistration.participants.map((player) => {
+              const complete = isRegistrationComplete(player, activeRegistration.setting);
+              return <button type="button" key={player.entrantId} disabled={settingErrors.length > 0 || csvPending}
                 className={`event-list-item local-registration-player ${complete ? "" : "incomplete"} ${draft?.entrantId === player.entrantId ? "selected" : ""}`}
-                onClick={() => setDraft({ ...player, categorySelections: player.categorySelections.map((items) => [...items]) })}>
+                onClick={() => {
+                  applyPendingSetting();
+                  setDraft({ ...player, categorySelections: player.categorySelections.map((items) => [...items]) });
+                }}>
                 <strong>{player.name}</strong>
                 <span className={complete ? "meta" : "error-text"}>{complete ? t("選択完了") : t("選択未完了")}</span>
               </button>;
@@ -152,11 +187,12 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
                 index === slotIndex ? items.filter((_, selectedIndex) => selectedIndex !== itemIndex) : items) })} />
             {errors.length > 0 && <p className="error-text">{errors.join(" ")}</p>}
             <div className="entrant-meta-actions">
-              <button type="button" disabled={settingsChanged || !canRegisterParticipant({ ...draft, selectionsConfirmed: errors.length === 0 }, registration)} onClick={saveParticipant}>{t("参加者を保存")}</button>
+              <button type="button" disabled={settingErrors.length > 0 || !canRegisterParticipant({ ...draft, selectionsConfirmed: errors.length === 0 }, activeRegistration)} onClick={saveParticipant}>{t("参加者を保存")}</button>
               <button type="button" className="ghost" onClick={() => setDraft(null)}>{t("キャンセル")}</button>
               {registration.participants.some((player) => player.entrantId === draft.entrantId) &&
                 <button type="button" className="ghost" onClick={() => {
-                  onChange({ ...registration, participants: registration.participants.filter((player) => player.entrantId !== draft.entrantId) });
+                  onChange({ ...activeRegistration, participants: activeRegistration.participants.filter((player) => player.entrantId !== draft.entrantId) });
+                  setSettingDraft(activeRegistration.setting);
                   setDraft(null);
                 }}>{t("参加者を削除")}</button>}
             </div>

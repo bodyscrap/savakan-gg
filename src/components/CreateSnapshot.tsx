@@ -241,7 +241,7 @@ function LocalEventSnapshotForm({
       {!senderUserId && <p className="meta">{t("ローカルeventの作成には送信者IDの設定が必要です。")}</p>}
     </section>
     <LocalEventRegistration itemLists={itemLists} registration={registration} onChange={setRegistration}
-      busy={createBusy} onPendingChange={setRegistrationPending} />
+      busy={createBusy} onPendingChange={setRegistrationPending} onImportEventName={setLocalEventName} />
     <section className="panel create-layout-full">
       <h2>{t("フェーズ設定")}</h2>
       <div className="local-event-phase-scroll">
