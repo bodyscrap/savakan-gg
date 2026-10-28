@@ -45,6 +45,7 @@ export type EventEntrantMeta = {
   aliasName?: string;
   playSide: PlaySide | null;
   characterNames: string[];
+  categorySelections?: string[][] | null;
   authCode: string;
   notes: string | null;
 };
@@ -169,6 +170,7 @@ export type TournamentShareArchive = {
       aliasName: string;
       playSide: PlaySide | null;
       characterNames: string[];
+      categorySelections?: string[][] | null;
     }>;
     setPlaySides: SetPlaySideMeta[];
   };
@@ -194,6 +196,7 @@ export type LocalEventTieBreakRule =
 export type CreateLocalEventSnapshotInput = {
   tournamentName: string;
   eventName: string;
+  overwriteEventId?: string;
   eventAlias: string | null;
   participants: LocalEventParticipantInput[];
   requireItemSelections: boolean;
@@ -286,6 +289,7 @@ export type SaveLocalPlayerMetaInput = {
   aliasName: string;
   playSide: PlaySide | null;
   characterNames: string[];
+  categorySelections?: string[][] | null;
   notes: string | null;
 };
 

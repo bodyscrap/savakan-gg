@@ -2914,6 +2914,13 @@ function App() {
 
         {activeTab === "item-list" && (
           <ItemListEditor
+            freeTextSources={(workspace?.localMeta.events ?? []).flatMap((event) =>
+              (event.eventManagement?.itemListSnapshots ?? []).flatMap((list, slotIndex) =>
+                list.id === "__free_text__" ? [{
+                  id: `${event.eventId}:${slotIndex}`,
+                  label: `${event.eventName} / ${t("カテゴリ{value1}", { value1: slotIndex + 1 })}`,
+                  values: event.entrants.flatMap((entrant) => entrant.categorySelections?.[slotIndex] ?? []),
+                }] : []))}
             itemListName={itemListName}
             onItemListNameChange={setItemListName}
             itemCategoryName={itemCategoryName}

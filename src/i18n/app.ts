@@ -1,4 +1,6 @@
 export const appTranslations: Record<string, string> = {
+  "同じ大会名・イベント名のローカルイベントが複数あります。不要なイベントを削除してから作成してください。": "Multiple local events have the same tournament and event names. Delete unwanted events before creating one.",
+  "同じ大会名・イベント名のローカルイベントが既に存在します。\n{p0} / {p1}\n\n上書き作成すると、既存の参加者・ブラケット・試合結果・配信開始記録を置き換えます。この操作は元に戻せません。上書き作成しますか？": "A local event with the same tournament and event names already exists.\n{p0} / {p1}\n\nOverwriting will replace its participants, bracket, match results, and stream start records. This cannot be undone. Overwrite this event?",
   "プレイヤーエイリアス名を保存しました。": "Saved the player alias.",
   "アイテムの選択状態を保存しました。": "Saved the item selections.",
   "呼び出しの解決": "Resolve calls",

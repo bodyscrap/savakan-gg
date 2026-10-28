@@ -7,6 +7,20 @@ export type ItemListConfig = {
 };
 
 export const MAX_CATEGORY_SLOTS = 3;
+export const FREE_TEXT_LIST_ID = "__free_text__";
+
+export function freeTextCategory(slotIndex: number): ItemListConfig {
+  return {
+    id: FREE_TEXT_LIST_ID,
+    name: t("自由記入"),
+    categoryName: t("カテゴリ{value1}", { value1: slotIndex + 1 }),
+    items: [],
+  };
+}
+
+export function collectFreeTextItems(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
 
 export function normalizeItemListConfig(rawValue: unknown): ItemListConfig {
   const source = rawValue && typeof rawValue === "object"
@@ -58,7 +72,8 @@ export function createImportedItemList(
   const normalized = normalizeItemListConfig(rawValue);
   return {
     ...normalized,
-    id: normalized.id === "" || existingLists.some((itemList) => itemList.id === normalized.id)
+    id: normalized.id === "" || normalized.id === FREE_TEXT_LIST_ID
+      || existingLists.some((itemList) => itemList.id === normalized.id)
       ? crypto.randomUUID()
       : normalized.id,
   };

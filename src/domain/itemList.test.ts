@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { createImportedItemList } from "./itemList";
+import { collectFreeTextItems, createImportedItemList, FREE_TEXT_LIST_ID } from "./itemList";
+import { buildCategoryUsageList, buildConfiguredCategorySlots, validateCategorySelections } from "./eventManagement";
+
+describe("free text categories", () => {
+  it("accepts independent free text categories without an item list", () => {
+    const resolve = () => null;
+    const slots = buildConfiguredCategorySlots({ sideDecisionMethod: "upper_1p",
+      itemListIds: [FREE_TEXT_LIST_ID, "", FREE_TEXT_LIST_ID] }, resolve);
+    const result = validateCategorySelections([[" Alpha "], [], ["Beta"]], slots, 0, 3);
+    expect(result.errors).toEqual([]);
+    expect(result.normalizedBySlot).toEqual([["Alpha"], [], ["Beta"]]);
+  });
+
+  it("deduplicates whole entries without splitting punctuation", () => {
+    expect(collectFreeTextItems([" A / B ", "A / B", "", "C"])).toEqual(["A / B", "C"]);
+    expect(collectFreeTextItems([" A.*B ", "B, C", ""])).toEqual(["A.*B", "B, C"]);
+  });
+
+  it("counts free text usage independently by category", () => {
+    const slots = buildConfiguredCategorySlots({ sideDecisionMethod: "upper_1p",
+      itemListIds: [FREE_TEXT_LIST_ID, FREE_TEXT_LIST_ID] }, () => null);
+    const usage = buildCategoryUsageList(slots, [{ characterNames: ["A", "B"], categorySelections: [["A"], ["B"], []] }]);
+    expect(usage.map((slot) => slot.entries.map((entry) => entry.itemName))).toEqual([["A"], ["B"]]);
+  });
+});
 
 describe("createImportedItemList", () => {
   it("normalizes list data and retains its ID when it is unused", () => {

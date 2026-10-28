@@ -1,6 +1,8 @@
 import { t } from "../i18n";
-import { useRef } from "react";
-import type { ItemListConfig } from "../domain/itemList";
+import { useEffect, useRef, useState } from "react";
+import { collectFreeTextItems, parseLinesToUniqueList, type ItemListConfig } from "../domain/itemList";
+
+export type FreeTextImportSource = { id: string; label: string; values: string[] };
 
 type ItemListEditorProps = {
   itemListName: string;
@@ -20,6 +22,7 @@ type ItemListEditorProps = {
   onImportItemList: (file: File) => void;
   onExportItemList: (itemList: ItemListConfig) => void;
   busy: boolean;
+  freeTextSources?: FreeTextImportSource[];
 };
 
 export function ItemListEditor({
@@ -40,13 +43,19 @@ export function ItemListEditor({
   onImportItemList,
   onExportItemList,
   busy,
+  freeTextSources = [],
 }: ItemListEditorProps) {
   const importFileInputRef = useRef<HTMLInputElement>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   return (
     <>
       <section className="panel">
         <h2>{t("アイテムリストエディタ")}</h2>
+        <div className="panel-toolbar compact">
+          <button type="button" className="ghost" disabled={busy}
+            onClick={() => setImportOpen(true)}>{t("自由記入を取り込み")}</button>
+        </div>
 
         <div className="form">
           <input
@@ -150,6 +159,51 @@ export function ItemListEditor({
           </div>
         )}
       </section>
+      {importOpen && <FreeTextImportDialog sources={freeTextSources}
+        onClose={() => setImportOpen(false)} onImport={(items) => {
+          onItemListTextChange(parseLinesToUniqueList([itemListText, ...items].join("\n")).join("\n"));
+          setImportOpen(false);
+        }} />}
     </>
   );
+}
+
+export function FreeTextImportDialog({ sources, onImport, onClose }: {
+  sources: FreeTextImportSource[];
+  onImport: (items: string[]) => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [selectedId, setSelectedId] = useState("");
+  const items = collectFreeTextItems(sources.find((source) => source.id === selectedId)?.values ?? []);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => { dialog?.close(); };
+  }, []);
+
+  return <dialog ref={dialogRef} className="dialog-panel" aria-label={t("自由記入を取り込み")}
+    onCancel={(event) => { event.preventDefault(); onClose(); }}>
+    <form onSubmit={(event) => { event.preventDefault(); if (items.length) onImport(items); }}>
+      <div className="dialog-head"><h3>{t("自由記入を取り込み")}</h3></div>
+      <div className="dialog-body free-text-import-fields">
+        <fieldset>
+          <legend>{t("取り込むカテゴリ")}</legend>
+          {sources.length === 0 && <p className="meta">{t("保存済みの自由記入カテゴリがありません。")}</p>}
+          {sources.map((source) => <label key={source.id} className="setting-checkbox">
+            <input type="radio" name="free-text-import-category" value={source.id}
+              checked={selectedId === source.id} onChange={() => setSelectedId(source.id)} />
+            {source.label}
+          </label>)}
+        </fieldset>
+        <label>{t("取り込みプレビュー ({count} 件)", { count: items.length })}
+          <textarea readOnly rows={8} value={items.join("\n")} /></label>
+      </div>
+      <div className="dialog-actions dialog-actions-split">
+        <button type="button" className="ghost" onClick={onClose}>{t("キャンセル")}</button>
+        <button type="submit" disabled={items.length === 0}>{t("取り込み")}</button>
+      </div>
+    </form>
+  </dialog>;
 }

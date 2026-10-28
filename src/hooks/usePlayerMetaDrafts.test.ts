@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlaySide } from "./useTournamentWorkspace";
 import { usePlayerMetaDrafts } from "./usePlayerMetaDrafts";
+import { FREE_TEXT_LIST_ID, freeTextCategory } from "../domain/itemList";
 
 type Draft = { aliasName: string; playSide: PlaySide | ""; categorySelections: string[][] };
 type Drafts = Record<string, Draft>;
@@ -78,6 +79,30 @@ beforeEach(() => {
 });
 
 describe("independent player metadata saves", () => {
+  it("saves and restores independent free text categories, including a non-contiguous slot", async () => {
+    const test = setup(false);
+    test.options.categorySlotListIds = [FREE_TEXT_LIST_ID, "", FREE_TEXT_LIST_ID];
+    test.options.totalItemMinCount = 0;
+    test.options.configuredCategorySlots = [0, 2].map((slotIndex) => ({
+      slotIndex, list: freeTextCategory(slotIndex), minCount: 0, maxCount: 1, allowDuplicates: false,
+    }));
+    test.render().addSelectedEntrantDraftSelection(test.options.configuredCategorySlots[0], "Alpha / Beta");
+    test.render().addSelectedEntrantDraftSelection(test.options.configuredCategorySlots[1], "Gamma");
+    await test.render().saveSelectedEntrantSelections();
+    expect(test.save).toHaveBeenCalledWith(expect.objectContaining({
+      characterNames: ["Alpha / Beta", "Gamma"], categorySelections: [["Alpha / Beta"], [], ["Gamma"]],
+    }));
+    const saved = test.save.mock.calls[0][0];
+    test.options.selectedEventMeta!.entrants = [{
+      ...test.entrant, characterNames: saved.characterNames, categorySelections: saved.categorySelections,
+      authCode: "", notes: null, playSide: null,
+    }];
+    state.drafts = {};
+    state.dirty.current.clear();
+    test.render();
+    state.hydrate();
+    expect(test.render().selectedEntrantDraftSelectionsBySlot).toEqual([["Alpha / Beta"], [], ["Gamma"]]);
+  });
   it("saves only the alias even when selections are invalid, preserving saved and unsaved selections", async () => {
     const test = setup();
     test.render().setMetaDraft("event", "player", {
@@ -94,7 +119,7 @@ describe("independent player metadata saves", () => {
     expect(test.options.setMessage).toHaveBeenCalledWith("プレイヤーエイリアス名を保存しました。");
     const result = test.hydrateSaved("New alias", ["A", "B", "Legacy item"]);
     expect(result.selectedEntrantAliasName).toBe("New alias");
-    expect(result.selectedEntrantDraftSelectionsBySlot).toEqual([[]]);
+    expect(result.selectedEntrantDraftSelectionsBySlot).toEqual([[], [], []]);
   });
 
   it("saves only selections and retains an unsaved alias through metadata hydration", async () => {
@@ -111,7 +136,7 @@ describe("independent player metadata saves", () => {
     expect(test.options.setMessage).toHaveBeenCalledWith("アイテムの選択状態を保存しました。");
     const result = test.hydrateSaved("Saved alias", ["B", "C"]);
     expect(result.selectedEntrantAliasName).toBe("Unsaved alias");
-    expect(result.selectedEntrantDraftSelectionsBySlot).toEqual([["B", "C"]]);
+    expect(result.selectedEntrantDraftSelectionsBySlot).toEqual([["B", "C"], [], []]);
   });
 
   it("still validates category limits when saving selections", async () => {
@@ -132,7 +157,7 @@ describe("independent player metadata saves", () => {
       aliasName: "", characterNames: hasSavedMeta ? ["A", "B", "Legacy item"] : [],
       playSide: hasSavedMeta ? "2P" : null, notes: hasSavedMeta ? "Keep notes" : null,
     }));
-    expect(test.render().selectedEntrantDraftSelectionsBySlot).toEqual([["C"]]);
+    expect(test.render().selectedEntrantDraftSelectionsBySlot).toEqual([["C"], [], []]);
   });
 
   it.each(["alias", "selections"] as const)("can save both fields independently with %s first", async (first) => {
@@ -154,7 +179,7 @@ describe("independent player metadata saves", () => {
     }));
     const result = test.hydrateSaved("New alias", ["B", "C"]);
     expect(result.selectedEntrantAliasName).toBe("New alias");
-    expect(result.selectedEntrantDraftSelectionsBySlot).toEqual([["B", "C"]]);
+    expect(result.selectedEntrantDraftSelectionsBySlot).toEqual([["B", "C"], [], []]);
   });
 
   it("hydrates clean fields independently when another field is still dirty", async () => {
@@ -162,7 +187,7 @@ describe("independent player metadata saves", () => {
     test.render().setSelectedEntrantAliasName("Unsaved alias");
     const result = test.hydrateSaved("Changed elsewhere", ["C", "B"]);
     expect(result.selectedEntrantAliasName).toBe("Unsaved alias");
-    expect(result.selectedEntrantDraftSelectionsBySlot).toEqual([["C", "B"]]);
+    expect(result.selectedEntrantDraftSelectionsBySlot).toEqual([["C", "B"], [], []]);
   });
 
   it("preserves alias edits made while an alias save is in progress", async () => {

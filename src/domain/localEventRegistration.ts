@@ -1,5 +1,6 @@
 import { buildConfiguredCategorySlots, emptyCategorySelections, validateCategorySelections } from "./eventManagement";
 import type { EventManagementMeta, LocalEventParticipantInput } from "./tournamentWorkspaceRepository";
+import { FREE_TEXT_LIST_ID } from "./itemList";
 
 export type RegisteredLocalParticipant = LocalEventParticipantInput & { selectionsConfirmed: boolean };
 export type LocalEventRegistration = {
@@ -60,7 +61,7 @@ export function applyRegistrationSetting(current: LocalEventRegistration, settin
       const categorySelections = emptyCategorySelections();
       for (const slot of registrationCategorySlots(setting)) {
         categorySelections[slot.slotIndex] = (participant.categorySelections[slot.slotIndex] ?? [])
-          .filter((item) => slot.list.items.includes(item));
+          .filter((item) => slot.list.id === FREE_TEXT_LIST_ID || slot.list.items.includes(item));
       }
       if (JSON.stringify(categorySelections) !== JSON.stringify(participant.categorySelections)) {
         return { ...participant, categorySelections, selectionsConfirmed: false };

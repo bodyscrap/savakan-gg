@@ -178,6 +178,7 @@ export function useTournamentWorkspace({
     aliasName: string;
     playSide: PlaySide | null;
     characterNames: string[];
+    categorySelections?: string[][] | null;
     notes: string | null;
   }) {
     const result = await persistLocalPlayerMeta(input);

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { t } from "../i18n";
-import type { ItemListConfig } from "../domain/itemList";
+import { FREE_TEXT_LIST_ID, type ItemListConfig } from "../domain/itemList";
 import type { EventSettingProps, EventSettingCategorySlot } from "./EventSetting";
 
 type CategorySettingsProps = {
@@ -29,12 +29,15 @@ export function ItemListPicker({ id, lists, value, onChange }: {
   const label = (list: ItemListConfig) => `${list.name} / ${list.categoryName} (${list.items.length})`;
   const options = [
     { value: "", label: t("未選択") },
+    ...(!search || t("自由記入").toLowerCase().includes(search)
+      ? [{ value: FREE_TEXT_LIST_ID, label: t("自由記入") }] : []),
     ...lists.slice().sort((a, b) => a.name.localeCompare(b.name, "ja"))
+      .filter((list) => list.id !== FREE_TEXT_LIST_ID)
       .filter((list) => list.name.toLowerCase().includes(search) || list.categoryName.toLowerCase().includes(search))
       .map((list) => ({ value: list.id, label: label(list) })),
   ];
   const selected = lists.find((list) => list.id === value);
-  const selectedLabel = selected ? label(selected) : t("未選択");
+  const selectedLabel = value === FREE_TEXT_LIST_ID ? t("自由記入") : selected ? label(selected) : t("未選択");
 
   useEffect(() => {
     if (open && activeIndex >= 0) listRef.current?.children.item(activeIndex)?.scrollIntoView({ block: "nearest" });
@@ -55,8 +58,9 @@ export function ItemListPicker({ id, lists, value, onChange }: {
     updatePlacement();
     setQuery(null);
     setOpen(true);
-    const sorted = lists.slice().sort((a, b) => a.name.localeCompare(b.name, "ja"));
-    setActiveIndex(value ? sorted.findIndex((list) => list.id === value) + 1 : 0);
+    const sorted = lists.filter((list) => list.id !== FREE_TEXT_LIST_ID)
+      .sort((a, b) => a.name.localeCompare(b.name, "ja"));
+    setActiveIndex(value === FREE_TEXT_LIST_ID ? 1 : value ? sorted.findIndex((list) => list.id === value) + 2 : 0);
   }
   function choose(index: number) {
     if (inputRef.current?.matches(":disabled")) return;
@@ -170,6 +174,7 @@ type PlayerItemSelectionProps = {
 };
 
 export function PlayerItemSelectionFields({ slots, selections, onAdd, onRemove }: PlayerItemSelectionProps) {
+  const [drafts, setDrafts] = useState<Record<number, string>>({});
   if (slots.length === 0) {
     return <p className="meta">{t("先に上部でカテゴリ(最大3つ)を選択してください。")}</p>;
   }
@@ -183,12 +188,31 @@ export function PlayerItemSelectionFields({ slots, selections, onAdd, onRemove }
           value1: slot.minCount, value2: slot.maxCount, value3: slot.allowDuplicates ? t("可") : t("不可"),
         }),
       })}</p>
-      <select aria-label={t("カテゴリ{value1}", { value1: slot.slotIndex + 1 })} value=""
+      {slot.list.id === FREE_TEXT_LIST_ID ? <div className="free-text-item-input">
+        <input aria-label={t("カテゴリ{value1}", { value1: slot.slotIndex + 1 })}
+          value={drafts[slot.slotIndex] ?? ""} disabled={selected.length >= slot.maxCount}
+          onChange={(event) => setDrafts({ ...drafts, [slot.slotIndex]: event.currentTarget.value })}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            const value = (drafts[slot.slotIndex] ?? "").trim();
+            if (!value || (!slot.allowDuplicates && selected.includes(value))) return;
+            onAdd(slot, value);
+            setDrafts({ ...drafts, [slot.slotIndex]: "" });
+          }} />
+        <button type="button" className="ghost" disabled={selected.length >= slot.maxCount
+          || !(drafts[slot.slotIndex] ?? "").trim()
+          || (!slot.allowDuplicates && selected.includes((drafts[slot.slotIndex] ?? "").trim()))}
+          onClick={() => {
+            onAdd(slot, (drafts[slot.slotIndex] ?? "").trim());
+            setDrafts({ ...drafts, [slot.slotIndex]: "" });
+          }}>{t("追加")}</button>
+      </div> : <select aria-label={t("カテゴリ{value1}", { value1: slot.slotIndex + 1 })} value=""
         disabled={selected.length >= slot.maxCount || items.length === 0}
         onChange={(event) => onAdd(slot, event.currentTarget.value)}>
         <option value="">{t("アイテムを追加")}</option>
         {items.map((item) => <option key={item} value={item}>{item}</option>)}
-      </select>
+      </select>}
       {selected.length > 0 && <div className="player-item-selection-tags">
         {selected.map((item, index) =>
           <button key={`${item}-${index}`} type="button" className="ghost tiny"

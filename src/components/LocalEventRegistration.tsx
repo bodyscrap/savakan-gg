@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { t } from "../i18n";
 import { emptyCategorySelections, normalizeEventManagementSetting } from "../domain/eventManagement";
-import { type ItemListConfig } from "../domain/itemList";
+import { FREE_TEXT_LIST_ID, freeTextCategory, type ItemListConfig } from "../domain/itemList";
 import {
   applyRegistrationSetting, canRegisterParticipant, isRegistrationComplete, registrationCategorySlots, validateRegisteredSelections,
   type LocalEventRegistration as Registration, type RegisteredLocalParticipant,
@@ -43,7 +43,8 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
     if ((settingDraft.categoryMinCounts?.[index] ?? 0) > (settingDraft.categoryMaxCounts?.[index] ?? 0)) {
       settingErrors.push(t("カテゴリ{p0}: 上限は下限以上にしてください。", { p0: index + 1 }));
     }
-    if (listSnapshots.some((other, otherIndex) => otherIndex !== index && other.id === list.id)) {
+    if (list.id !== FREE_TEXT_LIST_ID
+      && listSnapshots.some((other, otherIndex) => otherIndex !== index && other.id === list.id)) {
       settingErrors.push(t("カテゴリは重複して設定できません。"));
     }
   }
@@ -99,7 +100,7 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
           onCategoryListChange: (index, id) => {
             const snapshots = Array.from({ length: 3 }, (_, slot) =>
               listSnapshots[slot] ?? { id: "", name: "", categoryName: "", items: [] });
-            snapshots[index] = itemLists.find((list) => list.id === id)
+            snapshots[index] = id === FREE_TEXT_LIST_ID ? freeTextCategory(index) : itemLists.find((list) => list.id === id)
               ?? listSnapshots.find((list) => list.id === id)
               ?? { id: "", name: "", categoryName: "", items: [] };
             const maxCounts = [...settingDraft.categoryMaxCounts ?? [0, 0, 0]];
@@ -177,7 +178,7 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
           {!draft ? <p className="meta">{t("参加登録、または一覧のプレイヤーを選択してください。")}</p> : <div className="entrant-meta-editor">
             <label className="meta" style={{ display: "grid", gap: "0.3rem" }}>{t("プレイヤー名")}<input value={draft.name}
               onChange={(event) => setDraft({ ...draft, name: event.currentTarget.value })} /></label>
-            <PlayerItemSelectionFields slots={slots} selections={draft.categorySelections}
+            <PlayerItemSelectionFields key={draft.entrantId} slots={slots} selections={draft.categorySelections}
               onAdd={(slot, item) => {
                 if (!item) return;
                 setDraft({ ...draft, categorySelections: draft.categorySelections.map((items, index) =>

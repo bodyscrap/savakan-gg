@@ -61,6 +61,17 @@ function makeWorkspace(): TournamentWorkspace {
 }
 
 describe("stream chapter sets", () => {
+  it("includes saved free text in its own category without a predefined item list", () => {
+    const workspace = makeWorkspace();
+    const meta = workspace.localMeta.events[0];
+    meta.eventManagement = { sideDecisionMethod: "upper_1p", itemListSnapshots: [
+      { id: "__free_text__", name: "Free text", categoryName: "Category 1", items: [] },
+      { id: "__free_text__", name: "Free text", categoryName: "Category 2", items: [] },
+    ] };
+    meta.entrants[0].categorySelections = [["Alpha"], ["Beta"], []];
+    expect(collectStreamChapterSets(workspace, "event", false, [0, 1])[1].matchup)
+      .toBe("Alice(Alpha/Beta) vs Bob");
+  });
   it("adds winner and loser marks with game wins in saved side order only when enabled", () => {
     const workspace = makeWorkspace();
     expect(collectStreamChapterSets(workspace, "event", true, [], true)[0].matchup)

@@ -1454,6 +1454,23 @@ fn overlay_items_for_entrant(
     let Some(entrant) = meta.entrants.iter().find(|entrant| Some(entrant.entrant_id.as_str()) == entrant_id) else {
         return categories;
     };
+    if let Some(selections) = &entrant.category_selections {
+        for (index, items) in selections.iter().take(3).enumerate() {
+            let Some(list) = setting.item_list_snapshots.get(index).filter(|list| !list.id.is_empty()) else {
+                continue;
+            };
+            for item in items {
+                let item = item.trim();
+                if !item.is_empty() && (list.id == "__free_text__" || list.items.iter().any(|name| name == item))
+                    && (setting.category_allow_duplicates.get(index).copied().unwrap_or(false)
+                        || !categories[index].iter().any(|name| name == item))
+                {
+                    categories[index].push(item.to_owned());
+                }
+            }
+        }
+        return categories;
+    }
     for item in &entrant.character_names {
         let item = item.trim();
         if item.is_empty() {

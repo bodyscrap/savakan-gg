@@ -103,4 +103,10 @@ describe("item list combobox", () => {
     expect(html).toContain("Show item list options");
     expect(html).toContain("No matching lists.");
   });
+
+  it("offers free text without creating or selecting a stored list", () => {
+    const { html } = setup(null, "__free_text__");
+    expect(html).toContain('value="自由記入"');
+    expect(html).toContain("自由記入</li>");
+  });
 });

@@ -4,6 +4,7 @@ import { createSetEntrantResolver, isResolvedEntrantName } from "./bracketProgre
 import { buildPendingSetResultsById, getSetScoresForDisplay, isConfirmedSetResult } from "./setResultDrafts";
 import type { TournamentWorkspace } from "./tournamentWorkspaceRepository";
 import { resolveOverlaySidesForSet } from "../hooks/useObsOverlay";
+import { FREE_TEXT_LIST_ID } from "./itemList";
 
 export type StreamChapterSet = {
   setId: string;
@@ -32,13 +33,16 @@ export function collectStreamChapterSets(
   const entrants = new Map(eventMeta?.entrants.map((entrant) => [entrant.entrantId, entrant]));
   const categoryLists = eventMeta?.eventManagement?.itemListSnapshots ?? [];
   function playerItems(entrantId: string | null): string[] {
-    const chosen = entrantId ? entrants.get(entrantId)?.characterNames ?? [] : [];
-    return categoryLists.slice(0, 3).flatMap((_list, slotIndex) => {
-      if (!selectedCategorySlots.includes(slotIndex)) {
+    const entrant = entrantId ? entrants.get(entrantId) : undefined;
+    const chosen = entrant?.characterNames ?? [];
+    return categoryLists.slice(0, 3).flatMap((list, slotIndex) => {
+      if (!list.id || !selectedCategorySlots.includes(slotIndex)) {
         return [];
       }
-      const items = chosen.map((item) => item.trim()).filter((item) =>
-        item !== "" && categoryLists.findIndex((category) => category.items.includes(item)) === slotIndex,
+      const items = (entrant?.categorySelections?.[slotIndex] ?? chosen).map((item) => item.trim()).filter((item) =>
+        item !== "" && (entrant?.categorySelections
+          ? list.id === FREE_TEXT_LIST_ID || list.items.includes(item)
+          : categoryLists.findIndex((category) => category.items.includes(item)) === slotIndex),
       );
       const categoryItems = eventMeta?.eventManagement?.categoryAllowDuplicates?.[slotIndex] ? items : [...new Set(items)];
       return categoryItems.length > 0 ? [categoryItems.map(singleLine).join(",")] : [];

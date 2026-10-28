@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { emptyCategorySelections, validateCategorySelections } from "../domain/eventManagement";
 import type { EventSettingCategorySlot } from "../components/EventSetting";
 import type { EventSnapshot } from "../domain/bracketDisplay";
-import { MAX_CATEGORY_SLOTS, resolveEventItemList, type ItemListConfig } from "../domain/itemList";
+import { FREE_TEXT_LIST_ID, MAX_CATEGORY_SLOTS, resolveEventItemList, type ItemListConfig } from "../domain/itemList";
 import { toApiSlug } from "../domain/slugUtils";
 import type { EventLocalMeta, PlaySide } from "./useTournamentWorkspace";
 
@@ -46,6 +46,7 @@ type UsePlayerMetaDraftsOptions = {
     aliasName: string;
     playSide: PlaySide | null;
     characterNames: string[];
+    categorySelections?: string[][] | null;
     notes: string | null;
   }) => Promise<unknown>;
   setBusy: (busy: boolean) => void;
@@ -88,7 +89,8 @@ export function usePlayerMetaDrafts({
     return resolveEventItemList(listId, selectedEventItemListSnapshots, itemLists);
   }
 
-  function buildInitialCategorySelections(characterNames: string[]): string[][] {
+  function buildInitialCategorySelections(characterNames: string[], savedSelections?: string[][] | null): string[][] {
+    if (savedSelections) return Array.from({ length: MAX_CATEGORY_SLOTS }, (_, index) => [...savedSelections[index] ?? []]);
     const categorySelections = emptyCategorySelections();
     const remaining = [...characterNames]
       .map((value) => value.trim())
@@ -144,7 +146,7 @@ export function usePlayerMetaDrafts({
           playSide: draft && dirty?.has("playSide") ? draft.playSide : existingMeta?.playSide ?? "",
           categorySelections: draft && dirty?.has("categorySelections")
             ? draft.categorySelections
-            : buildInitialCategorySelections(existingMeta?.characterNames ?? []),
+            : buildInitialCategorySelections(existingMeta?.characterNames ?? [], existingMeta?.categorySelections),
         };
       }
       return next;
@@ -165,7 +167,7 @@ export function usePlayerMetaDrafts({
     return metaDrafts[key] ?? {
       aliasName: existingMeta?.aliasName ?? "",
       playSide: existingMeta?.playSide ?? "",
-      categorySelections: buildInitialCategorySelections(existingMeta?.characterNames ?? []),
+      categorySelections: buildInitialCategorySelections(existingMeta?.characterNames ?? [], existingMeta?.categorySelections),
     };
   }
 
@@ -181,7 +183,7 @@ export function usePlayerMetaDrafts({
       const baseDraft = current[key] ?? {
         aliasName: existingMeta?.aliasName ?? "",
         playSide: existingMeta?.playSide ?? "",
-        categorySelections: buildInitialCategorySelections(existingMeta?.characterNames ?? []),
+        categorySelections: buildInitialCategorySelections(existingMeta?.characterNames ?? [], existingMeta?.categorySelections),
       };
       const nextSelections = patch.categorySelections
         ? patch.categorySelections.slice(0, MAX_CATEGORY_SLOTS).map((items) =>
@@ -240,7 +242,7 @@ export function usePlayerMetaDrafts({
     itemName: string,
   ) {
     const normalizedItem = itemName.trim();
-    if (normalizedItem === "" || !list.items.includes(normalizedItem)) {
+    if (normalizedItem === "" || (list.id !== FREE_TEXT_LIST_ID && !list.items.includes(normalizedItem))) {
       return;
     }
 
@@ -326,6 +328,7 @@ export function usePlayerMetaDrafts({
         aliasName: savesAlias ? draft.aliasName : existingMeta?.aliasName ?? "",
         playSide: existingMeta?.playSide ?? null,
         characterNames: validated?.flattened ?? existingMeta?.characterNames ?? [],
+        categorySelections: validated?.normalizedBySlot ?? existingMeta?.categorySelections ?? null,
         notes: existingMeta?.notes ?? null,
       });
 
@@ -402,8 +405,8 @@ export function usePlayerMetaDrafts({
     ? getMetaDraft(selectedEvent.eventId, selectedEntrant.entrantId)
     : null;
   const selectedEntrantDraftSelectionsBySlot = selectedEntrantMetaDraft
-    ? configuredCategorySlots.map((slot) =>
-      getDraftCategorySelections(selectedEntrantMetaDraft, slot.slotIndex),
+    ? Array.from({ length: MAX_CATEGORY_SLOTS }, (_, slotIndex) =>
+      getDraftCategorySelections(selectedEntrantMetaDraft, slotIndex),
     )
     : [];
   const selectedEntrantAliasName = selectedEntrantMetaDraft?.aliasName ?? "";

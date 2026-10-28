@@ -1,4 +1,10 @@
 export const componentTranslations: Record<string, string> = {
+  "自由記入": "Free text",
+  "追加": "Add",
+  "自由記入を取り込み": "Import free text",
+  "取り込むカテゴリ": "Categories to import",
+  "保存済みの自由記入カテゴリがありません。": "No saved free text categories.",
+  "取り込みプレビュー ({count} 件)": "Import preview ({count} items)",
   "参加者を全員クリア": "Clear all participants",
   "参加者の編集・追加時にもカテゴリ設定の変更を適用します。": "Category changes are also applied when editing or adding participants.",
   "カテゴリ設定を適用しました。対象リストにないアイテムは除去しました。選択条件を満たさない参加者は確認してください。": "Category settings applied. Items absent from the selected lists were removed. Please review participants with incomplete selections.",

@@ -346,7 +346,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                           {t("プレイヤーエイリアス名を保存")}
                         </button>
                       </div>
-                      <PlayerItemSelectionFields slots={configuredCategorySlots} selections={draftSelectionsBySlot}
+                      <PlayerItemSelectionFields key={selectedEntrantId} slots={configuredCategorySlots} selections={draftSelectionsBySlot}
                         onAdd={actions.onAddDraftSelection} onRemove={actions.onRemoveDraftSelection} />
                     </div>
 

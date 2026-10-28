@@ -1,4 +1,5 @@
 import { t } from "../i18n";
+import { FREE_TEXT_LIST_ID } from "./itemList";
 import { emptyCategorySelections } from "./eventManagement";
 import { registrationCategorySlots, validateRegisteredSelections, type LocalEventRegistration, type RegisteredLocalParticipant } from "./localEventRegistration";
 
@@ -62,7 +63,7 @@ export function importRegistrationCsv(
       const column = mapping.categories[slot.slotIndex];
       if (column === null || column === undefined) continue;
       const items = row[column].split(/[,\r\n]+/).map((item) => item.trim())
-        .filter((item) => item !== "" && slot.list.items.includes(item));
+        .filter((item) => item !== "" && (slot.list.id === FREE_TEXT_LIST_ID || slot.list.items.includes(item)));
       categorySelections[slot.slotIndex] = slot.allowDuplicates ? items : [...new Set(items)];
     }
     const participant = { entrantId: createId(), name, categorySelections, selectionsConfirmed: false };

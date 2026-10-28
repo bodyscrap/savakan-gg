@@ -788,7 +788,7 @@ fn validate_registration(input: &CreateLocalEventSnapshotInput) -> Result<(), St
         }
         let min = setting.category_min_counts.get(index).copied().unwrap_or(0);
         let max = setting.category_max_counts.get(index).copied().unwrap_or(1);
-        if !list_ids.insert(&list.id) || min > max {
+        if (list.id != "__free_text__" && !list_ids.insert(&list.id)) || min > max {
             return Err("カテゴリが重複しているか、件数条件が不正です。".to_owned());
         }
     }
@@ -815,7 +815,9 @@ fn validate_registration(input: &CreateLocalEventSnapshotInput) -> Result<(), St
             let duplicates = setting.category_allow_duplicates.get(index).copied().unwrap_or(false);
             let mut seen = std::collections::HashSet::new();
             if (input.require_item_selections && selections.len() < min) || selections.len() > max
-                || selections.iter().any(|item| !list.items.contains(item) || (!duplicates && !seen.insert(item)))
+                || selections.iter().any(|item| item.trim().is_empty()
+                    || (list.id != "__free_text__" && !list.items.contains(item))
+                    || (!duplicates && !seen.insert(item)))
             {
                 return Err(format!("{}: カテゴリ{}の選択条件を満たしていません。", participant.name, index + 1));
             }
@@ -1138,6 +1140,7 @@ mod tests {
             require_item_selections: true,
             tournament_name: "Local tournament".to_owned(),
             event_name: "Local event".to_owned(),
+            overwrite_event_id: None,
             event_alias: None,
             participants: (0..participant_count).map(|index| crate::models::LocalEventParticipantInput {
                 entrant_id: format!("entrant-{}", index + 1),
@@ -1267,6 +1270,23 @@ mod tests {
         config.participants[0].category_selections[0] = vec!["A".to_owned(), "B".to_owned()];
         config.event_management.total_max_count = 1;
         config.event_management.total_min_count = 0;
+        assert!(validate_input(&config).is_err());
+    }
+
+    #[test]
+    fn registration_accepts_multiple_free_text_categories_without_list_items() {
+        let mut config = input(2, vec![phase("SINGLE_ELIMINATION", 1, 0)]);
+        config.event_management.item_list_snapshots = (0..3).map(|index| crate::models::ItemListConfig {
+            id: "__free_text__".to_owned(), name: "Free text".to_owned(),
+            category_name: format!("Category {}", index + 1), items: Vec::new(),
+        }).collect();
+        config.event_management.category_max_counts = vec![1, 1, 1];
+        config.event_management.total_max_count = 3;
+        config.participants[0].category_selections = vec![vec!["Alpha / Beta".to_owned()], Vec::new(), vec!["Gamma".to_owned()]];
+        assert!(validate_input(&config).is_ok());
+        config.participants[0].category_selections[0].push("Excess".to_owned());
+        assert!(validate_input(&config).is_err());
+        config.participants[0].category_selections[0] = vec![" ".to_owned()];
         assert!(validate_input(&config).is_err());
     }
 

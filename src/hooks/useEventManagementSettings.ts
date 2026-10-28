@@ -14,6 +14,8 @@ import {
 import type { EventSnapshot } from "../domain/bracketDisplay";
 import {
   MAX_CATEGORY_SLOTS,
+  FREE_TEXT_LIST_ID,
+  freeTextCategory,
   normalizeItemListConfig,
   resolveEventItemList,
   type ItemListConfig,
@@ -315,7 +317,7 @@ export function useEventManagementSettings({
       while (next.length < MAX_CATEGORY_SLOTS) {
         next.push("");
       }
-      if (itemListId !== "") {
+      if (itemListId !== "" && itemListId !== FREE_TEXT_LIST_ID) {
         for (let index = 0; index < next.length; index += 1) {
           if (index !== slotIndex && next[index] === itemListId) {
             next[index] = "";
@@ -406,7 +408,7 @@ export function useEventManagementSettings({
         normalizedAllowDuplicates[index] = false;
         continue;
       }
-      if (seen.has(itemListIds[index])) {
+      if (itemListIds[index] !== FREE_TEXT_LIST_ID && seen.has(itemListIds[index])) {
         setError(t("カテゴリは重複して設定できません。"));
         return;
       }
@@ -433,7 +435,8 @@ export function useEventManagementSettings({
     setError("");
     setMessage("");
     try {
-      const itemListSnapshots = itemListIds.map((listId) => {
+      const itemListSnapshots = itemListIds.map((listId, slotIndex) => {
+        if (listId === FREE_TEXT_LIST_ID) return freeTextCategory(slotIndex);
         if (listId === "") {
           return { id: "", name: "", categoryName: "", items: [] };
         }

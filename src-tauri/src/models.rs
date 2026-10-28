@@ -73,6 +73,8 @@ pub struct TournamentShareEntrantMeta {
     pub play_side: Option<PlaySide>,
     #[serde(default)]
     pub character_names: Vec<String>,
+    #[serde(default)]
+    pub category_selections: Option<Vec<Vec<String>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -218,6 +220,8 @@ pub struct CreateLocalEventSnapshotInput {
     pub tournament_name: String,
     pub event_name: String,
     #[serde(default)]
+    pub overwrite_event_id: Option<String>,
+    #[serde(default)]
     pub event_alias: Option<String>,
     pub participants: Vec<LocalEventParticipantInput>,
     pub require_item_selections: bool,
@@ -323,6 +327,8 @@ pub struct EventEntrantMeta {
     pub alias_name: String,
     pub play_side: Option<PlaySide>,
     pub character_names: Vec<String>,
+    #[serde(default)]
+    pub category_selections: Option<Vec<Vec<String>>>,
     pub auth_code: String,
     pub notes: Option<String>,
 }
@@ -347,6 +353,8 @@ pub struct LocalPlayerMetaInput {
     pub alias_name: String,
     pub play_side: Option<PlaySide>,
     pub character_names: Vec<String>,
+    #[serde(default)]
+    pub category_selections: Option<Vec<Vec<String>>>,
     pub notes: Option<String>,
 }
 

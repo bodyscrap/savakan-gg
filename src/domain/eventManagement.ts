@@ -1,4 +1,4 @@
-import { MAX_CATEGORY_SLOTS, type ItemListConfig } from "./itemList";
+import { FREE_TEXT_LIST_ID, freeTextCategory, MAX_CATEGORY_SLOTS, type ItemListConfig } from "./itemList";
 import { t } from "../i18n";
 
 export type EventManagementSetting = {
@@ -69,11 +69,12 @@ export function resolveMatchSideAssignment(
 
 export type CategoryUsageSlot = {
   slotIndex: number;
-  list: Pick<ItemListConfig, "categoryName" | "name" | "items">;
+  list: Pick<ItemListConfig, "categoryName" | "name" | "items"> & { id?: string };
 };
 
 export type CategoryUsageEntrant = {
   characterNames: string[];
+  categorySelections?: string[][] | null;
 };
 
 export type CategoryUsage = {
@@ -102,7 +103,8 @@ export function validateCategorySelections(
   const errors: string[] = [];
   for (const slot of slots) {
     let selections = (categorySelections[slot.slotIndex] ?? [])
-      .map((value) => value.trim()).filter((value) => value !== "" && slot.list.items.includes(value));
+      .map((value) => value.trim()).filter((value) => value !== ""
+        && (slot.list.id === FREE_TEXT_LIST_ID || slot.list.items.includes(value)));
     if (!slot.allowDuplicates) selections = [...new Set(selections)];
     if (selections.length < slot.minCount) {
       errors.push(t("{p0}: 最低 {p1} 件必要です。", { p0: slot.list.categoryName, p1: slot.minCount }));
@@ -136,7 +138,7 @@ export function buildConfiguredCategorySlots(
       continue;
     }
 
-    const list = resolveItemList(listId);
+    const list = listId === FREE_TEXT_LIST_ID ? freeTextCategory(slotIndex) : resolveItemList(listId);
     if (!list) {
       continue;
     }
@@ -176,9 +178,9 @@ export function buildCategoryUsageList(
     }
 
     for (const entrant of entrants) {
-      const chosen = entrant.characterNames
+      const chosen = (entrant.categorySelections?.[slot.slotIndex] ?? entrant.characterNames)
         .map((itemName) => itemName.trim())
-        .filter((itemName) => itemCounts.has(itemName));
+        .filter((itemName) => itemName !== "" && (slot.list.id === FREE_TEXT_LIST_ID || itemCounts.has(itemName)));
 
       for (const itemName of new Set(chosen)) {
         itemCounts.set(itemName, (itemCounts.get(itemName) ?? 0) + 1);

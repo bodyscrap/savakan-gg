@@ -43,6 +43,7 @@ const SETTINGS_DIR_NAME: &str = "settings";
 const SNAPSHOTS_DIR_NAME: &str = "snapshots";
 const EVENT_SETTING_CATEGORY_SLOT_COUNT: usize = 3;
 static LOCAL_EVENT_SEQUENCE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static LOCAL_EVENT_CREATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn storage_perf_log(message: impl FnOnce() -> String) {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -499,6 +500,7 @@ mod player_item_selection_tests {
                 let entrant = event_meta.entrants.iter().find(|entrant| entrant.entrant_id == participant.entrant_id).unwrap();
                 assert_eq!(entrant.entrant_name, participant.name);
                 assert_eq!(entrant.character_names, ["B", "A", "B"]);
+                assert_eq!(entrant.category_selections.as_ref(), Some(&participant.category_selections));
                 assert!(!entrant.auth_code.is_empty());
             }
             let setting = event_meta.event_management.as_ref().unwrap();
@@ -510,6 +512,8 @@ mod player_item_selection_tests {
             let restored: TournamentLocalMeta = serde_json::from_str(&serialized).unwrap();
             assert_eq!(restored.events[0].entrants.len(), count);
             assert!(restored.events[0].entrants.iter().all(|entrant| entrant.character_names == ["B", "A", "B"]));
+            assert!(restored.events[0].entrants.iter().all(|entrant|
+                entrant.category_selections == Some(vec![vec!["B".to_owned(), "A".to_owned(), "B".to_owned()], Vec::new(), Vec::new()])));
         }
     }
 }
@@ -903,6 +907,7 @@ mod score_edit_lock_tests {
             require_item_selections: true,
             tournament_name: "Local".to_owned(),
             event_name: "Event".to_owned(),
+            overwrite_event_id: None,
             event_alias: None,
             participants: (1..=31).map(|index| crate::models::LocalEventParticipantInput {
                 entrant_id: format!("entrant-{index}"),
@@ -1181,6 +1186,7 @@ fn merge_snapshot_into_meta(
                 alias_name: String::new(),
                 play_side: None,
                 character_names: Vec::new(),
+                category_selections: None,
                 auth_code: derive_auth_code(&snapshot.slug, &event.event_id, entrant_id),
                 notes: None,
             });
@@ -1740,10 +1746,114 @@ fn next_local_event_sequence(app: &AppHandle, owner_sender_user_id: &str) -> Res
     Ok(sequence)
 }
 
+fn local_event_overwrite_target<'a>(
+    items: &'a [LocalSnapshotEventListItem],
+    tournament_name: &str,
+    event_name: &str,
+    overwrite_event_id: Option<&str>,
+) -> Result<Option<&'a LocalSnapshotEventListItem>, String> {
+    let matches = items.iter().filter(|item| {
+        item.origin == EventOrigin::Local
+            && item.tournament_name.trim() == tournament_name.trim()
+            && item.event_name.trim() == event_name.trim()
+    }).collect::<Vec<_>>();
+    if matches.len() > 1 {
+        return Err("同じ大会名・イベント名のローカルイベントが複数あります。不要なイベントを削除してから作成してください。".to_owned());
+    }
+    match (matches.first(), overwrite_event_id) {
+        (Some(item), Some(event_id)) if item.event_id == event_id => Ok(Some(*item)),
+        (Some(_), _) => Err("同じ大会名・イベント名のローカルイベントが既に存在します。上書きを確認してから作成してください。".to_owned()),
+        (None, Some(_)) => Err("上書き対象のローカルイベントが変更または削除されました。一覧を更新してやり直してください。".to_owned()),
+        (None, None) => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod local_event_creation_tests {
+    use super::*;
+
+    fn item(event_id: &str, origin: EventOrigin) -> LocalSnapshotEventListItem {
+        LocalSnapshotEventListItem {
+            tournament_id: format!("local-{event_id}"), slug: format!("local-{event_id}"),
+            tournament_name: "Tournament".to_owned(), event_id: event_id.to_owned(),
+            event_name: "Event".to_owned(), origin, event_alias: None, updated_at: Utc::now(),
+            last_selected_phase_name: None, last_selected_phase_group_name: None,
+            use_alias_name: false, entrant_aliases_by_id: HashMap::new(), set_count: 0,
+        }
+    }
+
+    #[test]
+    fn duplicate_local_names_require_explicit_confirmation_of_the_existing_id() {
+        let items = vec![item("existing", EventOrigin::Local)];
+        assert!(local_event_overwrite_target(&items, " Tournament ", " Event ", None).is_err());
+        assert!(local_event_overwrite_target(&items, "Tournament", "Event", Some("other")).is_err());
+        let target = local_event_overwrite_target(&items, " Tournament ", " Event ", Some("existing"))
+            .unwrap().unwrap();
+        assert_eq!(target.event_id, "existing");
+        assert!(local_event_overwrite_target(&items, "Tournament", "Other", None).unwrap().is_none());
+    }
+
+    #[test]
+    fn startgg_names_do_not_conflict_and_stale_or_ambiguous_confirmations_are_rejected() {
+        let mut items = vec![item("remote", EventOrigin::Startgg)];
+        assert!(local_event_overwrite_target(&items, "Tournament", "Event", None).unwrap().is_none());
+        assert!(local_event_overwrite_target(&items, "Tournament", "Event", Some("remote")).is_err());
+        items.push(item("first", EventOrigin::Local));
+        items.push(item("second", EventOrigin::Local));
+        assert!(local_event_overwrite_target(&items, "Tournament", "Event", Some("first")).is_err());
+    }
+
+    #[test]
+    fn recreation_keeps_existing_identity_and_builds_fresh_registration_metadata() {
+        let items = vec![item("existing", EventOrigin::Local)];
+        let target = local_event_overwrite_target(&items, "Tournament", "Event", Some("existing"))
+            .unwrap().unwrap();
+        let input: CreateLocalEventSnapshotInput = serde_json::from_value(serde_json::json!({
+            "tournamentName": " Tournament ", "eventName": " Event ", "eventAlias": " New alias ",
+            "overwriteEventId": "existing", "requireItemSelections": false,
+            "participants": [
+                {"entrantId": "new-1", "name": "Player 1", "categorySelections": [[], [], []]},
+                {"entrantId": "new-2", "name": "Player 2", "categorySelections": [[], [], []]},
+            ],
+            "eventManagement": {
+                "sideDecisionMethod": "upper_1p", "itemListSnapshots": [], "totalMaxCount": 3,
+            },
+            "phases": [{
+                "name": "Final", "poolCount": 1, "bracketType": "SINGLE_ELIMINATION",
+                "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+                "enabledTiebreakRules": ["TOTAL_SETS_WON"],
+            }],
+        })).unwrap();
+        let snapshot = crate::local_event::generate_local_snapshot(
+            &input, &target.tournament_id, &target.slug, &target.event_id,
+        ).unwrap();
+        let meta = build_local_event_meta(&snapshot, &input, "12345678").unwrap();
+        assert_eq!(meta.tournament_id, target.tournament_id);
+        assert_eq!(meta.slug, target.slug);
+        assert_eq!(meta.tournament_name, "Tournament");
+        let event = &meta.events[0];
+        assert_eq!(event.event_id, target.event_id);
+        assert_eq!(event.event_name, "Event");
+        assert_eq!(event.origin, EventOrigin::Local);
+        assert_eq!(event.owner_sender_user_id.as_deref(), Some("12345678"));
+        assert_eq!(event.event_alias.as_deref(), Some("New alias"));
+        assert_eq!(event.entrants.iter().map(|entrant| entrant.entrant_id.as_str()).collect::<Vec<_>>(), ["new-1", "new-2"]);
+        assert!(event.entrants.iter().all(|entrant| entrant.alias_name.is_empty() && entrant.notes.is_none()));
+        assert!(meta.pending_set_results.is_empty());
+        assert!(meta.pending_grand_final_reset_results.is_empty());
+        assert!(meta.set_confirmation_history.is_empty());
+        assert!(meta.set_stream_starts.is_empty());
+        assert!(meta.set_play_sides.is_empty());
+    }
+}
+
 pub fn create_local_event_snapshot(
     app: &AppHandle,
     input: CreateLocalEventSnapshotInput,
 ) -> Result<TournamentWorkspace, String> {
+    let lock = LOCAL_EVENT_CREATION_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock.lock()
+        .map_err(|_| "ローカルイベント作成ロックを取得できませんでした。".to_owned())?;
     let owner_sender_user_id = load_sender_profile(app)?
         .map(|profile| profile.sender_user_id.trim().to_owned())
         .filter(|sender_id| {
@@ -1752,37 +1862,55 @@ pub fn create_local_event_snapshot(
         .ok_or_else(|| {
             "ローカルイベントを作成する前に、送信者IDを設定してください。".to_owned()
         })?;
-    let sequence = next_local_event_sequence(app, &owner_sender_user_id)?;
-    let namespace = format!("local-{owner_sender_user_id}-{sequence}");
-    let snapshot = crate::local_event::generate_local_snapshot(
-        &input,
-        &namespace,
-        &namespace,
-        &format!("{namespace}-event"),
+    let items = list_local_snapshot_events(app)?;
+    let target = local_event_overwrite_target(
+        &items, &input.tournament_name, &input.event_name, input.overwrite_event_id.as_deref(),
     )?;
+    let (tournament_id, slug, event_id) = if let Some(target) = target {
+        (target.tournament_id.clone(), target.slug.clone(), target.event_id.clone())
+    } else {
+        let sequence = next_local_event_sequence(app, &owner_sender_user_id)?;
+        let namespace = format!("local-{owner_sender_user_id}-{sequence}");
+        (namespace.clone(), namespace.clone(), format!("{namespace}-event"))
+    };
+    let snapshot = crate::local_event::generate_local_snapshot(
+        &input, &tournament_id, &slug, &event_id,
+    )?;
+    let local_meta = build_local_event_meta(&snapshot, &input, &owner_sender_user_id)?;
+    save_event_snapshot(app, &snapshot, &event_id, None)?;
+    save_local_meta(app, &event_id, &local_meta)?;
+    invalidate_progression_cache(&snapshot.slug);
+    load_workspace(app, &snapshot.slug, &event_id)
+}
+
+fn build_local_event_meta(
+    snapshot: &TournamentSnapshot,
+    input: &CreateLocalEventSnapshotInput,
+    owner_sender_user_id: &str,
+) -> Result<TournamentLocalMeta, String> {
     let event_id = snapshot
         .events
         .first()
         .map(|event| event.event_id.clone())
         .ok_or_else(|| "ローカルイベントの生成結果にeventがありません。".to_owned())?;
-    save_event_snapshot(app, &snapshot, &event_id, None)?;
-    let mut local_meta = load_local_meta(app, &snapshot.slug, &event_id)?;
+    let mut local_meta = merge_snapshot_into_meta(
+        snapshot, &event_id, build_empty_meta(&snapshot.slug, &event_id),
+    );
     let event_meta = local_meta
         .events
         .iter_mut()
         .find(|event| event.event_id == event_id)
         .ok_or_else(|| "ローカルイベントの設定を保存できません。".to_owned())?;
     event_meta.origin = EventOrigin::Local;
-    event_meta.owner_sender_user_id = Some(owner_sender_user_id);
+    event_meta.owner_sender_user_id = Some(owner_sender_user_id.to_owned());
     event_meta.event_alias = input
         .event_alias
         .as_deref()
         .map(str::trim)
         .filter(|alias| !alias.is_empty())
         .map(str::to_owned);
-    apply_local_registration_meta(event_meta, &input)?;
-    save_local_meta(app, &event_id, &local_meta)?;
-    load_workspace(app, &snapshot.slug, &event_id)
+    apply_local_registration_meta(event_meta, input)?;
+    Ok(local_meta)
 }
 
 fn apply_local_registration_meta(
@@ -1796,6 +1924,7 @@ fn apply_local_registration_meta(
             .ok_or_else(|| format!("登録した参加者の保存先がありません: {}", participant.name))?;
         entrant.entrant_name = participant.name.trim().to_owned();
         entrant.character_names = participant.category_selections.iter().flatten().cloned().collect();
+        entrant.category_selections = Some(participant.category_selections.clone());
     }
     Ok(())
 }
@@ -1943,6 +2072,7 @@ pub fn export_tournament_share_archive(
                 alias_name: entrant.alias_name.clone(),
                 play_side: entrant.play_side.clone(),
                 character_names: entrant.character_names.clone(),
+                category_selections: entrant.category_selections.clone(),
             })
             .collect(),
         set_play_sides: local_meta
@@ -2082,6 +2212,7 @@ pub fn import_tournament_share_archive(
             entrant.alias_name.clear();
             entrant.play_side = None;
             entrant.character_names.clear();
+            entrant.category_selections = None;
         }
         for shared_entrant in event_settings.entrants {
             if let Some(entrant) = event_meta
@@ -2092,6 +2223,7 @@ pub fn import_tournament_share_archive(
                 entrant.alias_name = shared_entrant.alias_name;
                 entrant.play_side = shared_entrant.play_side;
                 entrant.character_names = shared_entrant.character_names;
+                entrant.category_selections = shared_entrant.category_selections;
             }
         }
     }
@@ -11223,6 +11355,7 @@ pub fn upsert_local_player_meta(
         existing.alias_name = input.alias_name.clone();
         existing.play_side = input.play_side;
         existing.character_names = character_names;
+        existing.category_selections = input.category_selections;
         existing.notes = input.notes;
         if existing.auth_code.trim().is_empty() {
             existing.auth_code = auth_code;
@@ -11234,6 +11367,7 @@ pub fn upsert_local_player_meta(
             alias_name: input.alias_name,
             play_side: input.play_side,
             character_names,
+            category_selections: input.category_selections,
             auth_code,
             notes: input.notes,
         });

@@ -254,7 +254,19 @@ export function useTournamentCreation({
     setError("");
     setMessage("");
     try {
-      await persistLocalEventSnapshot(input);
+      const existingItems = await listLocalSnapshotEvents();
+      const matches = existingItems.filter((item) => item.origin === "local"
+        && item.tournamentName.trim() === input.tournamentName.trim()
+        && item.eventName.trim() === input.eventName.trim());
+      if (matches.length > 1) {
+        throw new Error(t("同じ大会名・イベント名のローカルイベントが複数あります。不要なイベントを削除してから作成してください。"));
+      }
+      const existing = matches[0];
+      if (existing && !window.confirm(t(
+        "同じ大会名・イベント名のローカルイベントが既に存在します。\n{p0} / {p1}\n\n上書き作成すると、既存の参加者・ブラケット・試合結果・配信開始記録を置き換えます。この操作は元に戻せません。上書き作成しますか？",
+        { p0: existing.tournamentName, p1: existing.eventName },
+      ))) return;
+      await persistLocalEventSnapshot({ ...input, overwriteEventId: existing?.eventId });
       await onSnapshotCreated();
       setMessage(t("ローカルeventのスナップショットを作成しました。"));
     } catch (error) {
