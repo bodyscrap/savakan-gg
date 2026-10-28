@@ -9,6 +9,7 @@ import type { EventLocalMeta, PlaySide } from "./useTournamentWorkspace";
 
 type PlayerMetaDraft = {
   aliasName: string;
+  skillTier: string;
   playSide: PlaySide | "";
   categorySelections: string[][];
 };
@@ -21,7 +22,7 @@ type Entrant = {
 type SavePlayerMetaOptions = {
   silent?: boolean;
   manageBusy?: boolean;
-  scope?: "all" | "alias" | "selections";
+  scope?: "all" | "alias" | "selections" | "skill";
 };
 
 type UsePlayerMetaDraftsOptions = {
@@ -44,6 +45,7 @@ type UsePlayerMetaDraftsOptions = {
     entrantId: string;
     entrantName: string;
     aliasName: string;
+    skill: number | null;
     playSide: PlaySide | null;
     characterNames: string[];
     categorySelections?: string[][] | null;
@@ -143,6 +145,9 @@ export function usePlayerMetaDrafts({
         const dirty = dirtyMetaDraftFieldsRef.current.get(key);
         next[key] = {
           aliasName: draft && dirty?.has("aliasName") ? draft.aliasName : existingMeta?.aliasName ?? "",
+          skillTier: draft && dirty?.has("skillTier")
+            ? draft.skillTier
+            : existingMeta?.skill == null ? "" : String(existingMeta.skill),
           playSide: draft && dirty?.has("playSide") ? draft.playSide : existingMeta?.playSide ?? "",
           categorySelections: draft && dirty?.has("categorySelections")
             ? draft.categorySelections
@@ -166,6 +171,7 @@ export function usePlayerMetaDrafts({
     const existingMeta = findEntrantMeta(eventId, entrantId);
     return metaDrafts[key] ?? {
       aliasName: existingMeta?.aliasName ?? "",
+      skillTier: existingMeta?.skill == null ? "" : String(existingMeta.skill),
       playSide: existingMeta?.playSide ?? "",
       categorySelections: buildInitialCategorySelections(existingMeta?.characterNames ?? [], existingMeta?.categorySelections),
     };
@@ -176,12 +182,14 @@ export function usePlayerMetaDrafts({
     const existingMeta = findEntrantMeta(eventId, entrantId);
     const dirty = dirtyMetaDraftFieldsRef.current.get(key) ?? new Set<keyof PlayerMetaDraft>();
     if (patch.aliasName !== undefined) dirty.add("aliasName");
+    if (patch.skillTier !== undefined) dirty.add("skillTier");
     if (patch.playSide !== undefined) dirty.add("playSide");
     if (patch.categorySelections !== undefined) dirty.add("categorySelections");
     dirtyMetaDraftFieldsRef.current.set(key, dirty);
     setMetaDrafts((current) => {
       const baseDraft = current[key] ?? {
         aliasName: existingMeta?.aliasName ?? "",
+        skillTier: existingMeta?.skill == null ? "" : String(existingMeta.skill),
         playSide: existingMeta?.playSide ?? "",
         categorySelections: buildInitialCategorySelections(existingMeta?.characterNames ?? [], existingMeta?.categorySelections),
       };
@@ -278,6 +286,13 @@ export function usePlayerMetaDrafts({
     setMetaDraft(selectedEvent.eventId, selectedEntrant.entrantId, { aliasName });
   }
 
+  function setSelectedEntrantSkillTier(skillTier: string) {
+    if (!selectedEvent || !selectedEntrant) {
+      return;
+    }
+    setMetaDraft(selectedEvent.eventId, selectedEntrant.entrantId, { skillTier });
+  }
+
   function buildValidatedSelections(
     draft: PlayerMetaDraft,
     slots: EventSettingCategorySlot[],
@@ -298,15 +313,22 @@ export function usePlayerMetaDrafts({
     const silent = options?.silent ?? false;
     const manageBusy = options?.manageBusy ?? true;
     const scope = options?.scope ?? "all";
-    const savesAlias = scope !== "selections";
-    const savesSelections = scope !== "alias";
+    const savesAlias = scope !== "selections" && scope !== "skill";
+    const savesSkill = scope !== "selections" && scope !== "alias";
+    const savesSelections = scope !== "alias" && scope !== "skill";
     const normalizedSlug = toApiSlug(slug);
     const draft = getMetaDraft(eventSnapshot.eventId, entrantId);
     const existingMeta = findEntrantMeta(eventSnapshot.eventId, entrantId);
     const validated = savesSelections ? buildValidatedSelections(draft, configuredCategorySlots) : null;
+    const parsedSkillTier = draft.skillTier.trim() === "" ? null : Number(draft.skillTier);
 
     if (validated && validated.errors.length > 0) {
       setError(validated.errors.join(" "));
+      return;
+    }
+    if (savesSkill && parsedSkillTier !== null
+      && (!Number.isSafeInteger(parsedSkillTier) || parsedSkillTier < 0)) {
+      setError(t("Skill Tierは0以上の整数で入力してください。"));
       return;
     }
 
@@ -326,6 +348,7 @@ export function usePlayerMetaDrafts({
         entrantId,
         entrantName,
         aliasName: savesAlias ? draft.aliasName : existingMeta?.aliasName ?? "",
+        skill: savesSkill ? parsedSkillTier : existingMeta?.skill ?? null,
         playSide: existingMeta?.playSide ?? null,
         characterNames: validated?.flattened ?? existingMeta?.characterNames ?? [],
         categorySelections: validated?.normalizedBySlot ?? existingMeta?.categorySelections ?? null,
@@ -339,6 +362,9 @@ export function usePlayerMetaDrafts({
         const next = { ...latest };
         if (savesAlias && latest.aliasName === draft.aliasName) {
           dirty?.delete("aliasName");
+        }
+        if (savesSkill && latest.skillTier === draft.skillTier) {
+          dirty?.delete("skillTier");
         }
         if (validated && latest.categorySelections.length === draft.categorySelections.length
           && latest.categorySelections.every((items, slotIndex) =>
@@ -355,7 +381,9 @@ export function usePlayerMetaDrafts({
           ? t("プレイヤーエイリアス名を保存しました。")
           : scope === "selections"
             ? t("アイテムの選択状態を保存しました。")
-            : t("ローカルメタを保存しました。"));
+            : scope === "skill"
+              ? t("Skill Tierを保存しました。")
+              : t("ローカルメタを保存しました。"));
       }
     } catch (err) {
       setError(String(err));
@@ -394,7 +422,7 @@ export function usePlayerMetaDrafts({
     );
   }
 
-  function saveSelectedEntrantMeta(scope: "alias" | "selections") {
+  function saveSelectedEntrantMeta(scope: "alias" | "selections" | "skill") {
     if (selectedEvent && selectedEntrant) {
       return savePlayerMeta(selectedEvent, selectedEntrant.entrantId, selectedEntrant.entrantName, { scope })
         .catch((error: unknown) => setError(String(error)));
@@ -410,6 +438,11 @@ export function usePlayerMetaDrafts({
     )
     : [];
   const selectedEntrantAliasName = selectedEntrantMetaDraft?.aliasName ?? "";
+  const selectedEntrantSkillTier = selectedEntrantMetaDraft?.skillTier ?? "";
+  const selectedEntrantSkillTierErrors = selectedEntrantSkillTier.trim() !== ""
+    && (!Number.isSafeInteger(Number(selectedEntrantSkillTier)) || Number(selectedEntrantSkillTier) < 0)
+    ? [t("Skill Tierは0以上の整数で入力してください。")]
+    : [];
   const selectedEntrantValidationErrors = selectedEntrantMetaDraft
     ? buildValidatedSelections(selectedEntrantMetaDraft, configuredCategorySlots).errors
     : [];
@@ -419,6 +452,9 @@ export function usePlayerMetaDrafts({
     selectedEntrantDraftSelectionsBySlot,
     selectedEntrantAliasName,
     setSelectedEntrantAliasName,
+    selectedEntrantSkillTier,
+    setSelectedEntrantSkillTier,
+    selectedEntrantSkillTierErrors,
     selectedEntrantValidationErrors,
     addDraftCategorySelection,
     removeDraftCategorySelection,
@@ -427,6 +463,7 @@ export function usePlayerMetaDrafts({
     addSelectedEntrantDraftSelection,
     removeSelectedEntrantDraftSelection,
     saveSelectedEntrantAliasName: () => saveSelectedEntrantMeta("alias"),
+    saveSelectedEntrantSkillTier: () => saveSelectedEntrantMeta("skill"),
     saveSelectedEntrantSelections: () => saveSelectedEntrantMeta("selections"),
   };
 }

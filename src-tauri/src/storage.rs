@@ -913,6 +913,7 @@ mod score_edit_lock_tests {
                 entrant_id: format!("entrant-{index}"),
                 name: format!("Player {index}"),
                 category_selections: vec![Vec::new(); 3],
+                skill: None,
             }).collect(),
             event_management: EventManagementMeta {
                 side_decision_method: "upper_1p".to_owned(), item_list_snapshots: Vec::new(),
@@ -1184,6 +1185,7 @@ fn merge_snapshot_into_meta(
                 entrant_id: entrant_id.clone(),
                 entrant_name: slot.entrant_name.clone(),
                 alias_name: String::new(),
+                skill: None,
                 play_side: None,
                 character_names: Vec::new(),
                 category_selections: None,
@@ -1812,8 +1814,8 @@ mod local_event_creation_tests {
             "tournamentName": " Tournament ", "eventName": " Event ", "eventAlias": " New alias ",
             "overwriteEventId": "existing", "requireItemSelections": false,
             "participants": [
-                {"entrantId": "new-1", "name": "Player 1", "categorySelections": [[], [], []]},
-                {"entrantId": "new-2", "name": "Player 2", "categorySelections": [[], [], []]},
+                {"entrantId": "new-1", "name": "Player 1", "categorySelections": [[], [], []], "skill": 4},
+                {"entrantId": "new-2", "name": "Player 2", "categorySelections": [[], [], []], "skill": 2},
             ],
             "eventManagement": {
                 "sideDecisionMethod": "upper_1p", "itemListSnapshots": [], "totalMaxCount": 3,
@@ -1838,6 +1840,7 @@ mod local_event_creation_tests {
         assert_eq!(event.owner_sender_user_id.as_deref(), Some("12345678"));
         assert_eq!(event.event_alias.as_deref(), Some("New alias"));
         assert_eq!(event.entrants.iter().map(|entrant| entrant.entrant_id.as_str()).collect::<Vec<_>>(), ["new-1", "new-2"]);
+        assert_eq!(event.entrants.iter().map(|entrant| entrant.skill).collect::<Vec<_>>(), [Some(4), Some(2)]);
         assert!(event.entrants.iter().all(|entrant| entrant.alias_name.is_empty() && entrant.notes.is_none()));
         assert!(meta.pending_set_results.is_empty());
         assert!(meta.pending_grand_final_reset_results.is_empty());
@@ -1923,6 +1926,7 @@ fn apply_local_registration_meta(
             .find(|entrant| entrant.entrant_id == participant.entrant_id)
             .ok_or_else(|| format!("登録した参加者の保存先がありません: {}", participant.name))?;
         entrant.entrant_name = participant.name.trim().to_owned();
+        entrant.skill = participant.skill;
         entrant.character_names = participant.category_selections.iter().flatten().cloned().collect();
         entrant.category_selections = Some(participant.category_selections.clone());
     }
@@ -2070,6 +2074,7 @@ pub fn export_tournament_share_archive(
             .map(|entrant| TournamentShareEntrantMeta {
                 entrant_id: entrant.entrant_id.clone(),
                 alias_name: entrant.alias_name.clone(),
+                skill: entrant.skill,
                 play_side: entrant.play_side.clone(),
                 character_names: entrant.character_names.clone(),
                 category_selections: entrant.category_selections.clone(),
@@ -2123,7 +2128,10 @@ pub fn import_tournament_share_archive(
             .event_settings
             .entrants
             .iter()
-            .any(|entrant| !event_entrant_ids.contains(entrant.entrant_id.as_str()))
+        .any(|entrant| {
+            !event_entrant_ids.contains(entrant.entrant_id.as_str())
+                || entrant.skill.is_some_and(|skill| skill < 0)
+        })
         || archive.event_settings.set_play_sides.iter().any(|side| {
             !event.sets.iter().any(|set| {
                 set.set_id == side.set_id
@@ -2210,6 +2218,7 @@ pub fn import_tournament_share_archive(
         event_meta.last_selected_phase_group_name = None;
         for entrant in &mut event_meta.entrants {
             entrant.alias_name.clear();
+            entrant.skill = None;
             entrant.play_side = None;
             entrant.character_names.clear();
             entrant.category_selections = None;
@@ -2221,6 +2230,7 @@ pub fn import_tournament_share_archive(
                 .find(|entrant| entrant.entrant_id == shared_entrant.entrant_id)
             {
                 entrant.alias_name = shared_entrant.alias_name;
+                entrant.skill = shared_entrant.skill;
                 entrant.play_side = shared_entrant.play_side;
                 entrant.character_names = shared_entrant.character_names;
                 entrant.category_selections = shared_entrant.category_selections;
@@ -11311,6 +11321,9 @@ pub fn upsert_local_player_meta(
     app: &AppHandle,
     input: LocalPlayerMetaInput,
 ) -> Result<TournamentLocalMeta, String> {
+    if input.skill.is_some_and(|skill| skill < 0) {
+        return Err("Skill Tierは0以上の整数で入力してください。".to_owned());
+    }
     let mut local_meta = load_local_meta(app, &input.slug, &input.event_id)?;
 
     let event_index = if let Some(index) = local_meta
@@ -11353,6 +11366,7 @@ pub fn upsert_local_player_meta(
     {
         existing.entrant_name = input.entrant_name.clone();
         existing.alias_name = input.alias_name.clone();
+        existing.skill = input.skill;
         existing.play_side = input.play_side;
         existing.character_names = character_names;
         existing.category_selections = input.category_selections;
@@ -11365,6 +11379,7 @@ pub fn upsert_local_player_meta(
             entrant_id: input.entrant_id,
             entrant_name: input.entrant_name,
             alias_name: input.alias_name,
+            skill: input.skill,
             play_side: input.play_side,
             character_names,
             category_selections: input.category_selections,

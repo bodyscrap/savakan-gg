@@ -43,6 +43,7 @@ export type EventEntrantMeta = {
   entrantId: string;
   entrantName: string;
   aliasName?: string;
+  skill?: number | null;
   playSide: PlaySide | null;
   characterNames: string[];
   categorySelections?: string[][] | null;
@@ -168,6 +169,7 @@ export type TournamentShareArchive = {
     entrants: Array<{
       entrantId: string;
       aliasName: string;
+      skill?: number | null;
       playSide: PlaySide | null;
       characterNames: string[];
       categorySelections?: string[][] | null;
@@ -208,6 +210,7 @@ export type LocalEventParticipantInput = {
   entrantId: string;
   name: string;
   categorySelections: string[][];
+  skill?: number | null;
 };
 
 export type SnapshotRestoreScope =
@@ -287,6 +290,7 @@ export type SaveLocalPlayerMetaInput = {
   entrantId: string;
   entrantName: string;
   aliasName: string;
+  skill?: number | null;
   playSide: PlaySide | null;
   characterNames: string[];
   categorySelections?: string[][] | null;

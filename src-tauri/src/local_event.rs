@@ -94,6 +94,21 @@ impl SlotSource {
     }
 }
 
+fn possible_set_source(
+    builder: &SnapshotBuilder,
+    set_id: Option<&String>,
+    condition: &'static str,
+) -> Option<SlotSource> {
+    let set_id = set_id?;
+    let outputs = builder.possible_set_outputs.get(set_id)?;
+    let can_progress = match condition {
+        "winner" => outputs.0,
+        "loser" => outputs.1,
+        _ => false,
+    };
+    can_progress.then(|| SlotSource::from_set(set_id, condition))
+}
+
 fn format_set_identifier(index: usize) -> String {
     let mut remaining = index + 1;
     let mut identifier = Vec::new();
@@ -478,59 +493,66 @@ fn add_double_elimination(
     }
 
     let loser_round_count = winner_round_count * 2 - 2;
-    let mut loser_rounds = Vec::<Vec<String>>::new();
+    let mut loser_rounds = Vec::<Vec<Option<String>>>::new();
     for loser_round in 0..loser_round_count {
         let shift = loser_round / 2 + 2;
         let set_count = bracket_size >> shift;
         let mut current = Vec::new();
         for index in 0..set_count {
             let sources = if loser_round == 0 {
-                let first_source = &winner_rounds[0][index * 2];
-                let second_source = &winner_rounds[0][index * 2 + 1];
-                let first_has_loser = !builder
-                    .sets
-                    .iter()
-                    .find(|set| &set.set_id == first_source)
-                    .is_some_and(|set| set.is_bye);
-                let second_has_loser = !builder
-                    .sets
-                    .iter()
-                    .find(|set| &set.set_id == second_source)
-                    .is_some_and(|set| set.is_bye);
                 [
-                    first_has_loser.then(|| SlotSource::from_set(first_source, "loser")),
-                    second_has_loser.then(|| SlotSource::from_set(second_source, "loser")),
+                    possible_set_source(
+                        builder,
+                        Some(&winner_rounds[0][index * 2]),
+                        "loser",
+                    ),
+                    possible_set_source(
+                        builder,
+                        Some(&winner_rounds[0][index * 2 + 1]),
+                        "loser",
+                    ),
                 ]
             } else if loser_round % 2 == 1 {
                 let winners_round = loser_round / 2 + 1;
+                let winners_round_index = winner_rounds[winners_round].len() - 1 - index;
                 [
-                    Some(SlotSource::from_set(
-                        &loser_rounds[loser_round - 1][index],
+                    possible_set_source(
+                        builder,
+                        loser_rounds[loser_round - 1][index].as_ref(),
                         "winner",
-                    )),
-                    Some(SlotSource::from_set(
-                        &winner_rounds[winners_round][index],
+                    ),
+                    possible_set_source(
+                        builder,
+                        Some(&winner_rounds[winners_round][winners_round_index]),
                         "loser",
-                    )),
+                    ),
                 ]
             } else {
                 let previous_round = &loser_rounds[loser_round - 1];
                 [
-                    Some(SlotSource::from_set(&previous_round[index * 2], "winner")),
-                    Some(SlotSource::from_set(
-                        &previous_round[index * 2 + 1],
+                    possible_set_source(
+                        builder,
+                        previous_round[index * 2].as_ref(),
                         "winner",
-                    )),
+                    ),
+                    possible_set_source(
+                        builder,
+                        previous_round[index * 2 + 1].as_ref(),
+                        "winner",
+                    ),
                 ]
             };
+            if sources.iter().all(Option::is_none) {
+                current.push(None);
+                continue;
+            }
             let is_final_loser_round = loser_round + 1 == loser_round_count;
-            let is_bye = loser_round == 0 && (sources[0].is_none() || sources[1].is_none());
             let text = if is_final_loser_round {
                 "Losers Final".to_owned()
             } else {
                 format!("Losers Round {}", loser_round + 1)
             };
-            current.push(builder.add_set(
+            current.push(Some(builder.add_set(
                 phase_order,
                 phase_name,
                 group_id,
@@ -540,10 +562,10 @@ fn add_double_elimination(
                 text,
                 index,
                 sources,
-                is_bye,
+                false,
                 None,
                 None,
-            ));
+            )));
         }
         loser_rounds.push(current);
     }
@@ -555,6 +577,7 @@ fn add_double_elimination(
     let losers_final = loser_rounds
         .last()
         .and_then(|round| round.first())
+        .and_then(Option::as_ref)
         .expect("a bracket with at least two players has a losers final");
     builder.add_set(
         phase_order,
@@ -577,7 +600,11 @@ fn add_double_elimination(
     if config.fifth_place_match && winner_round_count >= 3 {
         let fifth_place_loser_round = winner_round_count * 2 - 5;
         if let Some(round) = loser_rounds.get(fifth_place_loser_round) {
-            if round.len() == 2 {
+            if let [Some(first), Some(second)] = round.as_slice() {
+                let sources = [
+                    possible_set_source(builder, Some(first), "loser"),
+                    possible_set_source(builder, Some(second), "loser"),
+                ];
                 builder.add_set(
                     phase_order,
                     phase_name,
@@ -587,10 +614,7 @@ fn add_double_elimination(
                     -((loser_round_count + 1) as i64),
                     "5th Place Match".to_owned(),
                     0,
-                    [
-                        Some(SlotSource::from_set(&round[0], "loser")),
-                        Some(SlotSource::from_set(&round[1], "loser")),
-                    ],
+                    sources,
                     false,
                     Some(5),
                     Some(6),
@@ -801,6 +825,12 @@ fn validate_registration(input: &CreateLocalEventSnapshotInput) -> Result<(), St
         {
             return Err("参加者の名前・識別子・アイテム選択が不正です。".to_owned());
         }
+        if participant.skill.is_some_and(|skill| skill < 0) {
+            return Err(format!(
+                "{}: Skill Tierは0以上の整数で入力してください。",
+                participant.name
+            ));
+        }
         let mut total = 0;
         for (index, selections) in participant.category_selections.iter().enumerate() {
             let list = setting.item_list_snapshots.get(index).filter(|list| !list.id.is_empty());
@@ -844,6 +874,21 @@ fn balanced_indices(length: usize, count: usize) -> Vec<Vec<usize>> {
         .collect()
 }
 
+fn snake_indices(length: usize, count: usize) -> Vec<Vec<usize>> {
+    let mut groups = vec![Vec::new(); count];
+    for index in 0..length {
+        let round = index / count;
+        let offset = index % count;
+        let group = if round % 2 == 0 {
+            offset
+        } else {
+            count - 1 - offset
+        };
+        groups[group].push(index);
+    }
+    groups
+}
+
 fn qualifier_pool_order(
     placement: usize,
     pool_count: usize,
@@ -883,10 +928,26 @@ pub fn generate_local_snapshot(
         possible_set_outputs: HashMap::new(),
     };
 
-    let mut current_entrants = input.participants.iter().enumerate()
-        .map(|(index, participant)| SeedEntry {
+    let has_skill_tiers = input
+        .participants
+        .iter()
+        .any(|participant| participant.skill.is_some());
+    let mut ranked_participants = input.participants.iter().enumerate().collect::<Vec<_>>();
+    if has_skill_tiers {
+        ranked_participants.sort_by(|(left_index, left), (right_index, right)| {
+            right
+                .skill
+                .unwrap_or_default()
+                .cmp(&left.skill.unwrap_or_default())
+                .then_with(|| left_index.cmp(right_index))
+        });
+    }
+    let mut current_entrants = ranked_participants
+        .into_iter()
+        .enumerate()
+        .map(|(rank, (_, participant))| SeedEntry {
             seed_id: String::new(),
-            seed_num: (index + 1) as i64,
+            seed_num: (rank + 1) as i64,
             entrant_id: Some(participant.entrant_id.clone()),
             entrant_name: Some(participant.name.trim().to_owned()),
             placeholder_name: None,
@@ -907,7 +968,11 @@ pub fn generate_local_snapshot(
             phase_order: Some(phase_order as i64),
         });
 
-        let entrant_indices = balanced_indices(current_entrants.len(), config.pool_count);
+        let entrant_indices = if phase_index == 0 && has_skill_tiers {
+            snake_indices(current_entrants.len(), config.pool_count)
+        } else {
+            balanced_indices(current_entrants.len(), config.pool_count)
+        };
         let mut phase_group_ids = Vec::with_capacity(config.pool_count);
         let mut group_entries = Vec::with_capacity(config.pool_count);
         for (pool_index, indices) in entrant_indices.into_iter().enumerate() {
@@ -1146,6 +1211,7 @@ mod tests {
                 entrant_id: format!("entrant-{}", index + 1),
                 name: format!("Player {}", index + 1),
                 category_selections: vec![Vec::new(); 3],
+                skill: None,
             }).collect(),
             event_management: crate::models::EventManagementMeta {
                 side_decision_method: "upper_1p".to_owned(),
@@ -1201,6 +1267,146 @@ mod tests {
             assert!(event.sets.iter().flat_map(|set| &set.slots).any(|slot|
                 slot.entrant_id.as_deref() == Some("registered-id") && slot.entrant_name == "登録プレイヤー"));
         }
+    }
+
+    #[test]
+    fn skill_tiers_seed_the_bracket_and_assign_byes_to_the_highest_seeds() {
+        let mut config = input(5, vec![phase("SINGLE_ELIMINATION", 1, 0)]);
+        for (index, skill) in [1, 5, 4, 3, 2].into_iter().enumerate() {
+            config.participants[index].skill = Some(skill);
+        }
+
+        let snapshot = generate(&config);
+        let event = &snapshot.events[0];
+        let seed_by_entrant = event.phase_groups[0]
+            .seeds
+            .iter()
+            .map(|seed| (seed.entrant_id.as_deref().unwrap(), seed.seed_num.unwrap()))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(seed_by_entrant["entrant-2"], 1);
+        assert_eq!(seed_by_entrant["entrant-3"], 2);
+        assert_eq!(seed_by_entrant["entrant-4"], 3);
+        assert_eq!(seed_by_entrant["entrant-5"], 4);
+        assert_eq!(seed_by_entrant["entrant-1"], 5);
+
+        let bye_winners = event.sets.iter()
+            .filter(|set| set.round == Some(1) && set.is_bye)
+            .filter_map(|set| set.winner_id.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(bye_winners.len(), 3);
+        assert!(bye_winners.iter().all(|entrant_id| {
+            matches!(*entrant_id, "entrant-2" | "entrant-3" | "entrant-4")
+        }));
+    }
+
+    #[test]
+    fn five_player_double_elimination_omits_empty_losers_branches() {
+        let mut config = input(5, vec![phase("DOUBLE_ELIMINATION", 1, 0)]);
+        for (index, participant) in config.participants.iter_mut().enumerate() {
+            participant.skill = Some((index + 1) as i64);
+        }
+
+        let snapshot = generate(&config);
+        let event = &snapshot.events[0];
+        assert_eq!(event.sets.len(), 13);
+        assert!(event.sets.iter().all(|set| {
+            set.entrant1_source.is_some() || set.entrant2_source.is_some()
+        }));
+
+        let losers_round_one = event
+            .sets
+            .iter()
+            .filter(|set| set.round == Some(-1))
+            .collect::<Vec<_>>();
+        let losers_round_two = event
+            .sets
+            .iter()
+            .filter(|set| set.round == Some(-2))
+            .collect::<Vec<_>>();
+        assert_eq!(losers_round_one.len(), 1);
+        assert_eq!(losers_round_two.len(), 2);
+
+        let winners_semifinal_ids = event
+            .sets
+            .iter()
+            .filter(|set| set.round == Some(2))
+            .map(|set| set.set_id.as_str())
+            .collect::<Vec<_>>();
+        let direct_bye = losers_round_two
+            .iter()
+            .find(|set| set.entrant1_source.is_none() || set.entrant2_source.is_none())
+            .expect("one second-round losers set should be a direct bye");
+        let only_source = direct_bye
+            .entrant1_source
+            .as_ref()
+            .or(direct_bye.entrant2_source.as_ref())
+            .expect("the direct bye should receive a winners semifinal loser");
+        assert_eq!(only_source.source_type.as_deref(), Some("set"));
+        assert_eq!(only_source.condition.as_deref(), Some("loser"));
+        assert_eq!(
+            only_source.type_id.as_deref(),
+            Some(winners_semifinal_ids[0])
+        );
+
+        let first_losers_match = losers_round_two
+            .iter()
+            .find(|set| set.entrant1_source.is_some() && set.entrant2_source.is_some())
+            .expect("one second-round losers set should combine two entrants");
+        let semifinal_loser = [
+            first_losers_match.entrant1_source.as_ref(),
+            first_losers_match.entrant2_source.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|source| source.condition.as_deref() == Some("loser"))
+        .expect("the first losers match should receive a semifinal loser");
+        assert_eq!(
+            semifinal_loser.type_id.as_deref(),
+            Some(winners_semifinal_ids[1])
+        );
+    }
+
+    #[test]
+    fn skill_tiers_are_snake_distributed_across_initial_pools() {
+        let mut config = input(8, vec![phase("ROUND_ROBIN", 4, 0)]);
+        for (index, participant) in config.participants.iter_mut().enumerate() {
+            participant.skill = Some((8 - index) as i64);
+        }
+
+        let snapshot = generate(&config);
+        let entrant_ids_by_pool = snapshot.events[0].phase_groups.iter()
+            .map(|group| group.seeds.iter()
+                .filter_map(|seed| seed.entrant_id.as_deref())
+                .collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(entrant_ids_by_pool, vec![
+            vec!["entrant-1", "entrant-8"],
+            vec!["entrant-2", "entrant-7"],
+            vec!["entrant-3", "entrant-6"],
+            vec!["entrant-4", "entrant-5"],
+        ]);
+    }
+
+    #[test]
+    fn skill_tiers_keep_the_highest_seeds_apart_in_the_opening_round() {
+        let mut config = input(8, vec![phase("SINGLE_ELIMINATION", 1, 0)]);
+        for (index, participant) in config.participants.iter_mut().enumerate() {
+            participant.skill = Some((8 - index) as i64);
+        }
+
+        let snapshot = generate(&config);
+        let opening_matchups = snapshot.events[0].sets.iter()
+            .filter(|set| set.round == Some(1) && !set.is_bye)
+            .map(|set| set.slots.iter()
+                .filter_map(|slot| slot.entrant_id.as_deref())
+                .collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(opening_matchups, vec![
+            vec!["entrant-1", "entrant-8"],
+            vec!["entrant-4", "entrant-5"],
+            vec!["entrant-2", "entrant-7"],
+            vec!["entrant-3", "entrant-6"],
+        ]);
     }
 
     #[test]

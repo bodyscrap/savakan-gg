@@ -57,6 +57,7 @@ function setup(draft: RegisteredLocalParticipant | null = null, settingDraft = s
     .mockImplementationOnce(() => [settingDraft, vi.fn()])
     .mockImplementationOnce(() => [draft, vi.fn()])
     .mockImplementationOnce(() => ["", vi.fn()])
+    .mockImplementationOnce(() => ["", vi.fn()])
     .mockImplementationOnce(() => [false, vi.fn()]);
   vi.mocked(React.useEffect).mockImplementation((effect) => { effect(); });
   const tree = LocalEventRegistration({
@@ -80,6 +81,15 @@ describe("local registration editor", () => {
     const html = renderToStaticMarkup(<LocalEventRegistration itemLists={setting.itemListSnapshots}
       registration={registration} onChange={vi.fn()} onPendingChange={vi.fn()} onImportEventName={vi.fn()} busy={false} />);
     expect(html).toContain('<button type="button" class="ghost" disabled="">参加者を全員クリア</button>');
+  });
+
+  it("shows a relative skill tier field for every registered participant editor", () => {
+    const { tree } = setup(player);
+    const html = renderToStaticMarkup(<>{tree}</>);
+    expect(html).toContain("Skill Tier");
+    expect(html).toContain("大きい値ほど高Skillとして扱い、未設定は0として扱います。");
+    expect(html).toMatch(/local-registration-name-skill-row"><label[^>]*>プレイヤー名[\s\S]*?<\/label><label[^>]*>Skill Tier[\s\S]*?<\/label><\/div>/);
+    expect(html).toContain('class="local-registration-skill-tier-input" type="number"');
   });
 
   it("keeps CSV import enabled while a participant is selected for editing", () => {
@@ -144,7 +154,7 @@ describe("local registration editor", () => {
     const { controls, onChange } = setup({ ...player, name: "Alice edited", categorySelections: [["B"], [], []] });
     controls.find((button) => button.label === "参加者を保存")?.click?.();
     expect(onChange.mock.calls[0][0].participants).toEqual([
-      { ...player, name: "Alice edited", categorySelections: [["B"], [], []] },
+      { ...player, name: "Alice edited", categorySelections: [["B"], [], []], skill: null },
     ]);
   });
 

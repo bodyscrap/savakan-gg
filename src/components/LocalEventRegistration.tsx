@@ -22,6 +22,7 @@ type Props = {
 export function LocalEventRegistration({ itemLists, registration, onChange, busy, onPendingChange, onImportEventName }: Props) {
   const [settingDraft, setSettingDraft] = useState(registration.setting);
   const [participantDraft, setDraft] = useState<RegisteredLocalParticipant | null>(null);
+  const [skillTierDraft, setSkillTierDraft] = useState("");
   const [notice, setNotice] = useState("");
   const [csvPending, setCsvPending] = useState(false);
   const settingsChanged = JSON.stringify(settingDraft) !== JSON.stringify(registration.setting);
@@ -62,6 +63,9 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
     : participantDraft;
   const slots = registrationCategorySlots(activeRegistration.setting);
   const errors = draft ? validateRegisteredSelections(draft, activeRegistration.setting).errors : [];
+  const skillTier = skillTierDraft.trim() === "" ? null : Number(skillTierDraft);
+  const skillTierError = skillTier !== null
+    && (!Number.isSafeInteger(skillTier) || skillTier < 0);
   const applyPendingSetting = () => {
     if (settingsChanged) {
       onChange(activeRegistration);
@@ -70,7 +74,12 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
   };
   const saveParticipant = () => {
     if (!draft || !draft.name.trim()) return;
-    const participant = { ...draft, name: draft.name.trim(), selectionsConfirmed: errors.length === 0 };
+    const participant = {
+      ...draft,
+      name: draft.name.trim(),
+      skill: skillTier,
+      selectionsConfirmed: errors.length === 0,
+    };
     const existing = registration.participants.some((player) => player.entrantId === participant.entrantId);
     onChange({ ...activeRegistration, participants: existing
       ? activeRegistration.participants.map((player) => player.entrantId === participant.entrantId ? participant : player)
@@ -141,7 +150,8 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
           <button type="button" disabled={settingErrors.length > 0 || registration.participants.length >= 512 || csvPending}
             onClick={() => {
               applyPendingSetting();
-              setDraft({ entrantId: crypto.randomUUID(), name: "", categorySelections: emptyCategorySelections(), selectionsConfirmed: false });
+              setDraft({ entrantId: crypto.randomUUID(), name: "", categorySelections: emptyCategorySelections(), skill: null, selectionsConfirmed: false });
+              setSkillTierDraft("");
             }}>
             {t("参加登録")}
           </button>
@@ -166,6 +176,7 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
                 onClick={() => {
                   applyPendingSetting();
                   setDraft({ ...player, categorySelections: player.categorySelections.map((items) => [...items]) });
+                  setSkillTierDraft(player.skill == null ? "" : String(player.skill));
                 }}>
                 <strong>{player.name}</strong>
                 <span className={complete ? "meta" : "error-text"}>{complete ? t("選択完了") : t("選択未完了")}</span>
@@ -176,8 +187,17 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
         <section>
           <h3>{t("選択プレイヤー設定")}</h3>
           {!draft ? <p className="meta">{t("参加登録、または一覧のプレイヤーを選択してください。")}</p> : <div className="entrant-meta-editor">
-            <label className="meta" style={{ display: "grid", gap: "0.3rem" }}>{t("プレイヤー名")}<input value={draft.name}
-              onChange={(event) => setDraft({ ...draft, name: event.currentTarget.value })} /></label>
+            <div className="local-registration-name-skill-row">
+              <label className="meta">{t("プレイヤー名")}<input value={draft.name}
+                onChange={(event) => setDraft({ ...draft, name: event.currentTarget.value })} /></label>
+              <label className="meta">{t("Skill Tier")}
+                <input className="local-registration-skill-tier-input" type="number" min="0" step="1" value={skillTierDraft}
+                  onChange={(event) => setSkillTierDraft(event.currentTarget.value)}
+                  placeholder={t("未設定")} />
+              </label>
+            </div>
+            <p className="meta">{t("大きい値ほど高Skillとして扱い、未設定は0として扱います。")}</p>
+            {skillTierError && <p role="alert" className="error-text">{t("Skill Tierは0以上の整数で入力してください。")}</p>}
             <PlayerItemSelectionFields key={draft.entrantId} slots={slots} selections={draft.categorySelections}
               onAdd={(slot, item) => {
                 if (!item) return;
@@ -188,7 +208,7 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
                 index === slotIndex ? items.filter((_, selectedIndex) => selectedIndex !== itemIndex) : items) })} />
             {errors.length > 0 && <p className="error-text">{errors.join(" ")}</p>}
             <div className="entrant-meta-actions">
-              <button type="button" disabled={settingErrors.length > 0 || !canRegisterParticipant({ ...draft, selectionsConfirmed: errors.length === 0 }, activeRegistration)} onClick={saveParticipant}>{t("参加者を保存")}</button>
+              <button type="button" disabled={settingErrors.length > 0 || skillTierError || !canRegisterParticipant({ ...draft, skill: skillTier, selectionsConfirmed: errors.length === 0 }, activeRegistration)} onClick={saveParticipant}>{t("参加者を保存")}</button>
               <button type="button" className="ghost" onClick={() => setDraft(null)}>{t("キャンセル")}</button>
               {registration.participants.some((player) => player.entrantId === draft.entrantId) &&
                 <button type="button" className="ghost" onClick={() => {

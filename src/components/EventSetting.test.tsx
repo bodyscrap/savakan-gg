@@ -21,7 +21,8 @@ function setup(): EventSettingProps {
     playerMeta: {
       selectedEventEntrants: [{ entrantId: "player", entrantName: "Player", aliasName: "日本語の名前" }],
       selectedEventMetaEntrantCount: 1, selectedEntrantId: "player", selectedEntrantName: "Player",
-      selectedEntrantAliasName: "日本語の名前", configuredCategorySlots: [],
+      selectedEntrantAliasName: "日本語の名前", selectedEntrantSkillTier: "", skillTierErrors: [],
+      configuredCategorySlots: [],
       selectedCategoryUsageList: [], draftSelectionsBySlot: [], validationErrors: [],
       canSavePlayerMeta: true,
     },
@@ -32,7 +33,8 @@ function setup(): EventSettingProps {
       onCategoryMaxChange: vi.fn(), onCategoryAllowDuplicatesChange: vi.fn(), onTotalItemMinChange: vi.fn(),
       onTotalItemMaxChange: vi.fn(), onUseAliasNameChange: vi.fn(), onRefreshPlayerDisplay: vi.fn(),
       onSaveEventManagementSetting: vi.fn(), onSelectEntrant: vi.fn(), onAddDraftSelection: vi.fn(),
-      onRemoveDraftSelection: vi.fn(), onSavePlayerAliasName: vi.fn(), onSavePlayerSelections: vi.fn(),
+      onRemoveDraftSelection: vi.fn(), onSavePlayerAliasName: vi.fn(), onSavePlayerSkillTier: vi.fn(),
+      onSkillTierChange: vi.fn(), onSavePlayerSelections: vi.fn(),
       onEntrantAliasNameChange: vi.fn(),
     },
   };
@@ -76,35 +78,47 @@ describe("player metadata save controls", () => {
     const props = setup();
     props.playerMeta.validationErrors = ["選択数が不足しています。"];
     const controls = buttons(EventSetting(props));
-    expect(controls.find((button) => button.label === "プレイヤーエイリアス名を保存")?.disabled).toBe(false);
+    expect(controls.find((button) => button.label === "エイリアス名を保存")?.disabled).toBe(false);
     expect(controls.find((button) => button.label === "アイテムの選択状態を保存")?.disabled).toBe(true);
+    expect(controls.find((button) => button.label === "Skill Tierを保存")?.disabled).toBe(false);
     expect(renderToStaticMarkup(<EventSetting {...props} />)).not.toContain("このプレイヤーを保存");
   });
 
   it("binds each button to its own save action", () => {
     const props = setup();
     const controls = buttons(EventSetting(props));
-    controls.find((button) => button.label === "プレイヤーエイリアス名を保存")?.click?.();
+    controls.find((button) => button.label === "エイリアス名を保存")?.click?.();
     expect(props.actions.onSavePlayerAliasName).toHaveBeenCalledOnce();
     expect(props.actions.onSavePlayerSelections).not.toHaveBeenCalled();
+    controls.find((button) => button.label === "Skill Tierを保存")?.click?.();
+    expect(props.actions.onSavePlayerSkillTier).toHaveBeenCalledOnce();
     controls.find((button) => button.label === "アイテムの選択状態を保存")?.click?.();
     expect(props.actions.onSavePlayerAliasName).toHaveBeenCalledOnce();
     expect(props.actions.onSavePlayerSelections).toHaveBeenCalledOnce();
+  });
+
+  it("places each metadata save button beside its input", () => {
+    const html = renderToStaticMarkup(<EventSetting {...setup()} />);
+    expect(html).toMatch(/entrant-meta-field-row"><label[^>]*>エイリアス名<input[\s\S]*?<\/label><button[^>]*>エイリアス名を保存<\/button><\/div>/);
+    expect(html).toMatch(/entrant-meta-field-row"><label[^>]*>Skill Tier<input[\s\S]*?<\/label><button[^>]*>Skill Tierを保存<\/button><\/div>/);
   });
 
   it("disables both saves when saving is unavailable", () => {
     const props = setup();
     props.playerMeta.canSavePlayerMeta = false;
     const controls = buttons(EventSetting(props));
-    expect(controls.find((button) => button.label === "プレイヤーエイリアス名を保存")?.disabled).toBe(true);
+    expect(controls.find((button) => button.label === "エイリアス名を保存")?.disabled).toBe(true);
     expect(controls.find((button) => button.label === "アイテムの選択状態を保存")?.disabled).toBe(true);
+    expect(controls.find((button) => button.label === "Skill Tierを保存")?.disabled).toBe(true);
   });
 
   it("provides English labels without translating the player's input", () => {
     setLanguage("en");
     const html = renderToStaticMarkup(<EventSetting {...setup()} />);
-    expect(html).toContain("Save player alias");
+    expect(html).toContain("Save alias");
     expect(html).toContain("Save item selections");
+    expect(html).toContain("Skill tier");
+    expect(html).toContain("Save skill tier");
     expect(html).toContain("Item selection category settings");
     expect(html).toContain("Participants (1)");
     expect(html).toContain('value="日本語の名前"');

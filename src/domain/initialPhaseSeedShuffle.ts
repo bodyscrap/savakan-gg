@@ -12,6 +12,7 @@ export function buildInitialPhaseSeedMapping(
   event: EventSnapshot,
   random: () => number = Math.random,
   includePhaseGroupPositions = false,
+  skillByEntrantId?: ReadonlyMap<string, number | null | undefined>,
 ): InitialPhaseSeedMappingEntry[] {
   const firstPhase = [...(event.phases ?? [])]
     .filter((phase) => phase.phaseOrder !== null)
@@ -51,6 +52,13 @@ export function buildInitialPhaseSeedMapping(
     const target = Math.floor(random() * (index + 1));
     [shuffledIds[index], shuffledIds[target]] = [shuffledIds[target], shuffledIds[index]];
   }
+  const skillBySeedId = new Map(entrantSeeds.map(({ seed }) => [
+    seed.seedId,
+    skillByEntrantId?.get(seed.entrantId ?? "") ?? 0,
+  ]));
+  shuffledIds.sort((leftId, rightId) => (
+    (skillBySeedId.get(rightId) ?? 0) - (skillBySeedId.get(leftId) ?? 0)
+  ));
   const positions = entrantSeeds
     .map(({ seed, phaseGroupId }) => ({ seedNum: seed.seedNum!, phaseGroupId }))
     .sort((left, right) => left.seedNum - right.seedNum);

@@ -190,7 +190,7 @@ function LocalEventSnapshotForm({
     tournamentName: localTournamentName,
     eventName: localEventName,
     eventAlias: localEventAlias.trim() === "" ? null : localEventAlias.trim(),
-    participants: registration.participants.map(({ entrantId, name, categorySelections }) => ({ entrantId, name, categorySelections })),
+    participants: registration.participants.map(({ entrantId, name, categorySelections, skill }) => ({ entrantId, name, categorySelections, skill })),
     eventManagement: registration.setting,
     requireItemSelections: registration.requireItemSelections,
     phases: effectivePhases.slice(0, phaseCount).map((phase, index) => ({

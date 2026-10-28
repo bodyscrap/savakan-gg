@@ -1425,6 +1425,26 @@ button:disabled {
   margin-top: 1rem;
 }
 
+.local-registration-name-skill-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 5.5rem;
+  align-items: end;
+  gap: 0.5rem;
+}
+
+.local-registration-name-skill-row label {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.local-registration-skill-tier-input {
+  width: 100%;
+  min-width: 0;
+}
+
 .local-registration-actions {
   display: flex;
   align-items: center;
@@ -3774,6 +3794,17 @@ li {
   gap: 0.28rem;
   font-size: 0.8rem;
   color: var(--muted);
+}
+
+.entrant-meta-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.4rem;
+}
+
+.entrant-meta-field-row button {
+  margin-bottom: 0.02rem;
 }
 
 .entrant-meta-actions {

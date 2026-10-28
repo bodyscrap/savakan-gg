@@ -70,6 +70,8 @@ pub struct TournamentShareEntrantMeta {
     #[serde(default)]
     pub alias_name: String,
     #[serde(default)]
+    pub skill: Option<i64>,
+    #[serde(default)]
     pub play_side: Option<PlaySide>,
     #[serde(default)]
     pub character_names: Vec<String>,
@@ -235,6 +237,8 @@ pub struct LocalEventParticipantInput {
     pub entrant_id: String,
     pub name: String,
     pub category_selections: Vec<Vec<String>>,
+    #[serde(default)]
+    pub skill: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -325,6 +329,8 @@ pub struct EventEntrantMeta {
     pub entrant_name: String,
     #[serde(default)]
     pub alias_name: String,
+    #[serde(default)]
+    pub skill: Option<i64>,
     pub play_side: Option<PlaySide>,
     pub character_names: Vec<String>,
     #[serde(default)]
@@ -351,6 +357,8 @@ pub struct LocalPlayerMetaInput {
     pub entrant_name: String,
     #[serde(default)]
     pub alias_name: String,
+    #[serde(default)]
+    pub skill: Option<i64>,
     pub play_side: Option<PlaySide>,
     pub character_names: Vec<String>,
     #[serde(default)]

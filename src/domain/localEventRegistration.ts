@@ -37,15 +37,20 @@ export function validateRegisteredSelections(participant: LocalEventParticipantI
 
 export function isRegistrationComplete(participant: RegisteredLocalParticipant, setting: EventManagementMeta): boolean {
   const validated = validateRegisteredSelections(participant, setting);
-  return participant.name.trim() !== "" && participant.selectionsConfirmed
+  return participant.name.trim() !== "" && isValidSkillTier(participant.skill) && participant.selectionsConfirmed
     && validated.errors.length === 0
     && JSON.stringify(participant.categorySelections) === JSON.stringify(validated.normalizedBySlot);
+}
+
+export function isValidSkillTier(skill: number | null | undefined): boolean {
+  return skill == null || (Number.isSafeInteger(skill) && skill >= 0);
 }
 
 export function canRegisterParticipant(
   participant: RegisteredLocalParticipant,
   registration: Pick<LocalEventRegistration, "setting" | "requireItemSelections">,
 ): boolean {
+  if (!isValidSkillTier(participant.skill)) return false;
   if (registration.requireItemSelections) return isRegistrationComplete(participant, registration.setting);
   const optionalSetting = {
     ...registration.setting, categoryMinCounts: [0, 0, 0], totalMinCount: 0,

@@ -7,6 +7,7 @@ export type EventSettingEntrant = {
   entrantId: string;
   entrantName: string;
   aliasName: string;
+  skill?: number | null;
 };
 
 export type EventSettingCategorySlot = {
@@ -59,6 +60,8 @@ export type EventSettingProps = {
     selectedEntrantId: string;
     selectedEntrantName: string;
     selectedEntrantAliasName: string;
+    selectedEntrantSkillTier: string;
+    skillTierErrors: string[];
     configuredCategorySlots: EventSettingCategorySlot[];
     selectedCategoryUsageList: EventSettingCategoryUsage[];
     draftSelectionsBySlot: string[][];
@@ -86,6 +89,8 @@ export type EventSettingProps = {
     onAddDraftSelection: (slot: EventSettingCategorySlot, itemName: string) => void;
     onRemoveDraftSelection: (slotIndex: number, selectionIndex: number) => void;
     onSavePlayerAliasName: () => void;
+    onSavePlayerSkillTier: () => void;
+    onSkillTierChange: (value: string) => void;
     onSavePlayerSelections: () => void;
     onEntrantAliasNameChange: (value: string) => void;
   };
@@ -115,6 +120,8 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
     selectedEntrantId,
     selectedEntrantName,
     selectedEntrantAliasName,
+    selectedEntrantSkillTier,
+    skillTierErrors,
     configuredCategorySlots,
     selectedCategoryUsageList,
     draftSelectionsBySlot,
@@ -134,6 +141,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
     onSaveEventManagementSetting,
     onSelectEntrant,
     onSavePlayerAliasName,
+    onSavePlayerSkillTier,
     onSavePlayerSelections,
     onEntrantAliasNameChange,
   } = actions;
@@ -220,6 +228,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
           <div className="setting-row" style={{ marginTop: "0.9rem" }}>
             <p className="setting-row-title">{t("初期PhaseのプレイヤーSeedシャッフル")}</p>
             <div className="setting-row-fields single" style={{ gridTemplateColumns: "minmax(220px, 1fr) auto auto" }}>
+              <p className="meta" style={{ gridColumn: "1 / -1" }}>{t("登録したSkill Tier順に並べ、同Tier内はランダムにSeed配置します。")}</p>
               <p className="meta">{isLocalEvent
                 ? t("対象: {value1} / {value2}人。 試合開始前のみ実行できます。不戦勝は開始済みに含みません。", { value1: initialSeedPhaseName || "-", value2: initialSeedEntrantCount })
                 : t("対象: {value1} / {value2}人。 試合開始前のみ実行でき、結果報告時にstart.ggへSeedを反映します。", { value1: initialSeedPhaseName || "-", value2: initialSeedEntrantCount })}</p>
@@ -265,6 +274,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                         >
                           <h4>{entrant.entrantName}</h4>
                           {entrant.aliasName.trim() !== "" && <p className="meta">{entrant.aliasName}</p>}
+                          {entrant.skill != null && <p className="meta">{t("Skill Tier")}: {entrant.skill}</p>}
                         </article>
                       );
                     })}
@@ -333,19 +343,36 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                   <>
                     <p className="meta">{selectedEntrantName}</p>
                     <div className="entrant-meta-editor">
-                      <label className="meta" style={{ display: "grid", gap: "0.3rem" }}>{t("エイリアス名")}<input
-                          type="text"
-                          value={selectedEntrantAliasName}
-                          onChange={(e) => onEntrantAliasNameChange(e.currentTarget.value)}
-                          placeholder={t("プレイヤーの表示名")}
-                          autoComplete="off"
-                        />
-                      </label>
-                      <div className="entrant-meta-actions">
+                      <div className="entrant-meta-field-row">
+                        <label className="meta">{t("エイリアス名")}<input
+                            type="text"
+                            value={selectedEntrantAliasName}
+                            onChange={(e) => onEntrantAliasNameChange(e.currentTarget.value)}
+                            placeholder={t("プレイヤーの表示名")}
+                            autoComplete="off"
+                          />
+                        </label>
                         <button type="button" disabled={!canSavePlayerMeta} onClick={onSavePlayerAliasName}>
-                          {t("プレイヤーエイリアス名を保存")}
+                          {t("エイリアス名を保存")}
                         </button>
                       </div>
+                      <div className="entrant-meta-field-row">
+                        <label className="meta">{t("Skill Tier")}
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={selectedEntrantSkillTier}
+                            onChange={(e) => actions.onSkillTierChange(e.currentTarget.value)}
+                            placeholder={t("未設定")}
+                          />
+                        </label>
+                        <button type="button" disabled={!canSavePlayerMeta || skillTierErrors.length > 0} onClick={onSavePlayerSkillTier}>
+                          {t("Skill Tierを保存")}
+                        </button>
+                      </div>
+                      <p className="meta">{t("大きい値ほど高Skillとして扱い、未設定は0として扱います。")}</p>
+                      {skillTierErrors.length > 0 && <p className="meta error-text">{skillTierErrors.join(" ")}</p>}
                       <PlayerItemSelectionFields key={selectedEntrantId} slots={configuredCategorySlots} selections={draftSelectionsBySlot}
                         onAdd={actions.onAddDraftSelection} onRemove={actions.onRemoveDraftSelection} />
                     </div>

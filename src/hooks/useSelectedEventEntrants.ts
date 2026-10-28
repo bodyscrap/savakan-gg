@@ -35,9 +35,13 @@ export function useSelectedEventEntrants(
     const aliasNameByEntrantId = new Map(
       selectedEntrantMeta.map((meta) => [meta.entrantId, meta.aliasName ?? ""]),
     );
+    const skillByEntrantId = new Map(
+      selectedEntrantMeta.map((meta) => [meta.entrantId, meta.skill ?? null]),
+    );
     return sortEventEntrants(resolvedEntrants).map((entrant) => ({
       ...entrant,
       aliasName: aliasNameByEntrantId.get(entrant.entrantId) ?? "",
+      skill: skillByEntrantId.get(entrant.entrantId) ?? null,
     }));
   }, [selectedEntrantMeta, selectedEvent]);
 

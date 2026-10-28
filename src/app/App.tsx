@@ -1457,10 +1457,14 @@ function App() {
     selectedEntrantDraftSelectionsBySlot,
     selectedEntrantAliasName,
     setSelectedEntrantAliasName,
+    selectedEntrantSkillTier,
+    setSelectedEntrantSkillTier,
+    selectedEntrantSkillTierErrors,
     selectedEntrantValidationErrors,
     addSelectedEntrantDraftSelection,
     removeSelectedEntrantDraftSelection,
     saveSelectedEntrantAliasName,
+    saveSelectedEntrantSkillTier,
     saveSelectedEntrantSelections,
   } = usePlayerMetaDrafts({
     selectedEvent,
@@ -2497,6 +2501,7 @@ function App() {
         selectedEvent,
         Math.random,
         selectedEventMeta?.origin === "local",
+        new Map((selectedEventMeta?.entrants ?? []).map((entrant) => [entrant.entrantId, entrant.skill])),
       );
       const result = await invoke<TournamentWorkspace>("shuffle_initial_phase_seeds", {
         input: {
@@ -2668,6 +2673,8 @@ function App() {
               selectedEntrantId: selectedTournamentEntrant?.entrantId ?? "",
               selectedEntrantName: selectedTournamentEntrant?.entrantName ?? "",
               selectedEntrantAliasName,
+              selectedEntrantSkillTier,
+              skillTierErrors: selectedEntrantSkillTierErrors,
               configuredCategorySlots,
               selectedCategoryUsageList,
               draftSelectionsBySlot: selectedEntrantDraftSelectionsBySlot,
@@ -2695,6 +2702,8 @@ function App() {
               onAddDraftSelection: addSelectedEntrantDraftSelection,
               onRemoveDraftSelection: removeSelectedEntrantDraftSelection,
               onSavePlayerAliasName: saveSelectedEntrantAliasName,
+              onSavePlayerSkillTier: saveSelectedEntrantSkillTier,
+              onSkillTierChange: setSelectedEntrantSkillTier,
               onSavePlayerSelections: saveSelectedEntrantSelections,
               onEntrantAliasNameChange: setSelectedEntrantAliasName,
             }}

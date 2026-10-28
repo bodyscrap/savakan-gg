@@ -47,6 +47,29 @@ describe("initial phase seed shuffle", () => {
     ]);
   });
 
+  it("places higher skill tiers in stronger seed positions", () => {
+    const event = eventFixture();
+    expect(buildInitialPhaseSeedMapping(event, () => 0.999, false, new Map([
+      ["entrant-1", 1],
+      ["entrant-2", 5],
+    ]))).toEqual([
+      { seedId: "seed-1", seedNum: 2 },
+      { seedId: "seed-2", seedNum: 1 },
+      { seedId: "placeholder", seedNum: 3 },
+    ]);
+  });
+
+  it("randomizes entrants within the same skill tier", () => {
+    expect(buildInitialPhaseSeedMapping(eventFixture(), () => 0, false, new Map([
+      ["entrant-1", 3],
+      ["entrant-2", 3],
+    ]))).toEqual([
+      { seedId: "seed-1", seedNum: 2 },
+      { seedId: "seed-2", seedNum: 1 },
+      { seedId: "placeholder", seedNum: 3 },
+    ]);
+  });
+
   it("tracks destination pools when local pools reuse seed numbers", () => {
     const event = eventFixture();
     const [firstGroup] = event.phaseGroups ?? [];
