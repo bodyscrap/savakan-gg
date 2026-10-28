@@ -220,7 +220,7 @@ export function useBracketReport<TWorkspace>({
     }
 
     if (hasUnreportedSeedShuffle) {
-      if (!window.confirm(
+      if (!await window.confirm(
         t("Seed設定前に、Seed設定対象のすべてのPhaseGroup（Pool）がReset済みである必要があります。対象PoolをすべてResetしたことを確認しましたか？"),
       )) {
         setMessage(t("Seed設定対象のすべてのPhaseGroup（Pool）をResetしてから、再度報告してください。"));
@@ -256,7 +256,7 @@ export function useBracketReport<TWorkspace>({
     const startConfirmationMessage = seedSnapshotRefreshRequired
       ? t("start.gg側でブラケットをStart済みであることを確認してください。スナップショット未更新のままローカル結果を報告する方法は上級者向けです。Setの対応付けに失敗した場合は報告が停止することがあります。続行しますか？")
       : t("start.gg側でブラケットをStart済みであることを確認してください。確定結果を報告しますか？");
-    if (!window.confirm(startConfirmationMessage)) {
+    if (!await window.confirm(startConfirmationMessage)) {
       setMessage(t("ブラケットがStart済みであることを確認してから、結果を報告してください。"));
       return;
     }

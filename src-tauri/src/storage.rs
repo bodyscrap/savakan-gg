@@ -1080,6 +1080,108 @@ fn opposite_side(side: crate::models::PlaySide) -> crate::models::PlaySide {
     }
 }
 
+#[cfg(test)]
+mod imported_skill_tests {
+    use super::*;
+
+    fn snapshot(skill: Option<i64>) -> TournamentSnapshot {
+        serde_json::from_value(serde_json::json!({
+            "tournamentId": "tournament",
+            "slug": "example",
+            "name": "Tournament",
+            "updatedAt": Utc::now(),
+            "events": [{
+                "eventId": "event",
+                "name": "Event",
+                "sets": [],
+                "entrants": [
+                    { "entrantId": "player", "name": "Player", "skill": skill },
+                    { "entrantId": "unset", "name": "Unset", "skill": null }
+                ]
+            }]
+        })).unwrap()
+    }
+
+    #[test]
+    fn imports_skills_for_entrants_without_sets_and_preserves_unset_values() {
+        let snapshot = snapshot(Some(5));
+        let meta = merge_snapshot_into_meta(&snapshot, "event", build_empty_meta("example", "event"));
+        let entrants = &meta.events[0].entrants;
+        assert_eq!(entrants.len(), 2);
+        assert_eq!(entrants[0].skill, Some(5));
+        assert_eq!(entrants[0].imported_skill.as_ref().unwrap().skill, Some(5));
+        assert_eq!(entrants[1].skill, None);
+        assert_eq!(entrants[1].imported_skill.as_ref().unwrap().skill, None);
+    }
+
+    #[test]
+    fn refresh_updates_restore_values_without_overwriting_local_edits_or_clears() {
+        for local_skill in [Some(9), Some(0), None] {
+            let original = snapshot(Some(5));
+            let mut meta = merge_snapshot_into_meta(&original, "event", build_empty_meta("example", "event"));
+            meta.events[0].entrants[0].skill = local_skill;
+            let meta = merge_snapshot_into_meta(&snapshot(Some(3)), "event", meta);
+            let reloaded: TournamentLocalMeta =
+                serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+            let entrant = &reloaded.events[0].entrants[0];
+            assert_eq!(entrant.skill, local_skill);
+            assert_eq!(entrant.imported_skill.as_ref().unwrap().skill, Some(3));
+            let meta = merge_snapshot_into_meta(&snapshot(None), "event", reloaded);
+            let entrant = &meta.events[0].entrants[0];
+            assert_eq!(entrant.skill, local_skill);
+            assert_eq!(entrant.imported_skill.as_ref().unwrap().skill, None);
+        }
+    }
+
+    #[test]
+    fn first_skill_import_preserves_legacy_local_values_and_initializes_new_entrants() {
+        let mut meta = build_empty_meta("example", "event");
+        let mut legacy_snapshot = snapshot(None);
+        legacy_snapshot.events[0].entrants.clear();
+        let slot: crate::models::SetSlotSnapshot = serde_json::from_value(serde_json::json!({
+            "entrantId": "player", "entrantName": "Player"
+        })).unwrap();
+        let mut set: SetSnapshot = serde_json::from_value(serde_json::json!({
+            "setId": "set", "fullRoundText": "Final", "state": 1, "slots": []
+        })).unwrap();
+        set.slots = vec![slot];
+        legacy_snapshot.events[0].sets.push(set);
+        meta = merge_snapshot_into_meta(&legacy_snapshot, "event", meta);
+        meta.events[0].entrants[0].skill = Some(8);
+        let meta = merge_snapshot_into_meta(&snapshot(Some(5)), "event", meta);
+        assert_eq!(meta.events[0].entrants[0].skill, Some(8));
+        assert_eq!(meta.events[0].entrants[0].imported_skill.as_ref().unwrap().skill, Some(5));
+        assert_eq!(meta.events[0].entrants.len(), 2);
+    }
+
+    #[test]
+    fn an_initially_unset_import_remains_unset_when_remote_skill_is_later_added() {
+        let meta = merge_snapshot_into_meta(&snapshot(None), "event", build_empty_meta("example", "event"));
+        let meta = merge_snapshot_into_meta(&snapshot(Some(4)), "event", meta);
+        assert_eq!(meta.events[0].entrants[0].skill, None);
+        assert_eq!(meta.events[0].entrants[0].imported_skill.as_ref().unwrap().skill, Some(4));
+    }
+
+    #[test]
+    fn shared_metadata_keeps_the_restore_value_separate_from_the_current_skill() {
+        for imported_skill in [Some(3), None] {
+            let shared = TournamentShareEntrantMeta {
+                entrant_id: "player".to_owned(),
+                alias_name: String::new(),
+                skill: Some(9),
+                imported_skill: Some(crate::models::ImportedSkillTier { skill: imported_skill }),
+                play_side: None,
+                character_names: Vec::new(),
+                category_selections: None,
+            };
+            let reloaded: TournamentShareEntrantMeta =
+                serde_json::from_str(&serde_json::to_string(&shared).unwrap()).unwrap();
+            assert_eq!(reloaded.skill, Some(9));
+            assert_eq!(reloaded.imported_skill.unwrap().skill, imported_skill);
+        }
+    }
+}
+
 fn merge_snapshot_into_meta(
     snapshot: &TournamentSnapshot,
     event_id: &str,
@@ -1095,6 +1197,7 @@ fn merge_snapshot_into_meta(
         .find(|item| item.event_id == event_id)
         .cloned()
         .unwrap_or_else(|| EventSnapshot {
+            entrants: Vec::new(),
             event_id: event_id.to_owned(),
             name: String::new(),
             phases: Vec::new(),
@@ -1186,6 +1289,7 @@ fn merge_snapshot_into_meta(
                 entrant_name: slot.entrant_name.clone(),
                 alias_name: String::new(),
                 skill: None,
+                imported_skill: None,
                 play_side: None,
                 character_names: Vec::new(),
                 category_selections: None,
@@ -1194,6 +1298,34 @@ fn merge_snapshot_into_meta(
             });
             entrant_index_by_id.insert(entrant_id.clone(), entrant_index);
         }
+    }
+
+    for imported in &event.entrants {
+        let index = if let Some(index) = entrant_index_by_id.get(&imported.entrant_id).copied() {
+            index
+        } else {
+            let index = event_meta.entrants.len();
+            event_meta.entrants.push(EventEntrantMeta {
+                entrant_id: imported.entrant_id.clone(),
+                entrant_name: imported.name.clone(),
+                alias_name: String::new(),
+                skill: None,
+                imported_skill: None,
+                play_side: None,
+                character_names: Vec::new(),
+                category_selections: None,
+                auth_code: derive_auth_code(&snapshot.slug, &event.event_id, &imported.entrant_id),
+                notes: None,
+            });
+            entrant_index_by_id.insert(imported.entrant_id.clone(), index);
+            index
+        };
+        let entrant = &mut event_meta.entrants[index];
+        entrant.entrant_name = imported.name.clone();
+        if entrant.imported_skill.is_none() && entrant.skill.is_none() {
+            entrant.skill = imported.skill;
+        }
+        entrant.imported_skill = Some(crate::models::ImportedSkillTier { skill: imported.skill });
     }
 
     let mut side_by_set_and_entrant = HashMap::new();
@@ -2055,6 +2187,7 @@ pub fn export_tournament_share_archive(
         .iter()
         .flat_map(|set| set.slots.iter())
         .filter_map(|slot| slot.entrant_id.as_deref())
+        .chain(event.entrants.iter().map(|entrant| entrant.entrant_id.as_str()))
         .collect::<HashSet<_>>();
     let local_meta = load_local_meta(app, slug, event_id)?;
     let event_meta = local_meta
@@ -2075,6 +2208,7 @@ pub fn export_tournament_share_archive(
                 entrant_id: entrant.entrant_id.clone(),
                 alias_name: entrant.alias_name.clone(),
                 skill: entrant.skill,
+                imported_skill: entrant.imported_skill.clone(),
                 play_side: entrant.play_side.clone(),
                 character_names: entrant.character_names.clone(),
                 category_selections: entrant.category_selections.clone(),
@@ -2120,6 +2254,7 @@ pub fn import_tournament_share_archive(
         .iter()
         .flat_map(|set| set.slots.iter())
         .filter_map(|slot| slot.entrant_id.as_deref())
+        .chain(event.entrants.iter().map(|entrant| entrant.entrant_id.as_str()))
         .collect::<HashSet<_>>();
     if snapshot.tournament_id.trim().is_empty()
         || snapshot.slug.trim().is_empty()
@@ -2131,6 +2266,8 @@ pub fn import_tournament_share_archive(
         .any(|entrant| {
             !event_entrant_ids.contains(entrant.entrant_id.as_str())
                 || entrant.skill.is_some_and(|skill| skill < 0)
+                || entrant.imported_skill.as_ref()
+                    .is_some_and(|imported| imported.skill.is_some_and(|skill| skill < 0))
         })
         || archive.event_settings.set_play_sides.iter().any(|side| {
             !event.sets.iter().any(|set| {
@@ -2219,6 +2356,7 @@ pub fn import_tournament_share_archive(
         for entrant in &mut event_meta.entrants {
             entrant.alias_name.clear();
             entrant.skill = None;
+            entrant.imported_skill = None;
             entrant.play_side = None;
             entrant.character_names.clear();
             entrant.category_selections = None;
@@ -2231,6 +2369,7 @@ pub fn import_tournament_share_archive(
             {
                 entrant.alias_name = shared_entrant.alias_name;
                 entrant.skill = shared_entrant.skill;
+                entrant.imported_skill = shared_entrant.imported_skill;
                 entrant.play_side = shared_entrant.play_side;
                 entrant.character_names = shared_entrant.character_names;
                 entrant.category_selections = shared_entrant.category_selections;
@@ -2418,6 +2557,7 @@ fn build_bracket_graph(
 
     for sets in phase_group_sets.into_values() {
         let group_event = EventSnapshot {
+            entrants: Vec::new(),
             event_id: graph_event.event_id.clone(),
             name: graph_event.name.clone(),
             phases: Vec::new(),
@@ -11376,6 +11516,7 @@ pub fn upsert_local_player_meta(
         }
     } else {
         event_meta.entrants.push(EventEntrantMeta {
+            imported_skill: None,
             entrant_id: input.entrant_id,
             entrant_name: input.entrant_name,
             alias_name: input.alias_name,

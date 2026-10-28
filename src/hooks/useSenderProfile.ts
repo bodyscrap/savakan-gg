@@ -285,7 +285,7 @@ export function useSenderProfile(
     }
 
     if (senderIdentityChanged) {
-      const confirmed = window.confirm(
+      const confirmed = await window.confirm(
         t("送信者名またはユーザーIDを変更して保存しようとしています。\n先に自分の呼び出しを解決し、他端末の外部報告者設定を解除してください。\nこのまま保存しますか？"),
       );
       if (!confirmed) {

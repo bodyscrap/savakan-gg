@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::time::{sleep, Instant};
 
 use crate::models::{
-    EventSnapshot, InitialPhaseSeedMappingEntry, PhaseGroupProgressionSnapshot,
+    EventEntrantSnapshot, EventSnapshot, InitialPhaseSeedMappingEntry, PhaseGroupProgressionSnapshot,
     PhaseGroupSeedSnapshot, PhaseGroupSnapshot, PhaseSnapshot, SetEntrantSourceSnapshot,
     SetSlotSnapshot, SetSnapshot, TournamentEventPreviewItem, TournamentPreview,
     TournamentSnapshot,
@@ -122,6 +122,40 @@ fn same_seed_population(
 #[cfg(test)]
 mod event_snapshot_scope_tests {
     use super::*;
+
+    #[test]
+    fn skill_query_reads_nullable_tiers_and_pagination_with_mixed_id_types() {
+        let body = EventEntrantSkills::build_query(event_entrant_skills::Variables {
+            event_id: "event".to_owned(),
+            page: 2,
+            per_page: 100,
+        });
+        let request = serde_json::to_value(body).unwrap();
+        assert_eq!(request["variables"]["eventId"], "event");
+        assert_eq!(request["variables"]["page"], 2);
+        assert!(request["query"].as_str().unwrap().contains("skill"));
+
+        let payload: Response<event_entrant_skills::ResponseData> =
+            serde_json::from_value(serde_json::json!({
+                "data": { "event": { "entrants": {
+                    "pageInfo": { "totalPages": 3 },
+                    "nodes": [
+                        { "id": 123, "name": "High", "skill": 5 },
+                        { "id": "456", "name": "Zero", "skill": 0 },
+                        { "id": 789, "name": "Unset", "skill": null }
+                    ]
+                }}}
+            })).unwrap();
+        let connection = payload.data.unwrap().event.unwrap().entrants.unwrap();
+        assert_eq!(connection.page_info.unwrap().total_pages, Some(3));
+        let entrants = connection.nodes.unwrap().into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(entrants[0].id.to_string(), "123");
+        assert_eq!(entrants[1].id.to_string(), "456");
+        assert_eq!(
+            entrants.iter().map(|entrant| entrant.skill).collect::<Vec<_>>(),
+            [Some(5), Some(0), None]
+        );
+    }
 
     #[test]
     fn excludes_indirect_sets_from_other_events() {
@@ -246,6 +280,15 @@ mod event_snapshot_scope_tests {
     custom_scalars_module = "crate::startgg_scalars"
 )]
 pub struct TournamentSync;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/graphql/schema.graphql",
+    query_path = "src/graphql/event_entrant_skills.graphql",
+    response_derives = "Debug, Clone",
+    custom_scalars_module = "crate::startgg_scalars"
+)]
+pub struct EventEntrantSkills;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -1909,9 +1952,15 @@ async fn query_tournament_snapshot(
                     .collect(),
                 phase_groups,
                 sets,
+                entrants: Vec::new(),
             }
         })
         .collect::<Vec<EventSnapshot>>();
+
+    let mut events = events;
+    for event in &mut events {
+        event.entrants = fetch_event_entrant_skills(&client, token, &event.event_id).await?;
+    }
 
     Ok(TournamentSnapshot {
         tournament_id: tournament.id.to_string(),
@@ -1922,6 +1971,68 @@ async fn query_tournament_snapshot(
         events,
         updated_at: Utc::now(),
     })
+}
+
+async fn fetch_event_entrant_skills(
+    client: &Client,
+    token: &str,
+    event_id: &str,
+) -> Result<Vec<EventEntrantSnapshot>, String> {
+    let mut entrants = Vec::new();
+    let mut page = 1;
+    loop {
+        let body = EventEntrantSkills::build_query(event_entrant_skills::Variables {
+            event_id: event_id.to_owned(),
+            page,
+            per_page: 100,
+        });
+        let response = post_graphql_with_retry(client, token, &body, "Skill Tier取得").await?;
+        let status = response.status();
+        let raw_body = response
+            .text()
+            .await
+            .map_err(|error| format!("Skill Tierレスポンス読込に失敗しました: {error}"))?;
+        if !status.is_success() {
+            return Err(format!(
+                "Skill Tier取得に失敗しました: HTTP {status} / body={}",
+                summarize_response_body(&raw_body)
+            ));
+        }
+        let payload: Response<event_entrant_skills::ResponseData> = serde_json::from_str(&raw_body)
+            .map_err(|error| format!("Skill Tierレスポンスの解析に失敗しました: {error}"))?;
+        if let Some(errors) = payload.errors {
+            return Err(format!("GraphQLエラー: {}", join_graphql_errors(&errors)));
+        }
+        let connection = payload
+            .data
+            .and_then(|data| data.event)
+            .and_then(|event| event.entrants)
+            .ok_or_else(|| format!("Skill Tier取得対象の参加者一覧が見つかりません: {event_id}"))?;
+        let total_pages = connection
+            .page_info
+            .and_then(|info| info.total_pages)
+            .ok_or_else(|| format!("Skill Tier取得のページ情報がありません: {event_id}"))?;
+        let nodes = connection
+            .nodes
+            .ok_or_else(|| format!("Skill Tier取得の参加者データがありません: {event_id}"))?;
+        if nodes.is_empty() && page < total_pages {
+            return Err(format!("Skill Tier取得の途中で空のページが返されました: event={event_id}, page={page}"));
+        }
+        for entrant in nodes.into_iter().flatten() {
+            if entrant.skill.is_some_and(|skill| skill < 0) {
+                return Err(format!("start.ggのSkill Tierが不正です: entrant={}", entrant.id));
+            }
+            entrants.push(EventEntrantSnapshot {
+                entrant_id: entrant.id.to_string(),
+                name: entrant.name.unwrap_or_else(|| "Unnamed entrant".to_owned()),
+                skill: entrant.skill,
+            });
+        }
+        if page >= total_pages {
+            return Ok(entrants);
+        }
+        page += 1;
+    }
 }
 
 pub async fn fetch_tournament_snapshot(
@@ -2355,6 +2466,8 @@ async fn fetch_event_snapshot_by_slug_with_policy(
         }
     }
 
+    let entrants = fetch_event_entrant_skills(&client, token, &event_id).await?;
+
     progress_cb(EventSnapshotFetchProgress {
         phase: "completed",
         completed_sets,
@@ -2373,6 +2486,7 @@ async fn fetch_event_snapshot_by_slug_with_policy(
             phases,
             phase_groups,
             sets: all_sets,
+            entrants,
         }],
         updated_at: Utc::now(),
     })

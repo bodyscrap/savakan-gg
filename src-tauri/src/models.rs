@@ -72,6 +72,8 @@ pub struct TournamentShareEntrantMeta {
     #[serde(default)]
     pub skill: Option<i64>,
     #[serde(default)]
+    pub imported_skill: Option<ImportedSkillTier>,
+    #[serde(default)]
     pub play_side: Option<PlaySide>,
     #[serde(default)]
     pub character_names: Vec<String>,
@@ -331,12 +333,20 @@ pub struct EventEntrantMeta {
     pub alias_name: String,
     #[serde(default)]
     pub skill: Option<i64>,
+    #[serde(default)]
+    pub imported_skill: Option<ImportedSkillTier>,
     pub play_side: Option<PlaySide>,
     pub character_names: Vec<String>,
     #[serde(default)]
     pub category_selections: Option<Vec<Vec<String>>>,
     pub auth_code: String,
     pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedSkillTier {
+    pub skill: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -512,6 +522,16 @@ pub struct EventSnapshot {
     #[serde(default)]
     pub phase_groups: Vec<PhaseGroupSnapshot>,
     pub sets: Vec<SetSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entrants: Vec<EventEntrantSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventEntrantSnapshot {
+    pub entrant_id: String,
+    pub name: String,
+    pub skill: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

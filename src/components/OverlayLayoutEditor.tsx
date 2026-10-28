@@ -451,7 +451,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
     setError("");
   }
   async function deletePreset() {
-    if (!preset || !window.confirm(t("このプリセットを削除しますか？"))) return;
+    if (!preset || !await window.confirm(t("このプリセットを削除しますか？"))) return;
     const next = parseOverlayLayouts({
       ...layouts,
       activePresetId: layouts.activePresetId === preset.id ? null : layouts.activePresetId,

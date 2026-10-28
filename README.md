@@ -268,6 +268,8 @@ Tauri の app_data_dir 配下に `settings` と `snapshots` のフォルダを�
 
 同じ tournament の複数 event を別々に選択・更新・削除できます。「スナップショット」画面では、alias / tournament 名 / event 名で検索でき、JSON ファイルへのエクスポートとインポートでスナップショットを別クライアントへ移せます。
 
+start.ggからの作成・更新・同期では、参加者のSkill Tierを取得し、ローカルで未設定の参加者の初期値として採用します。取り込み後の再取得では、ローカルのSkill Tier（未設定に戻した場合も含む）を上書きしません。「スナップショット&メタデータ設定」で参加者を選び、「Skill Tierを最新の取り込み値に戻す」を押すと、その参加者のSkill Tierだけを最後に取り込んだ値へ復元できます。start.gg側が未設定なら未設定へ戻ります。復元値は再取得ごとに更新され、アプリの再起動やJSON共有後も保持されます。Skill Tier自体をstart.ggへ書き戻すことはありません。
+
 スナップショットからの復元では、現在の Seed の並び順を維持して対象範囲のスコア・未報告結果を戻します。「全体」を復元する場合のみ、確認ダイアログで「Seedの並び順を維持して復元」または「Seedの並び替えも破棄して復元」を選択できます。現在 Pool・現在 Phase のロック中 Pool の復元では Seed の並び替えは破棄されません。
 
 ## ローカルネットワークでの連携
@@ -304,6 +306,7 @@ cd src-tauri && cargo check
 
 ## 実装上の注意
 
+- デスクトップ版ではTauriのdialogプラグインが`window.confirm`を非同期処理に置き換えます。確認が必要な操作は必ず`await window.confirm(...)`で結果を待ち、キャンセル時には削除・上書き・送信などを実行しないでください。通常のブラウザーの同期confirmでも同じ書き方で動作します。
 - start.gg のスキーマ変更時は、GraphQL 定義と `src-tauri/src/graphql` 配下の定義を更新してください。
 - start.gg のイベント作成・seed 確定はこのアプリの前提条件です。
 - ROUND ROBIN、phaseGroup、phase間進出の処理手順は [docs/phase-group-progression.md](docs/phase-group-progression.md) を参照してください。

@@ -14,6 +14,7 @@ export type EventSnapshot = {
   phases?: PhaseSnapshot[];
   phaseGroups?: PhaseGroupSnapshot[];
   sets: SetSnapshot[];
+  entrants?: Array<{ entrantId: string; name: string; skill: number | null }>;
 };
 
 export type PhaseSnapshot = {

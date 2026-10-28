@@ -42,6 +42,8 @@ export const componentTranslations: Record<string, string> = {
   "プレイヤー名": "Player name",
   "Skill Tier": "Skill tier",
   "Skill Tierを保存": "Save skill tier",
+  "Skill Tierを最新の取り込み値に戻す": "Restore latest imported skill tier",
+  "start.ggのSkill Tierは初期値として取り込みます。再取得時も編集値は維持し、復元先だけを最新の取り込み値に更新します。": "The start.gg skill tier is imported as the initial value. Refreshing preserves your edits and updates only the restore value.",
   "エイリアス名を保存": "Save alias",
   "Skill Tierは0以上の整数で入力してください。": "Enter a non-negative integer skill tier.",
   "大きい値ほど高Skillとして扱い、未設定は0として扱います。": "Higher values indicate greater skill; unset tiers are treated as 0.",

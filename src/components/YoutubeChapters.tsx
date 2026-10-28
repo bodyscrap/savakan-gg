@@ -66,9 +66,9 @@ export function StreamStartEditor({ set, disabled, onUpdate }: {
           onChange={(event) => { setDateTime(event.currentTarget.value); setError(""); }} />
       </label>
       <button type="submit" disabled={disabled}>{t("記録日時を修正")}</button>
-      <button type="button" className="ghost" disabled={disabled} onClick={() => {
-          if (window.confirm(t("選択した試合「{value1}」の配信開始記録を削除します。チャプター生成の対象から外れます。実行しますか？", { value1: set.matchup }))) {
-            void onUpdate(null);
+      <button type="button" className="ghost" disabled={disabled} onClick={async () => {
+          if (await window.confirm(t("選択した試合「{value1}」の配信開始記録を削除します。チャプター生成の対象から外れます。実行しますか？", { value1: set.matchup }))) {
+            await onUpdate(null);
           }
         }}>{t("配信記録のクリア")}</button>
       {error && <p className="error-text" role="alert">{t(error)}</p>}
@@ -207,7 +207,7 @@ export function YoutubeChapters({ slug, eventId, useAliasName }: YoutubeChapters
   }
 
   async function clearStreamStarts() {
-    if (!window.confirm(t("選択中イベントの全 Set の配信開始時刻を削除します。この操作は元に戻せません。試合結果やプレイヤー情報は変更しません。実行しますか？"))) {
+    if (!await window.confirm(t("選択中イベントの全 Set の配信開始時刻を削除します。この操作は元に戻せません。試合結果やプレイヤー情報は変更しません。実行しますか？"))) {
       return;
     }
     clearGeneratedText();

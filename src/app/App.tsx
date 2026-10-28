@@ -1366,7 +1366,7 @@ function App() {
         identity.slug,
         identity.eventId,
       );
-      if (existingEvent && !window.confirm(
+      if (existingEvent && !await window.confirm(
         t("同一イベントのスナップショットが既にあります。\n{p0} / {p1}\n\nスナップショットとイベント別メタデータを上書きしますか？", { p0: existingEvent.tournamentName, p1: existingEvent.eventName }),
       )) {
         return;
@@ -1460,6 +1460,8 @@ function App() {
     selectedEntrantSkillTier,
     setSelectedEntrantSkillTier,
     selectedEntrantSkillTierErrors,
+    canRestoreSelectedEntrantSkillTier,
+    restoreSelectedEntrantSkillTier,
     selectedEntrantValidationErrors,
     addSelectedEntrantDraftSelection,
     removeSelectedEntrantDraftSelection,
@@ -2129,7 +2131,7 @@ function App() {
       return;
     }
 
-    if (!window.confirm(t("外部報告者 {p0} ({p1}) をこのプールから解除しますか？", { p0: selectedPoolExternalEditor.senderName, p1: selectedPoolExternalEditor.senderUserId }))) {
+    if (!await window.confirm(t("外部報告者 {p0} ({p1}) をこのプールから解除しますか？", { p0: selectedPoolExternalEditor.senderName, p1: selectedPoolExternalEditor.senderUserId }))) {
       return;
     }
     setBusy(true);
@@ -2485,7 +2487,7 @@ function App() {
       setError(t("試合が開始済み、またはシャッフル可能なSeedがありません。"));
       return;
     }
-    if (!window.confirm(
+    if (!await window.confirm(
       selectedEventMeta?.origin === "local"
         ? t("最初のPhaseのSeed順をローカルでシャッフルします。Seed設定対象の全PhaseGroupが開始前であることを確認してください。続行しますか？")
         : t("最初のPhaseのSeed順をローカルでシャッフルします。Seed設定対象の全PhaseGroupがReset済みであることを確認し、後の報告操作でこのSeed順をstart.ggへ反映します。続行しますか？"),
@@ -2525,7 +2527,7 @@ function App() {
       setError(t("スナップショット時のSeed順へ戻せない状態です。"));
       return;
     }
-    if (!window.confirm(
+    if (!await window.confirm(
       selectedEventMeta?.origin === "local"
         ? t("スナップショット取得時の初期Phase Seed順に戻します。対象Poolが開始前であることを確認してください。続行しますか？")
         : t("スナップショット取得時の初期Phase Seed順に戻します。Reset済みの対象Poolを確認後、報告操作でこのSeed順をstart.ggへ反映します。続行しますか？"),
@@ -2675,6 +2677,7 @@ function App() {
               selectedEntrantAliasName,
               selectedEntrantSkillTier,
               skillTierErrors: selectedEntrantSkillTierErrors,
+              canRestoreSkillTier: canRestoreSelectedEntrantSkillTier,
               configuredCategorySlots,
               selectedCategoryUsageList,
               draftSelectionsBySlot: selectedEntrantDraftSelectionsBySlot,
@@ -2703,6 +2706,7 @@ function App() {
               onRemoveDraftSelection: removeSelectedEntrantDraftSelection,
               onSavePlayerAliasName: saveSelectedEntrantAliasName,
               onSavePlayerSkillTier: saveSelectedEntrantSkillTier,
+              onRestorePlayerSkillTier: restoreSelectedEntrantSkillTier,
               onSkillTierChange: setSelectedEntrantSkillTier,
               onSavePlayerSelections: saveSelectedEntrantSelections,
               onEntrantAliasNameChange: setSelectedEntrantAliasName,
@@ -2943,9 +2947,9 @@ function App() {
             onSearchInputChange={setItemListSearchInput}
             filteredItemLists={filteredItemLists}
             onEditItemList={editItemList}
-            onDeleteItemList={(itemList) => {
-              if (window.confirm(t("「{p0}」を削除しますか？", { p0: itemList.name }))) {
-                deleteItemList(itemList.id);
+            onDeleteItemList={async (itemList) => {
+              if (await window.confirm(t("「{p0}」を削除しますか？", { p0: itemList.name }))) {
+                await deleteItemList(itemList.id);
               }
             }}
             onImportItemList={(file) => void importItemListFile(file)}

@@ -3,7 +3,7 @@ import type { PlaySide } from "./useTournamentWorkspace";
 import { usePlayerMetaDrafts } from "./usePlayerMetaDrafts";
 import { FREE_TEXT_LIST_ID, freeTextCategory } from "../domain/itemList";
 
-type Draft = { aliasName: string; playSide: PlaySide | ""; categorySelections: string[][] };
+type Draft = { aliasName: string; skillTier: string; playSide: PlaySide | ""; categorySelections: string[][] };
 type Drafts = Record<string, Draft>;
 const state = vi.hoisted(() => ({
   drafts: {} as Drafts,
@@ -79,6 +79,46 @@ beforeEach(() => {
 });
 
 describe("independent player metadata saves", () => {
+  it.each([4, 0, null])("restores only the latest imported skill tier (%s), even with invalid drafts", async (importedSkill) => {
+    const test = setup();
+    const meta = test.options.selectedEventMeta!.entrants[0];
+    meta.skill = 9;
+    meta.importedSkill = { skill: importedSkill };
+    test.render().setMetaDraft("event", "player", {
+      skillTier: "-1", aliasName: "Unsaved alias", categorySelections: [[], [], []],
+    });
+
+    expect(test.render().canRestoreSelectedEntrantSkillTier).toBe(true);
+    await test.render().restoreSelectedEntrantSkillTier();
+
+    expect(test.save).toHaveBeenCalledWith(expect.objectContaining({
+      skill: importedSkill, aliasName: "Saved alias",
+      characterNames: ["A", "B", "Legacy item"], notes: "Keep notes",
+    }));
+    expect(test.render().selectedEntrantSkillTier).toBe(importedSkill == null ? "" : String(importedSkill));
+    expect(test.render().selectedEntrantAliasName).toBe("Unsaved alias");
+    expect(state.dirty.current.get("event:player")?.has("skillTier")).not.toBe(true);
+    expect(test.options.setMessage).toHaveBeenCalledWith("Skill Tierを最新の取り込み値に復元しました。");
+  });
+
+  it("does not offer or save a restoration without an imported skill tier", async () => {
+    const test = setup();
+    expect(test.render().canRestoreSelectedEntrantSkillTier).toBe(false);
+    await test.render().restoreSelectedEntrantSkillTier();
+    expect(test.save).not.toHaveBeenCalled();
+    expect(test.options.setError).toHaveBeenCalledWith("復元できるSkill Tierの取り込み値がありません。");
+  });
+
+  it("keeps the edited skill draft when restoration fails", async () => {
+    const test = setup();
+    test.options.selectedEventMeta!.entrants[0].importedSkill = { skill: 3 };
+    test.render().setSelectedEntrantSkillTier("9");
+    test.save.mockRejectedValueOnce(new Error("save failed"));
+    await test.render().restoreSelectedEntrantSkillTier();
+    expect(test.render().selectedEntrantSkillTier).toBe("9");
+    expect(test.options.setError).toHaveBeenCalledWith("Error: save failed");
+  });
+
   it("saves and restores independent free text categories, including a non-contiguous slot", async () => {
     const test = setup(false);
     test.options.categorySlotListIds = [FREE_TEXT_LIST_ID, "", FREE_TEXT_LIST_ID];

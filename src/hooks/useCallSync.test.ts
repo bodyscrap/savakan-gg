@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallSync } from "./useCallSync";
 
@@ -25,8 +25,24 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(invoke).mockResolvedValue(undefined);
 });
+afterEach(() => vi.unstubAllGlobals());
 
 describe("call resend requests", () => {
+  it.each([false, true])("waits before initializing the call list display (%s)", async (confirmed) => {
+    let answer!: (value: boolean) => void;
+    vi.stubGlobal("window", {
+      confirm: vi.fn(() => new Promise<boolean>((resolve) => { answer = resolve; })),
+    });
+    const { options, initializeCallListDisplay } = setup();
+    const operation = initializeCallListDisplay();
+    expect(options.resetDisplay).not.toHaveBeenCalled();
+    expect(options.onMessage).not.toHaveBeenCalled();
+    answer(confirmed);
+    await operation;
+    expect(options.resetDisplay).toHaveBeenCalledTimes(confirmed ? 1 : 0);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("sends one broadcast request instead of thread/status synchronization", async () => {
     const { options, requestUnresolvedCallSyncBroadcast } = setup();
     await requestUnresolvedCallSyncBroadcast();

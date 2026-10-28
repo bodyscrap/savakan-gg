@@ -16,6 +16,7 @@ fn local_grand_final_reset_setting_controls_creation_and_survives_reload() {
             tournament_id: "local".to_owned(), slug: "local".to_owned(), name: "Local".to_owned(),
             updated_at: Utc::now(),
             events: vec![EventSnapshot {
+                entrants: Vec::new(),
                 event_id: "event".to_owned(), name: "Event".to_owned(),
                 phases: Vec::new(), phase_groups: vec![group], sets: vec![losers_final, grand_final],
             }],
@@ -39,6 +40,7 @@ fn replaces_only_the_requested_event_from_pristine_snapshot() {
         name: "Tournament".to_owned(),
         events: vec![
             EventSnapshot {
+                entrants: Vec::new(),
                 event_id: "event-a".to_owned(),
                 name: "Locally changed A".to_owned(),
                 phases: Vec::new(),
@@ -46,6 +48,7 @@ fn replaces_only_the_requested_event_from_pristine_snapshot() {
                 sets: Vec::new(),
             },
             EventSnapshot {
+                entrants: Vec::new(),
                 event_id: "event-b".to_owned(),
                 name: "Local B".to_owned(),
                 phases: Vec::new(),
@@ -60,6 +63,7 @@ fn replaces_only_the_requested_event_from_pristine_snapshot() {
         slug: "event".to_owned(),
         name: "Tournament".to_owned(),
         events: vec![EventSnapshot {
+            entrants: Vec::new(),
             event_id: "event-a".to_owned(),
             name: "Downloaded A".to_owned(),
             phases: Vec::new(),
@@ -138,6 +142,7 @@ fn clear_reset_set_results_preserves_confirmed_matchup_and_clears_scores() {
         slug: "tournament/example".to_owned(),
         name: "Tournament".to_owned(),
         events: vec![EventSnapshot {
+            entrants: Vec::new(),
             event_id: "event".to_owned(),
             name: "Event".to_owned(),
             phases: Vec::new(),
@@ -229,6 +234,7 @@ fn restoring_cascade_reset_preserves_root_entrants_and_clears_dependents() {
         slug: "tournament/example".to_owned(),
         name: "Tournament".to_owned(),
         events: vec![EventSnapshot {
+            entrants: Vec::new(),
             event_id: "event".to_owned(),
             name: "Event".to_owned(),
             phases: Vec::new(),
@@ -319,6 +325,7 @@ fn prior_phase_losers_history_does_not_create_grand_final_reset() {
     );
 
     let event = EventSnapshot {
+        entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "Event".to_owned(),
         phases: Vec::new(),
@@ -353,6 +360,7 @@ fn same_phase_group_losers_history_identifies_grand_final_side() {
     grand_final.phase_group_id = Some("phase-two".to_owned());
 
     let event = EventSnapshot {
+        entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "Event".to_owned(),
         phases: Vec::new(),
@@ -399,6 +407,7 @@ fn winners_side_grand_final_makes_existing_reset_inactive() {
     reset.phase_order = Some(2);
     reset.phase_group_id = Some("phase-two".to_owned());
     let event = EventSnapshot {
+        entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "Event".to_owned(),
         phases: Vec::new(),
@@ -436,6 +445,7 @@ fn losers_side_grand_final_keeps_reset_active() {
     reset.phase_order = Some(2);
     reset.phase_group_id = Some("phase-two".to_owned());
     let event = EventSnapshot {
+        entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "Event".to_owned(),
         phases: Vec::new(),
@@ -470,6 +480,7 @@ fn intermediate_grand_final_does_not_create_virtual_reset() {
     }))
     .unwrap();
     let event = EventSnapshot {
+        entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "Event".to_owned(),
         phases: Vec::new(),
@@ -500,6 +511,7 @@ fn existing_remote_reset_order_is_preserved() {
     let grand_final = make_set("gf", "Grand Final", Some("winner"), &["loser", "winner"]);
     let reset = make_set("gf-reset", "Grand Final Reset", None, &["loser", "winner"]);
     let mut event = EventSnapshot {
+        entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "event".to_owned(),
         phases: Vec::new(),
@@ -531,6 +543,7 @@ fn normalization_preserves_remote_reset_order() {
         &["loser", "winner"],
     );
     let mut event = EventSnapshot {
+        entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "event".to_owned(),
         phases: Vec::new(),
@@ -559,6 +572,7 @@ fn normalization_keeps_local_reset_winner_first() {
         &["loser", "winner"],
     );
     let mut event = EventSnapshot {
+        entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "event".to_owned(),
         phases: Vec::new(),

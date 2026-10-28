@@ -209,7 +209,7 @@ export function useTournamentCreation({
           toApiSlug(item.slug) === tournamentSlug
           && item.eventId === createSelectedEventId,
         );
-        if (existing && !window.confirm(
+        if (existing && !await window.confirm(
           t("このeventのスナップショットは既に存在します。上書きして再取得しますか？\n{p0}", { p0: existing.slug }),
         )) {
           return;
@@ -262,7 +262,7 @@ export function useTournamentCreation({
         throw new Error(t("同じ大会名・イベント名のローカルイベントが複数あります。不要なイベントを削除してから作成してください。"));
       }
       const existing = matches[0];
-      if (existing && !window.confirm(t(
+      if (existing && !await window.confirm(t(
         "同じ大会名・イベント名のローカルイベントが既に存在します。\n{p0} / {p1}\n\n上書き作成すると、既存の参加者・ブラケット・試合結果・配信開始記録を置き換えます。この操作は元に戻せません。上書き作成しますか？",
         { p0: existing.tournamentName, p1: existing.eventName },
       ))) return;

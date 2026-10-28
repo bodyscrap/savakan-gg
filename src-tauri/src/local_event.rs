@@ -1152,6 +1152,7 @@ pub fn generate_local_snapshot(
     }
 
     let event = EventSnapshot {
+        entrants: Vec::new(),
         event_id: event_id.to_owned(),
         name: input.event_name.trim().to_owned(),
         phases: builder.phases,

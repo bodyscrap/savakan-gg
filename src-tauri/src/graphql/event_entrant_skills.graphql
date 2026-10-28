@@ -1,0 +1,14 @@
+query EventEntrantSkills($eventId: ID!, $page: Int!, $perPage: Int!) {
+  event(id: $eventId) {
+    entrants(query: { page: $page, perPage: $perPage }) {
+      pageInfo {
+        totalPages
+      }
+      nodes {
+        id
+        name
+        skill
+      }
+    }
+  }
+}

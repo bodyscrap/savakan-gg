@@ -56,11 +56,11 @@ export function useCallSync({
     }
   }
 
-  function initializeCallListDisplay() {
+  async function initializeCallListDisplay() {
     if (shouldWarnIdentityChange) {
       window.alert(t("送信者情報が変更されています。意図しない挙動になることがあります。"));
     }
-    if (!window.confirm(t("呼び出しリストの表示を初期化します。保持中の未解決の呼び出しは削除しません。実行しますか？"))) {
+    if (!await window.confirm(t("呼び出しリストの表示を初期化します。保持中の未解決の呼び出しは削除しません。実行しますか？"))) {
       return;
     }
     resetDisplay({ rebuild: true });

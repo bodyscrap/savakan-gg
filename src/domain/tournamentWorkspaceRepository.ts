@@ -44,6 +44,7 @@ export type EventEntrantMeta = {
   entrantName: string;
   aliasName?: string;
   skill?: number | null;
+  importedSkill?: { skill: number | null } | null;
   playSide: PlaySide | null;
   characterNames: string[];
   categorySelections?: string[][] | null;
@@ -170,6 +171,7 @@ export type TournamentShareArchive = {
       entrantId: string;
       aliasName: string;
       skill?: number | null;
+      importedSkill?: { skill: number | null } | null;
       playSide: PlaySide | null;
       characterNames: string[];
       categorySelections?: string[][] | null;

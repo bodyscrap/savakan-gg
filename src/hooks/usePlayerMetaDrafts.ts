@@ -23,6 +23,7 @@ type SavePlayerMetaOptions = {
   silent?: boolean;
   manageBusy?: boolean;
   scope?: "all" | "alias" | "selections" | "skill";
+  restoreImportedSkill?: boolean;
 };
 
 type UsePlayerMetaDraftsOptions = {
@@ -319,8 +320,14 @@ export function usePlayerMetaDrafts({
     const normalizedSlug = toApiSlug(slug);
     const draft = getMetaDraft(eventSnapshot.eventId, entrantId);
     const existingMeta = findEntrantMeta(eventSnapshot.eventId, entrantId);
+    if (options?.restoreImportedSkill && !existingMeta?.importedSkill) {
+      setError(t("復元できるSkill Tierの取り込み値がありません。"));
+      return;
+    }
     const validated = savesSelections ? buildValidatedSelections(draft, configuredCategorySlots) : null;
-    const parsedSkillTier = draft.skillTier.trim() === "" ? null : Number(draft.skillTier);
+    const parsedSkillTier = options?.restoreImportedSkill
+      ? existingMeta?.importedSkill?.skill ?? null
+      : draft.skillTier.trim() === "" ? null : Number(draft.skillTier);
 
     if (validated && validated.errors.length > 0) {
       setError(validated.errors.join(" "));
@@ -364,6 +371,7 @@ export function usePlayerMetaDrafts({
           dirty?.delete("aliasName");
         }
         if (savesSkill && latest.skillTier === draft.skillTier) {
+          next.skillTier = parsedSkillTier == null ? "" : String(parsedSkillTier);
           dirty?.delete("skillTier");
         }
         if (validated && latest.categorySelections.length === draft.categorySelections.length
@@ -377,7 +385,9 @@ export function usePlayerMetaDrafts({
         return { ...current, [key]: next };
       });
       if (!silent) {
-        setMessage(scope === "alias"
+        setMessage(options?.restoreImportedSkill
+          ? t("Skill Tierを最新の取り込み値に復元しました。")
+          : scope === "alias"
           ? t("プレイヤーエイリアス名を保存しました。")
           : scope === "selections"
             ? t("アイテムの選択状態を保存しました。")
@@ -429,6 +439,19 @@ export function usePlayerMetaDrafts({
     }
   }
 
+  function restoreSelectedEntrantSkillTier() {
+    if (selectedEvent && selectedEntrant) {
+      return savePlayerMeta(selectedEvent, selectedEntrant.entrantId, selectedEntrant.entrantName, {
+        scope: "skill",
+        restoreImportedSkill: true,
+      }).catch((error: unknown) => setError(String(error)));
+    }
+  }
+
+  const canRestoreSelectedEntrantSkillTier = selectedEvent && selectedEntrant
+    ? findEntrantMeta(selectedEvent.eventId, selectedEntrant.entrantId)?.importedSkill != null
+    : false;
+
   const selectedEntrantMetaDraft = selectedEvent && selectedEntrant
     ? getMetaDraft(selectedEvent.eventId, selectedEntrant.entrantId)
     : null;
@@ -455,6 +478,8 @@ export function usePlayerMetaDrafts({
     selectedEntrantSkillTier,
     setSelectedEntrantSkillTier,
     selectedEntrantSkillTierErrors,
+    canRestoreSelectedEntrantSkillTier,
+    restoreSelectedEntrantSkillTier,
     selectedEntrantValidationErrors,
     addDraftCategorySelection,
     removeDraftCategorySelection,

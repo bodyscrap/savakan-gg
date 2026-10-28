@@ -124,7 +124,7 @@ export function useEventSnapshotMaintenance({
     const displayEventName = item.eventAlias && item.eventAlias.trim() !== ""
       ? item.eventAlias
       : item.eventName;
-    const confirmed = window.confirm(
+    const confirmed = await window.confirm(
       t("このローカルスナップショットを削除しますか？\n{p0} / {p1}", { p0: item.tournamentName, p1: displayEventName }),
     );
     if (!confirmed) {
@@ -210,7 +210,7 @@ export function useEventSnapshotMaintenance({
 
     setError("");
     setMessage("");
-    if (seedSnapshotRefreshRequired && !window.confirm(
+    if (seedSnapshotRefreshRequired && !await window.confirm(
       t("Seed反映直後はstart.ggのブラケットが未Startのため、まだスナップショットを更新できません。start.ggでブラケットをStartした後であることを確認しましたか？"),
     )) {
       setMessage(t("start.ggでブラケットをStartしてから、スナップショットを更新してください。"));
@@ -224,7 +224,7 @@ export function useEventSnapshotMaintenance({
         "has_unreported_initial_phase_seed_shuffle",
         { slug: normalizedSlug, eventId },
       );
-      if (hasUnreportedSeedShuffle && !window.confirm(
+      if (hasUnreportedSeedShuffle && !await window.confirm(
         t("未報告の初期Seed入替があります。スナップショットを更新するとローカルのSeed入替とブラケット表示が失われ、start.gg側の状態に置き換わります。更新を続行しますか？"),
       )) {
         setMessage(t("スナップショットの更新をキャンセルしました。"));

@@ -46,6 +46,20 @@ beforeEach(() => {
 });
 
 describe("direct bracket calls", () => {
+  it.each([false, true])("waits for an asynchronous confirmation before sending (%s)", async (confirmed) => {
+    let answer!: (value: boolean) => void;
+    vi.stubGlobal("window", {
+      confirm: vi.fn(() => new Promise<boolean>((resolve) => { answer = resolve; })),
+    });
+    const { sendCallMessageFromMatch, options } = setup();
+    const operation = sendCallMessageFromMatch(slot, "entrant");
+    expect(invoke).not.toHaveBeenCalled();
+    expect(options.setCallingEntrantId).not.toHaveBeenCalled();
+    answer(confirmed);
+    await operation;
+    expect(invoke).toHaveBeenCalledTimes(confirmed ? 2 : 0);
+  });
+
   it("confirms and broadcasts to call_list without composing a mailbox thread", async () => {
     const { sendCallMessageFromMatch, options } = setup();
     await sendCallMessageFromMatch(slot, "entrant");

@@ -62,6 +62,7 @@ export type EventSettingProps = {
     selectedEntrantAliasName: string;
     selectedEntrantSkillTier: string;
     skillTierErrors: string[];
+    canRestoreSkillTier: boolean;
     configuredCategorySlots: EventSettingCategorySlot[];
     selectedCategoryUsageList: EventSettingCategoryUsage[];
     draftSelectionsBySlot: string[][];
@@ -90,6 +91,7 @@ export type EventSettingProps = {
     onRemoveDraftSelection: (slotIndex: number, selectionIndex: number) => void;
     onSavePlayerAliasName: () => void;
     onSavePlayerSkillTier: () => void;
+    onRestorePlayerSkillTier: () => void;
     onSkillTierChange: (value: string) => void;
     onSavePlayerSelections: () => void;
     onEntrantAliasNameChange: (value: string) => void;
@@ -371,7 +373,15 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                           {t("Skill Tierを保存")}
                         </button>
                       </div>
+                      {playerMeta.canRestoreSkillTier && (
+                        <button type="button" disabled={!canSavePlayerMeta} onClick={actions.onRestorePlayerSkillTier}>
+                          {t("Skill Tierを最新の取り込み値に戻す")}
+                        </button>
+                      )}
                       <p className="meta">{t("大きい値ほど高Skillとして扱い、未設定は0として扱います。")}</p>
+                      {playerMeta.canRestoreSkillTier && (
+                        <p className="meta">{t("start.ggのSkill Tierは初期値として取り込みます。再取得時も編集値は維持し、復元先だけを最新の取り込み値に更新します。")}</p>
+                      )}
                       {skillTierErrors.length > 0 && <p className="meta error-text">{skillTierErrors.join(" ")}</p>}
                       <PlayerItemSelectionFields key={selectedEntrantId} slots={configuredCategorySlots} selections={draftSelectionsBySlot}
                         onAdd={actions.onAddDraftSelection} onRemove={actions.onRemoveDraftSelection} />

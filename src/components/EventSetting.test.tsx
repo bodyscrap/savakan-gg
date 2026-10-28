@@ -22,6 +22,7 @@ function setup(): EventSettingProps {
       selectedEventEntrants: [{ entrantId: "player", entrantName: "Player", aliasName: "日本語の名前" }],
       selectedEventMetaEntrantCount: 1, selectedEntrantId: "player", selectedEntrantName: "Player",
       selectedEntrantAliasName: "日本語の名前", selectedEntrantSkillTier: "", skillTierErrors: [],
+      canRestoreSkillTier: false,
       configuredCategorySlots: [],
       selectedCategoryUsageList: [], draftSelectionsBySlot: [], validationErrors: [],
       canSavePlayerMeta: true,
@@ -35,6 +36,7 @@ function setup(): EventSettingProps {
       onSaveEventManagementSetting: vi.fn(), onSelectEntrant: vi.fn(), onAddDraftSelection: vi.fn(),
       onRemoveDraftSelection: vi.fn(), onSavePlayerAliasName: vi.fn(), onSavePlayerSkillTier: vi.fn(),
       onSkillTierChange: vi.fn(), onSavePlayerSelections: vi.fn(),
+      onRestorePlayerSkillTier: vi.fn(),
       onEntrantAliasNameChange: vi.fn(),
     },
   };
@@ -55,6 +57,23 @@ function buttons(node: ReactNode): Array<{ label: string; disabled?: boolean; cl
 afterEach(() => setLanguage("ja"));
 
 describe("player metadata save controls", () => {
+  it("offers skill restoration only when an imported value exists, independently of validation", () => {
+    const props = setup();
+    const label = "Skill Tierを最新の取り込み値に戻す";
+    expect(buttons(EventSetting(props)).find((button) => button.label === label)).toBeUndefined();
+    props.playerMeta.canRestoreSkillTier = true;
+    props.playerMeta.skillTierErrors = ["invalid"];
+    props.playerMeta.validationErrors = ["invalid selections"];
+    const restore = buttons(EventSetting(props)).find((button) => button.label === label);
+    expect(restore?.disabled).toBe(false);
+    restore?.click?.();
+    expect(props.actions.onRestorePlayerSkillTier).toHaveBeenCalledOnce();
+    props.playerMeta.canSavePlayerMeta = false;
+    expect(buttons(EventSetting(props)).find((button) => button.label === label)?.disabled).toBe(true);
+    setLanguage("en");
+    expect(renderToStaticMarkup(<EventSetting {...props} />)).toContain("Restore latest imported skill tier");
+  });
+
   it("collapses item category settings by default and combines the participant heading and count", () => {
     const html = renderToStaticMarkup(<EventSetting {...setup()} />);
     expect(html).toMatch(/<details class="item-category-settings"><summary><h3>アイテム選択カテゴリの設定<\/h3><\/summary>[\s\S]*設定の適用&amp;保存[\s\S]*<\/details>/);

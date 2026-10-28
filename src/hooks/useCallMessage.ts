@@ -67,7 +67,7 @@ export function useCallMessage({
       onError(t("設定タブで送信者名・8桁ユーザーID・ネットワークデバイスを保存してから送信してください。"));
       return;
     }
-    if (!window.confirm(t("{p0} を呼び出しますか？\n宛先機能: 呼び出しリスト\n送信先: ブロードキャスト", { p0: slot.entrantName }))) {
+    if (!await window.confirm(t("{p0} を呼び出しますか？\n宛先機能: 呼び出しリスト\n送信先: ブロードキャスト", { p0: slot.entrantName }))) {
       return;
     }
     setCallingEntrantId(entrantId);

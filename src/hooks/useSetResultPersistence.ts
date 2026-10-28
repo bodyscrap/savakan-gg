@@ -375,7 +375,7 @@ export function useSetResultPersistence<TWorkspace>({
       return;
     }
 
-    const confirmed = window.confirm(t("このsetと影響するsetの結果をローカルで取り消します。実行しますか？"));
+    const confirmed = await window.confirm(t("このsetと影響するsetの結果をローカルで取り消します。実行しますか？"));
     if (!confirmed) {
       return;
     }

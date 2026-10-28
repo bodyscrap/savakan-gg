@@ -43,6 +43,26 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("local event overwrite confirmation", () => {
+  it.each([false, true])("waits for an asynchronous overwrite answer (%s)", async (confirmed) => {
+    vi.mocked(listLocalSnapshotEvents).mockResolvedValue([existing]);
+    let answer!: (value: boolean) => void;
+    const opened = new Promise<void>((resolveOpened) => {
+      vi.stubGlobal("window", { confirm: vi.fn(() => {
+        resolveOpened();
+        return new Promise<boolean>((resolve) => { answer = resolve; });
+      }) });
+    });
+    const creation = setup();
+    const operation = creation.createLocalEventSnapshot(input);
+    await opened;
+    expect(persistLocalEventSnapshot).not.toHaveBeenCalled();
+    expect(creation.onSnapshotCreated).not.toHaveBeenCalled();
+    answer(confirmed);
+    await operation;
+    expect(persistLocalEventSnapshot).toHaveBeenCalledTimes(confirmed ? 1 : 0);
+    expect(creation.onSnapshotCreated).toHaveBeenCalledTimes(confirmed ? 1 : 0);
+  });
+
   it("creates a new event without confirmation when the name pair is unused", async () => {
     const creation = setup();
     await creation.createLocalEventSnapshot(input);

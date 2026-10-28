@@ -12,7 +12,7 @@ type Query {
   phase(id: ID!): Phase
   set(id: ID!): Set
   seed(id: ID): Seed
-  event(slug: String!): Event
+  event(slug: String, id: ID): Event
   currentUser: User
   tournaments(query: TournamentPaginationQuery): TournamentConnection
 }
@@ -66,6 +66,21 @@ type Event {
   phases: [Phase]
   phaseGroups: [PhaseGroup]
   sets(page: Int, perPage: Int, sortType: SetSortType): SetConnection
+  entrants(query: EntrantPaginationQuery!): EntrantConnection
+}
+
+input EntrantPaginationQuery {
+  page: Int
+  perPage: Int
+}
+
+type EntrantConnection {
+  nodes: [Entrant]
+  pageInfo: PageInfo
+}
+
+type PageInfo {
+  totalPages: Int
 }
 
 type SetConnection {
@@ -166,6 +181,7 @@ type Progression {
 type Entrant {
   id: GgID!
   name: String
+  skill: Int
 }
 
 type Standing {
