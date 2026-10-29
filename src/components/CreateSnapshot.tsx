@@ -68,6 +68,8 @@ function createPreviewEventSearchLabel(event: TournamentEventPreviewItem): strin
 
 type SnapshotSource = "startgg" | "local";
 const SNAPSHOT_SOURCE_STORAGE_KEY = "savakan-gg.snapshot-source.v1";
+const LOCAL_TOURNAMENT_NAME_STORAGE_KEY = "savakan-gg.local-tournament-name.v1";
+const DEFAULT_LOCAL_TOURNAMENT_NAME = "Local Tournament";
 
 function readStoredSnapshotSource(): SnapshotSource {
   if (typeof window === "undefined") {
@@ -93,6 +95,18 @@ function defaultLocalEventName(): string {
     String(now.getDate()).padStart(2, "0"),
   ].join("-");
   return `${date} Local Event`;
+}
+
+function readStoredLocalTournamentName(): string {
+  if (typeof window === "undefined") {
+    return DEFAULT_LOCAL_TOURNAMENT_NAME;
+  }
+  try {
+    return window.localStorage.getItem(LOCAL_TOURNAMENT_NAME_STORAGE_KEY) ?? DEFAULT_LOCAL_TOURNAMENT_NAME;
+  } catch (error) {
+    console.error("Unable to read the local tournament name preference.", error);
+    return DEFAULT_LOCAL_TOURNAMENT_NAME;
+  }
 }
 
 const localRoundRobinTieBreakOptions: Array<{
@@ -126,9 +140,9 @@ function LocalEventSnapshotForm({
   canCreateLocalSnapshot,
   onCreateLocalSnapshot,
 }: LocalEventSnapshotFormProps) {
-  const [localTournamentName, setLocalTournamentName] = useState("Local Tournament");
+  const [localTournamentName, setLocalTournamentName] = useState(readStoredLocalTournamentName);
   const [localEventName, setLocalEventName] = useState(defaultLocalEventName);
-  const [localEventAlias, setLocalEventAlias] = useState(() => formatDefaultSnapshotName("Local Tournament", localEventName));
+  const [localEventAlias, setLocalEventAlias] = useState(() => formatDefaultSnapshotName(localTournamentName, localEventName));
   const [localEventAliasEdited, setLocalEventAliasEdited] = useState(false);
   const participantCount = registration.participants.length;
   const [phaseCount, setPhaseCount] = useState(1);
@@ -141,6 +155,16 @@ function LocalEventSnapshotForm({
   const [registrationPending, setRegistrationPending] = useState(false);
   const registrationComplete = participantCount >= 2 && participantCount <= 512
     && registration.participants.every((player) => canRegisterParticipant(player, registration));
+  const changeLocalTournamentName = (value: string) => {
+    setLocalTournamentName(value);
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(LOCAL_TOURNAMENT_NAME_STORAGE_KEY, value);
+      }
+    } catch (error) {
+      console.error("Unable to save the local tournament name preference.", error);
+    }
+  };
   let availablePlayers = participantCount;
   const effectivePhases = phases.map((phase, index) => {
     const poolCount = Math.max(1, Math.min(phase.poolCount, Math.floor(availablePlayers / 2)));
@@ -219,7 +243,7 @@ function LocalEventSnapshotForm({
       <h2>{t("ローカルeventの基本設定")}</h2>
       <div className="local-event-basic-fields">
         <div className="local-event-name-fields">
-          <label>{t("tournament名")}<input value={localTournamentName} onChange={(event) => setLocalTournamentName(event.currentTarget.value)} /></label>
+          <label>{t("tournament名")}<input value={localTournamentName} onChange={(event) => changeLocalTournamentName(event.currentTarget.value)} /></label>
           <label>{t("event名")}<input value={localEventName} onChange={(event) => setLocalEventName(event.currentTarget.value)} /></label>
           <label>{t("エイリアス名")}<input value={localEventAlias} onChange={(event) => {
             setLocalEventAliasEdited(true);

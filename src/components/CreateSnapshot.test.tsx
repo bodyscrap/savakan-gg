@@ -129,6 +129,28 @@ describe("snapshot creation defaults", () => {
     );
   });
 
+  it("restores and saves the local tournament name preference", () => {
+    const storageKey = "savakan-gg.local-tournament-name.v1";
+    const setItem = vi.fn();
+    const getItem = vi.fn((key: string) => key === storageKey ? "Saved Tournament" : "local");
+    vi.stubGlobal("window", { localStorage: { getItem, setItem } });
+    vi.mocked(React.useState).mockImplementation((...args: unknown[]) => {
+      const initialState = args[0];
+      const state = typeof initialState === "function" ? (initialState as () => unknown)() : initialState;
+      return [state, vi.fn()] as [unknown, React.Dispatch<unknown>];
+    });
+    vi.mocked(React.useEffect).mockImplementation(() => {});
+
+    const tree = CreateSnapshot(snapshotElement().props);
+    const localFormElement = tree.props.children[2];
+    const localForm = localFormElement.type(localFormElement.props);
+    const tournamentInput = localForm.props.children[0].props.children[1].props.children.props.children[0].props.children[1];
+
+    expect(tournamentInput.props.value).toBe("Saved Tournament");
+    tournamentInput.props.onChange({ currentTarget: { value: "Updated Tournament" } });
+    expect(setItem).toHaveBeenCalledWith(storageKey, "Updated Tournament");
+  });
+
   it.each(["invalid", "unavailable"])("reports %s storage and keeps the default usable", (mode) => {
     const error = new Error("Storage unavailable");
     const report = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -174,7 +196,9 @@ describe("snapshot creation defaults", () => {
   it("prefixes the default event name and alias with the local date", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 0, 2, 23, 45));
-    vi.stubGlobal("window", { localStorage: { getItem: () => "local" } });
+    vi.stubGlobal("window", { localStorage: {
+      getItem: (key: string) => key === storageKey ? "local" : null,
+    } });
     const html = renderToStaticMarkup(snapshotElement());
     expect(html).toContain('value="2026-01-02 Local Event"');
     expect(html).toContain('value="Local Tournament / 2026-01-02 Local Event"');
