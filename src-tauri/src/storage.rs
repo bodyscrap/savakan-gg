@@ -6136,8 +6136,11 @@ fn winners_to_losers_round_match(
     let destination_rounds =
         winners_to_losers_rounds_by_group.get(&graph_phase_group_key(source))?;
     if let Some(destination_rounds) = destination_rounds.get(&source_round) {
+        if destination_rounds.contains(&target_round) {
+            return Some(true);
+        }
         if destination_rounds.len() == 1 {
-            return Some(destination_rounds.contains(&target_round));
+            return Some(false);
         }
     }
 

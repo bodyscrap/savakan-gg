@@ -28,6 +28,156 @@ fn progression_targets_for(
 }
 
 #[test]
+fn seven_player_losers_round_two_preserves_the_loser_advancing_through_a_bye() {
+    let input = serde_json::from_value(serde_json::json!({
+        "tournamentName": "Local",
+        "eventName": "Seven players",
+        "participants": (1..=7).map(|index| serde_json::json!({
+            "entrantId": format!("player-{index}"),
+            "name": format!("Player {index}"),
+            "skill": index,
+            "categorySelections": [[], [], []]
+        })).collect::<Vec<_>>(),
+        "requireItemSelections": false,
+        "eventManagement": {
+            "sideDecisionMethod": "coin_toss",
+            "itemListSnapshots": []
+        },
+        "phases": [{
+            "name": "Final",
+            "poolCount": 1,
+            "bracketType": "DOUBLE_ELIMINATION",
+            "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+            "enabledTiebreakRules": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"]
+        }]
+    }))
+    .expect("local event input should deserialize");
+    let mut snapshot = crate::local_event::generate_local_snapshot(
+        &input, "local-test", "local-test", "event",
+    )
+    .expect("local event should generate");
+    let event = &snapshot.events[0];
+    let source_a = event.sets.iter().find(|set| set.identifier.as_deref() == Some("A")).unwrap();
+    let source_a_id = source_a.set_id.clone();
+    let source_a_loser = source_a.slots[1].entrant_id.clone();
+    let target_h_id = event
+        .sets
+        .iter()
+        .find(|set| set.identifier.as_deref() == Some("H"))
+        .unwrap()
+        .set_id
+        .clone();
+    let graph = build_bracket_graph(&snapshot, event);
+    let target_h = graph.event.sets.iter().find(|set| set.set_id == target_h_id).unwrap();
+    assert_eq!(target_h.round, Some(-2));
+    let source = target_h.entrant1_source.as_ref().unwrap();
+    assert_eq!(source.resolved_set_id.as_deref(), Some(source_a_id.as_str()));
+    assert_eq!(source.condition.as_deref(), Some("loser"));
+    assert!(graph.edges.iter().any(|edge| {
+        edge.from_set_id == source_a_id
+            && edge.to_set_id == target_h_id
+            && edge.target_slot_index == 0
+            && edge.relation == "loser"
+    }));
+
+    apply_source_based_tbd_labels(&mut snapshot.events[0]);
+    let target_h = snapshot.events[0].sets.iter().find(|set| set.set_id == target_h_id).unwrap();
+    assert_eq!(target_h.slots[0].entrant_name, "loser of A");
+    assert_eq!(target_h.slots[1].entrant_name, "loser of E");
+
+    let source_a = snapshot.events[0].sets.iter_mut().find(|set| set.set_id == source_a_id).unwrap();
+    source_a.winner_id = source_a.slots[0].entrant_id.clone();
+    source_a.state = 3;
+    rebuild_progression_from_completed_sets(&mut snapshot);
+    let target_h = snapshot.events[0].sets.iter().find(|set| set.set_id == target_h_id).unwrap();
+    assert!(source_a_loser.is_some());
+    assert_eq!(target_h.slots[0].entrant_id, source_a_loser);
+}
+
+#[test]
+fn five_player_losers_final_labels_and_progression_use_the_direct_merge_sources() {
+    let input = serde_json::from_value(serde_json::json!({
+        "tournamentName": "Local",
+        "eventName": "Five players",
+        "participants": (1..=5).map(|index| serde_json::json!({
+            "entrantId": format!("player-{index}"),
+            "name": format!("Player {index}"),
+            "skill": index,
+            "categorySelections": [[], [], []]
+        })).collect::<Vec<_>>(),
+        "requireItemSelections": false,
+        "eventManagement": {
+            "sideDecisionMethod": "coin_toss",
+            "itemListSnapshots": []
+        },
+        "phases": [{
+            "name": "Final",
+            "poolCount": 1,
+            "bracketType": "DOUBLE_ELIMINATION",
+            "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+            "enabledTiebreakRules": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"]
+        }]
+    }))
+    .expect("local event input should deserialize");
+    let mut snapshot = crate::local_event::generate_local_snapshot(
+        &input, "local-test", "local-test", "event",
+    )
+    .expect("local event should generate");
+    rebuild_progression_from_completed_sets(&mut snapshot);
+    apply_source_based_tbd_labels(&mut snapshot.events[0]);
+    let event = &snapshot.events[0];
+    let previous = event.sets.iter().find(|set| set.round == Some(-2)).unwrap();
+    let winners_final = event.sets.iter().find(|set| set.round == Some(3)).unwrap();
+    let losers_final = event
+        .sets
+        .iter()
+        .find(|set| set.full_round_text == "Losers Final")
+        .unwrap();
+    let previous_id = previous.set_id.clone();
+    let winners_final_id = winners_final.set_id.clone();
+    let losers_final_id = losers_final.set_id.clone();
+    assert_eq!(losers_final.round, Some(-3));
+    assert_eq!(
+        losers_final.slots[0].entrant_name,
+        format!("winner of {}", previous.identifier.as_deref().unwrap())
+    );
+    assert_eq!(
+        losers_final.slots[1].entrant_name,
+        format!("loser of {}", winners_final.identifier.as_deref().unwrap())
+    );
+
+    let preceding_ids = event
+        .sets
+        .iter()
+        .take_while(|set| set.set_id != losers_final_id)
+        .filter(|set| !set.is_bye)
+        .map(|set| set.set_id.clone())
+        .collect::<Vec<_>>();
+    for set_id in preceding_ids {
+        let set = snapshot.events[0]
+            .sets
+            .iter_mut()
+            .find(|set| set.set_id == set_id)
+            .unwrap();
+        assert!(set.slots.iter().all(|slot| slot.entrant_id.is_some()));
+        set.winner_id = set.slots[0].entrant_id.clone();
+        set.state = 3;
+        rebuild_progression_from_completed_sets(&mut snapshot);
+    }
+    let event = &snapshot.events[0];
+    let previous = event.sets.iter().find(|set| set.set_id == previous_id).unwrap();
+    let winners_final = event.sets.iter().find(|set| set.set_id == winners_final_id).unwrap();
+    let losers_final = event.sets.iter().find(|set| set.set_id == losers_final_id).unwrap();
+    assert_eq!(losers_final.slots[0].entrant_id, previous.winner_id);
+    let winners_final_loser = winners_final
+        .slots
+        .iter()
+        .find(|slot| slot.entrant_id != winners_final.winner_id)
+        .unwrap();
+    assert_eq!(losers_final.slots[1].entrant_id, winners_final_loser.entrant_id);
+}
+
+#[test]
 fn pending_confirmation_is_restored_only_for_the_replayed_roster() {
     let mut event: EventSnapshot = serde_json::from_value(serde_json::json!({
         "eventId": "event",

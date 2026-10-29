@@ -25,6 +25,9 @@ start.gg で運用する大会を、イベント単位でローカルにミラ�
 
 ### ローカルeventのフェーズ設定
 
+- ダブルエリミネーションでは、Winners Round 1 の実試合数が Round 2 のセット数を上回る場合、Losers Round 1 の端数は BYE と組み合わせます。Round 2 のセット数が同数以上の場合は、BYE 勝者同士の Winners Round 2 セットの敗者を端数枠へ送り、その勝者と残りの Winners Round 2 敗者を Losers Round 2 で合流させます。
+- Losers 内の勝者同士を組み合わせるラウンドで実試合が発生しない場合は、そのラウンドを省略して次の Winners 敗者との合流戦へ直接接続します。5人の場合、Losers Final は Round 3（-3）となり、Losers Round 2 の勝者と Winners Round 3 の敗者が対戦します。
+- Losers の BYE 通過者は、非表示の BYE セットの勝者ではなく元の対戦元を参照します。7人の場合、Losers Round 1 を BYE で通過した Winners Round 1 の敗者は、Losers Round 2 に「loser of …」として引き継がれます。
 - イベントの作成方法（start.gg取り込み／ローカルevent）は前回の選択を保存し、次回起動時にも復元します。ローカルeventのデフォルトイベント名は `YYYY-MM-DD Local Event` です。
 - ローカルeventでは、前後の空白を除いたtournament名・event名の組が同じイベントを重複作成できません。既存のローカルeventがある場合は上書き警告を表示し、承認した場合だけ既存IDを維持して参加者・ブラケット・試合結果・配信開始記録を置き換えます。キャンセル時は変更しません。既に同名のローカルeventが複数ある場合は、不要なイベントを削除してから作成してください。start.gg由来のイベントはこの名前による重複判定から除外します。
 - フェーズ数はtournament名・event名・エイリアス名と同じ行の右端で、1桁用のコンパクトな選択欄から指定します。
