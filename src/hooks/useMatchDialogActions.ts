@@ -21,6 +21,7 @@ type UseMatchDialogActionsOptions = {
   getSetScoresForDisplay: (set: SetSnapshot) => { scores: SetScoreDraft };
   initializeMatchDraft: (input: InitializeMatchDraftInput) => void;
   busy: boolean;
+  interactionDisabled?: boolean;
   overlayBusy: boolean;
   stopOverlay: (fullyStopped: boolean) => Promise<void>;
   toggleOverlay: (set: SetSnapshot) => Promise<void>;
@@ -36,11 +37,13 @@ export function useMatchDialogActions({
   getSetScoresForDisplay,
   initializeMatchDraft,
   busy,
+  interactionDisabled = false,
   overlayBusy,
   stopOverlay,
   toggleOverlay,
 }: UseMatchDialogActionsOptions) {
   function openMatchDialog(set: SetSnapshot, forcedDraftState?: SetResultDraftState) {
+    if (interactionDisabled) return;
     if (!isDisplayableSet(set, selectedEvent) || isInactiveGrandFinalReset(set, selectedEvent)) {
       return;
     }
@@ -67,6 +70,7 @@ export function useMatchDialogActions({
   }
 
   function handleRoundRobinMatchClick(set: SetSnapshot, event: MouseEvent<HTMLButtonElement>) {
+    if (interactionDisabled) { event.preventDefault(); return; }
     if (event.altKey) {
       event.preventDefault();
       if (!busy && !overlayBusy) {
@@ -85,6 +89,7 @@ export function useMatchDialogActions({
   }
 
   function handleEliminationSetActivate(set: SetSnapshot, event: MouseEvent<HTMLElement>) {
+    if (interactionDisabled) { event.preventDefault(); return; }
     if (event.altKey && event.button === 0) {
       event.preventDefault();
       if (!busy && !overlayBusy) {

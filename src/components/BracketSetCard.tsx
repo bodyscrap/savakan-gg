@@ -1,5 +1,6 @@
 import { t } from "../i18n";
 import type { KeyboardEvent, MouseEvent } from "react";
+import { PlayerSeedSwapTarget, type PlayerSeedSwapControls } from "./PlayerSeedSwap";
 
 type BracketSetCardSlot = {
   key: string;
@@ -20,6 +21,8 @@ type BracketSetCardProps = {
   slots: BracketSetCardSlot[];
   onActivate: (event: MouseEvent<HTMLElement>) => void;
   onOpen: () => void;
+  seedSwap?: PlayerSeedSwapControls;
+  entrantIds?: (string | null)[];
 };
 
 export function BracketSetCard({
@@ -32,6 +35,8 @@ export function BracketSetCard({
   slots,
   onActivate,
   onOpen,
+  seedSwap,
+  entrantIds,
 }: BracketSetCardProps) {
   const resultStatusClass = resultStatus ? `set-card-status-${resultStatus}` : "";
 
@@ -47,9 +52,10 @@ export function BracketSetCard({
       className={`set-card simple-match-card ${changeClass} ${resultStatusClass} ${isLiveOverlaySet ? "set-card-live" : ""}`}
       style={{ top: `${Math.round(positionY)}px` }}
       role="button"
-      tabIndex={0}
-      onClick={onActivate}
-      onKeyDown={handleKeyDown}
+      aria-disabled={seedSwap?.active || undefined}
+      tabIndex={seedSwap?.active ? -1 : 0}
+      onClick={seedSwap?.active ? undefined : onActivate}
+      onKeyDown={seedSwap?.active ? undefined : handleKeyDown}
     >
       {(displayCode || isLiveOverlaySet || resultStatusLabel !== "") && (
         <div className="set-header-row">
@@ -64,7 +70,8 @@ export function BracketSetCard({
           </div>
         </div>
       )}
-      {slots.map((slot) => (
+      {slots.map((slot, index) => (
+        <PlayerSeedSwapTarget key={slot.key} controls={seedSwap} entrantId={entrantIds?.[index] ?? null} samePoolOnly>
         <div className="simple-match-row" key={slot.key}>
           <span className={`side-badge ${slot.sideBadgeClass}`}>
             {slot.sideLabel}
@@ -72,6 +79,7 @@ export function BracketSetCard({
           <span className="simple-player-name">{slot.entrantName}</span>
           <span className={`simple-games ${slot.scoreClass}`}>{slot.gameWins}</span>
         </div>
+        </PlayerSeedSwapTarget>
       ))}
     </article>
   );

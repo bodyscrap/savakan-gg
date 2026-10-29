@@ -1937,6 +1937,7 @@ async fn query_tournament_snapshot(
                 .collect::<Vec<SetSnapshot>>();
 
             EventSnapshot {
+                origin: crate::models::EventOrigin::Startgg,
                 event_id: event.id.to_string(),
                 name: event.name.unwrap_or_else(|| "Unnamed event".to_owned()),
                 phases: event
@@ -2481,6 +2482,7 @@ async fn fetch_event_snapshot_by_slug_with_policy(
         slug: tournament_slug,
         name: tournament_name,
         events: vec![EventSnapshot {
+            origin: crate::models::EventOrigin::Startgg,
             event_id,
             name: event_name,
             phases,

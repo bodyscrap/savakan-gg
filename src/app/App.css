@@ -2317,6 +2317,25 @@ button:disabled {
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
+.seed-swap-toolbar {
+  margin: 0.8rem 0;
+}
+
+.seed-swap-target {
+  cursor: grab;
+  border-radius: 6px;
+  outline: 1px dashed #3b82f6;
+}
+
+.seed-swap-target:active {
+  cursor: grabbing;
+}
+
+.seed-swap-over {
+  outline: 3px solid #2563eb;
+  background: #dbeafe;
+}
+
 .simple-match-card:hover {
   border-color: #93c5fd;
   box-shadow: 0 1px 6px rgba(59, 130, 246, 0.18);

@@ -2,6 +2,7 @@ import { t } from "../i18n";
 import type { CSSProperties, MouseEvent } from "react";
 import type { PhaseGroupSeedSnapshot, SetSnapshot } from "../domain/bracketProgression";
 import { BracketSetCard } from "./BracketSetCard";
+import type { PlayerSeedSwapControls } from "./PlayerSeedSwap";
 
 export type EliminationBracketCardView = {
   set: SetSnapshot;
@@ -36,6 +37,7 @@ export type EliminationBracketSectionView = {
 };
 
 type EliminationBracketProps = {
+  seedSwap?: PlayerSeedSwapControls;
   scaleStyle: CSSProperties;
   phaseGroupKey: string;
   seeds: PhaseGroupSeedSnapshot[];
@@ -53,6 +55,7 @@ export function EliminationBracket({
   sections,
   onActivateSet,
   onOpenSet,
+  seedSwap,
 }: EliminationBracketProps) {
   return (
     <div className="bracket-split-stack" style={scaleStyle}>
@@ -91,6 +94,11 @@ export function EliminationBracket({
                       resultStatusLabel={card.resultStatusLabel}
                       isLiveOverlaySet={card.isLiveOverlaySet}
                       slots={card.slots}
+                      seedSwap={seedSwap}
+                      entrantIds={card.set.slots.map((slot) =>
+                        seedSwap?.positions.some((position) => position.entrantId === slot.entrantId
+                          && position.phaseGroupId === card.set.phaseGroupId)
+                          ? slot.entrantId : null)}
                       onActivate={(event) => onActivateSet(card.set, event)}
                       onOpen={() => onOpenSet(card.set)}
                     />

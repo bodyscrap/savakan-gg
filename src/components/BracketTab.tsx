@@ -12,6 +12,7 @@ import { getBracketProgressionModel } from "../domain/bracketProgression";
 import { RoundRobinBracket } from "./RoundRobinBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
 import type { FeatureMessage } from "../domain/messages";
+import { PlayerSeedSwapToggle, type PlayerSeedSwapControls } from "./PlayerSeedSwap";
 
 type RoundRobinDiagnostics = {
   candidateSetCount: number;
@@ -32,6 +33,7 @@ type RoundRobinView = {
 };
 
 type BracketTabProps = {
+  seedSwap?: PlayerSeedSwapControls;
   busy: boolean;
   draftPendingCount: number;
   confirmedReportableCount: number;
@@ -139,6 +141,7 @@ export function BracketTab({
   onRoundRobinMatchClick,
   onEliminationSetActivate,
   onOpenSet,
+  seedSwap,
 }: BracketTabProps) {
   const selectedBracketModel = selectedPhasePoolGroup
     ? getBracketProgressionModel(selectedPhasePoolGroup.bracketType)
@@ -167,6 +170,7 @@ export function BracketTab({
         <section className="panel">
           <h2>{eventAlias.trim() !== "" ? eventAlias : t("未設定")}</h2>
           <p className="meta">{t("tournament名: {value1}, event名: {value2}", { value1: tournamentName, value2: eventName })}</p>
+          <PlayerSeedSwapToggle controls={seedSwap} />
           <div className="event-toolbar">
             <div className="bracket-scope-controls" aria-label={t("ブラケット表示範囲")}>
               <label className="bracket-scope-field" htmlFor="phase-select">{t("対象フェーズ")}<select
@@ -307,6 +311,7 @@ export function BracketTab({
                 )}
                 {selectedBracketModel === "round_robin" ? (
                   <RoundRobinBracket
+                    interactionDisabled={seedSwap?.active}
                     scaleStyle={bracketScaleStyle}
                     setCount={selectedPhasePoolGroup.sets.length}
                     phaseGroupId={selectedPhasePoolGroup.phaseGroupId}
@@ -331,6 +336,7 @@ export function BracketTab({
                       </h3>
                     )}
                     <EliminationBracket
+                      seedSwap={seedSwap}
                       scaleStyle={bracketScaleStyle}
                       phaseGroupKey={selectedPhasePoolGroup.key}
                       seeds={selectedPhasePoolGroup.seeds}

@@ -322,6 +322,66 @@ fn source_snapshot(source: &SetSource) -> SetEntrantSourceSnapshot {
     }
 }
 
+fn progression_id_for_seed(seed: &SeedEntry) -> Option<String> {
+    Some(format!(
+        "{}-place-{}",
+        seed.origin_phase_group_id.as_deref()?,
+        seed.origin_placement?
+    ))
+}
+
+fn set_progression_output(
+    set: &mut SetSnapshot,
+    seed: &SeedEntry,
+    progression_id: &str,
+    winner: bool,
+) {
+    let (
+        progression_seed_id,
+        progression_id_field,
+        seed_num,
+        placeholder_name,
+        origin_phase_group_id,
+        origin_phase_group_display_identifier,
+        origin_phase_order,
+        origin_placement,
+        origin_order,
+    ) = if winner {
+        (
+            &mut set.winner_progression_seed_id,
+            &mut set.winner_progression_id,
+            &mut set.winner_progression_seed_num,
+            &mut set.winner_progression_seed_placeholder_name,
+            &mut set.winner_progression_origin_phase_group_id,
+            &mut set.winner_progression_origin_phase_group_display_identifier,
+            &mut set.winner_progression_origin_phase_order,
+            &mut set.winner_progression_origin_placement,
+            &mut set.winner_progression_origin_order,
+        )
+    } else {
+        (
+            &mut set.loser_progression_seed_id,
+            &mut set.loser_progression_id,
+            &mut set.loser_progression_seed_num,
+            &mut set.loser_progression_seed_placeholder_name,
+            &mut set.loser_progression_origin_phase_group_id,
+            &mut set.loser_progression_origin_phase_group_display_identifier,
+            &mut set.loser_progression_origin_phase_order,
+            &mut set.loser_progression_origin_placement,
+            &mut set.loser_progression_origin_order,
+        )
+    };
+    *progression_seed_id = Some(seed.seed_id.clone());
+    *progression_id_field = Some(progression_id.to_owned());
+    *seed_num = Some(seed.seed_num);
+    *placeholder_name = seed.placeholder_name.clone();
+    *origin_phase_group_id = seed.origin_phase_group_id.clone();
+    *origin_phase_group_display_identifier = seed.origin_phase_group_display_identifier.clone();
+    *origin_phase_order = seed.origin_phase_order;
+    *origin_placement = seed.origin_placement;
+    *origin_order = seed.origin_order;
+}
+
 fn next_power_of_two(value: usize) -> usize {
     value.next_power_of_two()
 }
@@ -1005,6 +1065,96 @@ fn qualifier_pool_order(
     }
 }
 
+fn qualifier_pool_indices(entrants: &[SeedEntry], pool_count: usize) -> Vec<Vec<usize>> {
+    let capacities = balanced_indices(entrants.len(), pool_count)
+        .iter().map(Vec::len).collect::<Vec<_>>();
+    let mut groups = vec![Vec::<usize>::new(); pool_count];
+    for (index, entrant) in entrants.iter().enumerate() {
+        let destination = (0..pool_count)
+            .filter(|&pool| groups[pool].len() < capacities[pool])
+            .min_by_key(|&pool| {
+                let rank_count = groups[pool].iter()
+                    .filter(|&&other| entrants[other].origin_placement == entrant.origin_placement)
+                    .count();
+                let origin_count = groups[pool].iter()
+                    .filter(|&&other| entrants[other].origin_phase_group_id == entrant.origin_phase_group_id)
+                    .count();
+                (rank_count, origin_count, groups[pool].len())
+            })
+            .expect("balanced pools have space for every qualifier");
+        groups[destination].push(index);
+    }
+
+    loop {
+        let mut improved = false;
+        for left in 0..pool_count {
+            for right in left + 1..pool_count {
+                for a in 0..groups[left].len() {
+                    for b in 0..groups[right].len() {
+                        let first = &entrants[groups[left][a]];
+                        let second = &entrants[groups[right][b]];
+                        if first.origin_placement != second.origin_placement
+                            || first.origin_phase_group_id == second.origin_phase_group_id
+                        {
+                            continue;
+                        }
+                        let count = |pool: usize, origin: &Option<String>| groups[pool].iter()
+                            .filter(|&&index| &entrants[index].origin_phase_group_id == origin)
+                            .count();
+                        let before = count(left, &first.origin_phase_group_id)
+                            + count(right, &second.origin_phase_group_id);
+                        let after = count(right, &first.origin_phase_group_id)
+                            + count(left, &second.origin_phase_group_id) + 2;
+                        if before > after {
+                            let saved = groups[left][a];
+                            groups[left][a] = groups[right][b];
+                            groups[right][b] = saved;
+                            improved = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !improved {
+            break;
+        }
+    }
+
+    groups
+}
+
+fn elimination_qualifier_indices(entrants: &[SeedEntry], pool_count: usize) -> Vec<Vec<usize>> {
+    let mut groups = qualifier_pool_indices(entrants, pool_count);
+    for group in &mut groups {
+        let size = next_power_of_two(group.len());
+        let positions = seeded_positions(size);
+        let mut position_by_seed = vec![0; size];
+        for (position, seed) in positions.into_iter().enumerate() {
+            position_by_seed[seed - 1] = position;
+        }
+        let mut remaining = std::mem::take(group);
+        while !remaining.is_empty() {
+            let placement = entrants[remaining[0]].origin_placement;
+            let position = position_by_seed[group.len()];
+            let candidate = (0..remaining.len())
+                .take_while(|&index| entrants[remaining[index]].origin_placement == placement)
+                .min_by_key(|&index| {
+                    // Minimize same-Pool opponents in the smallest bracket sections first.
+                    (1..=size.trailing_zeros()).map(|round| {
+                        group.iter().enumerate().filter(|&(seed, other)| {
+                            entrants[*other].origin_phase_group_id
+                                == entrants[remaining[index]].origin_phase_group_id
+                                && position_by_seed[seed] >> round == position >> round
+                        }).count()
+                    }).collect::<Vec<_>>()
+                })
+                .expect("each placement tier contains a qualifier");
+            group.push(remaining.remove(candidate));
+        }
+    }
+    groups
+}
+
 pub fn generate_local_snapshot(
     input: &CreateLocalEventSnapshotInput,
     tournament_id: &str,
@@ -1063,7 +1213,13 @@ pub fn generate_local_snapshot(
             phase_order: Some(phase_order as i64),
         });
 
-        let entrant_indices = if phase_index == 0 && has_skill_tiers {
+        let entrant_indices = if phase_index > 0
+            && matches!(config.bracket_type.as_str(), "SINGLE_ELIMINATION" | "DOUBLE_ELIMINATION")
+        {
+            elimination_qualifier_indices(&current_entrants, config.pool_count)
+        } else if phase_index > 0 && config.pool_count > 1 {
+            qualifier_pool_indices(&current_entrants, config.pool_count)
+        } else if phase_index == 0 && has_skill_tiers {
             snake_indices(current_entrants.len(), config.pool_count)
         } else {
             balanced_indices(current_entrants.len(), config.pool_count)
@@ -1086,6 +1242,26 @@ pub fn generate_local_snapshot(
                     seed.entrant_name = None;
                 }
                 seeds.push(seed);
+            }
+            for seed in seeds
+                .iter()
+                .filter(|seed| seed.origin_phase_order.is_some())
+            {
+                let Some(progression_id) = progression_id_for_seed(seed) else {
+                    continue;
+                };
+                for source_set in &mut builder.sets {
+                    if source_set.phase_group_id.as_deref() != seed.origin_phase_group_id.as_deref()
+                    {
+                        continue;
+                    }
+                    if source_set.winner_placement == seed.origin_placement {
+                        set_progression_output(source_set, seed, &progression_id, true);
+                    }
+                    if source_set.loser_placement == seed.origin_placement {
+                        set_progression_output(source_set, seed, &progression_id, false);
+                    }
+                }
             }
             phase_group_ids.push((group_id, display_identifier, group_name));
             group_entries.push(seeds);
@@ -1126,7 +1302,7 @@ pub fn generate_local_snapshot(
                     .iter()
                     .map(|seed| PhaseGroupSeedSnapshot {
                         seed_id: seed.seed_id.clone(),
-                        progression_id: None,
+                        progression_id: progression_id_for_seed(seed),
                         group_seed_num: Some(seed.seed_num),
                         seed_num: Some(seed.seed_num),
                         placement: seed.origin_placement,
@@ -1205,9 +1381,7 @@ pub fn generate_local_snapshot(
         if phase_index + 1 < input.phases.len() {
             let mut qualifiers = Vec::<SeedEntry>::new();
             let next_phase = &input.phases[phase_index + 1];
-            let snake_bracket_seeds = config.bracket_type == "ROUND_ROBIN"
-                && next_phase.pool_count == 1
-                && matches!(
+            let snake_bracket_seeds = matches!(
                     next_phase.bracket_type.as_str(),
                     "SINGLE_ELIMINATION" | "DOUBLE_ELIMINATION"
                 );
@@ -1247,6 +1421,7 @@ pub fn generate_local_snapshot(
     }
 
     let event = EventSnapshot {
+        origin: crate::models::EventOrigin::Local,
         entrants: Vec::new(),
         event_id: event_id.to_owned(),
         name: input.event_name.trim().to_owned(),
@@ -1909,11 +2084,12 @@ mod tests {
     }
 
     #[test]
-    fn round_robin_qualifiers_are_snake_seeded_into_elimination_brackets() {
+    fn qualifiers_are_snake_seeded_into_elimination_brackets() {
+        for source_type in ["ROUND_ROBIN", "SINGLE_ELIMINATION", "DOUBLE_ELIMINATION"] {
         for bracket_type in ["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION"] {
             let snapshot = generate(&input(
                 16,
-                vec![phase("ROUND_ROBIN", 4, 2), phase(bracket_type, 1, 0)],
+                vec![phase(source_type, 4, 2), phase(bracket_type, 1, 0)],
             ));
             let event = &snapshot.events[0];
             let final_group = event
@@ -1966,6 +2142,67 @@ mod tests {
                     ("Pool 3 #1", "Pool 4 #2"),
                 ]
             );
+        }
+        }
+    }
+
+    #[test]
+    fn qualifiers_spread_across_pools_and_preserve_rank_priority() {
+        for source_pools in [2, 3, 4, 5, 8] {
+            for qualifiers in [2, 3, 4] {
+                for target_pools in [1, 2, 3] {
+                    if source_pools * qualifiers / target_pools < 2 {
+                        continue;
+                    }
+                    for target_type in ["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION", "ROUND_ROBIN"] {
+                        for source_type in ["ROUND_ROBIN", "SINGLE_ELIMINATION", "DOUBLE_ELIMINATION"] {
+                        let snapshot = generate(&input(
+                            source_pools * 8,
+                            vec![
+                                phase(source_type, source_pools, qualifiers),
+                                phase(target_type, target_pools, 0),
+                            ],
+                        ));
+                        let groups = snapshot.events[0].phase_groups.iter()
+                            .filter(|group| group.phase_order == Some(2)).collect::<Vec<_>>();
+                        let sizes = groups.iter().map(|group| group.seeds.len()).collect::<Vec<_>>();
+                        assert!(sizes.iter().max().unwrap() - sizes.iter().min().unwrap() <= 1);
+                        for group in &groups {
+                            assert!(group.seeds.windows(2)
+                                .all(|pair| pair[0].origin_placement <= pair[1].origin_placement));
+                        }
+                        for source in 1..=source_pools {
+                            let counts = groups.iter().map(|group| group.seeds.iter()
+                                .filter(|seed| seed.origin_phase_group_display_identifier.as_deref()
+                                    == Some(source.to_string().as_str())).count()).collect::<Vec<_>>();
+                            assert!(counts.iter().max().unwrap() - counts.iter().min().unwrap() <= 1,
+                                "source={source}, pools={source_pools}, qualifiers={qualifiers}, targets={target_pools}: {counts:?}");
+                        }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn same_pool_qualifiers_are_separated_until_the_latest_bracket_sections() {
+        for source_pools in [2, 4, 8] {
+            for qualifiers in [2, 4] {
+                let snapshot = generate(&input(
+                    source_pools * 8,
+                    vec![phase("DOUBLE_ELIMINATION", source_pools, qualifiers),
+                        phase("SINGLE_ELIMINATION", 1, 0)],
+                ));
+                let group = snapshot.events[0].phase_groups.last().unwrap();
+                let positions = seeded_positions(group.seeds.len());
+                for section in positions.chunks_exact(source_pools) {
+                    let origins = section.iter().map(|seed|
+                        group.seeds[seed - 1].origin_phase_group_id.as_deref().unwrap()
+                    ).collect::<std::collections::HashSet<_>>();
+                    assert_eq!(origins.len(), source_pools);
+                }
+            }
         }
     }
 

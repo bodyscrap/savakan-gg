@@ -2,6 +2,7 @@ import { t } from "../i18n";
 import type { ItemListConfig } from "../domain/itemList";
 import { YoutubeChapters } from "./YoutubeChapters";
 import { CategorySettingsFields, PlayerItemSelectionFields } from "./ItemSelectionFields";
+import { PlayerSeedSwapTarget, PlayerSeedSwapToggle, type PlayerSeedSwapControls } from "./PlayerSeedSwap";
 
 export type EventSettingEntrant = {
   entrantId: string;
@@ -28,6 +29,7 @@ export type EventSettingCategoryUsage = {
 export type SideDecisionMethod = "upper_1p" | "upper_2p" | "random";
 
 export type EventSettingProps = {
+  seedSwap?: PlayerSeedSwapControls;
   event: {
     slug: string;
     eventId: string;
@@ -98,7 +100,7 @@ export type EventSettingProps = {
   };
 };
 
-export function EventSetting({ event, rules, playerMeta, actions }: EventSettingProps) {
+export function EventSetting({ event, rules, playerMeta, actions, seedSwap }: EventSettingProps) {
   const {
     hasSelectedEvent,
     tournamentName,
@@ -147,6 +149,11 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
     onSavePlayerSelections,
     onEntrantAliasNameChange,
   } = actions;
+  const displayedEntrants = seedSwap?.active
+    ? [...selectedEventEntrants].sort((left, right) =>
+      seedSwap.positions.findIndex((position) => position.entrantId === left.entrantId)
+      - seedSwap.positions.findIndex((position) => position.entrantId === right.entrantId))
+    : selectedEventEntrants;
   return (
     <section className="panel">
       {!hasSelectedEvent ? (
@@ -249,6 +256,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
             </div>
           </div>
 
+          <PlayerSeedSwapToggle controls={seedSwap} />
           {selectedEventEntrants.length === 0 ? (
             <p className="meta" style={{ marginTop: "0.75rem" }}>{t("参加者が見つかりません。")}</p>
           ) : (
@@ -258,11 +266,11 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                   <h3>{t("参加者一覧({count} 人)", { count: selectedEventEntrants.length })}</h3>
                   <p className="meta">{t("メタ情報の保存数: {value1}", { value1: selectedEventMetaEntrantCount })}</p>
                   <div className={`event-list player-list-scroll ${selectedEventEntrants.length > 8 ? "enabled" : ""}`}>
-                    {selectedEventEntrants.map((entrant) => {
+                    {displayedEntrants.map((entrant) => {
                       const isSelected = selectedEntrantId === entrant.entrantId;
                       return (
+                        <PlayerSeedSwapTarget key={entrant.entrantId} controls={seedSwap} entrantId={entrant.entrantId}>
                         <article
-                          key={entrant.entrantId}
                           className={`event-list-item ${isSelected ? "selected" : ""}`}
                           role="button"
                           tabIndex={0}
@@ -275,6 +283,10 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                           }}
                         >
                           <h4>{entrant.entrantName}</h4>
+                          {seedSwap?.positions.filter((position) => position.entrantId === entrant.entrantId)
+                            .map((position) => <p className="meta" key={position.entrantId}>
+                              Pool {position.poolName} / Seed {position.seedNum}
+                            </p>)}
                           {(entrant.aliasName.trim() !== "" || entrant.skill != null) && (
                             <div className="entrant-list-meta-row">
                               {entrant.aliasName.trim() !== "" && <span className="meta entrant-list-alias">{entrant.aliasName}</span>}
@@ -282,6 +294,7 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                             </div>
                           )}
                         </article>
+                        </PlayerSeedSwapTarget>
                       );
                     })}
                   </div>

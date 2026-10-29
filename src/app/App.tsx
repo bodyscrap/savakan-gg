@@ -70,7 +70,8 @@ import { useSetResultPersistence } from "../hooks/useSetResultPersistence";
 import { usePlayerMetaDrafts } from "../hooks/usePlayerMetaDrafts";
 import { useEventManagementSettings } from "../hooks/useEventManagementSettings";
 import { buildEventManagementSettingKey } from "../domain/eventManagement";
-import { buildInitialPhaseSeedMapping, canShuffleInitialPhaseSeeds } from "../domain/initialPhaseSeedShuffle";
+import { buildInitialPhaseSeedMapping, buildInitialPhaseSeedSwap, canShuffleInitialPhaseSeeds, getInitialPhasePlayerPositions } from "../domain/initialPhaseSeedShuffle";
+import type { PlayerSeedSwapControls } from "../components/PlayerSeedSwap";
 import { useEventSnapshotMaintenance } from "../hooks/useEventSnapshotMaintenance";
 import { useSetSideAssignment } from "../hooks/useSetSideAssignment";
 import { useMatchDialogActions } from "../hooks/useMatchDialogActions";
@@ -226,6 +227,8 @@ function App() {
   const [selectedPhaseName, setSelectedPhaseName] = useState("");
   const [selectedPhasePoolKey, setSelectedPhasePoolKey] = useState("");
   const [activeMatchSetId, setActiveMatchSetId] = useState("");
+  const [seedSwapEventId, setSeedSwapEventId] = useState("");
+  const seedSwapSavingRef = useRef(false);
   const {
     scoreDrafts,
     setScoreDrafts,
@@ -2394,6 +2397,42 @@ function App() {
     getSetSlotSide,
   });
 
+  const canShuffleSelectedInitialSeeds = selectedEvent !== null
+    && canShuffleInitialPhaseSeeds(selectedEvent, selectedEventMeta?.origin === "local")
+    && !(selectedEventMeta?.origin === "local"
+      && workspace?.localMeta.setStreamStarts?.some((start) => start.eventId === selectedEvent.eventId))
+    && !pendingSetResults.some((result) => result.eventId === selectedEvent.eventId)
+    && !pendingGrandFinalResetResults.some((result) => result.eventId === selectedEvent.eventId);
+  const seedSwapScope = `${snapshot?.slug ?? ""}:${selectedEvent?.eventId ?? ""}`;
+  const canSwapSeeds = canShuffleSelectedInitialSeeds
+    && directWinnerId === null
+    && !Object.values(scoreDrafts).some((score) => score.trim() !== "")
+    && !Object.values(interimScoreDraftsBySetId).some((scores) =>
+      Object.values(scores).some((score) => score.trim() !== ""));
+  const seedSwapActive = canSwapSeeds && seedSwapEventId === seedSwapScope;
+  useEffect(() => {
+    if (!canSwapSeeds || seedSwapEventId !== seedSwapScope) setSeedSwapEventId("");
+  }, [canSwapSeeds, seedSwapScope, seedSwapEventId]);
+  const seedSwapPositions = useMemo(
+    () => canSwapSeeds && selectedEvent ? getInitialPhasePlayerPositions(selectedEvent) : [],
+    [canSwapSeeds, selectedEvent],
+  );
+  const seedSwap: PlayerSeedSwapControls | undefined = selectedEvent ? {
+    active: seedSwapActive,
+    available: canSwapSeeds,
+    busy,
+    eventId: seedSwapScope,
+    requiresSeedReport: selectedEventMeta?.origin !== "local",
+    positions: seedSwapPositions,
+    onToggle: () => {
+      if (busy || !canSwapSeeds) return;
+      closeMatchDialog();
+      clearResultConfirmation();
+      setSeedSwapEventId(seedSwapActive ? "" : seedSwapScope);
+    },
+    onSwap: (source, target) => void swapSelectedEventPlayers(source, target),
+  } : undefined;
+
   const {
     openMatchDialog,
     handleRoundRobinMatchClick,
@@ -2407,6 +2446,7 @@ function App() {
     getSetSlotSide,
     getSetScoresForDisplay,
     initializeMatchDraft,
+    interactionDisabled: seedSwapActive,
     busy,
     overlayBusy: obsOverlayBusy,
     stopOverlay: setObsOverlayFullyStopped,
@@ -2434,6 +2474,7 @@ function App() {
     setActiveMatchSetId("");
     setActiveMatchSideDrafts({});
     clearMatchSideRandomNotice();
+    setScoreDrafts({});
     setDirectWinnerId(null);
   }
 
@@ -2441,6 +2482,10 @@ function App() {
     confirmed: boolean,
     confirmation?: ResultConfirmationState,
   ) {
+    if (seedSwapActive) {
+      setError(t("入替モード中はスコアを編集できません。"));
+      return;
+    }
     const set = confirmation?.match ?? activeMatch;
     if (!set) {
       return;
@@ -2508,14 +2553,37 @@ function App() {
   );
   const { ownCalls: activeMatchOwnCalls, otherCalls: activeMatchOtherCalls } =
     splitSetCalls(activeMatchCalls);
-  const canShuffleSelectedInitialSeeds = selectedEvent !== null
-    && canShuffleInitialPhaseSeeds(selectedEvent, selectedEventMeta?.origin === "local")
-    && !(selectedEventMeta?.origin === "local"
-      && workspace?.localMeta.setStreamStarts?.some((start) => start.eventId === selectedEvent.eventId))
-    && !pendingSetResults.some((result) => result.eventId === selectedEvent.eventId)
-    && !pendingGrandFinalResetResults.some((result) => result.eventId === selectedEvent.eventId);
   const canRestoreSelectedInitialSeeds = canShuffleSelectedInitialSeeds
     && hasLocalInitialSeedShuffle;
+
+  async function swapSelectedEventPlayers(source: string, target: string) {
+    if (busy || seedSwapSavingRef.current) return;
+    if (!selectedEvent || !seedSwapActive || !canSwapSeeds) {
+      setError(t("試合が開始済み、または入替モードが無効です。"));
+      return;
+    }
+    seedSwapSavingRef.current = true;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const seedMapping = buildInitialPhaseSeedSwap(selectedEvent, source, target);
+      const result = await invoke<TournamentWorkspace>("shuffle_initial_phase_seeds", {
+        input: { slug: snapshot?.slug ?? slug, eventId: selectedEvent.eventId, seedMapping },
+      });
+      clearAllDrafts();
+      setWorkspace(result);
+      setSeedStatusRefreshRevision((revision) => revision + 1);
+      setMessage(selectedEventMeta?.origin === "local"
+        ? t("プレイヤーの配置を入れ替えました。")
+        : t("プレイヤーの配置を入れ替えました。入替モードをOFFにし、結果報告でSeed変更をstart.ggへ反映してください。"));
+    } catch (swapError) {
+      setError(String(swapError));
+    } finally {
+      seedSwapSavingRef.current = false;
+      setBusy(false);
+    }
+  }
 
   async function shuffleSelectedEventInitialSeeds() {
     if (!selectedEvent || !canShuffleSelectedInitialSeeds) {
@@ -2668,6 +2736,7 @@ function App() {
 
         {activeTab === "tournament" && (
           <EventSetting
+            seedSwap={seedSwap}
             event={{
               slug: toApiSlug(slug),
               eventId: selectedEvent?.eventId ?? "",
@@ -2691,8 +2760,8 @@ function App() {
                   .map((seed) => seed.entrantId)
                   .filter((entrantId): entrantId is string => Boolean(entrantId))).size
                 : 0,
-              canShuffleInitialSeeds: canShuffleSelectedInitialSeeds,
-              canRestoreInitialSeeds: canRestoreSelectedInitialSeeds,
+              canShuffleInitialSeeds: !seedSwapActive && canShuffleSelectedInitialSeeds,
+              canRestoreInitialSeeds: !seedSwapActive && canRestoreSelectedInitialSeeds,
               isLocalEvent: selectedEventMeta?.origin === "local",
             }}
             rules={{
@@ -3127,6 +3196,7 @@ function App() {
         {activeTab === "bracket" && (
         <>
           <BracketTab
+            seedSwap={seedSwap}
             busy={busy}
             draftPendingCount={draftPendingCount}
             confirmedReportableCount={confirmedReportableCount}
@@ -3142,7 +3212,7 @@ function App() {
             onPhaseNameChange={setSelectedPhaseName}
             phaseScopedPoolGroups={phaseScopedPoolGroups}
             selectedPhasePoolGroup={selectedPhasePoolGroup}
-            selectedPoolScoreEditLocked={selectedPoolScoreEditLocked}
+            selectedPoolScoreEditLocked={seedSwapActive || selectedPoolScoreEditLocked}
             selectedPoolExternalScoreBroadcastEnabled={selectedPoolExternalScoreBroadcastEnabled}
             externalEditor={selectedPoolExternalEditor}
             externalRequest={selectedPoolExternalRequest}
@@ -3156,7 +3226,7 @@ function App() {
             onDiscardDqRequest={(request) => void handleDiscardDqRequest(request)}
             dqRequestBusy={dqRequestDiscarding || callListResolveSubmitting}
             pendingExternalRequestPoolIds={pendingExternalRequestPoolIds}
-            canAcceptExternalRequest={Boolean(selectedPoolExternalRequest && canAcceptExternalEditRequest(selectedPoolExternalRequest))}
+            canAcceptExternalRequest={!seedSwapActive && Boolean(selectedPoolExternalRequest && canAcceptExternalEditRequest(selectedPoolExternalRequest))}
             canRespondExternalRequest={Boolean(!busy && selectedPoolExternalRequest && canReplyToExternalEditRequest(selectedPoolExternalRequest))}
             onAcceptExternalRequest={() => {
               if (selectedPoolExternalRequest) void acceptExternalEditRequest(selectedPoolExternalRequest);
@@ -3177,12 +3247,12 @@ function App() {
             bracketZoomLevels={BRACKET_ZOOM_LEVELS}
             onBracketZoomChange={(value) => setBracketZoomLevel(normalizeBracketZoomLevel(value))}
             canOpenMobileInput={
-              !busy && !mobileInputPortalBusy && toApiSlug(slug) !== "" && Boolean(selectedEvent)
+              !seedSwapActive && !busy && !mobileInputPortalBusy && toApiSlug(slug) !== "" && Boolean(selectedEvent)
             }
             onOpenMobileInput={() => void openMobileInputPortalDialog()}
-            canRestore={!busy && toApiSlug(slug) !== "" && Boolean(selectedEvent)}
+            canRestore={!seedSwapActive && !busy && toApiSlug(slug) !== "" && Boolean(selectedEvent)}
             onOpenRestore={() => setRestoreDialogOpen(true)}
-            canReport={selectedEventMeta?.origin !== "local" && !busy && !isInitialSeedStatusLoading && toApiSlug(slug) !== "" && (confirmedReportableCount > 0 || hasUnreportedInitialSeedShuffle)}
+            canReport={!seedSwapActive && selectedEventMeta?.origin !== "local" && !busy && !isInitialSeedStatusLoading && toApiSlug(slug) !== "" && (confirmedReportableCount > 0 || hasUnreportedInitialSeedShuffle)}
             onReport={() => void bracketReport.startReport()}
             roundRobin={{
               entrantNames: roundRobinEntrantNames,
@@ -3205,7 +3275,7 @@ function App() {
             onOpenSet={openMatchDialog}
           />
 
-          {activeMatch && selectedEvent && (
+          {!seedSwapActive && activeMatch && selectedEvent && (
             <MatchDetailDialog
               match={activeMatch}
               setCode={setDisplayCodeById.get(activeMatch.setId)}

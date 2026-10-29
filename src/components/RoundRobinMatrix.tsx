@@ -33,12 +33,13 @@ export type RoundRobinMatrixRowView = {
 };
 
 type RoundRobinMatrixProps = {
+  interactionDisabled?: boolean;
   entrantNames: string[];
   rows: RoundRobinMatrixRowView[];
   onMatchClick: (set: SetSnapshot, event: MouseEvent<HTMLButtonElement>) => void;
 };
 
-export function RoundRobinMatrix({ entrantNames, rows, onMatchClick }: RoundRobinMatrixProps) {
+export function RoundRobinMatrix({ entrantNames, rows, onMatchClick, interactionDisabled }: RoundRobinMatrixProps) {
   return (
     <div className="round-robin-matrix-wrap">
       <table className="round-robin-matrix">
@@ -74,6 +75,7 @@ export function RoundRobinMatrix({ entrantNames, rows, onMatchClick }: RoundRobi
                   <td key={cell.key} className="round-robin-cell">
                     <button
                       type="button"
+                      disabled={interactionDisabled}
                       className={match.className}
                       title={match.title}
                       onClick={(event) => onMatchClick(match.set, event)}

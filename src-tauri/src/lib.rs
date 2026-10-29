@@ -1036,6 +1036,7 @@ mod tests {
         ];
 
         let event = models::EventSnapshot {
+            origin: Default::default(),
             entrants: Vec::new(),
             event_id: "event".to_owned(),
             name: "event".to_owned(),
@@ -1135,6 +1136,7 @@ mod tests {
         )
         .expect("test phase groups should deserialize");
         let event = models::EventSnapshot {
+            origin: Default::default(),
             entrants: Vec::new(),
             event_id: "event".to_owned(),
             name: "event".to_owned(),

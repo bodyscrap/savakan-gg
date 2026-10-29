@@ -515,6 +515,8 @@ pub struct BracketBatchConflict {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventSnapshot {
+    #[serde(default)]
+    pub origin: EventOrigin,
     pub event_id: String,
     pub name: String,
     #[serde(default)]

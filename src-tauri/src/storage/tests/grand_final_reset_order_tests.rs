@@ -1,6 +1,163 @@
 use super::*;
 
 #[test]
+fn local_phase_one_reset_is_visible_and_defers_next_phase_until_confirmed() {
+    for (enabled, lower_wins) in [(true, true), (true, false), (false, true)] {
+        let input = serde_json::from_value(serde_json::json!({
+            "tournamentName": "Local",
+            "eventName": "Three phases",
+            "participants": (1..=31).map(|index| serde_json::json!({
+                "entrantId": format!("player-{index}"),
+                "name": format!("Player {index}"),
+                "categorySelections": [[], [], []]
+            })).collect::<Vec<_>>(),
+            "requireItemSelections": false,
+            "eventManagement": {
+                "sideDecisionMethod": "coin_toss",
+                "itemListSnapshots": []
+            },
+            "phases": ([(4, 2), (2, 2), (1, 0)].into_iter().enumerate().map(
+                |(index, (pools, qualifiers))| serde_json::json!({
+                    "name": format!("Phase {}", index + 1),
+                    "poolCount": pools,
+                    "qualifiersPerPool": qualifiers,
+                    "bracketType": "DOUBLE_ELIMINATION",
+                    "grandFinalReset": enabled,
+                    "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+                    "enabledTiebreakRules": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"]
+                })
+            ).collect::<Vec<_>>())
+        }))
+        .unwrap();
+        let mut snapshot = crate::local_event::generate_local_snapshot(
+            &input, "local-test", "local-test", "event",
+        )
+        .unwrap();
+        rebuild_progression_from_completed_sets(&mut snapshot);
+        let group_id = snapshot.events[0].phase_groups[0].phase_group_id.clone();
+        let set_ids = snapshot.events[0].phase_groups[0].set_ids.clone();
+        let grand_final_id = set_ids.last().unwrap().clone();
+        for set_id in &set_ids {
+            let set = snapshot.events[0]
+                .sets
+                .iter_mut()
+                .find(|set| set.set_id == *set_id)
+                .unwrap();
+            if set.is_bye || set.set_id == grand_final_id {
+                continue;
+            }
+            assert!(set.slots.iter().all(|slot| slot.entrant_id.is_some()));
+            set.winner_id = set.slots[0].entrant_id.clone();
+            set.state = 3;
+            rebuild_progression_from_completed_sets(&mut snapshot);
+        }
+        let grand_final = snapshot.events[0]
+            .sets
+            .iter_mut()
+            .find(|set| set.set_id == grand_final_id)
+            .unwrap();
+        let upper = grand_final.slots[0].entrant_id.clone().unwrap();
+        let lower = grand_final.slots[1].entrant_id.clone().unwrap();
+        let winner = if lower_wins { &lower } else { &upper };
+        let loser = if lower_wins { &upper } else { &lower };
+        grand_final.winner_id = Some(winner.clone());
+        grand_final.state = 3;
+        let targets = build_progression_targets_by_source(&snapshot, &snapshot.events[0]);
+        apply_local_progression_incremental(
+            &mut snapshot, "event", &grand_final_id, winner, &targets,
+        );
+        let target_entrants = |snapshot: &TournamentSnapshot| {
+            snapshot.events[0].phase_groups.iter()
+                .filter(|group| group.phase_order == Some(2))
+                .flat_map(|group| group.seeds.iter())
+                .filter(|seed| seed.origin_phase_group_id.as_deref() == Some(group_id.as_str()))
+                .map(|seed| seed.entrant_id.clone())
+                .collect::<Vec<_>>()
+        };
+        if !enabled || !lower_wins {
+            assert!(!snapshot.events[0].sets.iter().any(is_grand_final_reset_set));
+            let entrants = target_entrants(&snapshot);
+            assert!(entrants.contains(&Some(winner.clone())));
+            assert!(entrants.contains(&Some(loser.clone())));
+            continue;
+        }
+        let reset_id = virtual_grand_final_reset_set_id(&grand_final_id);
+        let reset = snapshot.events[0].sets.iter().find(|set| set.set_id == reset_id).unwrap();
+        assert!(!crate::models::is_intermediate_set(&snapshot.events[0].phase_groups, reset));
+        assert!(build_bracket_graph(&snapshot, &snapshot.events[0])
+            .event.sets.iter().any(|set| set.set_id == reset_id));
+        assert!(target_entrants(&snapshot).iter().all(Option::is_none));
+        rebuild_progression_from_completed_sets(&mut snapshot);
+        assert!(target_entrants(&snapshot).iter().all(Option::is_none));
+
+        let reset = snapshot.events[0].sets.iter_mut().find(|set| set.set_id == reset_id).unwrap();
+        reset.winner_id = Some(upper.clone());
+        reset.state = 3;
+        let targets = build_progression_targets_by_source(&snapshot, &snapshot.events[0]);
+        apply_local_progression_incremental(&mut snapshot, "event", &reset_id, &upper, &targets);
+        assert_eq!(target_entrants(&snapshot).iter().filter(|id| id.is_some()).count(), 2);
+        let mut reloaded: TournamentSnapshot =
+            serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+        let pending = LocalGrandFinalResetResultMeta {
+            event_id: "event".to_owned(),
+            event_name: "Three phases".to_owned(),
+            source_grand_final_set_id: grand_final_id.clone(),
+            winner_id: upper.clone(),
+            score_csv: "3,1".to_owned(),
+            direct_win: false,
+            confirmed: true,
+            slot_scores: vec![
+                LocalSetScoreMeta { entrant_id: upper.clone(), score: 3 },
+                LocalSetScoreMeta { entrant_id: lower.clone(), score: 1 },
+            ],
+            recorded_at: Utc::now(),
+        };
+        let pending: LocalGrandFinalResetResultMeta =
+            serde_json::from_str(&serde_json::to_string(&pending).unwrap()).unwrap();
+        reloaded.events[0].sets.retain(|set| set.set_id != reset_id);
+        for group in &mut reloaded.events[0].phase_groups {
+            group.set_ids.retain(|set_id| set_id != &reset_id);
+        }
+        rebuild_progression_from_completed_sets(&mut reloaded);
+        assert!(target_entrants(&reloaded).iter().all(Option::is_none));
+        assert!(restore_pending_grand_final_reset_results_for_event(
+            &mut reloaded.events[0], &[pending],
+        ));
+        rebuild_progression_from_completed_sets(&mut reloaded);
+        let reset = reloaded.events[0].sets.iter().find(|set| set.set_id == reset_id).unwrap();
+        assert_eq!(reset.winner_id.as_deref(), Some(upper.as_str()));
+        assert_eq!(reset.slots[0].score, Some(1.0));
+        assert_eq!(reset.slots[1].score, Some(3.0));
+        let seeds = reloaded.events[0].phase_groups.iter()
+            .filter(|group| group.phase_order == Some(2))
+            .flat_map(|group| group.seeds.iter())
+            .filter(|seed| seed.origin_phase_group_id.as_deref() == Some(group_id.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(seeds.iter().find(|seed| seed.origin_placement == Some(1)).unwrap().entrant_id.as_deref(), Some(upper.as_str()));
+        assert_eq!(seeds.iter().find(|seed| seed.origin_placement == Some(2)).unwrap().entrant_id.as_deref(), Some(lower.as_str()));
+        for seed in seeds {
+            let slots = reloaded.events[0].sets.iter()
+                .filter(|set| set.phase_order == Some(2))
+                .flat_map(|set| set.slots.iter())
+                .filter(|slot| slot.seed_id.as_deref() == Some(seed.seed_id.as_str()))
+                .collect::<Vec<_>>();
+            assert!(!slots.is_empty());
+            assert!(slots.iter().all(|slot| slot.entrant_id == seed.entrant_id));
+        }
+        let reset_targets = collect_affected_reset_targets(
+            &reloaded, &reloaded.events[0], &grand_final_id,
+        )
+        .unwrap();
+        assert!(reset_targets.set_ids.contains(&reset_id));
+        clear_reset_set_results_from_snapshot(
+            &mut reloaded, "event", &reset_targets.set_ids,
+        );
+        rebuild_progression_from_completed_sets(&mut reloaded);
+        assert!(target_entrants(&reloaded).iter().all(Option::is_none));
+    }
+}
+
+#[test]
 fn local_grand_final_reset_setting_controls_creation_and_survives_reload() {
     for enabled in [false, true] {
         let mut losers_final = make_set("lf", "Losers Final", Some("lower"), &["lower", "other"]);
@@ -16,6 +173,7 @@ fn local_grand_final_reset_setting_controls_creation_and_survives_reload() {
             tournament_id: "local".to_owned(), slug: "local".to_owned(), name: "Local".to_owned(),
             updated_at: Utc::now(),
             events: vec![EventSnapshot {
+                origin: EventOrigin::Local,
                 entrants: Vec::new(),
                 event_id: "event".to_owned(), name: "Event".to_owned(),
                 phases: Vec::new(), phase_groups: vec![group], sets: vec![losers_final, grand_final],
@@ -40,6 +198,7 @@ fn replaces_only_the_requested_event_from_pristine_snapshot() {
         name: "Tournament".to_owned(),
         events: vec![
             EventSnapshot {
+                origin: Default::default(),
                 entrants: Vec::new(),
                 event_id: "event-a".to_owned(),
                 name: "Locally changed A".to_owned(),
@@ -48,6 +207,7 @@ fn replaces_only_the_requested_event_from_pristine_snapshot() {
                 sets: Vec::new(),
             },
             EventSnapshot {
+                origin: Default::default(),
                 entrants: Vec::new(),
                 event_id: "event-b".to_owned(),
                 name: "Local B".to_owned(),
@@ -63,6 +223,7 @@ fn replaces_only_the_requested_event_from_pristine_snapshot() {
         slug: "event".to_owned(),
         name: "Tournament".to_owned(),
         events: vec![EventSnapshot {
+            origin: Default::default(),
             entrants: Vec::new(),
             event_id: "event-a".to_owned(),
             name: "Downloaded A".to_owned(),
@@ -142,6 +303,7 @@ fn clear_reset_set_results_preserves_confirmed_matchup_and_clears_scores() {
         slug: "tournament/example".to_owned(),
         name: "Tournament".to_owned(),
         events: vec![EventSnapshot {
+            origin: EventOrigin::Local,
             entrants: Vec::new(),
             event_id: "event".to_owned(),
             name: "Event".to_owned(),
@@ -234,6 +396,7 @@ fn restoring_cascade_reset_preserves_root_entrants_and_clears_dependents() {
         slug: "tournament/example".to_owned(),
         name: "Tournament".to_owned(),
         events: vec![EventSnapshot {
+            origin: Default::default(),
             entrants: Vec::new(),
             event_id: "event".to_owned(),
             name: "Event".to_owned(),
@@ -325,6 +488,7 @@ fn prior_phase_losers_history_does_not_create_grand_final_reset() {
     );
 
     let event = EventSnapshot {
+        origin: Default::default(),
         entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "Event".to_owned(),
@@ -360,6 +524,7 @@ fn same_phase_group_losers_history_identifies_grand_final_side() {
     grand_final.phase_group_id = Some("phase-two".to_owned());
 
     let event = EventSnapshot {
+        origin: Default::default(),
         entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "Event".to_owned(),
@@ -407,6 +572,7 @@ fn winners_side_grand_final_makes_existing_reset_inactive() {
     reset.phase_order = Some(2);
     reset.phase_group_id = Some("phase-two".to_owned());
     let event = EventSnapshot {
+        origin: Default::default(),
         entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "Event".to_owned(),
@@ -445,6 +611,7 @@ fn losers_side_grand_final_keeps_reset_active() {
     reset.phase_order = Some(2);
     reset.phase_group_id = Some("phase-two".to_owned());
     let event = EventSnapshot {
+        origin: Default::default(),
         entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "Event".to_owned(),
@@ -480,6 +647,7 @@ fn intermediate_grand_final_does_not_create_virtual_reset() {
     }))
     .unwrap();
     let event = EventSnapshot {
+        origin: Default::default(),
         entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "Event".to_owned(),
@@ -511,6 +679,7 @@ fn existing_remote_reset_order_is_preserved() {
     let grand_final = make_set("gf", "Grand Final", Some("winner"), &["loser", "winner"]);
     let reset = make_set("gf-reset", "Grand Final Reset", None, &["loser", "winner"]);
     let mut event = EventSnapshot {
+        origin: Default::default(),
         entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "event".to_owned(),
@@ -543,6 +712,7 @@ fn normalization_preserves_remote_reset_order() {
         &["loser", "winner"],
     );
     let mut event = EventSnapshot {
+        origin: Default::default(),
         entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "event".to_owned(),
@@ -572,6 +742,7 @@ fn normalization_keeps_local_reset_winner_first() {
         &["loser", "winner"],
     );
     let mut event = EventSnapshot {
+        origin: Default::default(),
         entrants: Vec::new(),
         event_id: "event".to_owned(),
         name: "event".to_owned(),

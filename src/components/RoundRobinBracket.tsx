@@ -11,6 +11,7 @@ import { RoundRobinMatrix, type RoundRobinMatrixRowView } from "./RoundRobinMatr
 import { RoundRobinStandings } from "./RoundRobinStandings";
 
 type RoundRobinBracketProps = {
+  interactionDisabled?: boolean;
   scaleStyle: CSSProperties;
   setCount: number;
   phaseGroupId: string | null;
@@ -45,6 +46,7 @@ export function RoundRobinBracket({
   qualifyingCount,
   diagnostics,
   onMatchClick,
+  interactionDisabled,
 }: RoundRobinBracketProps) {
   return (
     <div className="round-robin-board" style={scaleStyle}>
@@ -70,6 +72,7 @@ export function RoundRobinBracket({
       </div>
       <div className="round-robin-layout">
         <RoundRobinMatrix
+          interactionDisabled={interactionDisabled}
           entrantNames={entrantNames}
           rows={rows}
           onMatchClick={onMatchClick}

@@ -28,6 +28,352 @@ fn progression_targets_for(
 }
 
 #[test]
+fn local_fifteen_player_pools_advance_losers_final_from_explicit_set_source() {
+    let input = serde_json::from_value(serde_json::json!({
+        "tournamentName": "Local", "eventName": "Uneven pools",
+        "participants": (1..=15).map(|index| serde_json::json!({
+            "entrantId": format!("player-{index}"),
+            "name": format!("Player {index}"),
+            "categorySelections": [[], [], []]
+        })).collect::<Vec<_>>(),
+        "requireItemSelections": false,
+        "eventManagement": { "sideDecisionMethod": "coin_toss", "itemListSnapshots": [] },
+        "phases": ([(2, 3), (1, 0)].into_iter().enumerate().map(
+            |(index, (pools, qualifiers))| serde_json::json!({
+                "name": format!("Phase {}", index + 1),
+                "poolCount": pools, "qualifiersPerPool": qualifiers,
+                "bracketType": "DOUBLE_ELIMINATION", "grandFinalReset": true,
+                "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+                "enabledTiebreakRules": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"]
+            })
+        ).collect::<Vec<_>>())
+    })).unwrap();
+    let mut snapshot = crate::local_event::generate_local_snapshot(
+        &input, "local-test", "local-test", "event",
+    ).unwrap();
+    let group = snapshot.events[0].phase_groups.iter()
+        .find(|group| group.phase_order == Some(1)
+            && group.display_identifier.as_deref() == Some("2"))
+        .unwrap();
+    let set_ids = group.set_ids.clone();
+    let losers_final = snapshot.events[0].sets.iter()
+        .find(|set| set_ids.contains(&set.set_id) && set.full_round_text == "Losers Final")
+        .unwrap();
+    let final_id = losers_final.set_id.clone();
+    let source_id = losers_final.entrant1_source.as_ref().unwrap().type_id.clone().unwrap();
+    let graph = build_bracket_graph(&snapshot, &snapshot.events[0]);
+    assert!(graph.edges.iter().any(|edge| edge.from_set_id == source_id
+        && edge.to_set_id == final_id && edge.target_slot_index == 0
+        && edge.relation == "winner"), "explicit Losers Round 3 -> Losers Final edge is missing");
+    rebuild_progression_from_completed_sets(&mut snapshot);
+    let mut expected_finalist = None;
+    for set_id in &set_ids {
+        let set = snapshot.events[0].sets.iter_mut()
+            .find(|set| &set.set_id == set_id).unwrap();
+        if set.is_bye {
+            continue;
+        }
+        assert!(set.slots.iter().all(|slot| slot.entrant_id.is_some()),
+            "{} ({}) is missing entrants", set.set_id, set.full_round_text);
+        let winner_slot = usize::from(set.full_round_text == "Grand Final");
+        let winner = set.slots[winner_slot].entrant_id.clone().unwrap();
+        let winner_name = set.slots[winner_slot].entrant_name.clone();
+        set.winner_id = Some(winner.clone());
+        set.state = 3;
+        let targets = build_progression_targets_by_source(&snapshot, &snapshot.events[0]);
+        apply_local_progression_incremental(&mut snapshot, "event", set_id, &winner, &targets);
+        if set_id == &source_id {
+            expected_finalist = Some((winner.clone(), winner_name));
+            let target = snapshot.events[0].sets.iter().find(|set| set.set_id == final_id).unwrap();
+            assert_eq!(target.slots[0].entrant_id.as_deref(), Some(winner.as_str()));
+            let mut reloaded: TournamentSnapshot =
+                serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+            rebuild_progression_from_completed_sets(&mut reloaded);
+            let target = reloaded.events[0].sets.iter().find(|set| set.set_id == final_id).unwrap();
+            assert_eq!(target.slots[0].entrant_id.as_deref(), Some(winner.as_str()));
+        }
+        rebuild_progression_from_completed_sets(&mut snapshot);
+    }
+    assert!(snapshot.events[0].sets.iter()
+        .any(|set| set.set_id.starts_with("virtual_gf_reset_")));
+    snapshot = serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+    rebuild_progression_from_completed_sets(&mut snapshot);
+    let (winner, winner_name) = expected_finalist.unwrap();
+    let target = snapshot.events[0].sets.iter().find(|set| set.set_id == final_id).unwrap();
+    assert_eq!(target.slots[0].entrant_id.as_deref(), Some(winner.as_str()));
+    assert_eq!(target.slots[0].entrant_name, winner_name);
+    let graph = build_bracket_graph(&snapshot, &snapshot.events[0]);
+    for (from, to, slot_index) in [("23", "25", 0), ("24", "26", 0), ("26", "27", 0)] {
+        let incoming = graph.edges.iter()
+            .filter(|edge| edge.to_set_id == to && edge.target_slot_index == slot_index)
+            .collect::<Vec<_>>();
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].from_set_id, from);
+        assert_eq!(incoming[0].relation, "winner");
+    }
+}
+
+#[test]
+fn startgg_connections_override_local_placement_and_reset_rules() {
+    let event: EventSnapshot = serde_json::from_value(serde_json::json!({
+        "eventId": "remote-event", "name": "Remote",
+        "phases": [
+            { "phaseId": "first", "phaseOrder": 1 },
+            { "phaseId": "next", "phaseOrder": 2 }
+        ],
+        "phaseGroups": [
+            {
+                "phaseGroupId": "pool", "phaseId": "first", "phaseOrder": 1,
+                "displayIdentifier": "1", "grandFinalReset": true,
+                "setIds": ["lf", "gf", "unconnected-losers", "api-direct"],
+                "progressionsOut": [{
+                    "progressionId": "first-place", "originPlacement": 1
+                }]
+            },
+            {
+                "phaseGroupId": "next-pool", "phaseId": "next", "phaseOrder": 2,
+                "setIds": ["target"],
+                "seeds": [
+                    { "seedId": "api-seed", "progressionId": "api-progression" },
+                    {
+                        "seedId": "local-looking-seed", "progressionId": "first-place",
+                        "originPhaseGroupId": "pool", "originPhaseOrder": 1,
+                        "originPlacement": 1
+                    }
+                ]
+            }
+        ],
+        "sets": [
+            {
+                "setId": "lf", "phaseGroupId": "pool", "phaseOrder": 1,
+                "fullRoundText": "Losers Final", "round": -1,
+                "state": 3, "winnerId": "lower",
+                "slots": [
+                    { "entrantId": "lower", "entrantName": "Lower" },
+                    { "entrantId": "other", "entrantName": "Other" }
+                ]
+            },
+            {
+                "setId": "gf", "phaseGroupId": "pool", "phaseOrder": 1,
+                "fullRoundText": "Grand Final", "round": 2,
+                "state": 3, "winnerId": "lower", "winnerPlacement": 1,
+                "winnerProgressionSeedId": "api-seed",
+                "winnerProgressionId": "api-progression",
+                "entrant2Source": { "sourceType": "set", "typeId": "lf", "condition": "winner" },
+                "slots": [
+                    { "entrantId": "upper", "entrantName": "Upper" },
+                    { "entrantId": "lower", "entrantName": "Lower" }
+                ]
+            },
+            {
+                "setId": "unconnected-losers", "phaseGroupId": "pool",
+                "fullRoundText": "Losers Round 1", "round": -1, "state": 1,
+                "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+            },
+            {
+                "setId": "api-direct", "phaseGroupId": "pool", "phaseOrder": 1,
+                "fullRoundText": "Losers Round 4", "round": -4, "state": 1,
+                "entrant1Source": { "sourceType": "set", "typeId": "lf", "condition": "loser" },
+                "slots": [{ "entrantName": "TBD" }, { "entrantName": "TBD" }]
+            },
+            {
+                "setId": "target", "phaseGroupId": "next-pool", "phaseOrder": 2,
+                "fullRoundText": "Winners Round 1", "round": 1, "state": 1,
+                "entrant1Source": { "sourceType": "seed", "typeId": "api-seed" },
+                "entrant2Source": { "sourceType": "seed", "typeId": "local-looking-seed" },
+                "slots": [
+                    { "seedId": "api-seed", "entrantName": "TBD" },
+                    { "seedId": "local-looking-seed", "entrantName": "TBD" }
+                ]
+            }
+        ]
+    })).unwrap();
+    assert_eq!(event.origin, crate::models::EventOrigin::Startgg);
+    let mut snapshot = TournamentSnapshot {
+        tournament_id: "remote".to_owned(), slug: "remote".to_owned(),
+        name: "Remote".to_owned(), events: vec![event], updated_at: Utc::now(),
+    };
+    let targets = build_progression_targets_by_source(&snapshot, &snapshot.events[0]);
+    apply_local_progression_incremental(&mut snapshot, "remote-event", "gf", "lower", &targets);
+    rebuild_progression_from_completed_sets(&mut snapshot);
+    let event = &snapshot.events[0];
+    assert!(!event.sets.iter().any(|set| set.set_id.starts_with("virtual_gf_reset_")));
+    assert_eq!(event.phase_groups[1].seeds[0].entrant_id.as_deref(), Some("lower"));
+    assert!(event.phase_groups[1].seeds[1].entrant_id.is_none());
+    let target = event.sets.iter().find(|set| set.set_id == "target").unwrap();
+    assert_eq!(target.slots[0].entrant_id.as_deref(), Some("lower"));
+    assert!(target.slots[1].entrant_id.is_none());
+    let direct = event.sets.iter().find(|set| set.set_id == "api-direct").unwrap();
+    assert_eq!(direct.slots[0].entrant_id.as_deref(), Some("other"));
+    assert_eq!(direct.slots[0].entrant_name, "Other");
+    let graph = build_bracket_graph(&snapshot, event);
+    assert!(!graph.edges.iter().any(|edge| edge.to_set_id == "unconnected-losers"));
+}
+
+#[test]
+fn local_double_elimination_advances_qualified_placements_to_next_phase() {
+    let input = serde_json::from_value(serde_json::json!({
+        "tournamentName": "Local",
+        "eventName": "Two phases",
+        "participants": (1..=4).map(|index| serde_json::json!({
+            "entrantId": format!("player-{index}"),
+            "name": format!("Player {index}"),
+            "categorySelections": [[], [], []]
+        })).collect::<Vec<_>>(),
+        "requireItemSelections": false,
+        "eventManagement": {
+            "sideDecisionMethod": "coin_toss",
+            "itemListSnapshots": []
+        },
+        "phases": [
+            {
+                "name": "Phase 1",
+                "poolCount": 1,
+                "qualifiersPerPool": 2,
+                "bracketType": "DOUBLE_ELIMINATION",
+                "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+                "enabledTiebreakRules": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"]
+            },
+            {
+                "name": "Phase 2",
+                "poolCount": 1,
+                "qualifiersPerPool": 2,
+                "bracketType": "DOUBLE_ELIMINATION",
+                "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+                "enabledTiebreakRules": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"]
+            },
+            {
+                "name": "Phase 3",
+                "poolCount": 1,
+                "qualifiersPerPool": 0,
+                "bracketType": "SINGLE_ELIMINATION",
+                "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+                "enabledTiebreakRules": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"]
+            }
+        ]
+    }))
+    .expect("local event input should deserialize");
+    let mut snapshot =
+        crate::local_event::generate_local_snapshot(&input, "local-test", "local-test", "event")
+            .expect("local event should generate");
+    let event = &snapshot.events[0];
+    let grand_final = event
+        .sets
+        .iter()
+        .find(|set| set.phase_order == Some(1) && set.full_round_text == "Grand Final")
+        .unwrap();
+    let grand_final_id = grand_final.set_id.clone();
+    let qualified_seeds = event.phase_groups[1].seeds.clone();
+    assert_eq!(qualified_seeds.len(), 2);
+    assert_eq!(
+        grand_final.winner_progression_seed_id.as_deref(),
+        Some(qualified_seeds[0].seed_id.as_str())
+    );
+    assert_eq!(
+        grand_final.loser_progression_seed_id.as_deref(),
+        Some(qualified_seeds[1].seed_id.as_str())
+    );
+    let phase_two_grand_final = event
+        .sets
+        .iter()
+        .find(|set| set.phase_order == Some(2) && set.full_round_text == "Grand Final")
+        .unwrap();
+    assert_eq!(
+        phase_two_grand_final.winner_progression_seed_id.as_deref(),
+        Some(snapshot.events[0].phase_groups[2].seeds[0].seed_id.as_str())
+    );
+
+    let grand_final = snapshot.events[0]
+        .sets
+        .iter_mut()
+        .find(|set| set.set_id == grand_final_id)
+        .unwrap();
+    grand_final.winner_progression_seed_id = None;
+    grand_final.winner_progression_id = None;
+    grand_final.loser_progression_seed_id = None;
+    grand_final.loser_progression_id = None;
+    grand_final.slots[0].entrant_id = Some("player-1".to_owned());
+    grand_final.slots[0].entrant_name = "Player 1".to_owned();
+    grand_final.slots[1].entrant_id = Some("player-2".to_owned());
+    grand_final.slots[1].entrant_name = "Player 2".to_owned();
+    grand_final.winner_id = Some("player-1".to_owned());
+    grand_final.state = 3;
+    let phase_two_grand_final_id = snapshot.events[0]
+        .sets
+        .iter()
+        .find(|set| set.phase_order == Some(2) && set.full_round_text == "Grand Final")
+        .unwrap()
+        .set_id
+        .clone();
+    let phase_two_grand_final = snapshot.events[0]
+        .sets
+        .iter_mut()
+        .find(|set| set.set_id == phase_two_grand_final_id)
+        .unwrap();
+    phase_two_grand_final.winner_progression_seed_id = None;
+    phase_two_grand_final.winner_progression_id = None;
+    phase_two_grand_final.loser_progression_seed_id = None;
+    phase_two_grand_final.loser_progression_id = None;
+    for seed in &mut snapshot.events[0].phase_groups[1].seeds {
+        seed.progression_id = None;
+    }
+    for seed in &mut snapshot.events[0].phase_groups[2].seeds {
+        seed.progression_id = None;
+    }
+
+    rebuild_progression_from_completed_sets(&mut snapshot);
+
+    assert_eq!(
+        snapshot.events[0].phase_groups[1].seeds[0]
+            .entrant_id
+            .as_deref(),
+        Some("player-1")
+    );
+    assert_eq!(
+        snapshot.events[0].phase_groups[1].seeds[1]
+            .entrant_id
+            .as_deref(),
+        Some("player-2")
+    );
+    let phase_two_slots = snapshot.events[0]
+        .sets
+        .iter()
+        .filter(|set| set.phase_order == Some(2))
+        .flat_map(|set| set.slots.iter())
+        .filter_map(|slot| slot.entrant_id.as_deref())
+        .collect::<Vec<_>>();
+    assert!(phase_two_slots.contains(&"player-1"));
+    assert!(phase_two_slots.contains(&"player-2"));
+
+    let phase_two_grand_final = snapshot.events[0]
+        .sets
+        .iter_mut()
+        .find(|set| set.set_id == phase_two_grand_final_id)
+        .unwrap();
+    phase_two_grand_final.slots[0].entrant_id = Some("player-1".to_owned());
+    phase_two_grand_final.slots[0].entrant_name = "Player 1".to_owned();
+    phase_two_grand_final.slots[1].entrant_id = Some("player-2".to_owned());
+    phase_two_grand_final.slots[1].entrant_name = "Player 2".to_owned();
+    phase_two_grand_final.winner_id = Some("player-1".to_owned());
+    phase_two_grand_final.state = 3;
+
+    rebuild_progression_from_completed_sets(&mut snapshot);
+
+    assert_eq!(
+        snapshot.events[0].phase_groups[2].seeds[0]
+            .entrant_id
+            .as_deref(),
+        Some("player-1")
+    );
+    assert_eq!(
+        snapshot.events[0].phase_groups[2].seeds[1]
+            .entrant_id
+            .as_deref(),
+        Some("player-2")
+    );
+}
+
+#[test]
 fn seven_player_losers_round_two_preserves_the_loser_advancing_through_a_bye() {
     let input = serde_json::from_value(serde_json::json!({
         "tournamentName": "Local",
@@ -1086,8 +1432,11 @@ fn progression_candidates_use_the_previous_same_side_round() {
             "missing edge {expected_source_set_id} -> {target_set_id} ({expected_relation})"
         );
     }
-    assert!(!graph.edges.iter().any(|edge| {
-        edge.to_set_id == "w-gap-target" || edge.to_set_id == "w-direct-gap-target"
+    assert!(!graph.edges.iter().any(|edge| edge.to_set_id == "w-gap-target"));
+    assert!(graph.edges.iter().any(|edge| {
+        edge.to_set_id == "w-direct-gap-target"
+            && edge.from_set_id == "w-round-1"
+            && edge.relation == "winner"
     }));
 }
 

@@ -135,6 +135,39 @@ standingsはsetを解決できたentrantだけではなく、phaseGroupのseed�
 
 phaseOrderや表示名だけでphaseGroupを判定しないことが重要です。
 
+### start.ggとローカルeventのルール境界
+
+- snapshotのeventに `origin` (`startgg` / `local`) を保存する。旧snapshotでは読み込み時に既存のevent metaから補完し、復元・共有インポート時も種別を引き継ぐ。
+- set IDとprogression seed IDは別の名前空間であり、同じ値を取り得る。ローカル・start.ggとも、`sourceType == set` の明示的な接続元setが存在する場合はseed IDとして再解釈しない。結果の再構築やReset生成後も同じ接続を維持する。
+- start.ggでは取得したentrant sourceとwinner/loser progressionを接続の正とする。明示的なset IDとwinner/loser条件を、ローカルのラウンド配置規則で除外・置換しない。
+- start.ggの接続情報にないLosers初戦の接続や、順位だけを根拠にしたDE/SEの進出接続を追加しない。中間setの経由とprogression seedの解決は、取得したsource/progression情報に基づいて行う。
+- ローカル専用の順位進出補完、仮想Reset生成、Reset待ちの進出保留は `origin == local` に限定する。start.ggのResetは取得したsetと接続情報に従い、ローカルのReset設定から生成しない。
+
+### ローカルDEのGrand Final Reset
+
+- `grandFinalReset` は最終フェーズだけでなく、各フェーズの各Poolに適用する。
+- 有効なPoolでLosers側がGrand Finalに勝った場合、仮想Resetを生成し、同じphaseGroupの `setIds` に登録する。未登録のsetは中間setとして表示から除外されるため、生成だけでは表示されない。
+- Resetが必要な場合、Grand Finalの結果では次フェーズのseedを確定しない。Resetの確定結果で1位・2位を割り当てる。
+- Reset無効、またはWinners側がGrand Finalに勝った場合は、Grand Finalの結果で進出する。
+- Grand Finalの結果を取り消す場合、仮想Resetとその先の進出結果も取り消し対象に含める。保存・再読み込みでも同じ進出条件を適用する。
+
+### ローカルeventの進出配置
+
+- 進出元が総当たり・SE・DEのいずれでも、進出先がSE/DEなら同じ配置規則を使用する。
+- 進出先が複数Poolの場合はRound Robinでも、Pool人数と順位ごとの人数を均等化し、同じ進出元Poolの選手を分散する。同順位の枠を交換して偏りを減らし、順位の優遇を維持する。単一PoolのRound Robinの配置は変更しない。
+- 各ブラケット内でも順位順のシードを維持し、同順位内で配置を調整する。初戦・準々決勝など小さい区画から同じ進出元Poolの重複を避け、Winners側での再戦をできるだけ遅らせる。人数や進出枠数によって重複が避けられない場合がある。
+- この配置はローカルeventの生成時に決定する。既存eventの接続や確定結果を読み込み時に組み替えない。start.ggの配置には適用しない。
+
+### eventの開始前プレイヤー入替
+
+- メタデータ設定とブラケットの「プレイヤー入替モード」をONにし、プレイヤーを別のプレイヤーへドラッグすると、初期Phaseの2人のSeed配置を交換して保存する。
+- メタデータ設定の参加者一覧ではPool間の交換も可能。SE/DEのブラケット上では同じPool内のみ交換できる。BYEや進出元未確定の枠は対象外。
+- 不戦勝を除く試合のスコア・確定結果・保存済みローカル下書き・配信開始記録がない場合のみ使用できる。詳細画面で入力しただけの未保存スコアは、更新・確定せずに閉じれば破棄し、入替を再び可能にする。保存時にも既存の開始前Seed変更検証を実行する。不戦勝と派生slotは配置変更後に再計算する。
+- 入替モード中は試合詳細を開く操作、スコア編集、配信切替ショートカット、モバイル入力を開始する操作を無効にする。既存の試合詳細と結果確認はモード開始時に閉じる。
+- プレイヤーのID、エイリアス、Skill Tier、登録アイテムは交換せず、SeedのPool・番号だけを変更する。
+- start.ggイベントも初期Phaseの入替に対応する。シャッフルと同じく、全setが未開始またはReset済みで、未報告の試合結果がない場合のみ使用できる。進行中・完了済みsetがある場合は不可。
+- start.ggの入替結果はシャッフルと同じ未報告Seed変更として保存する。入替モードをOFFにして結果報告を行うと、既存のSeed報告処理でstart.ggへ反映する。入替操作自体ではAPIを更新せず、元のset間の接続情報も変更しない。
+
 ## 7. 確定状態と表示
 
 setの状態は次のように表示します。

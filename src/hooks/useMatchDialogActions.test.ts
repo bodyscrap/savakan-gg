@@ -30,28 +30,41 @@ function createMouseEvent(overrides: Partial<ReactMouseEvent<HTMLButtonElement>>
   } as unknown as ReactMouseEvent<HTMLButtonElement>;
 }
 
-function createActions(overrides: { busy?: boolean; overlayBusy?: boolean } = {}) {
+function createActions(overrides: { busy?: boolean; overlayBusy?: boolean; interactionDisabled?: boolean } = {}) {
   const stopOverlay = vi.fn(async () => undefined);
   const toggleOverlay = vi.fn(async () => undefined);
+  const setActiveMatchSetId = vi.fn();
   const actions = useMatchDialogActions({
     selectedEvent: null,
     resolvedEventSetsById: new Map(),
     pendingResultBySetId: new Map(),
-    setActiveMatchSetId: vi.fn(),
+    setActiveMatchSetId,
     setActiveMatchSideDrafts: vi.fn(),
     getSetSlotSide: () => "",
     getSetScoresForDisplay: () => ({ scores: {} }),
     initializeMatchDraft: vi.fn(),
     busy: overrides.busy ?? false,
+    interactionDisabled: overrides.interactionDisabled,
     overlayBusy: overrides.overlayBusy ?? false,
     stopOverlay,
     toggleOverlay,
   });
 
-  return { ...actions, stopOverlay, toggleOverlay };
+  return { ...actions, stopOverlay, toggleOverlay, setActiveMatchSetId };
 }
 
 describe("match dialog set interactions", () => {
+  it("blocks mouse, keyboard/open, and overlay actions during seed swapping", () => {
+    const actions = createActions({ interactionDisabled: true });
+    actions.openMatchDialog(createSet());
+    for (const modifiers of [{}, { ctrlKey: true }, { altKey: true }]) {
+      actions.handleRoundRobinMatchClick(createSet(), createMouseEvent(modifiers));
+      actions.handleEliminationSetActivate(createSet(), createMouseEvent(modifiers));
+    }
+    expect(actions.setActiveMatchSetId).not.toHaveBeenCalled();
+    expect(actions.stopOverlay).not.toHaveBeenCalled();
+    expect(actions.toggleOverlay).not.toHaveBeenCalled();
+  });
   it("stops the overlay on round-robin Alt-click", () => {
     const actions = createActions();
     const event = createMouseEvent({ altKey: true });

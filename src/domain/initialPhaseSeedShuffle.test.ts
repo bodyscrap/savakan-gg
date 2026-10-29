@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EventSnapshot } from "./bracketDisplay";
-import { buildInitialPhaseSeedMapping, canShuffleInitialPhaseSeeds } from "./initialPhaseSeedShuffle";
+import { buildInitialPhaseSeedMapping, buildInitialPhaseSeedSwap, canShuffleInitialPhaseSeeds, getInitialPhasePlayerPositions } from "./initialPhaseSeedShuffle";
 
 function eventFixture(): EventSnapshot {
   return {
@@ -38,6 +38,39 @@ function eventFixture(): EventSnapshot {
 }
 
 describe("initial phase seed shuffle", () => {
+  it("swaps exactly two players while keeping placeholders and all seed identities", () => {
+    const event = eventFixture();
+    expect(buildInitialPhaseSeedSwap(event, "entrant-1", "entrant-2")).toEqual([
+      { seedId: "seed-1", seedNum: 2, phaseGroupId: "group-1" },
+      { seedId: "seed-2", seedNum: 1, phaseGroupId: "group-1" },
+      { seedId: "placeholder", seedNum: 3, phaseGroupId: "group-1" },
+    ]);
+    expect(event.phaseGroups?.[0].seeds?.[0].seedNum).toBe(1);
+    expect(() => buildInitialPhaseSeedSwap(event, "entrant-1", "entrant-1")).toThrow();
+    expect(() => buildInitialPhaseSeedSwap(event, "entrant-1", "missing")).toThrow();
+  });
+
+  it("swaps across pools with repeated seed numbers without moving later-phase seeds", () => {
+    const event = eventFixture();
+    const first = event.phaseGroups![0];
+    event.phaseGroups!.push({
+      ...first, phaseGroupId: "group-2", displayIdentifier: "B",
+      seeds: [{ seedId: "seed-3", seedNum: 1, entrantId: "entrant-3", entrantName: "Three" }],
+    }, {
+      ...first, phaseGroupId: "final", phaseId: "phase-2",
+      seeds: [{ seedId: "later", seedNum: 1, entrantId: "later", entrantName: "Later" }],
+    });
+    expect(buildInitialPhaseSeedSwap(event, "entrant-2", "entrant-3")).toEqual([
+      { seedId: "seed-1", seedNum: 1, phaseGroupId: "group-1" },
+      { seedId: "seed-2", seedNum: 1, phaseGroupId: "group-2" },
+      { seedId: "placeholder", seedNum: 3, phaseGroupId: "group-1" },
+      { seedId: "seed-3", seedNum: 2, phaseGroupId: "group-1" },
+    ]);
+    expect(getInitialPhasePlayerPositions(event).map((position) => position.entrantId))
+      .toEqual(["entrant-1", "entrant-2", "entrant-3"]);
+    expect(() => buildInitialPhaseSeedSwap(event, "entrant-1", "later")).toThrow();
+  });
+
   it("shuffles player seeds while preserving placeholder positions and seed numbers", () => {
     const mapping = buildInitialPhaseSeedMapping(eventFixture(), () => 0);
     expect(mapping).toEqual([

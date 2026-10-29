@@ -8,12 +8,7 @@ export type InitialPhaseSeedMappingEntry = {
   phaseGroupId?: string;
 };
 
-export function buildInitialPhaseSeedMapping(
-  event: EventSnapshot,
-  random: () => number = Math.random,
-  includePhaseGroupPositions = false,
-  skillByEntrantId?: ReadonlyMap<string, number | null | undefined>,
-): InitialPhaseSeedMappingEntry[] {
+function initialPhaseSeeds(event: EventSnapshot) {
   const firstPhase = [...(event.phases ?? [])]
     .filter((phase) => phase.phaseOrder !== null)
     .sort((left, right) => (left.phaseOrder ?? 0) - (right.phaseOrder ?? 0))[0];
@@ -41,7 +36,48 @@ export function buildInitialPhaseSeedMapping(
       seedsById.set(seed.seedId, { seed, phaseGroupId: group.phaseGroupId ?? "" });
     }
   }
-  const seedEntries = [...seedsById.values()];
+  return [...seedsById.values()];
+}
+
+export function getInitialPhasePlayerPositions(event: EventSnapshot) {
+  return initialPhaseSeeds(event).flatMap(({ seed, phaseGroupId }) =>
+    seed.entrantId ? [{
+      entrantId: seed.entrantId,
+      phaseGroupId,
+      seedNum: seed.seedNum!,
+      poolName: event.phaseGroups?.find((group) => group.phaseGroupId === phaseGroupId)?.displayIdentifier ?? phaseGroupId,
+    }] : [],
+  );
+}
+
+export function buildInitialPhaseSeedSwap(
+  event: EventSnapshot,
+  sourceEntrantId: string,
+  targetEntrantId: string,
+): InitialPhaseSeedMappingEntry[] {
+  const entries = initialPhaseSeeds(event);
+  const source = entries.find(({ seed }) => seed.entrantId === sourceEntrantId);
+  const target = entries.find(({ seed }) => seed.entrantId === targetEntrantId);
+  if (!source || !target || sourceEntrantId === targetEntrantId) {
+    throw new Error(t("入替対象のプレイヤーが不正です。"));
+  }
+  return entries.map((entry) => {
+    const position = entry === source ? target : entry === target ? source : entry;
+    return {
+      seedId: entry.seed.seedId,
+      seedNum: position.seed.seedNum!,
+      phaseGroupId: position.phaseGroupId,
+    };
+  });
+}
+
+export function buildInitialPhaseSeedMapping(
+  event: EventSnapshot,
+  random: () => number = Math.random,
+  includePhaseGroupPositions = false,
+  skillByEntrantId?: ReadonlyMap<string, number | null | undefined>,
+): InitialPhaseSeedMappingEntry[] {
+  const seedEntries = initialPhaseSeeds(event);
   const entrantSeeds = seedEntries.filter(({ seed }) => seed.entrantId !== null && seed.entrantId !== undefined);
   if (entrantSeeds.length < 2) {
     throw new Error(t("シャッフルできるプレイヤーSeedが2件以上ありません。"));
