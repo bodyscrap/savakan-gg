@@ -14,6 +14,7 @@ type PlayerListInfoProps = {
   selectedPlayerPreviewUrl: string;
   onSaveSelectedCard: () => void;
   onExportA4Sheet: () => void;
+  onExportCsv: () => void;
   onSelectAllPlayers: () => void;
   onClearPlayerSelection: () => void;
   onSelectPlayer: (player: UserCardPlayer, multiSelect: boolean) => void;
@@ -30,6 +31,7 @@ export function PlayerListInfo({
   selectedPlayerPreviewUrl,
   onSaveSelectedCard,
   onExportA4Sheet,
+  onExportCsv,
   onSelectAllPlayers,
   onClearPlayerSelection,
   onSelectPlayer,
@@ -59,6 +61,12 @@ export function PlayerListInfo({
                 disabled={disableLocalCommunication || userCardBusy || players.length === 0}
                 onClick={onExportA4Sheet}
               >{t("A4シートを作成")}</button>
+              <button
+                type="button"
+                className="ghost"
+                disabled={disableLocalCommunication || userCardBusy || players.length === 0}
+                onClick={onExportCsv}
+              >{t("CSVで出力")}</button>
             </div>
           </>
         )}
@@ -103,7 +111,7 @@ export function PlayerListInfo({
                       }}
                     >
                       <h4>{player.entrantName}</h4>
-                      <p className="meta user-id">playerId: {player.playerId}</p>
+                      <p className="meta user-id">{t("Skill Tier")}: {player.skill ?? t("未設定")} / Player ID: {player.playerId}</p>
                     </article>
                   );
                 })}

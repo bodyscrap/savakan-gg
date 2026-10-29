@@ -29,6 +29,9 @@ const player: UserCardPlayer = {
   eventAlias: "Event Alias",
   entrantId: "entrant",
   entrantName: "Original Player",
+  playerName: "Original Player",
+  aliasName: "Registered Alias",
+  skill: 5,
   playerId: "PG-PLAYER",
 };
 const missingAliasCases: Record<string, string>[] = [
@@ -46,7 +49,12 @@ function setup(useAliasName: boolean, aliases: Record<string, string> = { entran
     eventId: player.eventId,
     eventName: player.eventName,
     eventAlias: player.eventAlias,
-    entrants: [{ entrantId: player.entrantId, entrantName: player.entrantName }],
+    entrants: [{
+      entrantId: player.entrantId,
+      entrantName: player.entrantName,
+      aliasName: player.aliasName,
+      skill: player.skill,
+    }],
     aliasNamesByEntrantId: aliases,
     useAliasName,
     disableLocalCommunication: false,
@@ -86,5 +94,17 @@ describe("player card alias display", () => {
     await setup(true).saveSelectedCards();
     expect(renderCard).toHaveBeenCalledWith({ ...player, entrantName: "Alias" });
     expect(download).toHaveBeenCalledWith(expect.any(Blob), "Event-Alias_Alias.png");
+  });
+
+  it("exports the complete player metadata to a CSV file", async () => {
+    const result = setup(false);
+    result.exportPlayersAsCsv();
+
+    expect(download).toHaveBeenCalledWith(expect.any(Blob), "Event-Alias_players.csv");
+    const csvBlob = vi.mocked(download).mock.calls[0][0] as Blob;
+    await expect(csvBlob.text()).resolves.toContain(
+      "プレイヤー名,エイリアスプレイヤー名,Skill Tier,Player ID\r\n"
+      + "Original Player,Registered Alias,5,PG-PLAYER",
+    );
   });
 });

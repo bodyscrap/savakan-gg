@@ -9,6 +9,9 @@ export type UserCardPlayer = {
   eventAlias: string | null;
   entrantId: string;
   entrantName: string;
+  playerName: string;
+  aliasName: string;
+  skill: number | null;
   playerId: string;
 };
 

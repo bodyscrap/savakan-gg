@@ -2,6 +2,7 @@ import { t } from "../i18n";
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveEntrantDisplayName } from "../domain/bracketDisplay";
+import { buildPlayerListCsv, buildPlayerListCsvFileName } from "../domain/playerListCsv";
 import {
   buildPlayerCardFileName,
   buildPrintedPlayerCardPageFileName,
@@ -19,7 +20,12 @@ export type UseUserCardsOptions = {
   eventId: string | null;
   eventName: string;
   eventAlias: string | null;
-  entrants: Array<{ entrantId: string; entrantName: string }>;
+  entrants: Array<{
+    entrantId: string;
+    entrantName: string;
+    aliasName?: string;
+    skill?: number | null;
+  }>;
   aliasNamesByEntrantId: Record<string, string>;
   useAliasName: boolean;
   disableLocalCommunication: boolean;
@@ -83,6 +89,9 @@ export function useUserCards({
           eventAlias: eventAlias?.trim() ? eventAlias.trim() : null,
           entrantId: entrant.entrantId,
           entrantName: entrant.entrantName,
+          playerName: entrant.entrantName,
+          aliasName: entrant.aliasName?.trim() ?? "",
+          skill: entrant.skill ?? null,
           playerId: playerIds[index],
         }));
 
@@ -307,6 +316,33 @@ export function useUserCards({
     }
   }
 
+  function exportPlayersAsCsv() {
+    if (disableLocalCommunication) {
+      onError(t("ローカル通信を行わない設定のため、プレイヤーリスト機能は無効です。設定タブで解除してください。"));
+      return;
+    }
+    if (players.length === 0) {
+      onError(t("出力するプレイヤーがありません。"));
+      return;
+    }
+
+    onError("");
+    onMessage("");
+    try {
+      const csv = buildPlayerListCsv(players.map((player) => ({
+        playerName: player.playerName,
+        aliasName: player.aliasName,
+        skill: player.skill,
+        playerId: player.playerId,
+      })));
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      triggerBlobDownload(blob, buildPlayerListCsvFileName(eventAlias, eventName));
+      onMessage(t("{p0} 人のプレイヤーをCSVで出力しました。", { p0: players.length }));
+    } catch (error) {
+      onError(String(error));
+    }
+  }
+
   return {
     players,
     selectedPlayerIds,
@@ -318,5 +354,6 @@ export function useUserCards({
     clearPlayerSelection,
     saveSelectedCards,
     exportSelectedCardsAsA4Sheet,
+    exportPlayersAsCsv,
   };
 }

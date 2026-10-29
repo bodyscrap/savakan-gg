@@ -1536,6 +1536,7 @@ function App() {
     clearPlayerSelection: clearAllUserCardPlayersSelection,
     saveSelectedCards: saveSelectedUserCardImage,
     exportSelectedCardsAsA4Sheet: exportSelectedPlayerCardsAsA4Sheet,
+    exportPlayersAsCsv: exportUserCardPlayersAsCsv,
   } = useUserCards({
     tournamentId: snapshot?.tournamentId ?? null,
     tournamentName: snapshot?.name ?? "",
@@ -3116,6 +3117,7 @@ function App() {
             selectedPlayerPreviewUrl={selectedUserCardPreviewUrl}
             onSaveSelectedCard={() => void saveSelectedUserCardImage()}
             onExportA4Sheet={() => void exportSelectedPlayerCardsAsA4Sheet()}
+            onExportCsv={exportUserCardPlayersAsCsv}
             onSelectAllPlayers={selectAllUserCardPlayers}
             onClearPlayerSelection={clearAllUserCardPlayersSelection}
             onSelectPlayer={handleUserCardPlayerSelect}
