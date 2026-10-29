@@ -37,7 +37,7 @@ export function useSnapshotEventListRefresh({
   setHomeSelectedSnapshotKey,
   setError,
 }: UseSnapshotEventListRefreshOptions) {
-  async function refreshLocalSnapshotEvents() {
+  async function refreshLocalSnapshotEvents(): Promise<LocalSnapshotEventListItem[] | null> {
     try {
       const items = await fetchLocalSnapshotEvents();
 
@@ -69,8 +69,10 @@ export function useSnapshotEventListRefresh({
         clearStartupSelection();
         resetLastPersistedSnapshotSelection();
       }
+      return items;
     } catch (err) {
       setError(String(err));
+      return null;
     } finally {
       markSnapshotEventsLoaded();
     }

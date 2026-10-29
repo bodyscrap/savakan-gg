@@ -38,6 +38,26 @@ function sourceSetIdsForSet(set: SetSnapshot): string[] {
   ].filter((setId): setId is string => Boolean(setId && setId.trim() !== ""));
 }
 
+function incomingWinnersLoserSourceOrder(
+  set: SetSnapshot,
+  winnersSourceOrder: Map<string, number>,
+): number | null {
+  const sources = [set.entrant1Source, set.entrant2Source];
+  const positions = sources.flatMap((source) => {
+    if (source?.condition?.toLowerCase() !== "loser") {
+      return [];
+    }
+
+    const sourceSetId = source.resolvedSetId ?? source.typeId;
+    const order = sourceSetId ? winnersSourceOrder.get(sourceSetId) : undefined;
+    return order === undefined ? [] : [order];
+  });
+
+  return positions.length > 0
+    ? positions.reduce((sum, position) => sum + position, 0) / positions.length
+    : null;
+}
+
 function buildExpandedLaneIndexes(previousCount: number, currentCount: number): number[] {
   if (previousCount <= 0 || currentCount <= 0) {
     return [];
@@ -357,6 +377,7 @@ function fitPositionsToAvailableLanes(
 export function buildPositionedRoundColumns(
   columns: RoundColumn[],
   sectionKey: string,
+  winnersSourceOrder = new Map<string, number>(),
 ): PositionedRoundColumn[] {
   const displayOrder = new Map(columns.map((column, index) => [column.key, index]));
   if (sectionKey === "losers") {
@@ -376,6 +397,70 @@ export function buildPositionedRoundColumns(
       ?? maxSetCountIndexes[0]?.index
       ?? -1)
     : (maxSetCountIndexes[0]?.index ?? -1);
+  const winnersMergeOrderByColumn = new Map<number, number>();
+  if (sectionKey === "losers") {
+    let mergeIndex = 0;
+    columns.forEach((column, columnIndex) => {
+      if (column.sets.some((set) => [set.entrant1Source, set.entrant2Source]
+        .some((source) => source?.condition?.toLowerCase() === "loser"))) {
+        const round = Math.abs(column.round ?? 0);
+        const roundMergeIndex = round === 1
+          ? 0
+          : round >= 2 && round % 2 === 0
+            ? round / 2
+            : mergeIndex;
+        winnersMergeOrderByColumn.set(columnIndex, roundMergeIndex);
+        mergeIndex += 1;
+      }
+    });
+  }
+
+  const applyWinnersMergeOrder = (columnIndex: number, positions: number[]): number[] => {
+    const mergeIndex = winnersMergeOrderByColumn.get(columnIndex);
+    const column = columns[columnIndex];
+    if (mergeIndex === undefined || !column || positions.length !== column.sets.length) {
+      return positions;
+    }
+    if (column.round === -2) {
+      return positions;
+    }
+    const previousLosersSetIds = new Set(
+      columns[columnIndex - 1]?.sets.map((set) => set.setId) ?? [],
+    );
+    if (column.sets.some((set) => [set.entrant1Source, set.entrant2Source].some((source) => {
+      if (source?.condition?.toLowerCase() !== "winner") {
+        return false;
+      }
+
+      const sourceSetId = source.resolvedSetId ?? source.typeId;
+      return sourceSetId != null && previousLosersSetIds.has(sourceSetId);
+    }))) {
+      return positions;
+    }
+
+    const mergeSetIndexes = column.sets
+      .map((set, index) => ({
+        index,
+        sourceOrder: incomingWinnersLoserSourceOrder(set, winnersSourceOrder),
+      }))
+      .filter((item): item is { index: number; sourceOrder: number } => item.sourceOrder !== null)
+      .sort((left, right) => left.sourceOrder - right.sourceOrder || left.index - right.index);
+    const mergeLanes = mergeSetIndexes
+      .map(({ index }) => positions[index])
+      .filter((position): position is number => position !== undefined)
+      .sort((left, right) => left - right);
+
+    if (mergeSetIndexes.length < 2 || mergeLanes.length !== mergeSetIndexes.length) {
+      return positions;
+    }
+
+    const orderedLanes = mergeIndex % 2 === 0 ? mergeLanes : mergeLanes.reverse();
+    const adjusted = [...positions];
+    mergeSetIndexes.forEach(({ index }, mergeSetIndex) => {
+      adjusted[index] = orderedLanes[mergeSetIndex]!;
+    });
+    return adjusted;
+  };
 
   const assignDefaultPositions = (columnIndex: number): number[] => {
     const column = columns[columnIndex];
@@ -393,8 +478,9 @@ export function buildPositionedRoundColumns(
           (_, index) => BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP,
         );
 
-    resolvedPositions[columnIndex] = defaultPositions;
-    return defaultPositions;
+    const orderedPositions = applyWinnersMergeOrder(columnIndex, defaultPositions);
+    resolvedPositions[columnIndex] = orderedPositions;
+    return orderedPositions;
   };
 
   if (maxSetCountIndex >= 0) {
@@ -421,12 +507,15 @@ export function buildPositionedRoundColumns(
         )
         : buildWinnersExpandedRoundPositions(nextColumn.sets, referencePositions, column.sets);
 
-    const adjustedPositions = sectionKey === "losers"
+    const adjustedPositions = sectionKey === "losers" && nextColumn.round !== -2
       ? fitPositionsToAvailableLanes(lanePositions, maxSetCount)
       : lanePositions;
-    resolvedPositions[columnIndex] = adjustedPositions.length > 0
+    const positions = adjustedPositions.length > 0
       ? adjustedPositions
       : assignDefaultPositions(columnIndex);
+    if (adjustedPositions.length > 0) {
+      resolvedPositions[columnIndex] = applyWinnersMergeOrder(columnIndex, positions);
+    }
   }
 
   for (let columnIndex = maxSetCountIndex + 1; columnIndex < columns.length; columnIndex += 1) {
@@ -444,9 +533,11 @@ export function buildPositionedRoundColumns(
           : buildWinnersExpandedRoundPositions(previousColumn.sets, previousPositions, column.sets)
         : assignDefaultPositions(columnIndex);
 
-    resolvedPositions[columnIndex] = lanePositions.length > 0
-      ? lanePositions
-      : assignDefaultPositions(columnIndex);
+    if (lanePositions.length > 0) {
+      resolvedPositions[columnIndex] = applyWinnersMergeOrder(columnIndex, lanePositions);
+    } else {
+      assignDefaultPositions(columnIndex);
+    }
   }
 
   for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {

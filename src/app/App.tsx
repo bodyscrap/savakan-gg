@@ -500,12 +500,30 @@ function App() {
     setBusy,
     setError,
     setMessage,
-    onSnapshotCreated: async () => {
+    onSnapshotCreated: async (identity) => {
       localEventDraft.clearParticipants();
       setWorkspace(null);
       markStartupAutoRestoreDone();
-      await refreshLocalSnapshotEvents();
       setActiveTab("create");
+      const items = await refreshSnapshotEventList();
+      const createdItem = items
+        ? findSnapshotEventByIdentity(items, identity.slug, identity.eventId)
+        : null;
+      if (!createdItem) {
+        throw new Error(t("作成したスナップショットを一覧から特定できませんでした。"));
+      }
+
+      const eventLabel = createdItem.eventAlias?.trim()
+        || `${createdItem.tournamentName} / ${createdItem.eventName}`;
+      if (!await window.confirm(t(
+        "スナップショットを作成しました。作成したスナップショットを操作対象として選択しますか？\n{p0}",
+        { p0: eventLabel },
+      ))) {
+        return false;
+      }
+
+      await selectLocalSnapshotEventRef.current(createdItem);
+      return true;
     },
   });
   const {
@@ -1253,7 +1271,9 @@ function App() {
     setHomeSelectedSnapshotKey,
     setError,
   });
-  refreshLocalSnapshotEventsRef.current = refreshSnapshotEventList;
+  refreshLocalSnapshotEventsRef.current = async () => {
+    await refreshSnapshotEventList();
+  };
 
   const selectedEventSettingKey = snapshot && selectedEvent
     ? buildEventManagementSettingKey(snapshot.slug, selectedEvent.eventId)

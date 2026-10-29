@@ -4,7 +4,7 @@ import { emptyCategorySelections } from "./eventManagement";
 import { registrationCategorySlots, validateRegisteredSelections, type LocalEventRegistration, type RegisteredLocalParticipant } from "./localEventRegistration";
 
 export type RegistrationCsv = { headers: string[]; rows: string[][] };
-export type RegistrationCsvMapping = { name: number; categories: Array<number | null> };
+export type RegistrationCsvMapping = { name: number; categories: Array<number | null>; skill?: number | null };
 
 export function parseRegistrationCsv(text: string): RegistrationCsv {
   const records: string[][] = [];
@@ -51,13 +51,20 @@ export function importRegistrationCsv(
   createId: () => string = () => crypto.randomUUID(),
 ): RegisteredLocalParticipant[] {
   const validColumn = (column: number) => Number.isInteger(column) && column >= 0 && column < csv.headers.length;
-  if (!validColumn(mapping.name) || mapping.categories.some((column) => column !== null && !validColumn(column))) {
+  if (!validColumn(mapping.name)
+    || mapping.categories.some((column) => column !== null && !validColumn(column))
+    || (mapping.skill !== null && mapping.skill !== undefined && !validColumn(mapping.skill))) {
     throw new Error(t("取り込みに使用するカラムを選択してください。"));
   }
   const slots = registrationCategorySlots(registration.setting);
   return csv.rows.map((row, index) => {
     const name = row[mapping.name].trim();
     if (!name) throw new Error(t("CSVの{row}行目にプレイヤー名がありません。", { row: index + 2 }));
+    const rawSkill = mapping.skill == null ? "" : row[mapping.skill].trim();
+    const skill = rawSkill === "" ? null : Number(rawSkill);
+    if (skill !== null && (!Number.isSafeInteger(skill) || skill < 0)) {
+      throw new Error(t("CSVの{row}行目のSkill Tierは0以上の整数で入力してください。", { row: index + 2 }));
+    }
     const categorySelections = emptyCategorySelections();
     for (const slot of slots) {
       const column = mapping.categories[slot.slotIndex];
@@ -66,7 +73,7 @@ export function importRegistrationCsv(
         .filter((item) => item !== "" && (slot.list.id === FREE_TEXT_LIST_ID || slot.list.items.includes(item)));
       categorySelections[slot.slotIndex] = slot.allowDuplicates ? items : [...new Set(items)];
     }
-    const participant = { entrantId: createId(), name, categorySelections, selectionsConfirmed: false };
+    const participant = { entrantId: createId(), name, skill, categorySelections, selectionsConfirmed: false };
     participant.selectionsConfirmed = validateRegisteredSelections(participant, registration.setting).errors.length === 0;
     return participant;
   });

@@ -19,6 +19,7 @@ import {
   persistLocalEventSnapshot,
   loadStartggCreateSlug,
   saveStartggCreateSlug,
+  type LocalSnapshotEventListItem,
   type CreateLocalEventSnapshotInput,
 } from "../domain/tournamentWorkspaceRepository";
 import { toApiSlug, toEventApiSlug, toSlugInput } from "../domain/slugUtils";
@@ -31,7 +32,9 @@ type UseTournamentCreationOptions = {
   setBusy: (busy: boolean) => void;
   setError: (error: string) => void;
   setMessage: (message: string) => void;
-  onSnapshotCreated: () => Promise<void>;
+  onSnapshotCreated: (
+    identity: Pick<LocalSnapshotEventListItem, "slug" | "eventId">,
+  ) => Promise<boolean>;
 };
 
 export function useTournamentCreation({
@@ -239,8 +242,13 @@ export function useTournamentCreation({
         eventAlias: createEventAlias.trim() === "" ? null : createEventAlias.trim(),
         perPage,
       });
-      await onSnapshotCreated();
-      setMessage(t("eventのローカルスナップショットを作成しました。"));
+      const selected = await onSnapshotCreated({
+        slug: tournamentSlug,
+        eventId: createSelectedEventId,
+      });
+      if (!selected) {
+        setMessage(t("eventのローカルスナップショットを作成しました。"));
+      }
     } catch (error) {
       setError(String(error));
     } finally {
@@ -266,9 +274,18 @@ export function useTournamentCreation({
         "同じ大会名・イベント名のローカルイベントが既に存在します。\n{p0} / {p1}\n\n上書き作成すると、既存の参加者・ブラケット・試合結果・配信開始記録を置き換えます。この操作は元に戻せません。上書き作成しますか？",
         { p0: existing.tournamentName, p1: existing.eventName },
       ))) return;
-      await persistLocalEventSnapshot({ ...input, overwriteEventId: existing?.eventId });
-      await onSnapshotCreated();
-      setMessage(t("ローカルeventのスナップショットを作成しました。"));
+      const workspace = await persistLocalEventSnapshot({ ...input, overwriteEventId: existing?.eventId });
+      const createdEvent = workspace.snapshot.events[0];
+      if (!createdEvent) {
+        throw new Error(t("作成したローカルeventのスナップショットを特定できませんでした。"));
+      }
+      const selected = await onSnapshotCreated({
+        slug: workspace.snapshot.slug,
+        eventId: createdEvent.eventId,
+      });
+      if (!selected) {
+        setMessage(t("ローカルeventのスナップショットを作成しました。"));
+      }
     } catch (error) {
       setError(String(error));
     } finally {

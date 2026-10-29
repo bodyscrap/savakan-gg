@@ -50,6 +50,8 @@ describe("CSV import dialog", () => {
     expect(html.match(/<select disabled=""/g)).toHaveLength(2);
     expect(html).toContain("カテゴリ1");
     expect(html).toContain("Items");
+    expect(html).toContain("Skill Tier");
+    expect(html).toContain('<option value="">割り当てなし</option>');
     expect(onPendingChange).toHaveBeenCalledWith(true);
   });
 

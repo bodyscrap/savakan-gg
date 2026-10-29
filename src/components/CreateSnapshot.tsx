@@ -201,12 +201,10 @@ function LocalEventSnapshotForm({
     phases: effectivePhases.slice(0, phaseCount).map((phase, index) => ({
       ...phase,
       qualifiersPerPool: index + 1 < phaseCount ? phase.qualifiersPerPool : 0,
-      thirdPlaceMatch: index + 1 === phaseCount
-        && phase.bracketType === "SINGLE_ELIMINATION"
+      thirdPlaceMatch: phase.bracketType === "SINGLE_ELIMINATION"
         && Math.floor(participantCountForPhase(index) / phase.poolCount) >= 4
         && phase.thirdPlaceMatch,
-      fifthPlaceMatch: index + 1 === phaseCount
-        && phase.bracketType === "DOUBLE_ELIMINATION"
+      fifthPlaceMatch: phase.bracketType === "DOUBLE_ELIMINATION"
         && Math.floor(participantCountForPhase(index) / phase.poolCount) >= 8
         && phase.fifthPlaceMatch,
     })),
@@ -276,8 +274,7 @@ function LocalEventSnapshotForm({
                 <option value="ROUND_ROBIN">{t("総当たり")}</option>
               </select>
               <div className="local-event-phase-options">
-              {lastPhase
-                && phase.bracketType === "SINGLE_ELIMINATION" && (
+              {phase.bracketType === "SINGLE_ELIMINATION" && (
                   <div className="local-event-phase-option-field" title={playersPerPool < 4 ? t("各プールに{count}人以上必要です。", { count: 4 }) : undefined}>
                     <label>
                       <input
@@ -290,8 +287,7 @@ function LocalEventSnapshotForm({
                     </label>
                   </div>
                 )}
-              {lastPhase
-                && phase.bracketType === "DOUBLE_ELIMINATION" && (
+              {phase.bracketType === "DOUBLE_ELIMINATION" && (
                   <div className="local-event-phase-option-field" title={playersPerPool < 8 ? t("各プールに{count}人以上必要です。", { count: 8 }) : undefined}>
                     <label>
                       <input

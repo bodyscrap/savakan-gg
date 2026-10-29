@@ -215,7 +215,7 @@ describe("local event phase settings", () => {
     it.each([
       ["SINGLE_ELIMINATION", 4, "thirdPlaceMatch"],
       ["DOUBLE_ELIMINATION", 8, "fifthPlaceMatch"],
-    ] as const)("requires both the %s option and enough participants per pool", (bracketType, minimum, field) => {
+    ] as const)("applies the %s option only when enabled and each phase meets its per-pool minimum", (bracketType, minimum, field) => {
       vi.mocked(React.useEffect).mockImplementation(() => {});
       for (const checked of [false, true]) {
         for (const players of [minimum - 1, minimum, minimum + 1]) {
@@ -233,10 +233,13 @@ describe("local event phase settings", () => {
           expect(submitted.eventManagement).toEqual(defaultLocalEventRegistration().setting);
           expect(submitted.requireItemSelections).toBe(true);
           expect(submitted.phases).toHaveLength(phaseCount);
-          for (const [index, phase] of submitted.phases.entries()) {
-            const expected = index + 1 === phaseCount && checked && players >= minimum;
+          let phasePlayerCount = submitted.participants.length;
+          for (const phase of submitted.phases) {
+            const playersPerPool = Math.floor(phasePlayerCount / phase.poolCount);
+            const expected = checked && playersPerPool >= minimum;
             expect(phase[field]).toBe(expected);
             expect(phase[field === "thirdPlaceMatch" ? "fifthPlaceMatch" : "thirdPlaceMatch"]).toBe(false);
+            phasePlayerCount = phase.poolCount * phase.qualifiersPerPool;
           }
         }
       }
@@ -277,22 +280,37 @@ describe("local event phase settings", () => {
     it.each([
       ["SINGLE_ELIMINATION", 4, "3位決定戦"],
       ["DOUBLE_ELIMINATION", 8, "5位決定戦"],
-    ] as const)("shows %s placement matches only for the final phase", (bracketType, minimum, label) => {
+    ] as const)("shows %s placement match settings on every phase", (bracketType, minimum, label) => {
       const html = renderLocalPhases(phaseCount, bracketType, minimum);
-      expect(html.match(/class="local-event-phase-option-field"/g)).toHaveLength(bracketType === "DOUBLE_ELIMINATION" ? phaseCount + 1 : 1);
-      expect(html).toContain(`<input type="checkbox" checked=""/>${label}`);
-      const finalPhaseStart = html.indexOf(`role="group" aria-label="Phase ${phaseCount}"`);
-      expect(html.indexOf(`/>${label}`)).toBeGreaterThan(finalPhaseStart);
+      expect(html.match(/class="local-event-phase-option-field"/g)).toHaveLength(
+        phaseCount * (bracketType === "DOUBLE_ELIMINATION" ? 2 : 1),
+      );
+      for (let index = 1; index <= phaseCount; index += 1) {
+        const phaseStart = html.indexOf(`role="group" aria-label="Phase ${index}"`);
+        const nextPhaseStart = html.indexOf(`role="group" aria-label="Phase ${index + 1}"`);
+        const phaseMarkup = html.slice(phaseStart, nextPhaseStart < 0 ? undefined : nextPhaseStart);
+        expect(phaseMarkup).toContain(`>${label}</label>`);
+      }
     });
 
     it.each([
       ["SINGLE_ELIMINATION", 4, "3位決定戦"],
       ["DOUBLE_ELIMINATION", 8, "5位決定戦"],
-    ] as const)("keeps %s options visible but disabled below the per-pool minimum", (bracketType, minimum, label) => {
+    ] as const)("disables %s options when the final phase is below the per-pool minimum", (bracketType, minimum, label) => {
       const html = renderLocalPhases(phaseCount, bracketType, minimum - 1, 2);
-      expect(html).toContain(`<input type="checkbox" disabled=""/>${label}`);
-      expect(html).toContain(`title="各プールに${minimum}人以上必要です。"`);
-      expect(html).not.toMatch(new RegExp(`type="checkbox"[^>]*checked=""[^>]*\\/>${label}`));
+      const finalPhaseStart = html.indexOf(`role="group" aria-label="Phase ${phaseCount}"`);
+      const finalPhaseMarkup = html.slice(finalPhaseStart);
+      expect(finalPhaseMarkup).toContain(`<input type="checkbox" disabled=""/>${label}`);
+      expect(finalPhaseMarkup).toContain(`title="各プールに${minimum}人以上必要です。"`);
+      expect(finalPhaseMarkup).not.toMatch(new RegExp(`type="checkbox"[^>]*checked=""[^>]*\\/>${label}`));
+      if (phaseCount > 1) {
+        const firstPhaseMarkup = html.slice(
+          html.indexOf('role="group" aria-label="Phase 1"'),
+          html.indexOf('role="group" aria-label="Phase 2"'),
+        );
+        expect(firstPhaseMarkup).toContain(`>${label}</label>`);
+        expect(firstPhaseMarkup).not.toContain('type="checkbox" disabled=""/>');
+      }
     });
 
     it("does not offer placement matches for a round-robin final", () => {

@@ -44,7 +44,7 @@ function CsvMappingDialog({ csv, fileName, registration, onClose, onImport }: {
   onClose: () => void; onImport: (participants: RegisteredLocalParticipant[], eventName: string) => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [mapping, setMapping] = useState<RegistrationCsvMapping>({ name: -1, categories: [null, null, null] });
+  const [mapping, setMapping] = useState<RegistrationCsvMapping>({ name: -1, categories: [null, null, null], skill: null });
   const [error, setError] = useState("");
   const [prefixDate, setPrefixDate] = useState(false);
   const now = new Date();
@@ -79,6 +79,10 @@ function CsvMappingDialog({ csv, fileName, registration, onClose, onImport }: {
           <label>{t("プレイヤー名")}<select required value={mapping.name} onChange={(event) =>
             setMapping({ ...mapping, name: Number(event.currentTarget.value) })}>
             <option value={-1} disabled>{t("カラムを選択")}</option>{columnOptions}
+          </select></label>
+          <label>{t("Skill Tier")}<select value={mapping.skill ?? ""}
+            onChange={(event) => setMapping({ ...mapping, skill: event.currentTarget.value === "" ? null : Number(event.currentTarget.value) })}>
+            <option value="">{t("割り当てなし")}</option>{columnOptions}
           </select></label>
           {[0, 1, 2].map((index) => {
             const slot = slots.find((candidate) => candidate.slotIndex === index);

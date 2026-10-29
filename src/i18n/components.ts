@@ -21,6 +21,7 @@ export const componentTranslations: Record<string, string> = {
   "CSVのカラム数が一致しない行があります。": "Some CSV rows have a different number of columns.",
   "取り込みに使用するカラムを選択してください。": "Select the columns to import.",
   "CSVの{row}行目にプレイヤー名がありません。": "CSV row {row} has no player name.",
+  "CSVの{row}行目のSkill Tierは0以上の整数で入力してください。": "Enter a non-negative integer skill tier in CSV row {row}.",
   "CSVを読み込めませんでした: {error}": "Could not read the CSV: {error}",
   "{count} 人": "{count} participants",
   "取り込むと既存の参加登録をすべて置き換え、CSVファイル名（拡張子なし）をevent名に設定します。": "Import replaces all existing registrations and sets the event name to the CSV filename without its extension.",

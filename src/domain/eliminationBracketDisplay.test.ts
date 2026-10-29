@@ -66,4 +66,49 @@ describe("buildEliminationBracketSections", () => {
       }],
     });
   });
+
+  it("shows a Winners-side loser before a Losers-side winner in merge sets", () => {
+    const mergeSet: SetSnapshot = {
+      ...set,
+      setId: "merge-set",
+      entrant1Source: {
+        typeId: "losers-source",
+        condition: "winner",
+        conditionString: null,
+      },
+      entrant2Source: {
+        typeId: "winners-source",
+        condition: "loser",
+        conditionString: null,
+      },
+      slots: [
+        { entrantId: "losers-winner", entrantName: "Losers winner", seedId: null, seedNum: null, score: null },
+        { entrantId: "winners-loser", entrantName: "Winners loser", seedId: null, seedNum: null, score: null },
+      ],
+    };
+    const mergeColumn: PositionedRoundColumn = {
+      ...column,
+      positionedSets: [{ set: mergeSet, y: 24 }],
+    };
+    const sections = buildEliminationBracketSections({
+      sections: [{ key: "losers", title: "Losers", setCount: 1, columns: [mergeColumn] }],
+      resolvedEventSetsById: new Map(),
+      pendingResultBySetId: new Map(),
+      interimScoreDraftsBySetId: {},
+      activeOverlay: null,
+      entrantMeta: [],
+      useAliasName: false,
+      setDisplayCodeById: new Map(),
+      getTbdSourceLabel: () => null,
+      getSideLabel: (_setId, entrantId) => entrantId === "winners-loser" ? "1P" : "2P",
+      getScoresForSet: () => ({ scores: {}, isDq: false, winnerId: null }),
+      formatScoreValue: String,
+      isDqScoreValue: (value) => value === -1,
+    });
+
+    expect(sections[0]?.columns[0]?.cards[0]?.slots.map(({ entrantName }) => entrantName)).toEqual([
+      "Winners loser",
+      "Losers winner",
+    ]);
+  });
 });

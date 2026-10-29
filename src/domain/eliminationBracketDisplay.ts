@@ -73,6 +73,23 @@ export function buildEliminationBracketSections(input: {
         const matchupReady = isMatchupReady(displaySet);
         const setDisplay = input.getScoresForSet(displaySet);
         const winnerId = setDisplay.winnerId ?? set.winnerId;
+        const indexedSlots = displaySet.slots.map((slot, index) => ({ slot, index }));
+        const sourceConditions = [
+          displaySet.entrant1Source?.condition?.toLowerCase(),
+          displaySet.entrant2Source?.condition?.toLowerCase(),
+        ];
+        const hasWinnersLosersMerge = sourceConditions.includes("loser")
+          && sourceConditions.includes("winner");
+        const displayedSlots = hasWinnersLosersMerge
+          ? indexedSlots.sort((left, right) => {
+            const sourceOrder = (index: number) => (
+              sourceConditions[index] === "loser" ? 0
+                : sourceConditions[index] === "winner" ? 1
+                  : 2
+            );
+            return sourceOrder(left.index) - sourceOrder(right.index);
+          })
+          : indexedSlots;
 
         return {
           set,
@@ -86,7 +103,7 @@ export function buildEliminationBracketSections(input: {
             && input.activeOverlay.currentSetId === set.setId
             && input.activeOverlay.currentSetId !== "__test__",
           ),
-          slots: displaySet.slots.map((slot, index) => {
+          slots: displayedSlots.map(({ slot, index }) => {
             const entrantId = slot.entrantId;
             const tbdSourceLabel = input.getTbdSourceLabel(set, index, slot);
             const entrantName = !entrantId && tbdSourceLabel

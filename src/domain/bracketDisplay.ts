@@ -526,6 +526,24 @@ export function buildBracketSectionsForView(input: {
   event: EventSnapshot | null;
   pendingResetSetIds: Set<string>;
 }): BracketSectionForView[] {
+  const winnersSection = input.sections.find((section) => section.key === "winners");
+  const winnersSourceOrder = new Map<string, number>();
+  const positionedWinnersColumns = winnersSection
+    ? buildPositionedRoundColumns(winnersSection.columns, "winners")
+    : [];
+  for (const column of positionedWinnersColumns) {
+    const orderedSets = [...column.positionedSets].sort((left, right) => {
+      const leftIdentifier = left.set.identifier?.trim() ?? "";
+      const rightIdentifier = right.set.identifier?.trim() ?? "";
+      if (leftIdentifier !== "" && rightIdentifier !== "") {
+        return leftIdentifier.localeCompare(rightIdentifier, "en", { numeric: true })
+          || left.y - right.y;
+      }
+      return left.y - right.y;
+    });
+    orderedSets.forEach(({ set }, index) => winnersSourceOrder.set(set.setId, index));
+  }
+
   return input.sections.map((section) => {
     const preparedColumns = section.columns.map((column) => ({
       column,
@@ -564,6 +582,7 @@ export function buildBracketSectionsForView(input: {
     const positionedColumns = buildPositionedRoundColumns(
       visualColumns.map((item) => item.column),
       section.key,
+      winnersSourceOrder,
     ).map((column) => ({
       ...column,
       hidden: hiddenByKey.get(column.key) ?? false,
@@ -963,6 +982,13 @@ export function isDisplayableSet(set: SetSnapshot, event: EventSnapshot | null):
 }
 
 export function compareSetsForStableLane(left: SetSnapshot, right: SetSnapshot): number {
+  const leftIdentifier = left.identifier?.trim() ?? "";
+  const rightIdentifier = right.identifier?.trim() ?? "";
+  if (leftIdentifier !== "" && rightIdentifier !== "") {
+    return leftIdentifier.localeCompare(rightIdentifier, "en", { numeric: true })
+      || left.setId.localeCompare(right.setId, "ja");
+  }
+
   const leftSetId = left.setId.trim();
   const rightSetId = right.setId.trim();
   const leftIsNumeric = /^\d+$/.test(leftSetId);

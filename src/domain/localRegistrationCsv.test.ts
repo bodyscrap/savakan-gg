@@ -31,6 +31,34 @@ describe("registration CSV", () => {
     expect(players.every((player) => player.selectionsConfirmed)).toBe(true);
   });
 
+  it("optionally imports Skill Tier and leaves it unset when unmapped or blank", () => {
+    const csv = parseRegistrationCsv("name,items,tier\nAlice,ジャッカル,12\nBob,ヴァイス,\n");
+    const mapped = importRegistrationCsv(
+      csv,
+      { name: 0, categories: [1, null, null], skill: 2 },
+      registration(),
+      () => "id",
+    );
+    expect(mapped.map((player) => player.skill)).toEqual([12, null]);
+
+    const unmapped = importRegistrationCsv(
+      csv,
+      { name: 0, categories: [1, null, null] },
+      registration(),
+      () => "id",
+    );
+    expect(unmapped.map((player) => player.skill)).toEqual([null, null]);
+  });
+
+  it.each(["-1", "1.5", "not-a-number"])("rejects invalid Skill Tier %s", (tier) => {
+    const csv = parseRegistrationCsv(`name,tier\nAlice,${tier}`);
+    expect(() => importRegistrationCsv(
+      csv,
+      { name: 0, categories: [null, null, null], skill: 1 },
+      registration(),
+    )).toThrow("2行目");
+  });
+
   it("supports quoted commas, newlines and escaped quotes", () => {
     const csv = parseRegistrationCsv('name,items\n"Alice, ""A""","ジャッカル,\nヴァイス"\n');
     expect(csv.rows[0][0]).toBe('Alice, "A"');

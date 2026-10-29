@@ -18,6 +18,12 @@ vi.mock("../domain/tournamentWorkspaceRepository", () => ({
   persistEventSnapshot: vi.fn(), loadStartggCreateSlug: vi.fn(), saveStartggCreateSlug: vi.fn(),
 }));
 
+const createdWorkspace = {
+  snapshot: {
+    slug: "local-12345678-1",
+    events: [{ eventId: "local-12345678-1-event" }],
+  },
+} as Awaited<ReturnType<typeof persistLocalEventSnapshot>>;
 const input: CreateLocalEventSnapshotInput = {
   tournamentName: " Tournament ", eventName: " Event ", eventAlias: null, participants: [],
   requireItemSelections: false, eventManagement: defaultLocalEventRegistration().setting, phases: [],
@@ -38,7 +44,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal("window", { confirm: vi.fn().mockReturnValue(false), localStorage: { getItem: () => null } });
   vi.mocked(listLocalSnapshotEvents).mockResolvedValue([]);
-  vi.mocked(persistLocalEventSnapshot).mockResolvedValue({} as Awaited<ReturnType<typeof persistLocalEventSnapshot>>);
+  vi.mocked(persistLocalEventSnapshot).mockResolvedValue(createdWorkspace);
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -69,6 +75,10 @@ describe("local event overwrite confirmation", () => {
     expect(window.confirm).not.toHaveBeenCalled();
     expect(persistLocalEventSnapshot).toHaveBeenCalledWith({ ...input, overwriteEventId: undefined });
     expect(creation.onSnapshotCreated).toHaveBeenCalledOnce();
+    expect(creation.onSnapshotCreated).toHaveBeenCalledWith({
+      slug: createdWorkspace.snapshot.slug,
+      eventId: createdWorkspace.snapshot.events[0].eventId,
+    });
   });
 
   it("does not write or refresh when the overwrite warning is cancelled", async () => {

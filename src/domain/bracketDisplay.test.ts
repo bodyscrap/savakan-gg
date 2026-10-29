@@ -347,6 +347,199 @@ describe("double-elimination bracket lane order", () => {
     expect(y("l5-0")).toBe((y("l4-0") + y("l4-1")) / 2);
   });
 
+  it("alternates the Winners-side merge order in successive Losers rounds", () => {
+    const makeSet = (
+      setId: string,
+      round: number,
+      sources: Array<{ setId: string; condition: string }> = [],
+      identifier = setId,
+    ): SetSnapshot => ({
+      setId,
+      identifier,
+      fullRoundText: `Losers Round ${Math.abs(round)}`,
+      phaseName: "Bracket",
+      phaseGroupName: "A",
+      phaseOrder: 1,
+      phaseGroupDisplayIdentifier: "A",
+      state: 1,
+      winnerId: null,
+      slots: [],
+      round,
+      entrant1Source: sources[0]
+        ? { typeId: sources[0].setId, condition: sources[0].condition, conditionString: null }
+        : null,
+      entrant2Source: sources[1]
+        ? { typeId: sources[1].setId, condition: sources[1].condition, conditionString: null }
+        : null,
+    });
+    const sets = [
+      ...Array.from({ length: 4 }, (_, index) => makeSet(`l1-${index}`, -1, [
+        { setId: `winner-r1-${index}`, condition: "loser" },
+      ])),
+      ...[
+        ["H", "winner-H"],
+        ["I", "winner-I"],
+        ["J", "winner-J"],
+        ["K", "winner-K"],
+      ].map(([label, sourceId]) => makeSet(`l2-${label}`, -2, [
+        { setId: sourceId!, condition: "loser" },
+      ])),
+      makeSet("l3-0", -3, [{ setId: "l2-H", condition: "winner" }]),
+      makeSet("l3-1", -3, [{ setId: "l2-I", condition: "winner" }]),
+      makeSet("l4-L", -4, [
+        { setId: "l3-0", condition: "winner" },
+        { setId: "winner-L", condition: "loser" },
+      ], "B"),
+      makeSet("l4-M", -4, [
+        { setId: "l3-1", condition: "winner" },
+        { setId: "winner-M", condition: "loser" },
+      ], "A"),
+    ];
+    const columns = buildPositionedRoundColumns(buildRoundColumns(sets), "losers", new Map([
+      ["winner-r1-0", 10],
+      ["winner-r1-1", 116],
+      ["winner-r1-2", 222],
+      ["winner-r1-3", 328],
+      ["winner-H", 10],
+      ["winner-I", 116],
+      ["winner-J", 222],
+      ["winner-K", 328],
+      ["winner-L", 10],
+      ["winner-M", 116],
+    ]));
+    const y = (setId: string) => columns.flatMap((column) => column.positionedSets)
+      .find((item) => item.set.setId === setId)!.y;
+
+    expect(y("l1-0")).toBeLessThan(y("l1-1"));
+    expect(y("l1-1")).toBeLessThan(y("l1-2"));
+    expect(y("l1-2")).toBeLessThan(y("l1-3"));
+    expect(y("l2-H")).toBeLessThan(y("l2-I"));
+    expect(y("l2-I")).toBeLessThan(y("l2-J"));
+    expect(y("l2-J")).toBeLessThan(y("l2-K"));
+    expect(y("l4-L")).toBeLessThan(y("l4-M"));
+  });
+
+  it("keeps Losers merge cards aligned with their previous Losers set", () => {
+    const makeSet = (
+      setId: string,
+      round: number,
+      sources: Array<{ setId: string; condition: string }> = [],
+    ): SetSnapshot => ({
+      setId,
+      fullRoundText: `Losers Round ${Math.abs(round)}`,
+      phaseName: "Bracket",
+      phaseGroupName: "A",
+      phaseOrder: 1,
+      phaseGroupDisplayIdentifier: "A",
+      state: 1,
+      winnerId: null,
+      slots: [],
+      round,
+      entrant1Source: sources[0]
+        ? { typeId: sources[0].setId, condition: sources[0].condition, conditionString: null }
+        : null,
+      entrant2Source: sources[1]
+        ? { typeId: sources[1].setId, condition: sources[1].condition, conditionString: null }
+        : null,
+    });
+    const sets = [
+      ...Array.from({ length: 4 }, (_, index) => makeSet(`l2-${index}`, -2)),
+      makeSet("l3-0", -3, [
+        { setId: "l2-0", condition: "winner" },
+        { setId: "l2-1", condition: "winner" },
+      ]),
+      makeSet("l3-1", -3, [
+        { setId: "l2-2", condition: "winner" },
+        { setId: "l2-3", condition: "winner" },
+      ]),
+      makeSet("l4-0", -4, [
+        { setId: "l3-0", condition: "winner" },
+        { setId: "winner-y", condition: "loser" },
+      ]),
+      makeSet("l4-1", -4, [
+        { setId: "l3-1", condition: "winner" },
+        { setId: "winner-x", condition: "loser" },
+      ]),
+    ];
+    const columns = buildPositionedRoundColumns(buildRoundColumns(sets), "losers", new Map([
+      ["winner-x", 10],
+      ["winner-y", 116],
+    ]));
+    const y = (setId: string) => columns.flatMap((column) => column.positionedSets)
+      .find((item) => item.set.setId === setId)!.y;
+
+    expect(y("l4-0")).toBe(y("l3-0"));
+    expect(y("l4-1")).toBe(y("l3-1"));
+  });
+
+  it("keeps Losers Round 2 in identifier order and aligns sets with their Losers Round 1 sources", () => {
+    const makeSet = (
+      setId: string,
+      round: number,
+      identifier: string,
+      sources: Array<{ setId: string; condition: string }> = [],
+    ): SetSnapshot => ({
+      setId,
+      identifier,
+      fullRoundText: `Losers Round ${Math.abs(round)}`,
+      phaseName: "Bracket",
+      phaseGroupName: "A",
+      phaseOrder: 1,
+      phaseGroupDisplayIdentifier: "A",
+      state: 1,
+      winnerId: null,
+      slots: [],
+      round,
+      entrant1Source: sources[0]
+        ? { typeId: sources[0].setId, condition: sources[0].condition, conditionString: null }
+        : null,
+      entrant2Source: sources[1]
+        ? { typeId: sources[1].setId, condition: sources[1].condition, conditionString: null }
+        : null,
+    });
+    const sets = [
+      ...Array.from({ length: 4 }, (_, index) => makeSet(`l1-${index}`, -1, `L${index}`)),
+      makeSet("l2-set-4", -2, "R", [
+        { setId: "winner-r1-a", condition: "loser" },
+        { setId: "winner-r1-b", condition: "loser" },
+      ]),
+      makeSet("l2-set-3", -2, "S", [
+        { setId: "l1-0", condition: "winner" },
+        { setId: "winner-s", condition: "loser" },
+      ]),
+      makeSet("l2-set-1", -2, "T", [
+        { setId: "l1-1", condition: "winner" },
+        { setId: "winner-t", condition: "loser" },
+      ]),
+      makeSet("l2-set-2", -2, "U", [
+        { setId: "l1-2", condition: "winner" },
+        { setId: "winner-u", condition: "loser" },
+      ]),
+    ];
+    const columns = buildPositionedRoundColumns(buildRoundColumns(sets), "losers", new Map([
+      ["winner-r1-a", 328],
+      ["winner-r1-b", 222],
+      ["winner-s", 10],
+      ["winner-t", 222],
+      ["winner-u", 116],
+    ]));
+    const roundTwo = columns.find((column) => column.round === -2)!;
+    const identifiersTopToBottom = [...roundTwo.positionedSets]
+      .sort((left, right) => left.y - right.y)
+      .map(({ set }) => set.identifier);
+    const roundOneBySetId = new Map(
+      columns.find((column) => column.round === -1)!.positionedSets.map(({ set, y }) => [set.setId, y]),
+    );
+    const roundTwoYByIdentifier = new Map(
+      roundTwo.positionedSets.map(({ set, y }) => [set.identifier, y]),
+    );
+
+    expect(identifiersTopToBottom).toEqual(["R", "S", "T", "U"]);
+    expect(roundTwoYByIdentifier.get("S")).toBe(roundOneBySetId.get("l1-0"));
+    expect(roundTwoYByIdentifier.get("T")).toBe(roundOneBySetId.get("l1-1"));
+    expect(roundTwoYByIdentifier.get("U")).toBe(roundOneBySetId.get("l1-2"));
+  });
+
   it("anchors on the fullest Losers round without reversing source progression", () => {
     const createSet = (
       setId: string,
