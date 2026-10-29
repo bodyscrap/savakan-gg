@@ -7,8 +7,10 @@ import { CreateSnapshot } from "./CreateSnapshot";
 import { defaultLocalEventRegistration } from "../domain/localEventRegistration";
 
 vi.mock("react", { spy: true });
+let registration = defaultLocalEventRegistration();
 
 afterEach(() => {
+  registration = defaultLocalEventRegistration();
   vi.unstubAllGlobals();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -46,15 +48,15 @@ function mockLocalPhaseState(
     fifthPlaceMatch: checked,
     grandFinalReset,
   }));
-  const states: unknown[] = [
-    "local", "Tournament", "Event", "Alias", false,
-    {
+  registration = {
       ...defaultLocalEventRegistration(),
       requireItemSelections,
       participants: Array.from({ length: phaseCount === 1 ? playersPerPool * poolCount : 32 }, (_, index) => ({
         entrantId: `player-${index}`, name: `Player ${index}`, categorySelections: [[], [], []], selectionsConfirmed,
       })),
-    },
+    };
+  const states: unknown[] = [
+    "local", "Tournament", "Event", "Alias", false,
     phaseCount, null, phases, false,
   ];
   for (const state of states) {
@@ -64,6 +66,7 @@ function mockLocalPhaseState(
 
 function snapshotElement() {
   return <CreateSnapshot
+    registration={registration} onRegistrationChange={vi.fn()}
     itemLists={[]}
     token="" onTokenChange={vi.fn()}
     createTournamentSlug="" onCreateTournamentSlugChange={vi.fn()}
@@ -80,6 +83,26 @@ function snapshotElement() {
 
 describe("snapshot creation defaults", () => {
   const storageKey = "savakan-gg.snapshot-source.v1";
+
+  it("uses the same parent-owned participants after source changes and form remounts", () => {
+    registration = {
+      ...defaultLocalEventRegistration(),
+      participants: [{ entrantId: "retained", name: "Retained Player", skill: 7, categorySelections: [[], [], []], selectionsConfirmed: true }],
+    };
+    const onRegistrationChange = vi.fn();
+    for (const source of ["local", "startgg", "local"] as const) {
+      vi.mocked(React.useState).mockImplementationOnce(() => [source, vi.fn()]);
+      const tree = CreateSnapshot({ ...snapshotElement().props, onRegistrationChange });
+      const localForm = tree.props.children[2];
+      expect(localForm.props.registration).toBe(registration);
+      expect(localForm.props.onRegistrationChange).toBe(onRegistrationChange);
+      expect(localForm.props.visible).toBe(source === "local");
+    }
+    vi.stubGlobal("window", { localStorage: { getItem: () => "local" } });
+    const html = renderToStaticMarkup(snapshotElement());
+    expect(html).toContain("Retained Player");
+    expect(html).toContain("参加者一覧(1 人)");
+  });
 
   it("places the compact phase count after the name fields without a redundant participant count", () => {
     const html = renderLocalPhases(1, "DOUBLE_ELIMINATION", 8);

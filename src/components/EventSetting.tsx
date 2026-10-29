@@ -275,8 +275,12 @@ export function EventSetting({ event, rules, playerMeta, actions }: EventSetting
                           }}
                         >
                           <h4>{entrant.entrantName}</h4>
-                          {entrant.aliasName.trim() !== "" && <p className="meta">{entrant.aliasName}</p>}
-                          {entrant.skill != null && <p className="meta">{t("Skill Tier")}: {entrant.skill}</p>}
+                          {(entrant.aliasName.trim() !== "" || entrant.skill != null) && (
+                            <div className="entrant-list-meta-row">
+                              {entrant.aliasName.trim() !== "" && <span className="meta entrant-list-alias">{entrant.aliasName}</span>}
+                              {entrant.skill != null && <span className="meta entrant-list-skill">{t("Skill Tier")}: {entrant.skill}</span>}
+                            </div>
+                          )}
                         </article>
                       );
                     })}

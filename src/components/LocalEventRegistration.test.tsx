@@ -28,6 +28,7 @@ function findCsvImport(node: React.ReactNode): React.ReactElement<React.Componen
 
 vi.mock("react", { spy: true });
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   setLanguage("ja");
 });
@@ -68,12 +69,43 @@ function setup(draft: RegisteredLocalParticipant | null = null, settingDraft = s
 }
 
 describe("local registration editor", () => {
-  it("clears all participants while preserving category settings", () => {
+  it("shows each participant name and skill tier on the same list row", () => {
+    const registration = {
+      ...defaultLocalEventRegistration(),
+      participants: [{ ...player, skill: 7 }, { ...player, entrantId: "unset", name: "Bob", skill: null }],
+    };
+    const html = renderToStaticMarkup(<LocalEventRegistration itemLists={[]}
+      registration={registration} onChange={vi.fn()} onPendingChange={vi.fn()} onImportEventName={vi.fn()} busy={false} />);
+    expect(html).toMatch(/<strong>Alice<\/strong><span class="meta local-registration-player-skill">Skill Tier: 7<\/span>/);
+    expect(html).toMatch(/<strong>Bob<\/strong><span class="meta local-registration-player-skill">Skill Tier: 未設定<\/span>/);
+  });
+
+  it.each([7, 8, 9, 20])("enables list scrolling only above eight participants (%i)", (count) => {
+    const registration = {
+      ...defaultLocalEventRegistration(),
+      participants: Array.from({ length: count }, (_, index) => ({ ...player, entrantId: `player-${index}` })),
+    };
+    const html = renderToStaticMarkup(<LocalEventRegistration itemLists={[]}
+      registration={registration} onChange={vi.fn()} onPendingChange={vi.fn()} onImportEventName={vi.fn()} busy={false} />);
+    expect(html).toContain(`class="event-list local-registration-list${count > 8 ? " scrollable" : ""}"`);
+    expect(html.match(/class="event-list-item local-registration-player /g)).toHaveLength(count);
+  });
+
+  it("clears all participants after confirmation while preserving category settings", async () => {
+    vi.stubGlobal("window", { confirm: vi.fn().mockResolvedValue(true) });
     const { controls, onChange } = setup(player);
     const clear = controls.find((button) => button.label === "参加者を全員クリア");
     expect(clear).toBeDefined();
-    clear?.click?.();
+    await clear?.click?.();
+    expect(window.confirm).toHaveBeenCalledWith("登録済みの参加者を全員クリアしますか？");
     expect(onChange).toHaveBeenCalledWith({ requireItemSelections: true, setting, participants: [] });
+  });
+
+  it("keeps all participants when clearing is cancelled", async () => {
+    vi.stubGlobal("window", { confirm: vi.fn().mockResolvedValue(false) });
+    const { controls, onChange } = setup(player);
+    await controls.find((button) => button.label === "参加者を全員クリア")?.click?.();
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("disables clearing when no participants are registered", () => {

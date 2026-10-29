@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { save as saveFile } from "@tauri-apps/plugin-dialog";
 import { CreateSnapshot } from "../components/CreateSnapshot";
+import { useLocalEventDraft } from "../hooks/useLocalEventDraft";
 import { DqRequestDialog } from "../components/DqRequestDialog";
 import { useDqCameraScan } from "../hooks/useDqCameraScan";
 import { useSenderProfile } from "../hooks/useSenderProfile";
@@ -206,6 +207,18 @@ function getCallListResolveDialogTitle(dialog: {
 function App() {
   useLanguage();
   const [activeTab, setActiveTab] = useState<AppTab>("create");
+  const localEventDraft = useLocalEventDraft();
+  const selectTab = async (tab: AppTab) => {
+    if (tab === "tournament" && activeTab !== "tournament") {
+      if (!await localEventDraft.confirmDiscardParticipants("metadata")) return;
+      localEventDraft.clearParticipants();
+    }
+    setActiveTab(tab);
+  };
+  const createSnapshotWithDraftConfirmation = async (create: () => Promise<void>) => {
+    if (!await localEventDraft.confirmDiscardParticipants("creation")) return;
+    await create();
+  };
   const appVersion = useAppVersion();
   const [slug, setSlug] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
@@ -488,6 +501,7 @@ function App() {
     setError,
     setMessage,
     onSnapshotCreated: async () => {
+      localEventDraft.clearParticipants();
       setWorkspace(null);
       markStartupAutoRestoreDone();
       await refreshLocalSnapshotEvents();
@@ -2557,7 +2571,7 @@ function App() {
     <AppShell
       appVersion={appVersion}
       activeTab={activeTab}
-      onTabSelect={setActiveTab}
+      onTabSelect={(tab) => void selectTab(tab)}
       otherDeviceCallCount={unresolvedCallRootCounts.otherDeviceCalls}
       receivedPlayingCount={unresolvedCallRootCounts.receivedPlaying}
       pendingDqRequestCount={pendingDqRequests.length}
@@ -2586,6 +2600,8 @@ function App() {
         {activeTab === "create" && (
           <>
             <CreateSnapshot
+              registration={localEventDraft.registration}
+              onRegistrationChange={localEventDraft.setRegistration}
               itemLists={itemLists}
               token={token}
               onTokenChange={setToken}
@@ -2605,10 +2621,10 @@ function App() {
               createEventAlias={createEventAlias}
               onEventAliasChange={setCreateEventAlias}
               canCreateSnapshot={token.trim() !== "" && toApiSlug(createTournamentSlug) !== "" && createSelectedEventId !== "" && toEventApiSlug(createTournamentSlug, createPreview?.events.find((event) => event.eventId === createSelectedEventId)?.eventSlug ?? "") !== ""}
-              onCreateSnapshot={() => void createEventSnapshotBySlug()}
+              onCreateSnapshot={() => void createSnapshotWithDraftConfirmation(createEventSnapshotBySlug)}
               senderUserId={senderProfile.senderUserId}
               canCreateLocalSnapshot={/^\d{8}$/.test(senderProfile.senderUserId.trim())}
-              onCreateLocalSnapshot={(input) => void createLocalEventSnapshot(input)}
+              onCreateLocalSnapshot={(input) => void createSnapshotWithDraftConfirmation(() => createLocalEventSnapshot(input))}
             />
             <EventSelector
               items={localSnapshotEvents}

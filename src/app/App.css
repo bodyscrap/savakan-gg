@@ -1218,6 +1218,25 @@ button:disabled {
   padding-right: 0.15rem;
 }
 
+.entrant-list-meta-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.entrant-list-alias {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entrant-list-skill {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .usage-board {
   margin-top: 0.85rem;
   display: grid;
@@ -1425,6 +1444,20 @@ button:disabled {
   margin-top: 1rem;
 }
 
+.local-registration-grid > section {
+  min-width: 0;
+}
+
+.local-registration-list {
+  grid-auto-rows: 3rem;
+}
+
+.local-registration-list.scrollable {
+  max-height: 28.2rem;
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+
 .local-registration-name-skill-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 5.5rem;
@@ -1463,11 +1496,22 @@ button:disabled {
 }
 
 .local-registration-player {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
   gap: 0.5rem;
   text-align: left;
   color: var(--ink);
+}
+
+.local-registration-player strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-registration-player > span {
+  white-space: nowrap;
 }
 
 .local-registration-player.incomplete {

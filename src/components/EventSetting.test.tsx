@@ -57,6 +57,25 @@ function buttons(node: ReactNode): Array<{ label: string; disabled?: boolean; cl
 afterEach(() => setLanguage("ja"));
 
 describe("player metadata save controls", () => {
+  it.each([
+    ["Alias", 7, '<span class="meta entrant-list-alias">Alias</span><span class="meta entrant-list-skill">Skill Tier: 7</span>'],
+    ["", 0, '<span class="meta entrant-list-skill">Skill Tier: 0</span>'],
+    ["Alias", null, '<span class="meta entrant-list-alias">Alias</span>'],
+  ] as const)("combines alias %s and skill %s in one metadata row", (aliasName, skill, content) => {
+    const props = setup();
+    props.playerMeta.selectedEventEntrants[0] = {
+      ...props.playerMeta.selectedEventEntrants[0], aliasName, skill,
+    };
+    const html = renderToStaticMarkup(<EventSetting {...props} />);
+    expect(html).toContain(`<div class="entrant-list-meta-row">${content}</div>`);
+  });
+
+  it("omits the metadata row when neither alias nor skill is set", () => {
+    const props = setup();
+    props.playerMeta.selectedEventEntrants[0].aliasName = "";
+    expect(renderToStaticMarkup(<EventSetting {...props} />)).not.toContain('class="entrant-list-meta-row"');
+  });
+
   it("offers skill restoration only when an imported value exists, independently of validation", () => {
     const props = setup();
     const label = "Skill Tierを最新の取り込み値に戻す";

@@ -358,6 +358,10 @@ export function buildPositionedRoundColumns(
   columns: RoundColumn[],
   sectionKey: string,
 ): PositionedRoundColumn[] {
+  const displayOrder = new Map(columns.map((column, index) => [column.key, index]));
+  if (sectionKey === "losers") {
+    columns = [...columns].sort((left, right) => (right.round ?? 0) - (left.round ?? 0));
+  }
   const positionedColumns: Array<PositionedRoundColumn | null> = Array.from(
     { length: columns.length },
     () => null,
@@ -440,11 +444,8 @@ export function buildPositionedRoundColumns(
           : buildWinnersExpandedRoundPositions(previousColumn.sets, previousPositions, column.sets)
         : assignDefaultPositions(columnIndex);
 
-    const adjustedPositions = sectionKey === "losers"
-      ? fitPositionsToAvailableLanes(lanePositions, maxSetCount)
-      : lanePositions;
-    resolvedPositions[columnIndex] = adjustedPositions.length > 0
-      ? adjustedPositions
+    resolvedPositions[columnIndex] = lanePositions.length > 0
+      ? lanePositions
       : assignDefaultPositions(columnIndex);
   }
 
@@ -488,5 +489,7 @@ export function buildPositionedRoundColumns(
     };
   }
 
-  return positionedColumns.filter((item): item is PositionedRoundColumn => item !== null);
+  return positionedColumns
+    .filter((item): item is PositionedRoundColumn => item !== null)
+    .sort((left, right) => displayOrder.get(left.key)! - displayOrder.get(right.key)!);
 }

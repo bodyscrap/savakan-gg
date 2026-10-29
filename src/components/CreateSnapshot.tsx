@@ -7,7 +7,7 @@ import type {
 } from "../domain/tournamentWorkspaceRepository";
 import { formatDefaultSnapshotName } from "../domain/snapshotDisplay";
 import type { ItemListConfig } from "../domain/itemList";
-import { canRegisterParticipant, defaultLocalEventRegistration } from "../domain/localEventRegistration";
+import { canRegisterParticipant, type LocalEventRegistration as Registration } from "../domain/localEventRegistration";
 import { LocalEventRegistration } from "./LocalEventRegistration";
 
 export type TournamentEventPreviewItem = {
@@ -35,6 +35,8 @@ export type EventSnapshotProgress = {
 };
 
 type CreateSnapshotProps = {
+  registration: Registration;
+  onRegistrationChange: (registration: Registration) => void;
   itemLists: ItemListConfig[];
   token: string;
   onTokenChange: (value: string) => void;
@@ -104,6 +106,8 @@ const localRoundRobinTieBreakOptions: Array<{
 ];
 
 type LocalEventSnapshotFormProps = {
+  registration: Registration;
+  onRegistrationChange: (registration: Registration) => void;
   itemLists: ItemListConfig[];
   visible: boolean;
   createBusy: boolean;
@@ -113,6 +117,8 @@ type LocalEventSnapshotFormProps = {
 };
 
 function LocalEventSnapshotForm({
+  registration,
+  onRegistrationChange,
   itemLists,
   visible,
   createBusy,
@@ -124,7 +130,6 @@ function LocalEventSnapshotForm({
   const [localEventName, setLocalEventName] = useState(defaultLocalEventName);
   const [localEventAlias, setLocalEventAlias] = useState(() => formatDefaultSnapshotName("Local Tournament", localEventName));
   const [localEventAliasEdited, setLocalEventAliasEdited] = useState(false);
-  const [registration, setRegistration] = useState(defaultLocalEventRegistration);
   const participantCount = registration.participants.length;
   const [phaseCount, setPhaseCount] = useState(1);
   const [draggedTieBreakRule, setDraggedTieBreakRule] = useState<{ phaseIndex: number; ruleIndex: number } | null>(null);
@@ -240,7 +245,7 @@ function LocalEventSnapshotForm({
       <p className="meta">{t("送信者ID")}: {senderUserId || t("未設定")}</p>
       {!senderUserId && <p className="meta">{t("ローカルeventの作成には送信者IDの設定が必要です。")}</p>}
     </section>
-    <LocalEventRegistration itemLists={itemLists} registration={registration} onChange={setRegistration}
+    <LocalEventRegistration itemLists={itemLists} registration={registration} onChange={onRegistrationChange}
       busy={createBusy} onPendingChange={setRegistrationPending} onImportEventName={setLocalEventName} />
     <section className="panel create-layout-full">
       <h2>{t("フェーズ設定")}</h2>
@@ -377,6 +382,8 @@ function LocalEventSnapshotForm({
 }
 
 export function CreateSnapshot({
+  registration,
+  onRegistrationChange,
   itemLists,
   token,
   onTokenChange,
@@ -531,6 +538,8 @@ export function CreateSnapshot({
       </section>
       </> : null}
       <LocalEventSnapshotForm
+        registration={registration}
+        onRegistrationChange={onRegistrationChange}
         itemLists={itemLists}
         visible={source === "local"}
         createBusy={createBusy}

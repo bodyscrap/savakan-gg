@@ -163,12 +163,13 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
               onImportEventName(eventName);
             }} />
           <button type="button" className="ghost" disabled={csvPending || registration.participants.length === 0}
-            onClick={() => {
+            onClick={async () => {
+              if (!await window.confirm(t("登録済みの参加者を全員クリアしますか？"))) return;
               onChange({ ...registration, participants: [] });
               setDraft(null);
             }}>{t("参加者を全員クリア")}</button>
           </div>
-          <div className="event-list player-list-scroll enabled">
+          <div className={`event-list local-registration-list${activeRegistration.participants.length > 8 ? " scrollable" : ""}`}>
             {activeRegistration.participants.map((player) => {
               const complete = isRegistrationComplete(player, activeRegistration.setting);
               return <button type="button" key={player.entrantId} disabled={settingErrors.length > 0 || csvPending}
@@ -179,6 +180,7 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
                   setSkillTierDraft(player.skill == null ? "" : String(player.skill));
                 }}>
                 <strong>{player.name}</strong>
+                <span className="meta local-registration-player-skill">{t("Skill Tier")}: {player.skill ?? t("未設定")}</span>
                 <span className={complete ? "meta" : "error-text"}>{complete ? t("選択完了") : t("選択未完了")}</span>
               </button>;
             })}

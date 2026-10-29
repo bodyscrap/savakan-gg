@@ -311,6 +311,42 @@ describe("double-elimination bracket lane order", () => {
     );
   });
 
+  it.each([false, true])("centers losers merges and aligns single-source rounds in either display order (reversed=%s)", (reversed) => {
+    const makeSet = (setId: string, round: number, sources: string[] = []): SetSnapshot => ({
+      setId,
+      fullRoundText: `Losers Round ${Math.abs(round)}`,
+      phaseName: "Bracket",
+      phaseGroupName: "A",
+      phaseOrder: 1,
+      phaseGroupDisplayIdentifier: "A",
+      state: 1,
+      winnerId: null,
+      slots: [],
+      round,
+      entrant1Source: sources[0] ? { typeId: sources[0], condition: "winner", conditionString: null } : null,
+      entrant2Source: sources[1] ? { typeId: sources[1], condition: "winner", conditionString: null } : null,
+    });
+    const sets = [
+      ...Array.from({ length: 4 }, (_, index) => makeSet(`l2-${index}`, -2)),
+      makeSet("l3-0", -3, ["l2-0", "l2-1"]),
+      makeSet("l3-1", -3, ["l2-2", "l2-3"]),
+      makeSet("l4-0", -4, ["l3-0", "w3-0"]),
+      makeSet("l4-1", -4, ["l3-1", "w3-1"]),
+      makeSet("l5-0", -5, ["l4-0", "l4-1"]),
+    ];
+    const input = buildRoundColumns(sets);
+    if (reversed) input.reverse();
+    const columns = buildPositionedRoundColumns(input, "losers");
+    const y = (id: string) => columns.flatMap((column) => column.positionedSets)
+      .find((item) => item.set.setId === id)!.y;
+    expect(columns.map((column) => column.key)).toEqual(input.map((column) => column.key));
+    expect(y("l3-0")).toBe((y("l2-0") + y("l2-1")) / 2);
+    expect(y("l3-1")).toBe((y("l2-2") + y("l2-3")) / 2);
+    expect(y("l4-0")).toBe(y("l3-0"));
+    expect(y("l4-1")).toBe(y("l3-1"));
+    expect(y("l5-0")).toBe((y("l4-0") + y("l4-1")) / 2);
+  });
+
   it("anchors on the fullest Losers round without reversing source progression", () => {
     const createSet = (
       setId: string,
