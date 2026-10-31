@@ -882,6 +882,28 @@ pub fn active_json() -> Result<String, String> {
 mod tests {
     use super::*;
     #[test]
+    fn creates_workspaces_for_presets_without_images() {
+        let directory = std::env::temp_dir().join(format!(
+            "savakan-overlay-empty-workspace-test-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let mut layouts = sample();
+        for preset in &mut layouts.presets {
+            for component in &mut preset.components {
+                component.image.clear();
+            }
+        }
+        copy_preset_images_to_workspaces(&directory, &layouts).unwrap();
+        for preset in &layouts.presets {
+            let workspace = preset_workspace_path(&directory, &preset.id);
+            assert!(workspace.is_dir());
+            assert_eq!(fs::read_dir(workspace).unwrap().count(), 0);
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn writes_selected_images_to_the_preset_workspace() {
         let directory =
             std::env::temp_dir().join(format!("savakan-overlay-image-test-{}", std::process::id()));

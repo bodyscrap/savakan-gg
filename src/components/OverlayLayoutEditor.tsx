@@ -795,7 +795,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
       </div>
       <p className="meta">{t("適用中: {name}", { name: active?.name ?? t("デフォルト") })} {dirty && t("（未保存）")}</p>
       {active && <p className="meta">{t("録画・配信ソフト側のブラウザソースの幅・高さも {width} × {height} に設定してください。", { width: active.width, height: active.height })}</p>}
-      <div className="obs-overlay-grid">
+      <div className="overlay-layout-toolbar">
         {preset && <label>{t("プリセット名")}<input value={preset.name} maxLength={256} onChange={(e) => updatePreset({ name: e.target.value })} /></label>}
         {preset && <button type="button" onClick={() => void openPresetWorkspace()}>{t("ワークディレクトリを開く")}</button>}
       </div>
