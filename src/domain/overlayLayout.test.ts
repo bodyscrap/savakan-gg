@@ -149,6 +149,8 @@ describe("overlay text overflow settings", () => {
     }
     const names = builtInOverlayPreset().components.filter(c => c.source === "redPlayerName" || c.source === "bluePlayerName");
     for (const component of names) expect(resolveOverlayTextOverflow(component)).toEqual({ wrap: false, shrink: true });
+    const setLabels = builtInOverlayPreset().components.filter(c => c.source === "setName" || c.source === "roundName");
+    for (const component of setLabels) expect(resolveOverlayTextOverflow(component)).toEqual({ wrap: false, shrink: true });
   });
   it("round trips all flag combinations through saving, import, duplication and merge", () => {
     for (const wrapText of [false, true]) {

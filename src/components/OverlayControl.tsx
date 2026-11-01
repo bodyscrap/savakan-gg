@@ -25,7 +25,12 @@ type OverlayControlProps = {
   isTestOverlayActive: boolean;
   activeSetLabel: string | null;
   busy: boolean;
+  testEventName: string;
   testEventAlias: string;
+  testPhaseName: string;
+  testPoolName: string;
+  testSetName: string;
+  testRoundName: string;
   testRedName: string;
   testBlueName: string;
   testRedItems: OverlayTestItemInputs;
@@ -35,8 +40,13 @@ type OverlayControlProps = {
   previewWrapRef: { current: HTMLDivElement | null };
   previewIframeRef: { current: HTMLIFrameElement | null };
   onOpenUrl: (url: string) => void;
+  onTestEventNameChange: (value: string) => void;
   onTestRedNameChange: (value: string) => void;
   onTestEventAliasChange: (value: string) => void;
+  onTestPhaseNameChange: (value: string) => void;
+  onTestPoolNameChange: (value: string) => void;
+  onTestSetNameChange: (value: string) => void;
+  onTestRoundNameChange: (value: string) => void;
   onTestBlueNameChange: (value: string) => void;
   onTestRedItemsChange: (value: OverlayTestItemInputs) => void;
   onTestBlueItemsChange: (value: OverlayTestItemInputs) => void;
@@ -52,7 +62,12 @@ export function OverlayControl({
   isTestOverlayActive,
   activeSetLabel,
   busy,
+  testEventName,
   testEventAlias,
+  testPhaseName,
+  testPoolName,
+  testSetName,
+  testRoundName,
   testRedName,
   testBlueName,
   testRedItems,
@@ -62,8 +77,13 @@ export function OverlayControl({
   previewWrapRef,
   previewIframeRef,
   onOpenUrl,
+  onTestEventNameChange,
   onTestRedNameChange,
   onTestEventAliasChange,
+  onTestPhaseNameChange,
+  onTestPoolNameChange,
+  onTestSetNameChange,
+  onTestRoundNameChange,
   onTestBlueNameChange,
   onTestRedItemsChange,
   onTestBlueItemsChange,
@@ -88,6 +108,13 @@ export function OverlayControl({
   const isSwitchingFromLiveSet = Boolean(overlayState?.active && !isTestOverlayActive);
   const editorState = overlayState && !overlayState.active ? {
     ...overlayState,
+    eventName: testEventName,
+    eventAlias: testEventAlias,
+    roundText: `${testPhaseName.trim() || "-"} / Pool ${testPoolName.trim() || "-"} / Set ${testSetName.trim() || "-"}\n${testRoundName}`,
+    redPlayerName: testRedName,
+    bluePlayerName: testBlueName,
+    redSetWins: testRedWins,
+    blueSetWins: testBlueWins,
     redItems: parseOverlayTestItems(testRedItems),
     blueItems: parseOverlayTestItems(testBlueItems),
   } : overlayState;
@@ -232,63 +259,118 @@ export function OverlayControl({
                     })}
                   </div>
                 </div>}
-                <div className="obs-overlay-grid">
-                  <label>{t("ダミーイベントエイリアス")}<input
-                      type="text"
-                      value={testEventAlias}
-                      onChange={(e) => onTestEventAliasChange(e.currentTarget.value)}
-                      disabled={busy}
-                    />
-                  </label>
-                  <label>{t("1P プレイヤー名")}<input
-                      type="text"
-                      value={testRedName}
-                      onChange={(e) => onTestRedNameChange(e.currentTarget.value)}
-                      disabled={busy}
-                    />
-                  </label>
-                  <label>{t("1P 取得ゲーム数")}<input
-                      type="number"
-                      min={0}
-                      value={testRedWins}
-                      onChange={(e) => onTestRedWinsChange(Number(e.currentTarget.value))}
-                      disabled={busy}
-                    />
-                  </label>
-                  <label>{t("2P プレイヤー名")}<input
-                      type="text"
-                      value={testBlueName}
-                      onChange={(e) => onTestBlueNameChange(e.currentTarget.value)}
-                      disabled={busy}
-                    />
-                  </label>
-                  <label>{t("2P 取得ゲーム数")}<input
-                      type="number"
-                      min={0}
-                      value={testBlueWins}
-                      onChange={(e) => onTestBlueWinsChange(Number(e.currentTarget.value))}
-                      disabled={busy}
-                    />
-                  </label>
-                </div>
-                <p className="meta">{t("ダミーアイテムリスト（スペース区切り）")}</p>
-                <p className="meta">{t("テスト配信と停止中のカスタマイズプレビュー専用です。本配信では「スナップショット&メタデータ設定」で保存した各プレイヤーの選択内容を表示します。")}</p>
-                <div className="obs-overlay-grid">
-                  {[
-                    { side: "1P", values: testRedItems, onChange: onTestRedItemsChange },
-                    { side: "2P", values: testBlueItems, onChange: onTestBlueItemsChange },
-                  ].map(({ side, values, onChange }) => ([0, 1, 2] as const).map((index) =>
-                    <label key={`${side}-${index}`}>{t("{side} ダミーアイテム（カテゴリ{category}）", { side, category: index + 1 })}<input
-                      type="text" value={values[index]} disabled={busy}
-                      placeholder={t("アイテムA アイテムB")}
-                      onChange={(event) => {
-                        const next: OverlayTestItemInputs = [...values];
-                        next[index] = event.currentTarget.value;
-                        onChange(next);
-                      }} />
-                    </label>,
-                  ))}
-                </div>
+                <details className="overlay-dummy-settings">
+                  <summary>{t("ダミー値設定")}</summary>
+                  <p className="meta">{t("停止中のカスタマイズプレビューとテスト配信に使用する値です。")}</p>
+                  <div className="overlay-dummy-group">
+                    <strong>{t("イベント情報")}</strong>
+                    <div className="overlay-dummy-grid">
+                      <label>{t("ダミーイベント名")}<input
+                        type="text"
+                        value={testEventName}
+                        onChange={(e) => onTestEventNameChange(e.currentTarget.value)}
+                        disabled={busy}
+                      />
+                      </label>
+                      <label>{t("ダミーイベントエイリアス")}<input
+                        type="text"
+                        value={testEventAlias}
+                        onChange={(e) => onTestEventAliasChange(e.currentTarget.value)}
+                        disabled={busy}
+                      />
+                      </label>
+                    </div>
+                  </div>
+                  <div className="overlay-dummy-group">
+                    <strong>{t("セット情報")}</strong>
+                    <div className="overlay-dummy-grid">
+                      <label>{t("ダミーPhase名")}<input
+                        type="text"
+                        value={testPhaseName}
+                        onChange={(e) => onTestPhaseNameChange(e.currentTarget.value)}
+                        disabled={busy}
+                      />
+                      </label>
+                      <label>{t("ダミーPool名")}<input
+                        type="text"
+                        value={testPoolName}
+                        onChange={(e) => onTestPoolNameChange(e.currentTarget.value)}
+                        disabled={busy}
+                      />
+                      </label>
+                      <label>{t("ダミーSet名")}<input
+                        type="text"
+                        value={testSetName}
+                        onChange={(e) => onTestSetNameChange(e.currentTarget.value)}
+                        disabled={busy}
+                      />
+                      </label>
+                      <label>{t("ダミーラウンド名")}<input
+                        type="text"
+                        value={testRoundName}
+                        onChange={(e) => onTestRoundNameChange(e.currentTarget.value)}
+                        disabled={busy}
+                      />
+                      </label>
+                    </div>
+                  </div>
+                  <div className="overlay-dummy-group">
+                    <strong>{t("プレイヤー情報")}</strong>
+                    <div className="overlay-dummy-grid">
+                      <label>{t("1P プレイヤー名")}<input
+                        type="text"
+                        value={testRedName}
+                        onChange={(e) => onTestRedNameChange(e.currentTarget.value)}
+                        disabled={busy}
+                      />
+                      </label>
+                      <label>{t("1P 取得ゲーム数")}<input
+                        type="number"
+                        min={0}
+                        value={testRedWins}
+                        onChange={(e) => onTestRedWinsChange(Number(e.currentTarget.value))}
+                        disabled={busy}
+                      />
+                      </label>
+                      <label>{t("2P プレイヤー名")}<input
+                        type="text"
+                        value={testBlueName}
+                        onChange={(e) => onTestBlueNameChange(e.currentTarget.value)}
+                        disabled={busy}
+                      />
+                      </label>
+                      <label>{t("2P 取得ゲーム数")}<input
+                        type="number"
+                        min={0}
+                        value={testBlueWins}
+                        onChange={(e) => onTestBlueWinsChange(Number(e.currentTarget.value))}
+                        disabled={busy}
+                      />
+                      </label>
+                    </div>
+                  </div>
+                  <div className="overlay-dummy-group">
+                    <strong>{t("選択アイテム")}</strong>
+                    <p className="meta">{t("ダミーアイテムリスト（スペース区切り）")}</p>
+                    <p className="meta">{t("テスト配信と停止中のカスタマイズプレビュー専用です。本配信では「スナップショット&メタデータ設定」で保存した各プレイヤーの選択内容を表示します。")}</p>
+                    <div className="overlay-dummy-grid">
+                      {[
+                        { side: "1P", values: testRedItems, onChange: onTestRedItemsChange },
+                        { side: "2P", values: testBlueItems, onChange: onTestBlueItemsChange },
+                      ].map(({ side, values, onChange }) => ([0, 1, 2] as const).map((index) =>
+                        <label key={`${side}-${index}`}>{t("{side} ダミーアイテム（カテゴリ{category}）", { side, category: index + 1 })}<input
+                          type="text" value={values[index]} disabled={busy}
+                          placeholder={t("アイテムA アイテムB")}
+                          onChange={(event) => {
+                            const next: OverlayTestItemInputs = [...values];
+                            next[index] = event.currentTarget.value;
+                            onChange(next);
+                          }} />
+                        </label>,
+                      ))}
+                    </div>
+                  </div>
+                </details>
                 <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
                   <button
                     type="button"

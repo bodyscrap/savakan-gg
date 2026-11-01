@@ -179,7 +179,12 @@ type UseObsOverlayOptions = {
 export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: UseObsOverlayOptions) {
   const [obsOverlayState, setObsOverlayState] = useState<ObsOverlayState | null>(null);
   const [obsOverlayBusy, setObsOverlayBusy] = useState(false);
+  const [testOverlayEventName, setTestOverlayEventName] = useState(t("テスト大会"));
   const [testOverlayEventAlias, setTestOverlayEventAlias] = useState(t("テスト大会"));
+  const [testOverlayPhaseName, setTestOverlayPhaseName] = useState("Phase");
+  const [testOverlayPoolName, setTestOverlayPoolName] = useState("A");
+  const [testOverlaySetName, setTestOverlaySetName] = useState("1");
+  const [testOverlayRoundName, setTestOverlayRoundName] = useState("Grand Finals");
   const [testOverlayRedName, setTestOverlayRedName] = useState(t("テストプレイヤー1"));
   const [testOverlayBlueName, setTestOverlayBlueName] = useState(t("テストプレイヤー2"));
   const [testOverlayRedItems, setTestOverlayRedItems] = useState<OverlayTestItemInputs>(["1P-A 1P-B", "1P-C 1P-D", "1P-E 1P-F"]);
@@ -187,6 +192,7 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
   const [testOverlayRedWins, setTestOverlayRedWins] = useState(0);
   const [testOverlayBlueWins, setTestOverlayBlueWins] = useState(0);
   const [isTestOverlayActive, setIsTestOverlayActive] = useState(false);
+  const testOverlaySetLabel = `${testOverlayPhaseName.trim() || "-"} / Pool ${testOverlayPoolName.trim() || "-"} / Set ${testOverlaySetName.trim() || "-"}`;
   const overlaySelectionKeyRef = useRef<string | null>(null);
   const overlayPreviewWrapRef = useRef<HTMLDivElement | null>(null);
   const overlayPreviewIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -288,9 +294,9 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
             input: {
               enabled: true,
               setId: "__test__",
-              eventName: t("テスト配信"),
+              eventName: testOverlayEventName.trim(),
               eventAlias: testOverlayEventAlias.trim(),
-              roundText: "Preview / Pool A\nPreview\nSet T",
+              roundText: `${testOverlaySetLabel}\n${testOverlayRoundName}`,
               redPlayerName: testOverlayRedName.trim() || t("テストプレイヤー1"),
               bluePlayerName: testOverlayBlueName.trim() || t("テストプレイヤー2"),
               redItems: parseOverlayTestItems(testOverlayRedItems),
@@ -320,6 +326,11 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     obsOverlayState?.active,
     obsOverlayState?.currentSetId,
     obsOverlayState?.fontScale,
+    testOverlayEventName,
+    testOverlayPhaseName,
+    testOverlayPoolName,
+    testOverlaySetName,
+    testOverlayRoundName,
     testOverlayRedName,
     testOverlayBlueName,
     testOverlayRedItems,
@@ -395,9 +406,9 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     await toggleObsOverlaySet({
       enabled: true,
       setId: "__test__",
-      eventName: t("テスト配信"),
+      eventName: testOverlayEventName.trim(),
       eventAlias: testOverlayEventAlias.trim(),
-      roundText: "Preview / Pool A\nPreview\nSet T",
+      roundText: `${testOverlaySetLabel}\n${testOverlayRoundName}`,
       redPlayerName: testOverlayRedName.trim() || t("テストプレイヤー1"),
       bluePlayerName: testOverlayBlueName.trim() || t("テストプレイヤー2"),
       redItems: parseOverlayTestItems(testOverlayRedItems),
@@ -448,10 +459,20 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     obsOverlayState,
     applyOverlayState,
     obsOverlayBusy,
+    testOverlayEventName,
+    setTestOverlayEventName,
     testOverlayRedName,
     setTestOverlayRedName,
     testOverlayEventAlias,
     setTestOverlayEventAlias,
+    testOverlayPhaseName,
+    setTestOverlayPhaseName,
+    testOverlayPoolName,
+    setTestOverlayPoolName,
+    testOverlaySetName,
+    setTestOverlaySetName,
+    testOverlayRoundName,
+    setTestOverlayRoundName,
     testOverlayBlueName,
     setTestOverlayBlueName,
     testOverlayRedItems,

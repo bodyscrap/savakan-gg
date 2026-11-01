@@ -225,11 +225,15 @@ describe("English component rendering", () => {
     const props: ComponentProps<typeof OverlayControl> = {
       overlayState: { active: true, fullyStopped: false, currentSetId: "set-id", eventName: "大会", eventAlias: "別名", roundText: "Round 1", redPlayerName: "赤", bluePlayerName: "青", redSetWins: 1, blueSetWins: 2, fontScale: 1, overlayUrl: "http://localhost/overlay" },
       isTestOverlayActive: false, activeSetLabel: "日本語試合", busy: false,
-      testEventAlias: "テスト大会", testRedName: "設定", testBlueName: "青プレイヤー", testRedWins: 1, testBlueWins: 2,
+      testEventName: "テスト大会", testEventAlias: "テスト大会", testPhaseName: "Phase",
+      testPoolName: "A", testSetName: "1",
+      testRoundName: "Grand Finals", testRedName: "設定", testBlueName: "青プレイヤー", testRedWins: 1, testBlueWins: 2,
       testRedItems: ["選択A 選択B", "", "選択C"], testBlueItems: ["選択D", "選択E", ""],
       previewWrapRef: { current: null }, previewIframeRef: { current: null },
       onOpenUrl: noop,
-      onTestRedNameChange: noop, onTestEventAliasChange: noop, onTestBlueNameChange: noop,
+      onTestEventNameChange: noop, onTestRedNameChange: noop, onTestEventAliasChange: noop,
+      onTestPhaseNameChange: noop, onTestPoolNameChange: noop, onTestSetNameChange: noop,
+      onTestRoundNameChange: noop, onTestBlueNameChange: noop,
       onTestRedItemsChange: noop, onTestBlueItemsChange: noop,
       onTestRedWinsChange: noop, onTestBlueWinsChange: noop, onToggleTestOverlay: noop, onFullyStop: noop, onPreviewLoad: noop,
     };
@@ -240,6 +244,13 @@ describe("English component rendering", () => {
     expect(html).toContain('value="設定"');
     expect(html).toContain('value="青プレイヤー"');
     expect(html).toContain("Start test stream");
+    expect(html).toContain("<summary>Dummy values</summary>");
+    expect(html).not.toContain("<details class=\"overlay-dummy-settings\" open");
+    expect(html).toContain("Test event name");
+    expect(html).toContain("Test phase name");
+    expect(html).toContain("Test pool name");
+    expect(html).toContain("Test set name");
+    expect(html).toContain("Test round name");
     expect(html).toContain("Dummy item lists (space-separated)");
     expect(html).toContain("Live streams show each player&#x27;s saved selections from Snapshot &amp; metadata settings.");
     for (const side of ["1P", "2P"]) {

@@ -127,13 +127,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
 
   useEffect(() => {
     if (!previewPreset || !stageRef.current) return;
-    const previewState: OverlayRenderState = state.active ? { ...state, fullyStopped: false } : {
-      active: true, fullyStopped: false, redPlayerName: t("テストプレイヤー1"),
-      bluePlayerName: t("テストプレイヤー2"), redSetWins: 2, blueSetWins: 1,
-      redItems: state.redItems ?? [],
-      blueItems: state.blueItems ?? [],
-      roundText: "Phase / Pool A / Set 1\nGrand Finals", eventName: t("テスト大会"), eventAlias: t("テスト大会"),
-    };
+    const previewState: OverlayRenderState = { ...state, active: true, fullyStopped: false };
     const isCurrentAnimationTest = animationTestRequest.presetId === selectedId
       && animationTestRequest.componentId === componentId;
     const previewAnimationTestRequest = isCurrentAnimationTest

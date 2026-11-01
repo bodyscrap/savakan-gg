@@ -3289,6 +3289,41 @@ button:disabled {
   padding: 0.7rem;
 }
 
+.overlay-dummy-settings {
+  margin: 0.75rem 0;
+}
+
+.overlay-dummy-settings > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.overlay-dummy-settings > .meta {
+  margin: 0.5rem 0;
+}
+
+.overlay-dummy-group {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.9rem;
+}
+
+.overlay-dummy-group > .meta {
+  margin: 0;
+}
+
+.overlay-dummy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem 0.85rem;
+}
+
+@media (max-width: 640px) {
+  .overlay-dummy-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .overlay-visibility-control {
   display: grid;
   gap: 0.45rem;

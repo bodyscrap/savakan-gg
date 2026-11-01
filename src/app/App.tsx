@@ -318,8 +318,18 @@ function App() {
   const {
     obsOverlayState,
     obsOverlayBusy,
+    testOverlayEventName,
+    setTestOverlayEventName,
     testOverlayEventAlias,
     setTestOverlayEventAlias,
+    testOverlayPhaseName,
+    setTestOverlayPhaseName,
+    testOverlayPoolName,
+    setTestOverlayPoolName,
+    testOverlaySetName,
+    setTestOverlaySetName,
+    testOverlayRoundName,
+    setTestOverlayRoundName,
     testOverlayRedName,
     setTestOverlayRedName,
     testOverlayBlueName,
@@ -3070,7 +3080,12 @@ function App() {
           isTestOverlayActive={isTestOverlayActive}
           activeSetLabel={activeObsOverlaySet?.set.fullRoundText ?? null}
           busy={obsOverlayBusy}
+          testEventName={testOverlayEventName}
           testEventAlias={testOverlayEventAlias}
+          testPhaseName={testOverlayPhaseName}
+          testPoolName={testOverlayPoolName}
+          testSetName={testOverlaySetName}
+          testRoundName={testOverlayRoundName}
           testRedName={testOverlayRedName}
           testBlueName={testOverlayBlueName}
           testRedItems={testOverlayRedItems}
@@ -3084,8 +3099,13 @@ function App() {
               setError(t("URLをブラウザで開けませんでした: {p0}", { p0: String(err) }));
             });
           }}
+          onTestEventNameChange={setTestOverlayEventName}
           onTestRedNameChange={setTestOverlayRedName}
           onTestEventAliasChange={setTestOverlayEventAlias}
+          onTestPhaseNameChange={setTestOverlayPhaseName}
+          onTestPoolNameChange={setTestOverlayPoolName}
+          onTestSetNameChange={setTestOverlaySetName}
+          onTestRoundNameChange={setTestOverlayRoundName}
           onTestBlueNameChange={setTestOverlayBlueName}
           onTestRedItemsChange={setTestOverlayRedItems}
           onTestBlueItemsChange={setTestOverlayBlueItems}
