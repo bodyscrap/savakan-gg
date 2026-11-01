@@ -218,6 +218,53 @@ describe("overlay text fitting with measured dimensions", () => {
     dispose();
   });
 
+  it("removes text outline when disabled on a reused component", () => {
+    const stage = {
+      style: {},
+      children: [],
+      append(child) {
+        child.remove?.();
+        this.children.push(child);
+        child.parentElement = this;
+      },
+      replaceChildren() { this.children = []; },
+    };
+    vi.stubGlobal("document", {
+      createElement(tagName) { return mockElement(tagName.toUpperCase()); },
+      fonts: {
+        ready: Promise.resolve(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+    vi.stubGlobal("setInterval", vi.fn(() => 1));
+    vi.stubGlobal("clearInterval", vi.fn());
+
+    const preset = {
+      id: "preset", width: 100, height: 100,
+      components: [{
+        kind: "clock", id: "clock", name: "Clock", source: "clock", clockFormat: "HH:mm",
+        textOutlineWidth: 2, textOutlineColor: "#123456",
+        visible: true, x: 0, y: 0, width: 100, height: 40,
+        fontFamily: "sans-serif", fontSize: 20, color: "#ffffff", background: "#000000",
+        align: "center", bold: false,
+      }],
+    };
+
+    const disposeWithOutline = renderOverlayPreset(stage, preset, {});
+    const element = stage.children[0];
+    expect(element.style.webkitTextStroke).toBe("2px #123456");
+    disposeWithOutline();
+
+    const disposeWithoutOutline = renderOverlayPreset(stage, {
+      ...preset,
+      components: [{ ...preset.components[0], textOutlineWidth: 0 }],
+    }, {});
+    expect(stage.children[0]).toBe(element);
+    expect(element.style.webkitTextStroke).toBe("0px transparent");
+    disposeWithoutOutline();
+  });
+
   it.each([
     {
       animationSettings: { imageAnimationValueSource: "redPlayerName" }, kind: "text", source: "redPlayerName",

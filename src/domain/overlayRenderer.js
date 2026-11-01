@@ -494,7 +494,7 @@ export function renderOverlayPreset(stage, preset, state) {
       fontFamily: component.fontFamily, fontSize: `${component.fontSize}px`,
       fontWeight: component.bold ? frame === "setSub" || alias ? "800" : builtIn ? "900" : "700" : "400",
       webkitTextStroke: component.textOutlineWidth > 0
-        ? `${component.textOutlineWidth}px ${component.textOutlineColor ?? "#000000"}` : "none",
+        ? `${component.textOutlineWidth}px ${component.textOutlineColor ?? "#000000"}` : "0px transparent",
       color: component.color, background: component.kind === "image" ? "transparent" : background, textAlign: component.align,
       whiteSpace: singleLine ? "nowrap" : "pre-wrap", overflow: "hidden",
       overflowWrap: singleLine ? "normal" : "anywhere", textOverflow: singleLine ? "ellipsis" : "clip",
