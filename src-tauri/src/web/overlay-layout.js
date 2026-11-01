@@ -1,5 +1,6 @@
 import { renderOverlayPreset } from "/overlay-renderer.js";
 
+const isPreview = new URLSearchParams(window.location.search).has("preview");
 const stage = document.createElement("div");
 stage.id = "custom-overlay-stage";
 document.body.append(stage);
@@ -15,9 +16,6 @@ let cleanup;
 function render() {
   cleanup?.();
   cleanup = undefined;
-  const legacy = [document.querySelector(".stage"), document.getElementById("eventAlias")];
-  for (const element of legacy) element.style.visibility = preset ? "hidden" : "";
-  stage.style.display = preset ? "block" : "none";
   if (!preset || !state) return;
   document.documentElement.style.width = document.body.style.width = `${preset.width}px`;
   document.documentElement.style.height = document.body.style.height = `${preset.height}px`;
@@ -42,11 +40,23 @@ window.addEventListener("resize", () => {
   container = { width: window.innerWidth, height: window.innerHeight };
   render();
 });
-window.addEventListener("overlay-state", (event) => {
-  state = event.detail;
-  render();
-});
-async function poll() {
+async function pollState() {
+  try {
+    const response = await fetch(`/api/overlay-state?ts=${Date.now()}`, {
+      cache: "no-store",
+      headers: { "Cache-Control": "no-cache" },
+    });
+    if (response.ok) {
+      state = await response.json();
+      render();
+    }
+  } catch {
+    // Retry on the next tick.
+  } finally {
+    window.setTimeout(pollState, 450);
+  }
+}
+async function pollLayout() {
   try {
     const revision = await fetch("/api/overlay-layout-revision", { cache: "no-store" });
     if (!revision.ok) throw new Error(`Overlay layout: HTTP ${revision.status}`);
@@ -54,13 +64,8 @@ async function poll() {
     if (signature !== version) {
       const response = await fetch("/api/overlay-layout", { cache: "no-store" });
       if (!response.ok) throw new Error(`Overlay layout: HTTP ${response.status}`);
-      const text = await response.text();
-      preset = JSON.parse(text);
+      preset = JSON.parse(await response.text());
       signature = version;
-      if (!preset) {
-        document.documentElement.style.width = document.body.style.width = "1920px";
-        document.documentElement.style.height = document.body.style.height = "1080px";
-      }
       render();
     }
     error.textContent = "";
@@ -68,7 +73,8 @@ async function poll() {
     console.error("Unable to load overlay layout.", cause);
     error.textContent = String(cause);
   } finally {
-    window.setTimeout(poll, 450);
+    window.setTimeout(pollLayout, 450);
   }
 }
-void poll();
+void pollState();
+void pollLayout();

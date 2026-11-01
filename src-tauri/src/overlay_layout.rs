@@ -14,16 +14,7 @@ use tauri::Manager;
 
 const MAX_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_IMAGE_BYTES: usize = 4 * 1024 * 1024;
-const BUILT_IN_COMPONENT_IDS: [&str; 8] = [
-    "builtin-redPlayerName",
-    "builtin-redSetWins",
-    "builtin-text",
-    "builtin-setName",
-    "builtin-roundName",
-    "builtin-blueSetWins",
-    "builtin-bluePlayerName",
-    "builtin-eventAlias",
-];
+static DEFAULT_PRESET: OnceLock<Preset> = OnceLock::new();
 static STORE: OnceLock<Mutex<(PathBuf, Layouts)>> = OnceLock::new();
 static REVISION: AtomicU64 = AtomicU64::new(1);
 static VISIBILITY_SHOW_REVISION: AtomicU64 = AtomicU64::new(0);
@@ -142,6 +133,25 @@ impl Default for Layouts {
             presets: Vec::new(),
             default_visibility_control_ids: Vec::new(),
         }
+    }
+}
+
+/// The read-only default preset, shared with the frontend editor.
+fn default_preset() -> &'static Preset {
+    DEFAULT_PRESET.get_or_init(|| {
+        serde_json::from_str(include_str!("../../src/domain/defaultOverlayPreset.json"))
+            .expect("the bundled default overlay preset must be valid")
+    })
+}
+
+impl Layouts {
+    /// The applied preset (falling back to the default) and its display-toggle component IDs.
+    fn applied_preset(&self) -> (&Preset, &[String]) {
+        self.presets
+            .iter()
+            .find(|preset| Some(&preset.id) == self.active_preset_id.as_ref())
+            .map(|preset| (preset, preset.visibility_control_ids.as_slice()))
+            .unwrap_or_else(|| (default_preset(), self.default_visibility_control_ids.as_slice()))
     }
 }
 
@@ -325,7 +335,7 @@ impl Layouts {
         if self.default_visibility_control_ids.len() > 6
             || self.default_visibility_control_ids.iter().any(|id| {
                 !id.is_empty()
-                    && (!BUILT_IN_COMPONENT_IDS.contains(&id.as_str())
+                    && (!default_preset().components.iter().any(|component| component.id == *id)
                         || !default_visibility_control_ids.insert(id))
             })
         {
@@ -538,56 +548,25 @@ pub fn get_overlay_layouts() -> Result<Layouts, String> {
 
 pub fn visibility_controls() -> Result<Vec<VisibilityControl>, String> {
     let layouts = get_overlay_layouts()?;
-    if let Some(preset) = layouts
-        .presets
-        .iter()
-        .find(|preset| Some(&preset.id) == layouts.active_preset_id.as_ref())
-    {
-        return Ok(preset
-            .visibility_control_ids
-            .iter()
-            .enumerate()
-            .filter_map(|(slot, id)| {
-                preset
-                    .components
-                    .iter()
-                    .find(|component| component.id == *id)
-                    .map(|component| VisibilityControl {
-                        slot,
-                        id: id.clone(),
-                        name: component
-                            .name
-                            .clone()
-                            .filter(|name| !name.trim().is_empty())
-                            .unwrap_or_else(|| component.id.clone()),
-                        visible: component.visible,
-                    })
-            })
-            .collect());
-    }
-
-    Ok(layouts
-        .default_visibility_control_ids
+    let (preset, control_ids) = layouts.applied_preset();
+    Ok(control_ids
         .iter()
         .enumerate()
         .filter_map(|(slot, id)| {
-            let name = match id.as_str() {
-                "builtin-redPlayerName" => "1P プレイヤー名",
-                "builtin-redSetWins" => "1P 取得ゲーム数",
-                "builtin-text" => "セット情報の背景",
-                "builtin-setName" => "Phase / Pool / Set名",
-                "builtin-roundName" => "ラウンド名",
-                "builtin-blueSetWins" => "2P 取得ゲーム数",
-                "builtin-bluePlayerName" => "2P プレイヤー名",
-                "builtin-eventAlias" => "イベントエイリアス",
-                _ => return None,
-            };
-            Some(VisibilityControl {
-                slot,
-                id: id.clone(),
-                name: name.to_owned(),
-                visible: true,
-            })
+            preset
+                .components
+                .iter()
+                .find(|component| component.id == *id)
+                .map(|component| VisibilityControl {
+                    slot,
+                    id: id.clone(),
+                    name: component
+                        .name
+                        .clone()
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| component.id.clone()),
+                    visible: component.visible,
+                })
         })
         .collect())
 }
@@ -684,25 +663,12 @@ fn persist_layouts(
         show_revisions.clear();
     } else {
         let allowed = layouts
-            .presets
+            .applied_preset()
+            .1
             .iter()
-            .find(|preset| Some(&preset.id) == layouts.active_preset_id.as_ref())
-            .map(|preset| {
-                preset
-                    .visibility_control_ids
-                    .iter()
-                    .filter(|id| !id.is_empty())
-                    .cloned()
-                    .collect::<HashSet<_>>()
-            })
-            .unwrap_or_else(|| {
-                layouts
-                    .default_visibility_control_ids
-                    .iter()
-                    .filter(|id| !id.is_empty())
-                    .cloned()
-                    .collect::<HashSet<_>>()
-            });
+            .filter(|id| !id.is_empty())
+            .cloned()
+            .collect::<HashSet<_>>();
         overrides.retain(|id, _| allowed.contains(id) && !reset_overrides.contains(id));
         show_revisions.retain(|id, _| allowed.contains(id));
     }
@@ -749,28 +715,15 @@ pub fn set_overlay_component_visibility(
         .ok_or("Overlay settings are not initialized.")?
         .lock()
         .map_err(|_| "Cannot lock overlay settings.")?;
-    let preset = store
-        .1
-        .presets
+    let (preset, control_ids) = store.1.applied_preset();
+    if !control_ids.contains(&component_id) {
+        return Err("The component is not available for display toggling.".to_owned());
+    }
+    let initial_visibility = preset
+        .components
         .iter()
-        .find(|preset| Some(&preset.id) == store.1.active_preset_id.as_ref());
-    let initial_visibility = if let Some(preset) = preset {
-        if !preset.visibility_control_ids.contains(&component_id) {
-            return Err("The component is not available for display toggling.".to_owned());
-        }
-        preset
-            .components
-            .iter()
-            .find(|component| component.id == component_id)
-            .map(|component| component.visible)
-    } else {
-        (store
-            .1
-            .default_visibility_control_ids
-            .contains(&component_id)
-            && BUILT_IN_COMPONENT_IDS.contains(&component_id.as_str()))
-        .then_some(true)
-    };
+        .find(|component| component.id == component_id)
+        .map(|component| component.visible);
     let Some(initial_visibility) = initial_visibility else {
         return Err("The component is not available for display toggling.".to_owned());
     };
@@ -817,14 +770,7 @@ pub fn visibility_overrides() -> Result<HashMap<String, bool>, String> {
         .ok_or("Overlay settings are not initialized.")?
         .lock()
         .map_err(|_| "Cannot lock overlay settings.")?;
-    let preset = store
-        .1
-        .presets
-        .iter()
-        .find(|preset| Some(&preset.id) == store.1.active_preset_id.as_ref());
-    let selected_ids = preset.map_or(&store.1.default_visibility_control_ids, |preset| {
-        &preset.visibility_control_ids
-    });
+    let selected_ids = store.1.applied_preset().1;
     let overrides = VISIBILITY_OVERRIDES
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -846,14 +792,7 @@ pub fn visibility_show_revisions() -> Result<HashMap<String, u64>, String> {
         .ok_or("Overlay settings are not initialized.")?
         .lock()
         .map_err(|_| "Cannot lock overlay settings.")?;
-    let preset = store
-        .1
-        .presets
-        .iter()
-        .find(|preset| Some(&preset.id) == store.1.active_preset_id.as_ref());
-    let selected_ids = preset.map_or(&store.1.default_visibility_control_ids, |preset| {
-        &preset.visibility_control_ids
-    });
+    let selected_ids = store.1.applied_preset().1;
     let revisions = VISIBILITY_SHOW_REVISIONS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -871,11 +810,7 @@ pub fn visibility_show_revisions() -> Result<HashMap<String, u64>, String> {
 
 pub fn active_json() -> Result<String, String> {
     let layouts = get_overlay_layouts()?;
-    let preset = layouts
-        .presets
-        .iter()
-        .find(|p| Some(&p.id) == layouts.active_preset_id.as_ref());
-    serde_json::to_string(&preset).map_err(|e| e.to_string())
+    serde_json::to_string(layouts.applied_preset().0).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1419,6 +1354,19 @@ mod tests {
         layouts.presets[0].components.pop();
         layouts.presets.push(layouts.presets[0].clone());
         assert!(layouts.validate().is_err());
+    }
+    #[test]
+    fn bundled_default_preset_is_valid_and_served_when_no_preset_is_applied() {
+        let layouts = Layouts {
+            presets: vec![default_preset().clone()],
+            ..Layouts::default()
+        };
+        layouts.validate().unwrap();
+        let empty = Layouts::default();
+        let (preset, ids) = empty.applied_preset();
+        assert_eq!(preset.id, "default");
+        assert!(ids.is_empty());
+        assert!(preset.components.iter().any(|component| component.id == "builtin-eventAlias"));
     }
     #[test]
     fn validates_version_and_selection() {

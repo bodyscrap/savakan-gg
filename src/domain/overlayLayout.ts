@@ -1,4 +1,5 @@
 import { t } from "../i18n";
+import defaultOverlayPreset from "./defaultOverlayPreset.json";
 
 export const overlayTextSources = [
   "redPlayerName", "bluePlayerName",
@@ -378,30 +379,12 @@ export function copyOverlayPreset(
   };
 }
 
+// Shared with the Rust overlay server so the editor and OBS render the same default preset.
 export function builtInOverlayPreset(): OverlayPreset {
-  const fontFamily = '"BIZ UDPGothic", "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo", "Noto Sans CJK JP", "Noto Sans JP", sans-serif';
-  const weights = [2.22, 0.48, 1.30, 0.48, 2.22];
-  const widths = weights.map((weight) => (1800 - 16 * 4) * weight / 6.7);
-  const positions = widths.map((_, index) => 60 + widths.slice(0, index).reduce((total, width) => total + width, 0) + index * 16);
-  const text = (source: OverlaySource, patch: Partial<OverlayComponent>): OverlayComponent => ({
-    ...newOverlayComponent(overlayNumberSources.some((item) => item === source) ? "number" : "text",
-      source === "text" ? t("セット情報の背景") : t(overlaySourceLabels[source])),
-    id: `builtin-${source}`, source, text: "", fontFamily, frame: "plate", background: "transparent", verticalAlign: undefined,
-    wrapText: false, shrinkText: source === "redPlayerName" || source === "bluePlayerName", ...patch,
-  });
-  const centerX = positions[2];
+  const preset = defaultOverlayPreset as OverlayPreset;
   return {
-    id: crypto.randomUUID(), name: t("デフォルト"), width: 1920, height: 1080,
-    components: [
-      text("redPlayerName", { x: positions[0], y: 6, width: widths[0], height: 83, fontSize: 56, background: "#991b1b" }),
-      text("redSetWins", { x: positions[1], y: 6, width: widths[1], height: 83, fontSize: 54, background: "#991b1b" }),
-      text("text", { x: centerX, y: 6, width: widths[2], height: 94.6, background: "#374151" }),
-      text("setName", { x: centerX + 16, y: 18, width: widths[2] - 32, height: 35.2, fontSize: 32, frame: "setMain" }),
-      text("roundName", { x: centerX + 16, y: 59.2, width: widths[2] - 32, height: 29.4, fontSize: 28, frame: "setSub" }),
-      text("blueSetWins", { x: positions[3], y: 6, width: widths[3], height: 83, fontSize: 54, background: "#1e40af" }),
-      text("bluePlayerName", { x: positions[4], y: 6, width: widths[4], height: 83, fontSize: 56, background: "#1e40af" }),
-      text("eventAlias", { x: 640, y: 1019.2, width: 640, height: 48.8, fontSize: 28, background: "#000000", frame: "eventAlias" }),
-    ],
+    ...preset, id: crypto.randomUUID(), name: t(preset.name),
+    components: preset.components.map((component) => ({ ...component, name: t(component.name) })),
   };
 }
 
