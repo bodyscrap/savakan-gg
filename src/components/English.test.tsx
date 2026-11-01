@@ -256,6 +256,20 @@ describe("English component rendering", () => {
     for (const side of ["1P", "2P"]) {
       for (const category of [1, 2, 3]) expect(html).toContain(`${side} dummy items (category ${category})`);
     }
+    const categoryOneOneP = html.indexOf("1P dummy items (category 1)");
+    const categoryOneTwoP = html.indexOf("2P dummy items (category 1)");
+    const categoryTwoOneP = html.indexOf("1P dummy items (category 2)");
+    const categoryTwoTwoP = html.indexOf("2P dummy items (category 2)");
+    expect(categoryOneOneP).toBeLessThan(categoryOneTwoP);
+    expect(categoryOneTwoP).toBeLessThan(categoryTwoOneP);
+    expect(categoryTwoOneP).toBeLessThan(categoryTwoTwoP);
+    const onePName = html.indexOf("1P player name");
+    const twoPName = html.indexOf("2P player name");
+    const onePWins = html.indexOf("1P games won");
+    const twoPWins = html.indexOf("2P games won");
+    expect(onePName).toBeLessThan(twoPName);
+    expect(twoPName).toBeLessThan(onePWins);
+    expect(onePWins).toBeLessThan(twoPWins);
     expect(html).toContain('value="選択A 選択B"');
     expect(html).toContain("Preset to apply");
     expect(html).not.toContain("Saved presets are applied immediately. Unsaved edits are not applied.");

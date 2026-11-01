@@ -324,18 +324,18 @@ export function OverlayControl({
                         disabled={busy}
                       />
                       </label>
+                      <label>{t("2P プレイヤー名")}<input
+                        type="text"
+                        value={testBlueName}
+                        onChange={(e) => onTestBlueNameChange(e.currentTarget.value)}
+                        disabled={busy}
+                      />
+                      </label>
                       <label>{t("1P 取得ゲーム数")}<input
                         type="number"
                         min={0}
                         value={testRedWins}
                         onChange={(e) => onTestRedWinsChange(Number(e.currentTarget.value))}
-                        disabled={busy}
-                      />
-                      </label>
-                      <label>{t("2P プレイヤー名")}<input
-                        type="text"
-                        value={testBlueName}
-                        onChange={(e) => onTestBlueNameChange(e.currentTarget.value)}
                         disabled={busy}
                       />
                       </label>
@@ -354,10 +354,10 @@ export function OverlayControl({
                     <p className="meta">{t("ダミーアイテムリスト（スペース区切り）")}</p>
                     <p className="meta">{t("テスト配信と停止中のカスタマイズプレビュー専用です。本配信では「スナップショット&メタデータ設定」で保存した各プレイヤーの選択内容を表示します。")}</p>
                     <div className="overlay-dummy-grid">
-                      {[
+                      {([0, 1, 2] as const).flatMap((index) => [
                         { side: "1P", values: testRedItems, onChange: onTestRedItemsChange },
                         { side: "2P", values: testBlueItems, onChange: onTestBlueItemsChange },
-                      ].map(({ side, values, onChange }) => ([0, 1, 2] as const).map((index) =>
+                      ].map(({ side, values, onChange }) =>
                         <label key={`${side}-${index}`}>{t("{side} ダミーアイテム（カテゴリ{category}）", { side, category: index + 1 })}<input
                           type="text" value={values[index]} disabled={busy}
                           placeholder={t("アイテムA アイテムB")}
