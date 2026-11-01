@@ -9582,7 +9582,8 @@ fn apply_prestart_initial_phase_seed_mapping(
             !set.is_bye && (!matches!(set.state, 1 | 2) || set.winner_id.is_some()
                 || set.slots.iter().any(|slot| slot.score.is_some()))
         } else {
-            set.state != 1 || set.winner_id.is_some()
+            !matches!(set.state, 1 | 4 | 6 | 7) || set.winner_id.is_some()
+                || set.slots.iter().any(|slot| slot.score.is_some())
         }
     }) {
         return Err("試合が進行したeventの初期Seedはシャッフルできません。".to_owned());
@@ -10383,6 +10384,13 @@ mod snapshot_restore_scope_tests {
             assert!(apply_prestart_initial_phase_seed_mapping(
                 &mut started, "event", &mapping, false, false,
             ).is_err());
+        }
+        for state in [4, 6, 7] {
+            let mut called = snapshot.clone();
+            called.events[0].sets[0].state = state;
+            assert!(apply_prestart_initial_phase_seed_mapping(
+                &mut called, "event", &mapping, false, false,
+            ).is_ok());
         }
     }
 

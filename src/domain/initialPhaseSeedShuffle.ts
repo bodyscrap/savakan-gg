@@ -124,10 +124,14 @@ export function canShuffleInitialPhaseSeeds(event: EventSnapshot, isLocalEvent =
     .filter((phase) => phase.phaseOrder !== null)
     .sort((left, right) => (left.phaseOrder ?? 0) - (right.phaseOrder ?? 0))[0];
   if (!firstPhase || event.sets.length === 0
-    || !event.sets.every((set) => isLocalEvent
-      ? set.isBye || ((set.state === 1 || set.state === 2)
-        && set.winnerId === null && set.slots.every((slot) => slot.score === null || slot.score === undefined))
-      : set.state === 1 && set.winnerId === null)) {
+    || !event.sets.every((set) => {
+      const unscored = set.winnerId === null
+        && set.slots.every((slot) => slot.score === null || slot.score === undefined);
+      // start.gg may mark untouched sets as ready/called/queued before any match is played.
+      return isLocalEvent
+        ? set.isBye || ((set.state === 1 || set.state === 2) && unscored)
+        : [1, 4, 6, 7].includes(set.state ?? 0) && unscored;
+    })) {
     return false;
   }
   const entrantIds = new Set(
