@@ -2,7 +2,8 @@ import type { SetResultDraftState, SetScoreDraft } from "../hooks/useSetResultDr
 import { buildMatchSideDrafts } from "./matchSideDrafts";
 import { buildScoreDraftsFromResult, buildScoreDraftsFromSet } from "./setResultDrafts";
 import { getDisplaySlotsForSet, isMatchupReady, resolveEntrantDisplayName } from "./bracketDisplay";
-import type { MatchDialogPlayerView } from "../components/MatchDetailDialog";
+import type { MatchCallNotice, MatchDialogPlayerView } from "../components/MatchDetailDialog";
+import type { FeatureMessage } from "./messages";
 import type { PlaySide, TournamentWorkspace } from "./tournamentWorkspaceRepository";
 import type { SetSnapshot, SetSlot } from "./bracketProgression";
 
@@ -16,6 +17,36 @@ export type WorkspaceMatchDraftState = {
   directWinnerId: string | null;
   sideDrafts: Record<string, PlaySide | "">;
 };
+
+export function buildMatchDialogCallNotices(
+  calls: FeatureMessage[],
+  eventId: string,
+  setId: string,
+  aliasNamesByEntrantId: Record<string, string> = {},
+  useAliasName = false,
+): MatchCallNotice[] {
+  return calls.flatMap((call) => {
+    const metadata = call.messageMeta;
+    const entrantName = metadata?.callEntrantName;
+    const entrantId = metadata?.callEntrantId;
+    return call.method === "call_player"
+      && call.messageType === "normal"
+      && call.parentMessageId === null
+      && metadata?.eventId === eventId
+      && metadata?.setId === setId
+      && typeof entrantName === "string"
+      ? [{
+        messageId: call.messageId,
+        entrantName: resolveEntrantDisplayName(
+          entrantName,
+          typeof entrantId === "string" ? aliasNamesByEntrantId[entrantId] : undefined,
+          useAliasName,
+        ),
+        calledAt: call.createdAt,
+      }]
+      : [];
+  });
+}
 
 type BuildMatchDialogPlayersOptions = {
   set: SetSnapshot;

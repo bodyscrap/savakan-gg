@@ -59,7 +59,7 @@ import {
   useSetResultDrafts,
   type ResultConfirmationState,
 } from "../hooks/useSetResultDrafts";
-import { buildMatchDialogPlayers, resolveWorkspaceMatchDraftState } from "../domain/matchDialogDraft";
+import { buildMatchDialogCallNotices, buildMatchDialogPlayers, resolveWorkspaceMatchDraftState } from "../domain/matchDialogDraft";
 import {
   buildScoreDraftsFromSet,
   buildSlotScoresForSave,
@@ -1230,8 +1230,8 @@ function App() {
   }, [localSnapshotEvents, workspace]);
 
   function resolveCallListPlayerName(
-    group: CallListEventGroup,
-    player: CallListPlayer,
+    group: Pick<CallListEventGroup, "tournamentId" | "eventId">,
+    player: Pick<CallListPlayer, "entrantId" | "entrantName">,
   ) {
     const aliasSettings = callListAliasSettingsByEvent.get(`${group.tournamentId}::${group.eventId}`);
     return resolveEntrantDisplayName(
@@ -1538,6 +1538,21 @@ function App() {
     && playerDisplayAliasSnapshot?.eventId === selectedEvent.eventId
     ? playerDisplayAliasSnapshot
     : null;
+
+  function resolveCurrentPlayerName(entrantId: string | null, entrantName: string) {
+    return resolveEntrantDisplayName(
+      entrantName,
+      entrantId ? currentPlayerDisplayAliasSnapshot?.aliasesByEntrantId[entrantId] : undefined,
+      currentPlayerDisplayAliasSnapshot?.enabled ?? false,
+    );
+  }
+
+  function resolveSetCallPlayerName(call: FeatureMessage) {
+    return resolveCurrentPlayerName(
+      extractMetaString(call.messageMeta, "callEntrantId"),
+      extractMetaString(call.messageMeta, "callEntrantName") || call.subject,
+    );
+  }
   const {
     players: userCardPlayers,
     selectedPlayerIds: selectedUserCardPlayerIds,
@@ -2355,6 +2370,7 @@ function App() {
     eventAlias: selectedEventMeta?.eventAlias ?? "",
     senderProfile,
     communicationDisabled: disableLocalCommunication,
+    resolvePlayerName: resolveCurrentPlayerName,
     setCallingEntrantId,
     refreshCalls: refreshPlayerCalls,
     onError: setError,
@@ -3316,6 +3332,7 @@ function App() {
               displayPlayersBySide={displayBracketPlayersBySide}
               onDisplayPlayersBySideChange={setDisplayBracketPlayersBySide}
               randomNotice={matchSideRandomNotice}
+              resolvePlayerName={resolveCurrentPlayerName}
               players={buildMatchDialogPlayers({
                 set: activeMatch,
                 displayBySide: displayBracketPlayersBySide,
@@ -3329,22 +3346,13 @@ function App() {
                 useAliasName: currentPlayerDisplayAliasSnapshot?.enabled,
               })}
               callingEntrantId={callingEntrantId}
-              callNotices={activeMatchCalls.flatMap((callMessage) => {
-                const metadata = callMessage.messageMeta;
-                const entrantName = metadata?.callEntrantName;
-                return callMessage.method === "call_player"
-                  && callMessage.messageType === "normal"
-                  && callMessage.parentMessageId === null
-                  && metadata?.eventId === selectedEvent.eventId
-                  && metadata?.setId === activeMatch.setId
-                  && typeof entrantName === "string"
-                  ? [{
-                    messageId: callMessage.messageId,
-                    entrantName,
-                    calledAt: callMessage.createdAt,
-                  }]
-                  : [];
-              })}
+              callNotices={buildMatchDialogCallNotices(
+                activeMatchCalls,
+                selectedEvent.eventId,
+                activeMatch.setId,
+                currentPlayerDisplayAliasSnapshot?.aliasesByEntrantId,
+                currentPlayerDisplayAliasSnapshot?.enabled,
+              )}
               calledEntrantIds={activeMatchCalledEntrantIds}
               hasUnresolvedCalls={activeMatchCalls.length > 0}
               canResolveCalls={activeMatchOwnCalls.length > 0 && activeMatchOtherCalls.length === 0}
@@ -3384,6 +3392,7 @@ function App() {
           )}
           <BracketDialogs
             busy={busy}
+            resolvePlayerName={resolveCurrentPlayerName}
             resultConfirmation={resultConfirmation}
             activeSetId={activeMatch?.setId ?? null}
             onCancelResultConfirmation={clearResultConfirmation}
@@ -3443,7 +3452,14 @@ function App() {
               activeSetLabel: activeObsOverlaySet.set.fullRoundText,
               activeEntrantNames: activeObsOverlaySet.set.slots
                 .filter((slot) => slot.entrantName.trim() !== "")
-                .map((slot) => slot.entrantName),
+                .map((slot) => resolveCallListPlayerName(
+                  {
+                    tournamentId: snapshot?.tournamentId ?? "",
+                    eventId: snapshot?.events.find((event) =>
+                      event.sets.some((set) => set.setId === activeObsOverlaySet.set.setId))?.eventId ?? "",
+                  },
+                  { entrantId: slot.entrantId ?? "", entrantName: slot.entrantName },
+                )),
             } : null}
             overlayBusy={obsOverlayBusy}
             onCancelOverlaySwitch={cancelOverlaySwitch}
@@ -3465,7 +3481,18 @@ function App() {
             onIssueMobileUrl={(bindIp) => void issueMobileInputPortalUrl(bindIp)}
             onCopyMobileUrl={() => void copyMobileInputUrl()}
             onRefreshMobileUrl={() => void refreshMobileInputPortalDialog()}
-            conflictDialog={bracketReport.conflictDialog}
+            conflictDialog={bracketReport.conflictDialog && {
+              ...bracketReport.conflictDialog,
+              conflict: {
+                ...bracketReport.conflictDialog.conflict,
+                entrantNames: bracketReport.conflictDialog.conflict.entrantNames.map((name) =>
+                  resolveCurrentPlayerName(
+                    selectedEvent?.sets.find((set) => set.setId === bracketReport.conflictDialog?.conflict.setId)
+                      ?.slots.find((slot) => slot.entrantName === name)?.entrantId ?? null,
+                    name,
+                  )),
+              },
+            }}
             forceOverwriteRemaining={bracketReport.forceOverwriteRemaining}
             onCancelConflict={bracketReport.cancelConflict}
             onForceOverwriteRemainingChange={bracketReport.setForceOverwriteRemaining}
@@ -3503,7 +3530,7 @@ function App() {
                       <p className="dialog-summary-title">{t("自端末発行: ")}{setCallResolutionDialog.ownCalls.length}{t("件")}</p>
                       {setCallResolutionDialog.ownCalls.map((call) => (
                         <p className="meta" key={call.messageId}>
-                          {extractMetaString(call.messageMeta, "callEntrantName") || call.subject}
+                          {resolveSetCallPlayerName(call)}
                         </p>
                       ))}
                     </div>
@@ -3514,7 +3541,7 @@ function App() {
                         {t("他端末発行: ")}{setCallResolutionDialog.otherCalls.length}{t("件")}</p>
                       {setCallResolutionDialog.otherCalls.map((call) => (
                         <p className="meta" key={call.messageId}>
-                          {extractMetaString(call.messageMeta, "callEntrantName") || call.subject}
+                          {resolveSetCallPlayerName(call)}
                           {t(" / 発行元: ")}{call.senderName}{" ("}{call.senderUserId}{")"}
                         </p>
                       ))}

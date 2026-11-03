@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildMatchDialogCallNotices,
   buildMatchDialogPlayers,
   buildInitialMatchDialogDraft,
   resolveExistingMatchDialogDraft,
@@ -7,6 +8,52 @@ import {
 } from "./matchDialogDraft";
 import type { TournamentWorkspace } from "./tournamentWorkspaceRepository";
 import type { SetSnapshot } from "./bracketProgression";
+import type { FeatureMessage } from "./messages";
+
+describe("match dialog call notices", () => {
+  const call: FeatureMessage = {
+    messageId: "call-1",
+    threadId: "call-1",
+    subject: "Player 1",
+    body: "Player 1",
+    senderName: "Operator",
+    senderUserId: "12345678",
+    senderIp: "192.168.1.10",
+    destination: "call_list",
+    method: "call_player",
+    messageType: "normal",
+    parentMessageId: null,
+    messageMeta: {
+      eventId: "event-1", setId: "set-1",
+      callEntrantId: "entrant-1", callEntrantName: "Player 1",
+    },
+    createdAt: "2026-11-03T00:00:00Z",
+  };
+
+  it.each([
+    [true, " Alias 1 ", "Alias 1"],
+    [false, "Alias 1", "Player 1"],
+    [true, "", "Player 1"],
+    [true, "   ", "Player 1"],
+  ])("resolves the current alias setting (%s, %s)", (enabled, alias, expected) => {
+    expect(buildMatchDialogCallNotices(
+      [call], "event-1", "set-1", { "entrant-1": alias }, enabled,
+    )).toEqual([{ messageId: call.messageId, entrantName: expected, calledAt: call.createdAt }]);
+  });
+
+  it("keeps the original name if the entrant alias is unavailable", () => {
+    expect(buildMatchDialogCallNotices([call], "event-1", "set-1", {}, true)[0].entrantName)
+      .toBe("Player 1");
+  });
+
+  it("excludes replies and calls for other events or sets", () => {
+    expect(buildMatchDialogCallNotices([
+      { ...call, parentMessageId: "root" },
+      { ...call, messageMeta: { ...call.messageMeta, eventId: "other-event" } },
+      { ...call, messageMeta: { ...call.messageMeta, setId: "other-set" } },
+    ], "event-1", "set-1")).toEqual([]);
+  });
+});
 
 describe("match dialog draft selection", () => {
   const forced = { winnerId: "forced", scoreDrafts: { forced: "W" }, directWin: true };

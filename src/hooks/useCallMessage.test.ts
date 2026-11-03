@@ -85,6 +85,21 @@ describe("direct bracket calls", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it("uses the display name for local notices without changing the transmitted identity", async () => {
+    const { options } = setup();
+    const resolvePlayerName = vi.fn(() => "Alias Player");
+    await useCallMessage({ ...options, resolvePlayerName }).sendCallMessageFromMatch(slot, "entrant");
+
+    expect(resolvePlayerName).toHaveBeenCalledWith("entrant", "Player");
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("Alias Player"));
+    expect(options.onMessage).toHaveBeenLastCalledWith(expect.stringContaining("Alias Player"));
+    expect(invoke).toHaveBeenCalledWith("send_mailbox_message", {
+      input: expect.objectContaining({
+        messageMeta: expect.objectContaining({ callEntrantName: "Player", callEntrantId: "entrant" }),
+      }),
+    });
+  });
+
   it("rejects disabled communication before confirming", async () => {
     const { options, sendCallMessageFromMatch } = setup(true);
     await sendCallMessageFromMatch(slot, "entrant");

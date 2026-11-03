@@ -16,6 +16,7 @@ type MobileInputCandidateView = {
 
 type BracketDialogsProps = {
   busy: boolean;
+  resolvePlayerName?: (entrantId: string | null, entrantName: string) => string;
   resultConfirmation: ResultConfirmationState | null;
   activeSetId: string | null;
   onCancelResultConfirmation: () => void;
@@ -62,6 +63,7 @@ type BracketDialogsProps = {
 
 export function BracketDialogs({
   busy,
+  resolvePlayerName = (_entrantId, entrantName) => entrantName,
   resultConfirmation,
   activeSetId,
   onCancelResultConfirmation,
@@ -136,7 +138,7 @@ export function BracketDialogs({
                   .filter((slot) => slot.entrantId)
                   .map((slot) => (
                     <p className="meta" key={`result-confirm-${resultConfirmation.match.setId}-${slot.entrantId}`}>
-                      {slot.entrantName}: {resultConfirmation.scoreDrafts[slot.entrantId ?? ""] || t("未入力")}
+                      {resolvePlayerName(slot.entrantId, slot.entrantName)}: {resultConfirmation.scoreDrafts[slot.entrantId ?? ""] || t("未入力")}
                     </p>
                   ))}
               </div>

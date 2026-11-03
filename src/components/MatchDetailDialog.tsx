@@ -42,6 +42,7 @@ type MatchDetailDialogProps = {
   displayPlayersBySide: boolean;
   onDisplayPlayersBySideChange: (checked: boolean) => void;
   randomNotice: MatchSideRandomNotice | null;
+  resolvePlayerName?: (entrantId: string | null, entrantName: string) => string;
   players: MatchDialogPlayerView[];
   callNotices: MatchCallNotice[];
   calledEntrantIds: Array<string | null>;
@@ -81,6 +82,7 @@ export function MatchDetailDialog({
   displayPlayersBySide,
   onDisplayPlayersBySideChange,
   randomNotice,
+  resolvePlayerName = (_entrantId, entrantName) => entrantName,
   players,
   callNotices,
   calledEntrantIds,
@@ -105,6 +107,7 @@ export function MatchDetailDialog({
   onToggleOverlay,
   onConfirm,
 }: MatchDetailDialogProps) {
+  const resolvedSlots = match.slots.filter((slot) => slot.entrantId !== null);
   return (
     <div className="dialog-backdrop" onClick={onClose}>
       <section
@@ -136,7 +139,7 @@ export function MatchDetailDialog({
         )}
         {!matchupReady && <p className="meta">{t("対戦カード確定後にプレイヤーサイドを変更できます。")}</p>}
         {randomNotice && randomNotice.setId === match.setId && (
-          <p className={`meta side-random-notice ${randomNotice.changed ? "changed" : "unchanged"}`}>{t("ランダム実行済み ({value1}) : 上段 {value2} = {value3} / 下段 {value4} = {value5}{value6}", { value1: new Date(randomNotice.triggeredAt).toLocaleTimeString("ja-JP", { hour12: false }), value2: randomNotice.upperEntrantName, value3: randomNotice.upperSide, value4: randomNotice.lowerEntrantName, value5: randomNotice.lowerSide, value6: !randomNotice.changed ? t(" (結果は変更なし)") : "" })}</p>
+          <p className={`meta side-random-notice ${randomNotice.changed ? "changed" : "unchanged"}`}>{t("ランダム実行済み ({value1}) : 上段 {value2} = {value3} / 下段 {value4} = {value5}{value6}", { value1: new Date(randomNotice.triggeredAt).toLocaleTimeString("ja-JP", { hour12: false }), value2: resolvePlayerName(resolvedSlots[0]?.entrantId ?? null, randomNotice.upperEntrantName), value3: randomNotice.upperSide, value4: resolvePlayerName(resolvedSlots[1]?.entrantId ?? null, randomNotice.lowerEntrantName), value5: randomNotice.lowerSide, value6: !randomNotice.changed ? t(" (結果は変更なし)") : "" })}</p>
         )}
         {callNotices.map((notice) => (
           <p className="meta match-call-notice" key={notice.messageId}>{t("{value1}の呼び出しを行いました（{value2}）", { value1: notice.entrantName, value2: new Date(notice.calledAt).toLocaleTimeString("ja-JP", { hour12: false }) })}</p>

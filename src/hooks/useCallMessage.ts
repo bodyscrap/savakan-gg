@@ -12,6 +12,7 @@ type UseCallMessageOptions = {
   eventAlias: string;
   senderProfile: SenderProfile;
   communicationDisabled: boolean;
+  resolvePlayerName?: (entrantId: string, entrantName: string) => string;
   setCallingEntrantId: (entrantId: string) => void;
   refreshCalls: () => Promise<void>;
   onError: (error: string) => void;
@@ -44,6 +45,7 @@ export function useCallMessage({
   eventAlias: rawEventAlias,
   senderProfile,
   communicationDisabled,
+  resolvePlayerName = (_entrantId, entrantName) => entrantName,
   setCallingEntrantId,
   refreshCalls,
   onError,
@@ -67,7 +69,8 @@ export function useCallMessage({
       onError(t("設定タブで送信者名・8桁ユーザーID・ネットワークデバイスを保存してから送信してください。"));
       return;
     }
-    if (!await window.confirm(t("{p0} を呼び出しますか？\n宛先機能: 呼び出しリスト\n送信先: ブロードキャスト", { p0: slot.entrantName }))) {
+    const displayName = resolvePlayerName(entrantId, slot.entrantName);
+    if (!await window.confirm(t("{p0} を呼び出しますか？\n宛先機能: 呼び出しリスト\n送信先: ブロードキャスト", { p0: displayName }))) {
       return;
     }
     setCallingEntrantId(entrantId);
@@ -132,7 +135,7 @@ export function useCallMessage({
         },
       });
       await refreshCalls();
-      onMessage(t("プレイヤー呼び出しを送信しました: {p0}", { p0: slot.entrantName }));
+      onMessage(t("プレイヤー呼び出しを送信しました: {p0}", { p0: displayName }));
     } catch (error) {
       onError(String(error));
     } finally {
