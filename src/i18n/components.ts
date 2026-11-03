@@ -121,7 +121,7 @@ export const componentTranslations: Record<string, string> = {
   "カテゴリ{p0}": "Category {p0}",
   "表示切替 {number}": "Visibility toggle {number}",
   "区切り文字": "Delimiter",
-  "選択順に表示します。区切り文字は空欄や改行も指定できます。未選択のカテゴリは何も表示しません。": "Items appear in selection order. The delimiter can be empty or contain line breaks. Empty categories display nothing.",
+  "選択したカテゴリのアイテムを選択順に表示します。\n区切り文字は空欄・改行も指定でき、未選択カテゴリは表示しません。": "Items from selected categories appear in selection order.\nThe delimiter can be empty or contain line breaks; unselected categories are hidden.",
   "オーバーレイのカスタマイズ": "Customize overlay",
   "新しいプリセット": "New preset",
   "オーバーレイプリセットの形式が不正です。": "Invalid overlay preset format.",

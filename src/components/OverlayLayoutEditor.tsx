@@ -1042,13 +1042,13 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
               <p className="meta">{t("表示端末のローカル時刻を毎秒更新します。例: YYYY-MM-DD HH:mm:ss。YYYY/YY=年、\nMM/M=月、DD/D=日、HH/H=24時間、hh/h=12時間、mm/m=分、ss/s=秒、A/a=AM/PM、dddd/ddd=英語の曜日、d=曜日番号（日曜0）。[]内はそのまま表示します。")}</p>
               </div>
             </> : component.kind === "item" ? <>
-              <label>{t("対象プレイヤー")}<select value={component.source} onChange={(event) => {
+              <label className="overlay-item-player">{t("対象プレイヤー")}<select value={component.source} onChange={(event) => {
                 const source = overlayItemSources.find((item) => item === event.target.value);
                 if (source) updateComponent({ source });
               }}>{overlayItemSources.map((source, index) => <option key={source} value={source}>{index === 0 ? "1P" : "2P"}</option>)}</select></label>
-              <label>{t("区切り文字")}<textarea maxLength={256} rows={2} value={component.delimiter}
+              <label className="overlay-item-delimiter">{t("区切り文字")}<textarea maxLength={256} rows={1} value={component.delimiter}
                 onChange={(event) => updateComponent({ delimiter: event.target.value })} /></label>
-              <p className="meta">{t("選択順に表示します。区切り文字は空欄や改行も指定できます。未選択のカテゴリは何も表示しません。")}</p>
+              <p className="meta overlay-item-help">{t("選択したカテゴリのアイテムを選択順に表示します。\n区切り文字は空欄・改行も指定でき、未選択カテゴリは表示しません。")}</p>
             </> : <>
             {component.source === "number" && <label>{t("固定数値")}<input type="number" step="any" required value={component.numberValue ?? 0}
               onChange={(event) => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) updateComponent({ numberValue: value }); }} /></label>}

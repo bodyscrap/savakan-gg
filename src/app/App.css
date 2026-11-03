@@ -2939,6 +2939,23 @@ button:disabled {
   white-space: pre-line;
 }
 
+.overlay-item-player select,
+.overlay-item-delimiter textarea {
+  height: 2.5rem;
+  padding-top: 0.45rem;
+  padding-bottom: 0.45rem;
+}
+
+.overlay-item-delimiter textarea {
+  resize: vertical;
+}
+
+.overlay-item-help {
+  grid-column: 1 / -1;
+  margin: 0;
+  white-space: pre-line;
+}
+
 .overlay-font-controls {
   grid-column: 1 / -1;
   display: flex;
