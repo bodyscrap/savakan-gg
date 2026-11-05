@@ -440,13 +440,19 @@ describe("overlay text fitting with measured dimensions", () => {
     expect(legend.children.map((player) => player.children[1].textContent)).toEqual(["3勝", "1勝"]);
     expect(legend.children.map((player) => player.style.color)).toEqual(["#ef4444", "#3b82f6"]);
     expect(lines.map((line) => line.getAttribute("stroke"))).toEqual(["#ef4444", "#3b82f6"]);
+    const yAxisLabels = descendants(chart, "TEXT").filter((label) =>
+      label.getAttribute("text-anchor") === "start" && !label.textContent.startsWith("目標 "));
+    expect(yAxisLabels.map((label) => label.textContent)).toEqual(["0", "1", "2", "3", "4"]);
+    expect(yAxisLabels.map((label) => label.getAttribute("fill")))
+      .toEqual(["#ffffff", "#ffffff", "#ffffff", "#ffffff", "#ffffff"]);
+    expect(yAxisLabels.every((label) => Number(label.getAttribute("x")) > 0
+      && Number(label.getAttribute("x")) < Number(lines[0].getAttribute("points").split(" ")[0].split(",")[0]))).toBe(true);
     const targetLine = descendants(chart, "LINE").find((line) => line.getAttribute("stroke-dasharray"));
-    expect(targetLine.getAttribute("y1")).toBe(targetLine.getAttribute("y2"));
-    expect(targetLine.getAttribute("stroke-dasharray")).toBe("6 4");
-    expect(targetLine.getAttribute("stroke")).toBe("#ffffff");
-    expect(descendants(chart, "TEXT").some((label) => label.textContent === "目標 5勝")).toBe(true);
-    expect(descendants(chart, "TEXT").find((label) => label.textContent === "目標 5勝").getAttribute("fill"))
-      .toBe("#ffffff");
+    expect(targetLine).toBeUndefined();
+    const outOfRangeTargetLabel = descendants(chart, "TEXT").find((label) => label.textContent === "目標 5勝 ↑");
+    expect(Number(outOfRangeTargetLabel.getAttribute("y")))
+      .toBeGreaterThan(Number(yAxisLabels.at(-1).getAttribute("y")));
+    expect(outOfRangeTargetLabel.getAttribute("fill")).toBe("#ffffff");
     const onePlayerWins = lines[0].getAttribute("points").split(" ").map((point) => Number(point.split(",")[1]));
     const twoPlayerWins = lines[1].getAttribute("points").split(" ").map((point) => Number(point.split(",")[1]));
     expect(onePlayerWins).toHaveLength(3);
@@ -455,6 +461,52 @@ describe("overlay text fitting with measured dimensions", () => {
     expect(twoPlayerWins[0]).toBe(twoPlayerWins[1]);
     expect(descendants(chart, "TEXT").filter((label) => label.getAttribute("text-anchor") === "middle")
       .map((label) => label.textContent)).toEqual(["3", "4"]);
+    expect(chart.style).toMatchObject({ color: "#ffffff", fontFamily: "sans-serif", fontWeight: "700" });
+    dispose();
+  });
+
+  it("draws the target line when it is within the current score range", () => {
+    const descendants = (element, tagName) => element.children.flatMap((child) =>
+      [child, ...descendants(child, tagName)]).filter((child) => child.tagName === tagName);
+    const stage = mockElement("DIV");
+    vi.stubGlobal("document", {
+      createElement(tagName) { return mockElement(tagName.toUpperCase()); },
+      createElementNS(_namespace, tagName) { return mockElement(tagName.toUpperCase()); },
+      fonts: {
+        ready: Promise.resolve(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+    const preset = {
+      width: 400,
+      height: 320,
+      components: [{
+        kind: "firstToNWinsLine", id: "graph", visible: true, source: "text", historyLimit: 0,
+        background: "#000000", color: "#ffffff", fontFamily: "sans-serif", fontSize: 48,
+        bold: true, align: "center", x: 0, y: 0, width: 400, height: 320,
+      }],
+    };
+    const state = {
+      active: true, fullyStopped: false, redPlayerName: "", bluePlayerName: "",
+      redSetWins: 0, blueSetWins: 0, roundText: "", eventName: "", eventAlias: "",
+      firstToNWins: {
+        playerOneName: "Player One", playerTwoName: "Player Two",
+        winsRequired: 3, playerOneWins: 3, playerTwoWins: 1,
+        setNumbers: [1, 2, 3, 4],
+        setCompleted: [true, true, true, true],
+        playerOneResults: [true, false, true, true],
+        playerTwoResults: [false, true, false, false],
+      },
+    };
+    const dispose = renderOverlayPreset(stage, preset, state);
+    const chart = stage.children[0].children[0].children[1];
+    const targetLine = descendants(chart, "LINE").find((line) => line.getAttribute("stroke-dasharray"));
+    const targetLabel = descendants(chart, "TEXT").find((label) => label.textContent === "目標 3勝");
+    expect(targetLine.getAttribute("y1")).toBe(targetLine.getAttribute("y2"));
+    expect(targetLine.getAttribute("stroke-width")).toBe("4");
+    expect(targetLine.getAttribute("stroke-dasharray")).toBe("8 4");
+    expect(Number(targetLabel.getAttribute("y"))).toBeGreaterThan(Number(targetLine.getAttribute("y1")));
     dispose();
   });
 

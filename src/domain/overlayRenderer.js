@@ -644,13 +644,14 @@ function renderFirstToNWinsLineChart(container, component, state) {
 
   const chartHeight = Math.max(1, component.height - legendFontSize * 1.25);
   const axisFontSize = Math.min(component.fontSize * 0.45, width * 0.04, chartHeight * 0.06);
+  const maximum = Math.max(1, Math.max(...points.flat()) + 1);
+  const yAxisLabelWidth = String(maximum).length * axisFontSize * 0.72;
   const plot = {
-    left: axisFontSize * 2.5,
+    left: yAxisLabelWidth + axisFontSize * 0.7,
     right: width - axisFontSize * 0.75,
     top: axisFontSize * 0.75,
     bottom: chartHeight - axisFontSize * 2,
   };
-  const maximum = Math.max(1, data.winsRequired, ...points.flat());
   const x = (index) => plot.left + (plot.right - plot.left) * index / Math.max(1, displayedIndices.length);
   const y = (wins) => plot.bottom - (plot.bottom - plot.top) * wins / maximum;
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -659,7 +660,10 @@ function renderFirstToNWinsLineChart(container, component, state) {
   svg.setAttribute("role", "img");
   svg.setAttribute("aria-label",
     `F2NW: ${players[0].name} ${players[0].totalWins}勝, ${players[1].name} ${players[1].totalWins}勝, 目標${data.winsRequired}勝`);
-  Object.assign(svg.style, { display: "block", width: "100%", minHeight: "0", flex: "1 1 auto" });
+  Object.assign(svg.style, {
+    display: "block", width: "100%", minHeight: "0", flex: "1 1 auto",
+    color: component.color, fontFamily: component.fontFamily, fontWeight: component.bold ? "700" : "400",
+  });
   const addSvgElement = (tagName, attributes) => {
     const element = document.createElementNS("http://www.w3.org/2000/svg", tagName);
     for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, String(value));
@@ -677,26 +681,34 @@ function renderFirstToNWinsLineChart(container, component, state) {
       stroke: component.color, "stroke-opacity": "0.25", "stroke-width": "1",
     });
     const label = addSvgElement("text", {
-      x: plot.left - axisFontSize * 0.5, y: tickY + axisFontSize * 0.35,
-      fill: "currentColor", "font-size": axisFontSize, "text-anchor": "end",
+      x: axisFontSize * 0.2, y: tickY + axisFontSize * 0.35,
+      fill: component.color, "font-size": axisFontSize, "text-anchor": "start",
     });
     label.textContent = String(tick);
   }
 
-  const targetY = y(data.winsRequired);
   const backgroundRgb = (component.background === "transparent" ? "#000000" : component.background).slice(1, 7);
   const targetColor = `#${[0, 2, 4].map((index) =>
     (255 - Number.parseInt(backgroundRgb.slice(index, index + 2), 16)).toString(16).padStart(2, "0"),
   ).join("")}`;
-  addSvgElement("line", {
-    x1: plot.left, x2: plot.right, y1: targetY, y2: targetY,
-    stroke: targetColor, "stroke-width": "2", "stroke-dasharray": "6 4",
-  });
-  const targetLabel = addSvgElement("text", {
-    x: plot.right, y: targetY + axisFontSize * 0.9,
-    fill: targetColor, "font-size": axisFontSize, "text-anchor": "end",
-  });
-  targetLabel.textContent = `目標 ${data.winsRequired}勝`;
+  if (data.winsRequired <= maximum) {
+    const targetY = y(data.winsRequired);
+    addSvgElement("line", {
+      x1: plot.left, x2: plot.right, y1: targetY, y2: targetY,
+      stroke: targetColor, "stroke-width": "4", "stroke-dasharray": "8 4",
+    });
+    const targetLabel = addSvgElement("text", {
+      x: plot.left, y: targetY + axisFontSize * 1.1,
+      fill: targetColor, "font-size": axisFontSize, "text-anchor": "start",
+    });
+    targetLabel.textContent = `目標 ${data.winsRequired}勝`;
+  } else {
+    const targetLabel = addSvgElement("text", {
+      x: plot.left, y: plot.top + axisFontSize,
+      fill: targetColor, "font-size": axisFontSize, "text-anchor": "start",
+    });
+    targetLabel.textContent = `目標 ${data.winsRequired}勝 ↑`;
+  }
 
   players.forEach((player, playerIndex) => {
     const coordinates = points[playerIndex].map((wins, index) => `${x(index)},${y(wins)}`).join(" ");
@@ -716,7 +728,7 @@ function renderFirstToNWinsLineChart(container, component, state) {
     if (pointIndex % labelInterval !== 0 && pointIndex !== displayedIndices.length - 1) return;
     const label = addSvgElement("text", {
       x: x(pointIndex + 1), y: chartHeight - axisFontSize * 0.35,
-      fill: "currentColor", "font-size": axisFontSize, "text-anchor": "middle",
+      fill: component.color, "font-size": axisFontSize, "text-anchor": "middle",
     });
     label.textContent = String(data.setNumbers[index]);
   });

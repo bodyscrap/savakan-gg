@@ -595,6 +595,7 @@ fn build_mobile_first_to_n_overlay_data(
         player_one_name: name_for(player_one_id),
         player_two_name: name_for(player_two_id),
         winner_name: winner_id.map(name_for),
+        wins_required: settings.wins_required,
         player_one_wins: u32::try_from(player_one_wins).ok()?,
         player_two_wins: u32::try_from(player_two_wins).ok()?,
         set_numbers: (0..ordered_sets.len())
@@ -698,7 +699,7 @@ fn mobile_confirmed_first_to_n_draw(
 mod mobile_first_to_n_tests {
     use super::{
         build_mobile_first_to_n_overlay_data, mobile_confirmed_first_to_n_draw,
-        mobile_first_to_n_next_set_ids, MobileSetSaveInput,
+        mobile_first_to_n_next_set_ids, MobileSetSaveInput, ObsOverlayFirstToNWins,
     };
     use crate::models::{EventSnapshot, LocalSetScoreInput};
     use std::collections::{HashMap, HashSet};
@@ -877,12 +878,37 @@ mod mobile_first_to_n_tests {
             .expect("First to N event should produce scoreboard data");
         assert_eq!(overlay.player_one_name, "Player One");
         assert_eq!(overlay.player_two_name, "Player Two");
+        assert_eq!(overlay.wins_required, 2);
         assert_eq!((overlay.player_one_wins, overlay.player_two_wins), (1, 0));
         assert_eq!(overlay.set_numbers, vec![1, 2]);
         assert_eq!(overlay.set_completed, vec![true, false]);
         assert_eq!(overlay.player_one_results, vec![Some(true), None]);
         assert_eq!(overlay.player_two_results, vec![Some(false), None]);
         assert_eq!(overlay.winner_name, None);
+    }
+
+    #[test]
+    fn test_overlay_payload_preserves_first_to_n_target_and_history() {
+        let overlay: ObsOverlayFirstToNWins = serde_json::from_value(serde_json::json!({
+            "playerOneName": "Player One",
+            "playerTwoName": "Player Two",
+            "winnerName": null,
+            "winsRequired": 5,
+            "playerOneWins": 4,
+            "playerTwoWins": 1,
+            "setNumbers": [1, 2, 3, 4, 5],
+            "setCompleted": [true, true, true, true, true],
+            "playerOneResults": [true, true, false, true, false],
+            "playerTwoResults": [false, false, true, false, true]
+        }))
+        .expect("test First to N wins data should deserialize");
+
+        assert_eq!(overlay.wins_required, 5);
+        assert_eq!((overlay.player_one_wins, overlay.player_two_wins), (4, 1));
+        assert_eq!(
+            serde_json::to_value(overlay).unwrap()["playerOneResults"],
+            serde_json::json!([true, true, false, true, false])
+        );
     }
 }
 
@@ -1817,6 +1843,8 @@ struct ObsOverlayFirstToNWins {
     player_two_name: String,
     #[serde(default)]
     winner_name: Option<String>,
+    #[serde(default)]
+    wins_required: usize,
     player_one_wins: u32,
     player_two_wins: u32,
     set_numbers: Vec<u32>,
