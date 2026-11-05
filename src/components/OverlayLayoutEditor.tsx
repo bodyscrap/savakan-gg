@@ -5,7 +5,7 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { t } from "../i18n";
 import {
   MAX_IMAGE_BYTES, MAX_LAYOUT_BYTES, builtInOverlayPreset, mergeOverlayLayouts,
-  overlayPreviewTransform, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, overlayComponentsIntersecting, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayImageDimensions, fitOverlayImageToCanvas, overlayKindLabels, overlaySourceLabels, overlayTextSources, overlayNumberSources, overlayAnimationValueSources, overlayItemSources, parseOverlayLayouts, parseOverlayLayoutsFile,
+  overlayPreviewTransform, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, overlayComponentsIntersecting, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayImageDimensions, fitOverlayImageToCanvas, overlayKindLabels, overlaySourceLabels, overlayTextSources, overlayNumberSources, overlayAnimationValueSources, overlayItemSources, parseOverlayLayouts, parseOverlayLayoutsFile, MAX_OVERLAY_HISTORY_LIMIT,
   type OverlayCentering, type OverlayComponent, type OverlayLayouts, type OverlayPreset,
 } from "../domain/overlayLayout";
 import { createOverlayPresetArchive, overlayPresetArchiveBase64, parseOverlayPresetArchive } from "../domain/overlayPresetArchive";
@@ -856,6 +856,8 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
                   ? (item.image && item.imageFileName) || "-"
                   : item.kind === "item"
                   ? `${t(overlaySourceLabels[item.source])} / ${t("カテゴリ{p0}", { p0: item.itemCategory ?? 1 })}`
+                  : item.kind === "firstToNWins" || item.kind === "firstToNWinsVertical"
+                  ? t("First to N wins")
                   : t(overlaySourceLabels[item.source]);
                 return <tr key={item.id}
                   className={[
@@ -1049,6 +1051,16 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
               <label className="overlay-item-delimiter">{t("区切り文字")}<textarea maxLength={256} rows={1} value={component.delimiter}
                 onChange={(event) => updateComponent({ delimiter: event.target.value })} /></label>
               <p className="meta overlay-item-help">{t("選択したカテゴリのアイテムを選択順に表示します。\n区切り文字は空欄・改行も指定でき、未選択カテゴリは表示しません。")}</p>
+            </> : component.kind === "firstToNWins" || component.kind === "firstToNWinsVertical" ? <>
+              <label>{t("履歴の表示数(0は全件)")}<input className="overlay-history-limit" type="number"
+                min={0} max={MAX_OVERLAY_HISTORY_LIMIT} step={1} required
+                value={component.historyLimit ?? 0}
+                onChange={(event) => {
+                  const historyLimit = event.currentTarget.valueAsNumber;
+                  if (Number.isSafeInteger(historyLimit) && historyLimit >= 0 && historyLimit <= MAX_OVERLAY_HISTORY_LIMIT) {
+                    updateComponent({ historyLimit });
+                  }
+                }} /></label>
             </> : <>
             {component.source === "number" && <label>{t("固定数値")}<input type="number" step="any" required value={component.numberValue ?? 0}
               onChange={(event) => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) updateComponent({ numberValue: value }); }} /></label>}

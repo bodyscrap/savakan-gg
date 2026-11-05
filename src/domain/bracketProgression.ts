@@ -153,6 +153,7 @@ export type BracketProgressionModel =
   | "single_elimination"
   | "double_elimination"
   | "round_robin"
+  | "first_to_n_wins"
   | "source_directed";
 
 export type RoundRobinStanding = {
@@ -187,6 +188,9 @@ export function getBracketProgressionModel(bracketType: string | null): BracketP
   }
   if (normalized === "ROUND_ROBIN") {
     return "round_robin";
+  }
+  if (normalized === "FIRST_TO_N_WINS") {
+    return "first_to_n_wins";
   }
   return "source_directed";
 }

@@ -2,9 +2,10 @@ use chrono::Utc;
 use std::collections::HashMap;
 
 use crate::models::{
-    CreateLocalEventSnapshotInput, EventSnapshot, LocalEventPhaseConfig,
-    PhaseGroupProgressionSnapshot, PhaseGroupSeedSnapshot, PhaseGroupSnapshot, PhaseSnapshot,
-    SetEntrantSourceSnapshot, SetSlotSnapshot, SetSnapshot, TournamentSnapshot,
+    CreateLocalEventSnapshotInput, EventSnapshot, FirstToNWinsPhaseSnapshot,
+    LocalEventFirstToNWinsConfig, LocalEventPhaseConfig, PhaseGroupProgressionSnapshot,
+    PhaseGroupSeedSnapshot, PhaseGroupSnapshot, PhaseSnapshot, SetEntrantSourceSnapshot,
+    SetSlotSnapshot, SetSnapshot, TournamentSnapshot,
 };
 
 #[derive(Clone)]
@@ -848,6 +849,51 @@ fn add_round_robin(
     }
 }
 
+fn add_first_to_n_wins(
+    builder: &mut SnapshotBuilder,
+    phase_order: usize,
+    phase_name: &str,
+    group_id: &str,
+    group_name: &str,
+    display_identifier: &str,
+    seeds: &[SeedEntry],
+    config: &LocalEventFirstToNWinsConfig,
+) {
+    let player_one = seeds
+        .iter()
+        .find(|seed| seed.entrant_id.as_deref() == Some(&config.player_one_entrant_id))
+        .map(SlotSource::from)
+        .expect("validated first-to-N player one seed");
+    let player_two = seeds
+        .iter()
+        .find(|seed| seed.entrant_id.as_deref() != Some(&config.player_one_entrant_id))
+        .map(SlotSource::from)
+        .expect("validated first-to-N player two seed");
+
+    for match_index in 0..config.phase_set_count {
+        let sequence = builder.sets.len() + 1;
+        builder.add_set(
+            phase_order,
+            phase_name,
+            group_id,
+            group_name,
+            display_identifier,
+            (match_index + 1) as i64,
+            format!("Set {sequence}"),
+            match_index,
+            [Some(player_one.clone()), Some(player_two.clone())],
+            false,
+            None,
+            None,
+        );
+        builder
+            .sets
+            .last_mut()
+            .expect("the first-to-N set was just added")
+            .identifier = Some(sequence.to_string());
+    }
+}
+
 fn validate_input(input: &CreateLocalEventSnapshotInput) -> Result<(), String> {
     if input.tournament_name.trim().is_empty() || input.event_name.trim().is_empty() {
         return Err("大会名とイベント名を入力してください。".to_owned());
@@ -862,6 +908,15 @@ fn validate_input(input: &CreateLocalEventSnapshotInput) -> Result<(), String> {
         return Err("フェーズ数は1〜3で指定してください。".to_owned());
     }
     validate_registration(input)?;
+    let has_first_to_n_wins = input
+        .phases
+        .iter()
+        .any(|phase| phase.bracket_type == "FIRST_TO_N_WINS");
+    if has_first_to_n_wins {
+        if input.participants.len() != 2 || input.phases.len() != 1 {
+            return Err("First to N wins は2人限定で、1フェーズのみ指定できます。".to_owned());
+        }
+    }
     let mut participant_count = input.participants.len();
     for (index, phase) in input.phases.iter().enumerate() {
         if phase.name.trim().is_empty() {
@@ -876,7 +931,7 @@ fn validate_input(input: &CreateLocalEventSnapshotInput) -> Result<(), String> {
         }
         if !matches!(
             phase.bracket_type.as_str(),
-            "SINGLE_ELIMINATION" | "DOUBLE_ELIMINATION" | "ROUND_ROBIN"
+            "SINGLE_ELIMINATION" | "DOUBLE_ELIMINATION" | "ROUND_ROBIN" | "FIRST_TO_N_WINS"
         ) {
             return Err(format!("Phase {} の形式が不正です。", index + 1));
         }
@@ -904,6 +959,40 @@ fn validate_input(input: &CreateLocalEventSnapshotInput) -> Result<(), String> {
         if phase.bracket_type == "ROUND_ROBIN" && phase.enabled_tiebreak_rules.is_empty() {
             return Err(format!(
                 "Phase {} の総当たりでは勝利条件を1つ以上有効にしてください。",
+                index + 1
+            ));
+        }
+        if phase.bracket_type == "FIRST_TO_N_WINS" {
+            let config = phase.first_to_n_wins.as_ref().ok_or_else(|| {
+                format!("Phase {} のFirst to N wins設定がありません。", index + 1)
+            })?;
+            let expected_match_count = config
+                .wins_required
+                .checked_mul(2)
+                .and_then(|count| count.checked_sub(1));
+            if phase.pool_count != 1
+                || config.wins_required == 0
+                || config.wins_required > 500
+                || expected_match_count != Some(config.phase_set_count)
+                || !input
+                    .participants
+                    .iter()
+                    .any(|participant| participant.entrant_id == config.player_one_entrant_id)
+            {
+                return Err(format!(
+                    "Phase {} のFirst to N wins設定が不正です。",
+                    index + 1
+                ));
+            }
+            if index + 1 < input.phases.len() && phase.qualifiers_per_pool != 2 {
+                return Err(format!(
+                    "Phase {} のFirst to N winsでは次のフェーズへ2人を進出させてください。",
+                    index + 1
+                ));
+            }
+        } else if phase.first_to_n_wins.is_some() {
+            return Err(format!(
+                "Phase {} にFirst to N wins以外の設定が含まれています。",
                 index + 1
             ));
         }
@@ -1237,7 +1326,7 @@ pub fn generate_local_snapshot(
                 seed.seed_id = builder.next_seed_id.to_string();
                 builder.next_seed_id += 1;
                 seed.seed_num = (local_index + 1) as i64;
-                if phase_index > 0 {
+                if phase_index > 0 && config.bracket_type != "FIRST_TO_N_WINS" {
                     seed.entrant_id = None;
                     seed.entrant_name = None;
                 }
@@ -1270,7 +1359,9 @@ pub fn generate_local_snapshot(
         for (pool_index, ((group_id, display_identifier, group_name), seeds)) in
             phase_group_ids.iter().zip(group_entries.iter()).enumerate()
         {
-            let progressions_out = if phase_index + 1 < input.phases.len() {
+            let progressions_out = if config.bracket_type == "FIRST_TO_N_WINS" {
+                Vec::new()
+            } else if phase_index + 1 < input.phases.len() {
                 (1..=config.qualifiers_per_pool)
                     .map(|placement| PhaseGroupProgressionSnapshot {
                         progression_id: format!("{group_id}-place-{placement}"),
@@ -1326,6 +1417,16 @@ pub fn generate_local_snapshot(
                     .filter(|rule| config.enabled_tiebreak_rules.contains(rule))
                     .cloned()
                     .collect(),
+                first_to_n_wins: config.first_to_n_wins.as_ref().map(|settings| {
+                    FirstToNWinsPhaseSnapshot {
+                        phase_set_count: settings.phase_set_count,
+                        wins_required: settings.wins_required,
+                        player_one_entrant_id: settings.player_one_entrant_id.clone(),
+                        play_all_matches: settings.play_all_matches,
+                        draw_counts_as_win: settings.draw_counts_as_win,
+                        sudden_death: settings.sudden_death,
+                    }
+                }),
             });
         }
 
@@ -1363,6 +1464,19 @@ pub fn generate_local_snapshot(
                     display_identifier,
                     seeds,
                 ),
+                "FIRST_TO_N_WINS" => add_first_to_n_wins(
+                    &mut builder,
+                    phase_order,
+                    config.name.trim(),
+                    group_id,
+                    group_name,
+                    display_identifier,
+                    seeds,
+                    config
+                        .first_to_n_wins
+                        .as_ref()
+                        .expect("validated first-to-N settings"),
+                ),
                 _ => unreachable!("phase formats are validated"),
             }
             let set_ids = builder.sets[before..]
@@ -1379,6 +1493,10 @@ pub fn generate_local_snapshot(
         }
 
         if phase_index + 1 < input.phases.len() {
+            if config.bracket_type == "FIRST_TO_N_WINS" {
+                current_entrants = group_entries[0].clone();
+                continue;
+            }
             let mut qualifiers = Vec::<SeedEntry>::new();
             let next_phase = &input.phases[phase_index + 1];
             let snake_bracket_seeds = matches!(
@@ -1465,6 +1583,7 @@ mod tests {
             third_place_match: false,
             fifth_place_match: false,
             grand_final_reset: true,
+            first_to_n_wins: None,
         }
     }
 
@@ -1521,6 +1640,84 @@ mod tests {
             "name": "Phase 1", "poolCount": 1, "bracketType": "DOUBLE_ELIMINATION"
         })).unwrap();
         assert!(legacy.grand_final_reset);
+    }
+
+    #[test]
+    fn first_to_n_wins_generates_sequentially_identified_sets_and_player_sides() {
+        let mut config = input(2, vec![phase("FIRST_TO_N_WINS", 1, 0)]);
+        config.phases[0].first_to_n_wins = Some(LocalEventFirstToNWinsConfig {
+            phase_set_count: 3,
+            wins_required: 2,
+            player_one_entrant_id: "entrant-2".to_owned(),
+            play_all_matches: true,
+            draw_counts_as_win: false,
+            sudden_death: true,
+        });
+
+        let event = &generate(&config).events[0];
+        assert_eq!(event.sets.len(), 3);
+        assert_eq!(
+            event
+                .sets
+                .iter()
+                .map(|set| set.identifier.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            ["1", "2", "3"]
+        );
+        assert!(event.phase_groups[0]
+            .first_to_n_wins
+            .as_ref()
+            .is_some_and(|settings| {
+                settings.phase_set_count == 3
+                    && settings.wins_required == 2
+                    && settings.player_one_entrant_id == "entrant-2"
+                    && settings.play_all_matches
+                    && !settings.draw_counts_as_win
+                    && settings.sudden_death
+            }));
+        for set in &event.sets {
+            assert_eq!(set.slots[0].entrant_id.as_deref(), Some("entrant-2"));
+            assert_eq!(set.slots[1].entrant_id.as_deref(), Some("entrant-1"));
+        }
+    }
+
+    #[test]
+    fn first_to_n_wins_requires_two_participants_and_a_single_phase() {
+        let first_to_n = || {
+            let mut phase = phase("FIRST_TO_N_WINS", 1, 2);
+            phase.first_to_n_wins = Some(LocalEventFirstToNWinsConfig {
+                phase_set_count: 3,
+                wins_required: 2,
+                player_one_entrant_id: "entrant-1".to_owned(),
+                play_all_matches: false,
+                draw_counts_as_win: false,
+                sudden_death: false,
+            });
+            phase
+        };
+        let mut invalid_match_count = input(2, vec![first_to_n()]);
+        invalid_match_count.phases[0]
+            .first_to_n_wins
+            .as_mut()
+            .expect("First to N wins settings should exist")
+            .phase_set_count = 4;
+        assert!(validate_input(&invalid_match_count)
+            .unwrap_err()
+            .contains("設定が不正"));
+
+        let too_many_players = input(3, vec![first_to_n()]);
+        assert!(validate_input(&too_many_players)
+            .unwrap_err()
+            .contains("2人限定"));
+
+        let mut multiple_phases = input(
+            2,
+            vec![first_to_n(), first_to_n()],
+        );
+        multiple_phases.phases[1].qualifiers_per_pool = 0;
+        assert!(validate_input(&multiple_phases)
+            .unwrap_err()
+            .contains("1フェーズ"));
     }
 
     #[test]

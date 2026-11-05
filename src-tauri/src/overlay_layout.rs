@@ -54,6 +54,8 @@ pub struct Component {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     clock_format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    history_limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     wrap_text: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     shrink_text: Option<bool>,
@@ -236,7 +238,8 @@ impl Layouts {
                     || c.name.as_ref().is_some_and(|name| {
                         name.trim().is_empty() || name.encode_utf16().count() > 256
                     })
-                    || !["text", "number", "image", "item", "clock"].contains(&c.kind.as_str())
+                    || !["text", "number", "image", "item", "clock", "firstToNWins"]
+                        .contains(&c.kind.as_str())
                     || ![
                         "text",
                         "number",
@@ -244,6 +247,8 @@ impl Layouts {
                         "bluePlayerName",
                         "redSetWins",
                         "blueSetWins",
+                        "firstToNWinsPlayerOneWins",
+                        "firstToNWinsPlayerTwoWins",
                         "roundText",
                         "setName",
                         "roundName",
@@ -259,9 +264,11 @@ impl Layouts {
                     } else {
                         c.source == "clock"
                     })
+                    || (c.kind == "firstToNWins" && c.source != "text")
                     || c.clock_format
                         .as_ref()
                         .is_some_and(|value| value.is_empty() || value.encode_utf16().count() > 256)
+                    || c.history_limit.is_some_and(|value| value > 9_007_199_254_740_991)
                     || (if c.kind == "item" {
                         !["redItems", "blueItems"].contains(&c.source.as_str())
                             || !matches!(c.item_category, Some(1..=3))
@@ -275,7 +282,14 @@ impl Layouts {
                         .as_ref()
                         .is_some_and(|value| value.encode_utf16().count() > 256)
                     || (c.kind == "number"
-                        && !["redSetWins", "blueSetWins", "number"].contains(&c.source.as_str()))
+                        && ![
+                            "redSetWins",
+                            "blueSetWins",
+                            "firstToNWinsPlayerOneWins",
+                            "firstToNWinsPlayerTwoWins",
+                            "number",
+                        ]
+                        .contains(&c.source.as_str()))
                     || (c.source == "number" && (c.kind != "number" || c.number_value.is_none()))
                     || c.number_value.is_some_and(|value| !value.is_finite())
                     || c.text.chars().count() > 10000
@@ -919,6 +933,20 @@ mod tests {
         fs::remove_dir(&directory).unwrap();
     }
     #[test]
+    fn persists_first_to_n_wins_numeric_sources() {
+        for source in ["firstToNWinsPlayerOneWins", "firstToNWinsPlayerTwoWins"] {
+            let mut layouts = sample();
+            let component = &mut layouts.presets[0].components[0];
+            component.kind = "number".to_owned();
+            component.source = source.to_owned();
+            layouts.validate().unwrap();
+            let decoded: Layouts =
+                serde_json::from_slice(&serde_json::to_vec(&layouts).unwrap()).unwrap();
+            decoded.validate().unwrap();
+            assert_eq!(decoded.presets[0].components[0].source, source);
+        }
+    }
+    #[test]
     fn persists_numeric_values_and_rejects_invalid_numeric_sources() {
         let mut layouts = sample();
         let component = &mut layouts.presets[0].components[0];
@@ -933,6 +961,24 @@ mod tests {
             assert_eq!(decoded.presets[0].components[0].number_value, Some(value));
         }
         layouts.presets[0].components[0].number_value = Some(f64::INFINITY);
+        assert!(layouts.validate().is_err());
+    }
+    #[test]
+    fn persists_first_to_n_wins_history_limit_and_rejects_oversized_values() {
+        let mut layouts = sample();
+        let component = &mut layouts.presets[0].components[0];
+        component.kind = "firstToNWins".to_owned();
+        for history_limit in [0, 1, 9_007_199_254_740_991] {
+            layouts.presets[0].components[0].history_limit = Some(history_limit);
+            layouts.validate().unwrap();
+            let decoded: Layouts =
+                serde_json::from_slice(&serde_json::to_vec(&layouts).unwrap()).unwrap();
+            assert_eq!(
+                decoded.presets[0].components[0].history_limit,
+                Some(history_limit)
+            );
+        }
+        layouts.presets[0].components[0].history_limit = Some(9_007_199_254_740_992);
         assert!(layouts.validate().is_err());
         layouts.presets[0].components[0].number_value = Some(1.);
         layouts.presets[0].components[0].source = "redPlayerName".to_owned();

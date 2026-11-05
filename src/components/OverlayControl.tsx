@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { builtInOverlayPreset, parseOverlayLayouts, parseOverlayTestItems, type OverlayLayouts, type OverlayTestItemInputs } from "../domain/overlayLayout";
 import { OverlayLayoutEditor } from "./OverlayLayoutEditor";
 import type { OverlayRenderState } from "../domain/overlayRenderer.js";
+import { buildOverlayTestFirstToNWins, isValidOverlayTestFirstToNWinsHistory } from "../domain/overlayTestData";
 
 export type ObsOverlayState = OverlayRenderState & {
   active: boolean;
@@ -37,6 +38,9 @@ type OverlayControlProps = {
   testBlueItems: OverlayTestItemInputs;
   testRedWins: number;
   testBlueWins: number;
+  testFirstToNWinsRequired: number;
+  testDrawCountsAsWin: boolean;
+  testFirstToNWinsHistory: string;
   previewWrapRef: { current: HTMLDivElement | null };
   previewIframeRef: { current: HTMLIFrameElement | null };
   onOpenUrl: (url: string) => void;
@@ -52,6 +56,9 @@ type OverlayControlProps = {
   onTestBlueItemsChange: (value: OverlayTestItemInputs) => void;
   onTestRedWinsChange: (value: number) => void;
   onTestBlueWinsChange: (value: number) => void;
+  onTestFirstToNWinsRequiredChange: (value: number) => void;
+  onTestDrawCountsAsWinChange: (value: boolean) => void;
+  onTestFirstToNWinsHistoryChange: (value: string) => void;
   onToggleTestOverlay: (forceSwitch: boolean) => void;
   onFullyStop: () => void;
   onPreviewLoad: () => void;
@@ -74,6 +81,9 @@ export function OverlayControl({
   testBlueItems,
   testRedWins,
   testBlueWins,
+  testFirstToNWinsRequired,
+  testDrawCountsAsWin,
+  testFirstToNWinsHistory,
   previewWrapRef,
   previewIframeRef,
   onOpenUrl,
@@ -89,6 +99,9 @@ export function OverlayControl({
   onTestBlueItemsChange,
   onTestRedWinsChange,
   onTestBlueWinsChange,
+  onTestFirstToNWinsRequiredChange,
+  onTestDrawCountsAsWinChange,
+  onTestFirstToNWinsHistoryChange,
   onToggleTestOverlay,
   onFullyStop,
   onPreviewLoad,
@@ -115,6 +128,13 @@ export function OverlayControl({
     bluePlayerName: testBlueName,
     redSetWins: testRedWins,
     blueSetWins: testBlueWins,
+    firstToNWins: buildOverlayTestFirstToNWins({
+      playerOneName: testRedName.trim() || t("テストプレイヤー1"),
+      playerTwoName: testBlueName.trim() || t("テストプレイヤー2"),
+      winsRequired: testFirstToNWinsRequired,
+      drawCountsAsWin: testDrawCountsAsWin,
+      history: testFirstToNWinsHistory,
+    }),
     redItems: parseOverlayTestItems(testRedItems),
     blueItems: parseOverlayTestItems(testBlueItems),
   } : overlayState;
@@ -348,6 +368,39 @@ export function OverlayControl({
                       />
                       </label>
                     </div>
+                  </div>
+                  <div className="overlay-dummy-group">
+                    <strong>{t("First to N wins")}</strong>
+                    <div className="overlay-dummy-grid">
+                      <label>{t("目標勝利数")}<input
+                        type="number"
+                        min={1}
+                        value={testFirstToNWinsRequired}
+                        onChange={(e) => onTestFirstToNWinsRequiredChange(Number(e.currentTarget.value))}
+                        disabled={busy}
+                      />
+                      </label>
+                      <label className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={testDrawCountsAsWin}
+                          onChange={(e) => onTestDrawCountsAsWinChange(e.currentTarget.checked)}
+                          disabled={busy}
+                        />
+                        {t("ドローを勝利にカウント")}
+                      </label>
+                      <label>{t("勝敗履歴")}<input
+                        type="text"
+                        value={testFirstToNWinsHistory}
+                        onChange={(e) => onTestFirstToNWinsHistoryChange(e.currentTarget.value)}
+                        disabled={busy}
+                        aria-invalid={!isValidOverlayTestFirstToNWinsHistory(testFirstToNWinsHistory)}
+                      />
+                      </label>
+                    </div>
+                    <p className="meta">{t("勝敗履歴の入力形式")}</p>
+                    {!isValidOverlayTestFirstToNWinsHistory(testFirstToNWinsHistory)
+                      && <p className="error" role="alert">{t("勝敗履歴には1、2、dと空白のみ入力できます。")}</p>}
                   </div>
                   <div className="overlay-dummy-group">
                     <strong>{t("選択アイテム")}</strong>

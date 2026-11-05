@@ -261,6 +261,22 @@ pub struct LocalEventPhaseConfig {
     pub fifth_place_match: bool,
     #[serde(default = "default_grand_final_reset")]
     pub grand_final_reset: bool,
+    #[serde(default)]
+    pub first_to_n_wins: Option<LocalEventFirstToNWinsConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalEventFirstToNWinsConfig {
+    pub phase_set_count: usize,
+    pub wins_required: usize,
+    pub player_one_entrant_id: String,
+    #[serde(default)]
+    pub play_all_matches: bool,
+    #[serde(default)]
+    pub draw_counts_as_win: bool,
+    #[serde(default)]
+    pub sudden_death: bool,
 }
 
 fn default_grand_final_reset() -> bool {
@@ -661,6 +677,22 @@ pub struct PhaseGroupSnapshot {
     pub seed_update_awaiting_started_snapshot: bool,
     #[serde(default)]
     pub tiebreak_order: Vec<String>,
+    #[serde(default)]
+    pub first_to_n_wins: Option<FirstToNWinsPhaseSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstToNWinsPhaseSnapshot {
+    pub phase_set_count: usize,
+    pub wins_required: usize,
+    pub player_one_entrant_id: String,
+    #[serde(default)]
+    pub play_all_matches: bool,
+    #[serde(default)]
+    pub draw_counts_as_win: bool,
+    #[serde(default)]
+    pub sudden_death: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

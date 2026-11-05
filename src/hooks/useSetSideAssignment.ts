@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import {
   isCompletedSet,
   isMatchupReady,
+  type FirstToNWinsPhaseSnapshot,
   type EventSnapshot,
 } from "../domain/bracketDisplay";
 import {
@@ -49,6 +50,93 @@ type UseSetSideAssignmentOptions = {
   setError: (error: string) => void;
   setMessage: (message: string) => void;
 };
+
+function oppositePlaySide(side: PlaySide): PlaySide {
+  return side === "1P" ? "2P" : "1P";
+}
+
+function orderedPhaseGroupSets(
+  event: EventSnapshot,
+  phaseGroupId: string,
+  resolvedEventSetsById: Map<string, SetSnapshot>,
+): SetSnapshot[] {
+  return event.sets
+    .filter((set) => set.phaseGroupId === phaseGroupId)
+    .map((set) => resolvedEventSetsById.get(set.setId) ?? set)
+    .sort((left, right) => {
+      const leftOrder = Number(left.identifier);
+      const rightOrder = Number(right.identifier);
+      const safeLeft = Number.isSafeInteger(leftOrder) && leftOrder > 0 ? leftOrder : Number.MAX_SAFE_INTEGER;
+      const safeRight = Number.isSafeInteger(rightOrder) && rightOrder > 0 ? rightOrder : Number.MAX_SAFE_INTEGER;
+      return safeLeft - safeRight || left.setId.localeCompare(right.setId);
+    });
+}
+
+function resolvePlayableFirstToNSet(
+  sets: SetSnapshot[],
+  settings: FirstToNWinsPhaseSnapshot,
+): { set: SetSnapshot; previousSet: SetSnapshot | null } | null {
+  const nextIndex = sets.findIndex((set) => !isCompletedSet(set));
+  if (nextIndex < 0) {
+    return null;
+  }
+
+  let playerOneWins = 0;
+  let playerTwoWins = 0;
+  for (const set of sets.slice(0, nextIndex)) {
+    if (set.winnerId === settings.playerOneEntrantId) {
+      playerOneWins += 1;
+    } else if (set.winnerId) {
+      playerTwoWins += 1;
+    } else if (settings.drawCountsAsWin && isCompletedSet(set)) {
+      playerOneWins += 1;
+      playerTwoWins += 1;
+    }
+
+    const winnerDecided = (playerOneWins >= settings.winsRequired && playerOneWins > playerTwoWins)
+      || (playerTwoWins >= settings.winsRequired && playerTwoWins > playerOneWins);
+    if (winnerDecided && !settings.playAllMatches) {
+      return null;
+    }
+  }
+
+  return {
+    set: sets[nextIndex],
+    previousSet: nextIndex > 0 ? sets[nextIndex - 1] : null,
+  };
+}
+
+function resolveFirstToNUpperSide(
+  set: SetSnapshot,
+  previousSet: SetSnapshot | null,
+  settings: FirstToNWinsPhaseSnapshot,
+  setPlaySideMap: Map<string, PlaySide>,
+): PlaySide {
+  const players = set.slots.filter((slot) => slot.entrantId !== null);
+  const upperEntrantId = players[0]?.entrantId;
+  if (!upperEntrantId) {
+    return "1P";
+  }
+
+  let playerOneSide: PlaySide = "1P";
+  if (previousSet) {
+    const storedPlayerOneSide = setPlaySideMap.get(
+      `${previousSet.setId}:${settings.playerOneEntrantId}`,
+    );
+    const previousPlayerTwoId = previousSet.slots
+      .map((slot) => slot.entrantId)
+      .find((entrantId) => entrantId && entrantId !== settings.playerOneEntrantId);
+    const storedPlayerTwoSide = previousPlayerTwoId
+      ? setPlaySideMap.get(`${previousSet.setId}:${previousPlayerTwoId}`)
+      : undefined;
+    playerOneSide = storedPlayerOneSide
+      ?? (storedPlayerTwoSide ? oppositePlaySide(storedPlayerTwoSide) : "1P");
+  }
+
+  return upperEntrantId === settings.playerOneEntrantId
+    ? playerOneSide
+    : oppositePlaySide(playerOneSide);
+}
 
 export function useSetSideAssignment({
   slug,
@@ -166,7 +254,22 @@ export function useSetSideAssignment({
 
     const previousReadiness = standbyReadinessRef.current;
     const nextReadiness: Record<string, string> = {};
-    const updates: Array<{ setSnapshot: SetSnapshot; upperEntrantId: string; upperSide: PlaySide }> = [];
+    const updates: Array<{ setSnapshot: SetSnapshot; upperEntrantId: string; upperSide: PlaySide | "" }> = [];
+    const firstToNGroups = new Map<string, FirstToNWinsPhaseSnapshot>();
+    for (const group of selectedEvent.phaseGroups ?? []) {
+      if (group.phaseGroupId && group.firstToNWins) {
+        firstToNGroups.set(group.phaseGroupId, group.firstToNWins);
+      }
+    }
+    const playableFirstToNSets = new Map(
+      [...firstToNGroups].map(([phaseGroupId, settings]) => [
+        phaseGroupId,
+        resolvePlayableFirstToNSet(
+          orderedPhaseGroupSets(selectedEvent, phaseGroupId, resolvedEventSetsById),
+          settings,
+        ),
+      ]),
+    );
 
     for (const set of selectedEvent.sets.map((candidate) =>
       resolvedEventSetsById.get(candidate.setId) ?? candidate,
@@ -175,6 +278,45 @@ export function useSetSideAssignment({
       const slots = set.slots.filter((slot) => slot.entrantId !== null);
       const upperId = slots[0]?.entrantId ?? "";
       const lowerId = slots[1]?.entrantId ?? "";
+      const phaseGroupId = set.phaseGroupId ?? "";
+      const firstToNSettings = firstToNGroups.get(phaseGroupId);
+      const playableFirstToN = playableFirstToNSets.get(phaseGroupId) ?? null;
+      if (firstToNSettings) {
+        const upperCurrent = upperId
+          ? setPlaySideMap.get(`${set.setId}:${upperId}`) ?? ""
+          : "";
+        const lowerCurrent = lowerId
+          ? setPlaySideMap.get(`${set.setId}:${lowerId}`) ?? ""
+          : "";
+        if (playableFirstToN?.set.setId !== set.setId) {
+          nextReadiness[set.setId] = "";
+          if (isReadyForAutoAssign && upperId && lowerId && (upperCurrent !== "" || lowerCurrent !== "")) {
+            updates.push({ setSnapshot: set, upperEntrantId: upperId, upperSide: "" });
+          }
+          continue;
+        }
+
+        const readinessKey = isReadyForAutoAssign && upperId && lowerId
+          ? `${upperId}:${lowerId}`
+          : "";
+        nextReadiness[set.setId] = readinessKey;
+        if (!isReadyForAutoAssign || !upperId || !lowerId) {
+          continue;
+        }
+
+        const expectedUpperSide = resolveFirstToNUpperSide(
+          set,
+          playableFirstToN.previousSet,
+          firstToNSettings,
+          setPlaySideMap,
+        );
+        const expectedLowerSide = oppositePlaySide(expectedUpperSide);
+        if (upperCurrent !== expectedUpperSide || lowerCurrent !== expectedLowerSide) {
+          updates.push({ setSnapshot: set, upperEntrantId: upperId, upperSide: expectedUpperSide });
+        }
+        continue;
+      }
+
       const readinessKey = isReadyForAutoAssign && upperId !== "" && lowerId !== ""
         ? `${upperId}:${lowerId}`
         : "";
@@ -277,12 +419,32 @@ export function useSetSideAssignment({
           continue;
         }
 
-        const decided = resolveSidesByDecisionMethod(set.setId, method);
+        const firstToNSettings = selectedEvent.phaseGroups?.find(
+          (group) => group.phaseGroupId === set.phaseGroupId,
+        )?.firstToNWins;
+        let upperSide: PlaySide;
+        if (firstToNSettings && set.phaseGroupId) {
+          const playableSet = resolvePlayableFirstToNSet(
+            orderedPhaseGroupSets(selectedEvent, set.phaseGroupId, resolvedEventSetsById),
+            firstToNSettings,
+          );
+          if (!playableSet || playableSet.set.setId !== set.setId) {
+            continue;
+          }
+          upperSide = resolveFirstToNUpperSide(
+            set,
+            playableSet.previousSet,
+            firstToNSettings,
+            setPlaySideMap,
+          );
+        } else {
+          upperSide = resolveSidesByDecisionMethod(set.setId, method).upperSide;
+        }
         const upperCurrent = setPlaySideMap.get(`${set.setId}:${upperId}`) ?? "";
         const lowerCurrent = setPlaySideMap.get(`${set.setId}:${lowerId}`) ?? "";
 
-        if (upperCurrent !== decided.upperSide || lowerCurrent !== decided.lowerSide) {
-          updates.push({ setSnapshot: set, upperEntrantId: upperId, upperSide: decided.upperSide });
+        if (upperCurrent !== upperSide || lowerCurrent !== oppositePlaySide(upperSide)) {
+          updates.push({ setSnapshot: set, upperEntrantId: upperId, upperSide });
         }
       }
 
@@ -313,5 +475,9 @@ export function useSetSideAssignment({
     }
   }
 
-  return { applySideDecisionMethodToAllUnconfirmedSets, saveSetPlaySide, saveMatchSideDraftsForResult };
+  return {
+    applySideDecisionMethodToAllUnconfirmedSets,
+    saveSetPlaySide,
+    saveMatchSideDraftsForResult,
+  };
 }

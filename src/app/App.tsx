@@ -42,7 +42,7 @@ import { EventSelector, type LocalSnapshotEventListItem } from "../components/Ev
 import { EventSetting } from "../components/EventSetting";
 import { AppShell, type AppStatusProgress, type AppTab, useAppVersion } from "../components/AppShell";
 import { OverlayControl } from "../components/OverlayControl";
-import { isOverlayActiveForSet, useObsOverlay } from "../hooks/useObsOverlay";
+import { isOverlayActiveForSet, useObsOverlay, type OverlaySetOutcome } from "../hooks/useObsOverlay";
 import { useObsOverlaySetActions } from "../hooks/useObsOverlaySetActions";
 import { usePhasePoolSelection } from "../hooks/usePhasePoolSelection";
 import { useMatchSideDraftActions } from "../hooks/useMatchSideDraftActions";
@@ -90,6 +90,7 @@ import {
 import {
   exportTournamentShareArchive,
   importTournamentShareArchive,
+  updateSetStreamStart,
   writeSnapshotExportFile,
 } from "../domain/tournamentWorkspaceRepository";
 import { findSnapshotEventByIdentity, sameSnapshotEventKey } from "../domain/snapshotDisplay";
@@ -342,6 +343,12 @@ function App() {
     setTestOverlayRedWins,
     testOverlayBlueWins,
     setTestOverlayBlueWins,
+    testOverlayFirstToNWinsRequired,
+    setTestOverlayFirstToNWinsRequired,
+    testOverlayDrawCountsAsWin,
+    setTestOverlayDrawCountsAsWin,
+    testOverlayFirstToNWinsHistory,
+    setTestOverlayFirstToNWinsHistory,
     isTestOverlayActive,
     overlayPreviewWrapRef,
     overlayPreviewIframeRef,
@@ -1645,8 +1652,9 @@ function App() {
     set: SetSnapshot,
     slotScores: Array<{ entrantId: string; score: number }>,
     sideOverrides?: Record<string, PlaySide | "">,
+    outcome?: OverlaySetOutcome,
   ) {
-    await syncOverlayScoresForSet(set, slotScores, sideOverrides);
+    await syncOverlayScoresForSet(set, slotScores, sideOverrides, outcome);
   }
 
   const {
@@ -2268,7 +2276,46 @@ function App() {
     getSavedSide: getSetSlotSide,
     refreshObsOverlayState,
     toggleObsOverlaySet,
+    recordSetStreamStart: async (setId, startedAt) => {
+      if (!selectedEvent) {
+        throw new Error(t("イベントが選択されていません。"));
+      }
+      try {
+        const updatedWorkspace = await updateSetStreamStart(
+          toApiSlug(slug), selectedEvent.eventId, setId, startedAt,
+        );
+        setWorkspace(updatedWorkspace);
+      } catch (error) {
+        setError(t("次のSetの配信開始記録に失敗しました: {value1}", { value1: String(error) }));
+      }
+    },
   });
+
+  async function updateActiveFirstToNWinsStreamStart() {
+    if (busy || !selectedEvent) return;
+    const startedAt = new Date().toISOString();
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const currentOverlay = await refreshObsOverlayState();
+      if (!currentOverlay.active
+        || !currentOverlay.currentSetId
+        || !selectedPhasePoolGroup?.firstToNWins
+        || !selectedPhasePoolGroup.sets.some((set) => set.setId === currentOverlay.currentSetId)) {
+        throw new Error(t("First to N wins の試合が配信されていません。"));
+      }
+      const updatedWorkspace = await updateSetStreamStart(
+        toApiSlug(slug), selectedEvent.eventId, currentOverlay.currentSetId, startedAt,
+      );
+      setWorkspace(updatedWorkspace);
+      setMessage(t("配信開始時刻を更新しました。"));
+    } catch (error) {
+      setError(t("配信開始時刻の更新に失敗しました: {value1}", { value1: String(error) }));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function applyPlayerDisplaySnapshot(
     eventId: string,
@@ -2507,6 +2554,7 @@ function App() {
   async function saveLocalResultForMatch(
     confirmed: boolean,
     confirmation?: ResultConfirmationState,
+    directDraw = false,
   ) {
     if (seedSwapActive) {
       setError(t("入替モード中はスコアを編集できません。"));
@@ -2517,14 +2565,15 @@ function App() {
       return;
     }
 
-    runSetActionAfterCallResolution(set, confirmed ? t("結果確定") : t("結果更新"), () =>
+    runSetActionAfterCallResolution(set, directDraw ? t("ドローを確定") : confirmed ? t("結果確定") : t("結果更新"), () =>
       persistMatchResult({
         slug: toApiSlug(slug),
         event: selectedEvent,
         set,
         confirmed,
-        directWinnerId: confirmation ? confirmation.directWinnerId : directWinnerId,
-        scoreDrafts: confirmation?.scoreDrafts ?? scoreDrafts,
+        directWinnerId: directDraw ? null : confirmation ? confirmation.directWinnerId : directWinnerId,
+        directDraw,
+        scoreDrafts: directDraw ? {} : confirmation?.scoreDrafts ?? scoreDrafts,
         sideDrafts: activeMatchSideDrafts,
       }),
     );
@@ -3108,6 +3157,9 @@ function App() {
           testBlueItems={testOverlayBlueItems}
           testRedWins={testOverlayRedWins}
           testBlueWins={testOverlayBlueWins}
+          testFirstToNWinsRequired={testOverlayFirstToNWinsRequired}
+          testDrawCountsAsWin={testOverlayDrawCountsAsWin}
+          testFirstToNWinsHistory={testOverlayFirstToNWinsHistory}
           previewWrapRef={overlayPreviewWrapRef}
           previewIframeRef={overlayPreviewIframeRef}
           onOpenUrl={(url) => {
@@ -3127,6 +3179,9 @@ function App() {
           onTestBlueItemsChange={setTestOverlayBlueItems}
           onTestRedWinsChange={setTestOverlayRedWins}
           onTestBlueWinsChange={setTestOverlayBlueWins}
+          onTestFirstToNWinsRequiredChange={setTestOverlayFirstToNWinsRequired}
+          onTestDrawCountsAsWinChange={setTestOverlayDrawCountsAsWin}
+          onTestFirstToNWinsHistoryChange={setTestOverlayFirstToNWinsHistory}
           onToggleTestOverlay={toggleTestOverlay}
           onFullyStop={() => void setObsOverlayFullyStopped(true)}
           onPreviewLoad={handlePreviewLoad}
@@ -3305,6 +3360,15 @@ function App() {
                 unresolvedSetReasons: roundRobinBoardData.unresolvedSetReasons,
               },
             }}
+            firstToNWinsAllSets={selectedEvent?.sets ?? []}
+            activeOverlaySetId={obsOverlayState?.active ? obsOverlayState.currentSetId : null}
+            onUpdateStreamStart={() => void updateActiveFirstToNWinsStreamStart()}
+            directWinSetIds={new Set(pendingSetResults
+              .filter((result) => result.eventId === selectedEvent?.eventId
+                && result.directWin
+                && result.confirmed !== false)
+              .map((result) => result.setId))}
+            getSetSlotSide={getSetSlotSide}
             eliminationSections={eliminationBracketSections}
             onRoundRobinMatchClick={handleRoundRobinMatchClick}
             onEliminationSetActivate={handleEliminationSetActivate}
@@ -3328,6 +3392,7 @@ function App() {
                 || activeMatchCalls.length > 0
               }
               scoreEditLocked={selectedPoolScoreEditLocked}
+              allowDraw={Boolean(selectedPhasePoolGroup?.firstToNWins)}
               directWinnerId={directWinnerId}
               displayPlayersBySide={displayBracketPlayersBySide}
               onDisplayPlayersBySideChange={setDisplayBracketPlayersBySide}
@@ -3388,6 +3453,7 @@ function App() {
               onConfirm={() => runSetActionAfterCallResolution(activeMatch, t("結果確定"), () =>
                 requestResultConfirmation(activeMatch),
               )}
+              onDraw={() => saveLocalResultForMatch(true, undefined, true)}
             />
           )}
           <BracketDialogs

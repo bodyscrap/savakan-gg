@@ -1301,9 +1301,27 @@ struct ObsOverlaySetInput {
     red_items: [Vec<String>; 3],
     #[serde(default)]
     blue_items: [Vec<String>; 3],
+    #[serde(default)]
+    first_to_n_wins: Option<ObsOverlayFirstToNWins>,
     red_set_wins: u32,
     blue_set_wins: u32,
     font_scale: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObsOverlayFirstToNWins {
+    player_one_name: String,
+    player_two_name: String,
+    #[serde(default)]
+    winner_name: Option<String>,
+    player_one_wins: u32,
+    player_two_wins: u32,
+    set_numbers: Vec<u32>,
+    #[serde(default)]
+    set_completed: Vec<bool>,
+    player_one_results: Vec<Option<bool>>,
+    player_two_results: Vec<Option<bool>>,
 }
 
 impl ObsOverlaySetInput {
@@ -1337,6 +1355,7 @@ struct ObsOverlayState {
     blue_player_name: String,
     red_items: [Vec<String>; 3],
     blue_items: [Vec<String>; 3],
+    first_to_n_wins: Option<ObsOverlayFirstToNWins>,
     red_set_wins: u32,
     blue_set_wins: u32,
     font_scale: f64,
@@ -1356,6 +1375,7 @@ struct ObsOverlayActiveSet {
     blue_entrant_id: Option<String>,
     red_items: [Vec<String>; 3],
     blue_items: [Vec<String>; 3],
+    first_to_n_wins: Option<ObsOverlayFirstToNWins>,
     event_name: String,
     event_alias: String,
     round_text: String,
@@ -1408,6 +1428,7 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
             blue_player_name: active.blue_player_name.clone(),
             red_items: active.red_items.clone(),
             blue_items: active.blue_items.clone(),
+            first_to_n_wins: active.first_to_n_wins.clone(),
             red_set_wins: active.red_set_wins,
             blue_set_wins: active.blue_set_wins,
             font_scale: active.font_scale,
@@ -1433,6 +1454,7 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
         blue_player_name: String::new(),
         red_items: Default::default(),
         blue_items: Default::default(),
+        first_to_n_wins: None,
         red_set_wins: 0,
         blue_set_wins: 0,
         font_scale: preview_font_scale,
@@ -5290,6 +5312,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     blue_player_name: String::new(),
                     red_items: Default::default(),
                     blue_items: Default::default(),
+                    first_to_n_wins: None,
                     red_set_wins: 0,
                     blue_set_wins: 0,
                     font_scale: 1.0,
@@ -5367,6 +5390,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             blue_entrant_id: payload.blue_entrant_id.clone(),
             red_items: Default::default(),
             blue_items: Default::default(),
+            first_to_n_wins: None,
             red_set_wins: payload.red_set_wins,
             blue_set_wins: payload.blue_set_wins,
             font_scale: payload.font_scale,
@@ -5765,6 +5789,13 @@ fn apply_obs_overlay_toggle(
         {
             guard.animation_session_revision = guard.animation_session_revision.wrapping_add(1);
         }
+        let first_to_n_wins = input.first_to_n_wins.or_else(|| {
+            guard.active_set.as_ref().and_then(|active| {
+                (active.set_id != "__test__" && active.set_id == set_id)
+                    .then(|| active.first_to_n_wins.clone())
+                    .flatten()
+            })
+        });
         guard.active_set = Some(ObsOverlayActiveSet {
             set_id,
             slug: input.slug.clone(),
@@ -5773,6 +5804,7 @@ fn apply_obs_overlay_toggle(
             blue_entrant_id: input.blue_entrant_id,
             red_items,
             blue_items,
+            first_to_n_wins,
             event_name: input.event_name.trim().to_owned(),
             event_alias: input.event_alias.trim().to_owned(),
             round_text: input.round_text.trim().to_owned(),

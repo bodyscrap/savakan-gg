@@ -38,6 +38,7 @@ type MatchDetailDialogProps = {
   overlayBusy: boolean;
   scoreInputDisabled: boolean;
   scoreEditLocked: boolean;
+  allowDraw?: boolean;
   directWinnerId: string | null;
   displayPlayersBySide: boolean;
   onDisplayPlayersBySideChange: (checked: boolean) => void;
@@ -66,6 +67,7 @@ type MatchDetailDialogProps = {
   onResolveCalls: () => void;
   onToggleOverlay: () => void;
   onConfirm: () => void;
+  onDraw?: () => void;
 };
 
 export function MatchDetailDialog({
@@ -78,6 +80,7 @@ export function MatchDetailDialog({
   overlayBusy,
   scoreInputDisabled,
   scoreEditLocked,
+  allowDraw = false,
   directWinnerId,
   displayPlayersBySide,
   onDisplayPlayersBySideChange,
@@ -106,6 +109,7 @@ export function MatchDetailDialog({
   onResolveCalls,
   onToggleOverlay,
   onConfirm,
+  onDraw,
 }: MatchDetailDialogProps) {
   const resolvedSlots = match.slots.filter((slot) => slot.entrantId !== null);
   return (
@@ -138,6 +142,9 @@ export function MatchDetailDialog({
           </p>
         )}
         {!matchupReady && <p className="meta">{t("対戦カード確定後にプレイヤーサイドを変更できます。")}</p>}
+        {allowDraw && (
+          <p className="meta">{t("First to N winsでは同点スコアまたは「ドローを確定」でドローとして記録します。")}</p>
+        )}
         {randomNotice && randomNotice.setId === match.setId && (
           <p className={`meta side-random-notice ${randomNotice.changed ? "changed" : "unchanged"}`}>{t("ランダム実行済み ({value1}) : 上段 {value2} = {value3} / 下段 {value4} = {value5}{value6}", { value1: new Date(randomNotice.triggeredAt).toLocaleTimeString("ja-JP", { hour12: false }), value2: resolvePlayerName(resolvedSlots[0]?.entrantId ?? null, randomNotice.upperEntrantName), value3: randomNotice.upperSide, value4: resolvePlayerName(resolvedSlots[1]?.entrantId ?? null, randomNotice.lowerEntrantName), value5: randomNotice.lowerSide, value6: !randomNotice.changed ? t(" (結果は変更なし)") : "" })}</p>
         )}
@@ -279,6 +286,14 @@ export function MatchDetailDialog({
             >
               {overlayActive ? t("配信停止") : hasUnresolvedCalls ? t("未解決呼び出しあり") : t("配信開始")}
             </button>
+            {allowDraw && onDraw && (
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy || completed || !matchupReady || isDqDraft || hasUnresolvedCalls}
+                onClick={onDraw}
+              >{t("ドローを確定")}</button>
+            )}
             <button type="button" disabled={busy || completed || !matchupReady || hasUnresolvedCalls} onClick={onConfirm}>{t("確定")}</button>
           </div>
         </div>

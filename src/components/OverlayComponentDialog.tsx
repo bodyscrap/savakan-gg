@@ -39,12 +39,15 @@ export function OverlayComponentDialog({ onCreate, onClose }: Props) {
         {error && <p role="alert" className="error">{error}</p>}
         <label>{t("コンポーネント種別")}<select value={kind} onChange={(event) => {
           const value = event.target.value;
-          if (value === "text" || value === "number" || value === "image" || value === "item" || value === "clock") setKind(value);
+          if (value === "text" || value === "number" || value === "image" || value === "item"
+            || value === "clock" || value === "firstToNWins" || value === "firstToNWinsVertical") setKind(value);
         }}>
           <option value="text">{t("テキスト")}</option>
           <option value="number">{t("数値")}</option>
           <option value="item">{t("アイテム")}</option>
           <option value="clock">{t("時計")}</option>
+          <option value="firstToNWins">{t(overlayKindLabels.firstToNWins)}</option>
+          <option value="firstToNWinsVertical">{t(overlayKindLabels.firstToNWinsVertical)}</option>
           <option value="image">{t("画像")}</option>
         </select></label>
         <label>{t("コンポーネント名")}<input ref={nameRef} autoFocus required maxLength={256} value={name ?? t(overlayKindLabels[kind])}

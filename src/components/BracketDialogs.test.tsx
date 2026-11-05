@@ -64,10 +64,11 @@ describe("bracket dialog player display names", () => {
       onClose: noop, onSwapSides: noop, onRandomizeSides: noop, onScoreAdjust: noop,
       onScoreChange: noop, onToggleWinner: noop, onSetDq: noop, onCall: noop,
       onDiscardDraft: noop, onResetSet: noop, onSaveDraft: noop, onResolveCalls: noop,
-      onToggleOverlay: noop, onConfirm: noop,
+      onToggleOverlay: noop, onConfirm: noop, onDraw: noop, allowDraw: true,
     };
     const html = renderToStaticMarkup(<MatchDetailDialog {...props} />);
     expect(html).toContain(`上段 ${enabled ? "Alias One" : "Original One"} = 2P / 下段 Original Two = 1P`);
+    expect(html).toContain("ドローを確定");
     expect(match.slots[0].entrantName).toBe("Original One");
   });
 });

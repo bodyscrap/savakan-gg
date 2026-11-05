@@ -98,6 +98,9 @@ export function getSetResultVisualStatus(
   }
 
   const hasSnapshotScores = set.slots.some((slot) => slot.score !== null);
+  if (isCompletedSet(set) && !set.winnerId && hasSnapshotScores) {
+    return "confirmed";
+  }
   if (!set.winnerId && hasSnapshotScores) {
     return "inprogress";
   }

@@ -70,6 +70,14 @@ type SnapshotSource = "startgg" | "local";
 const SNAPSHOT_SOURCE_STORAGE_KEY = "savakan-gg.snapshot-source.v1";
 const LOCAL_TOURNAMENT_NAME_STORAGE_KEY = "savakan-gg.local-tournament-name.v1";
 const DEFAULT_LOCAL_TOURNAMENT_NAME = "Local Tournament";
+const DEFAULT_FIRST_TO_N_WINS_SETTINGS = {
+  phaseSetCount: 19,
+  winsRequired: 10,
+  playerOneEntrantId: "",
+  playAllMatches: false,
+  drawCountsAsWin: false,
+  suddenDeath: false,
+};
 
 function readStoredSnapshotSource(): SnapshotSource {
   if (typeof window === "undefined") {
@@ -148,9 +156,9 @@ function LocalEventSnapshotForm({
   const [phaseCount, setPhaseCount] = useState(1);
   const [draggedTieBreakRule, setDraggedTieBreakRule] = useState<{ phaseIndex: number; ruleIndex: number } | null>(null);
   const [phases, setPhases] = useState<LocalEventPhaseConfig[]>([
-    { name: "Phase 1", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false, grandFinalReset: true },
-    { name: "Phase 2", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false, grandFinalReset: true },
-    { name: "Phase 3", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false, grandFinalReset: true },
+    { name: "Phase 1", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false, grandFinalReset: true, firstToNWins: DEFAULT_FIRST_TO_N_WINS_SETTINGS },
+    { name: "Phase 2", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false, grandFinalReset: true, firstToNWins: DEFAULT_FIRST_TO_N_WINS_SETTINGS },
+    { name: "Phase 3", poolCount: 1, bracketType: "DOUBLE_ELIMINATION", qualifiersPerPool: 0, tiebreakOrder: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], enabledTiebreakRules: ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"], thirdPlaceMatch: false, fifthPlaceMatch: false, grandFinalReset: true, firstToNWins: DEFAULT_FIRST_TO_N_WINS_SETTINGS },
   ]);
   const [registrationPending, setRegistrationPending] = useState(false);
   const registrationComplete = participantCount >= 2 && participantCount <= 512
@@ -166,9 +174,15 @@ function LocalEventSnapshotForm({
     }
   };
   let availablePlayers = participantCount;
+  const firstToNWinsSelected = phases.slice(0, phaseCount)
+    .some((phase) => phase.bracketType === "FIRST_TO_N_WINS");
   const effectivePhases = phases.map((phase, index) => {
-    const poolCount = Math.max(1, Math.min(phase.poolCount, Math.floor(availablePlayers / 2)));
-    const qualifiersPerPool = Math.min(Math.max(1, phase.qualifiersPerPool), Math.floor(availablePlayers / poolCount));
+    const poolCount = phase.bracketType === "FIRST_TO_N_WINS"
+      ? 1
+      : Math.max(1, Math.min(phase.poolCount, Math.floor(availablePlayers / 2)));
+    const qualifiersPerPool = phase.bracketType === "FIRST_TO_N_WINS"
+      ? 2
+      : Math.min(Math.max(1, phase.qualifiersPerPool), Math.floor(availablePlayers / poolCount));
     if (index + 1 < phaseCount) availablePlayers = poolCount * qualifiersPerPool;
     return { ...phase, poolCount, qualifiersPerPool };
   });
@@ -190,6 +204,14 @@ function LocalEventSnapshotForm({
     participantCountForPhase(index) < 2
       ? [t("Phase {phase}: 参加人数は2人以上必要です。", { phase: index + 1 })]
       : []);
+  if (firstToNWinsSelected) {
+    if (registration.participants.length !== 2) {
+      phasePlayerErrors.push(t("First to N wins は参加者2人限定です。"));
+    }
+    if (phaseCount !== 1) {
+      phasePlayerErrors.push(t("First to N wins は1フェーズのみ指定できます。"));
+    }
+  }
   const updatePhase = (index: number, update: Partial<LocalEventPhaseConfig>) => {
     setPhases((current) => current.map((phase, phaseIndex) => (
       phaseIndex === index ? { ...phase, ...update } : phase
@@ -225,6 +247,15 @@ function LocalEventSnapshotForm({
     phases: effectivePhases.slice(0, phaseCount).map((phase, index) => ({
       ...phase,
       qualifiersPerPool: index + 1 < phaseCount ? phase.qualifiersPerPool : 0,
+      firstToNWins: phase.bracketType === "FIRST_TO_N_WINS"
+        ? {
+          ...phase.firstToNWins ?? DEFAULT_FIRST_TO_N_WINS_SETTINGS,
+          phaseSetCount: (phase.firstToNWins?.winsRequired ?? DEFAULT_FIRST_TO_N_WINS_SETTINGS.winsRequired) * 2 - 1,
+          playerOneEntrantId: phase.firstToNWins?.playerOneEntrantId
+            || registration.participants[0]?.entrantId
+            || "",
+        }
+        : undefined,
       thirdPlaceMatch: phase.bracketType === "SINGLE_ELIMINATION"
         && Math.floor(participantCountForPhase(index) / phase.poolCount) >= 4
         && phase.thirdPlaceMatch,
@@ -252,6 +283,7 @@ function LocalEventSnapshotForm({
           <label className="local-event-phase-count-field">{t("フェーズ数")}
             <select value={phaseCount} onChange={(event) => {
               const nextCount = Number(event.currentTarget.value);
+              if (firstToNWinsSelected && nextCount !== 1) return;
               setPhases((current) => current.map((phase, index) => (
                 index < nextCount - 1 && phase.qualifiersPerPool === 0
                   ? { ...phase, qualifiersPerPool: 1 }
@@ -259,7 +291,9 @@ function LocalEventSnapshotForm({
               )));
               setPhaseCount(nextCount);
             }}>
-              {[1, 2, 3].map((count) => <option key={count} value={count}>{count}</option>)}
+              {[1, 2, 3].map((count) => (
+                <option key={count} value={count} disabled={firstToNWinsSelected && count !== 1}>{count}</option>
+              ))}
             </select>
           </label>
         </div>
@@ -290,12 +324,25 @@ function LocalEventSnapshotForm({
             <div className="local-event-phase-fields">
               <strong className="local-event-phase-number">{phaseLabel} ({phasePlayers})</strong>
               <input aria-label={t("フェーズ名")} value={phase.name} onChange={(event) => updatePhase(index, { name: event.currentTarget.value })} />
-              <input aria-label={t("プール数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / 2))} value={phase.poolCount} disabled={phasePlayers < 2} onChange={(event) => updatePhase(index, { poolCount: Math.max(1, Math.min(Math.floor(phasePlayers / 2), Number(event.currentTarget.value) || 1)) })} />
-              {!lastPhase ? <input aria-label={t("進出人数")} title={t("各プールからの進出人数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / phase.poolCount))} value={phase.qualifiersPerPool} disabled={phasePlayers < 2} onChange={(event) => updatePhase(index, { qualifiersPerPool: Math.max(1, Math.min(Math.floor(phasePlayers / phase.poolCount), Number(event.currentTarget.value) || 1)) })} /> : <span />}
-              <select aria-label={t("形式")} value={phase.bracketType} onChange={(event) => updatePhase(index, { bracketType: event.currentTarget.value as LocalEventPhaseConfig["bracketType"] })}>
+              <input aria-label={t("プール数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / 2))} value={phase.poolCount} disabled={phasePlayers < 2 || phase.bracketType === "FIRST_TO_N_WINS"} onChange={(event) => updatePhase(index, { poolCount: Math.max(1, Math.min(Math.floor(phasePlayers / 2), Number(event.currentTarget.value) || 1)) })} />
+              {!lastPhase ? <input aria-label={t("進出人数")} title={t("各プールからの進出人数")} type="number" min={1} max={Math.max(1, Math.floor(phasePlayers / phase.poolCount))} value={phase.qualifiersPerPool} disabled={phasePlayers < 2 || phase.bracketType === "FIRST_TO_N_WINS"} onChange={(event) => updatePhase(index, { qualifiersPerPool: Math.max(1, Math.min(Math.floor(phasePlayers / phase.poolCount), Number(event.currentTarget.value) || 1)) })} /> : <span />}
+              <select aria-label={t("形式")} value={phase.bracketType} onChange={(event) => {
+                const bracketType = event.currentTarget.value as LocalEventPhaseConfig["bracketType"];
+                if (bracketType === "FIRST_TO_N_WINS") {
+                  updatePhase(index, {
+                    bracketType,
+                    poolCount: 1,
+                    qualifiersPerPool: 0,
+                    firstToNWins: phase.firstToNWins ?? DEFAULT_FIRST_TO_N_WINS_SETTINGS,
+                  });
+                } else {
+                  updatePhase(index, { bracketType });
+                }
+              }}>
                 <option value="SINGLE_ELIMINATION">{t("シングルエリミネーション")}</option>
                 <option value="DOUBLE_ELIMINATION">{t("ダブルエリミネーション")}</option>
                 <option value="ROUND_ROBIN">{t("総当たり")}</option>
+                <option value="FIRST_TO_N_WINS" disabled={index > 0 || phaseCount > 1}>{t("First to N wins")}</option>
               </select>
               <div className="local-event-phase-options">
               {phase.bracketType === "SINGLE_ELIMINATION" && (
@@ -382,6 +429,65 @@ function LocalEventSnapshotForm({
                     );
                   })}
                 </ol>
+              </div>
+            )}
+            {phase.bracketType === "FIRST_TO_N_WINS" && (
+              <div className="local-event-first-to-n-wins">
+                <div className="local-event-first-to-n-wins-primary-settings">
+                  <label>{t("目標勝利数")}
+                    <input type="number" min={1} max={500}
+                      value={phase.firstToNWins?.winsRequired ?? DEFAULT_FIRST_TO_N_WINS_SETTINGS.winsRequired}
+                      onChange={(event) => updatePhase(index, { firstToNWins: {
+                        ...phase.firstToNWins ?? DEFAULT_FIRST_TO_N_WINS_SETTINGS,
+                        winsRequired: Math.max(1, Math.min(500, Number(event.currentTarget.value) || 1)),
+                      } })} />
+                  </label>
+                  <label>{t("初期1Pプレイヤー")}
+                    <select
+                      value={phase.firstToNWins?.playerOneEntrantId || registration.participants[0]?.entrantId || ""}
+                      onChange={(event) => updatePhase(index, { firstToNWins: {
+                        ...phase.firstToNWins ?? DEFAULT_FIRST_TO_N_WINS_SETTINGS,
+                        playerOneEntrantId: event.currentTarget.value,
+                      } })}
+                    >
+                      {registration.participants.map((participant) => (
+                        <option key={participant.entrantId} value={participant.entrantId}>{participant.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <p className="meta local-event-first-to-n-wins-total">
+                  {t("総試合数: {count}試合 (2N-1)", {
+                    count: (phase.firstToNWins?.winsRequired ?? DEFAULT_FIRST_TO_N_WINS_SETTINGS.winsRequired) * 2 - 1,
+                  })}
+                </p>
+                <label className="local-event-first-to-n-wins-option">
+                  <input type="checkbox" checked={phase.firstToNWins?.playAllMatches ?? false}
+                    onChange={(event) => updatePhase(index, { firstToNWins: {
+                      ...phase.firstToNWins ?? DEFAULT_FIRST_TO_N_WINS_SETTINGS,
+                      playAllMatches: event.currentTarget.checked,
+                    } })} />
+                  <strong>{t("全試合の実施")}</strong>
+                  <small>{t("勝利確定後も予定された全試合を実施します。")}</small>
+                </label>
+                <label className="local-event-first-to-n-wins-option">
+                  <input type="checkbox" checked={phase.firstToNWins?.drawCountsAsWin ?? false}
+                    onChange={(event) => updatePhase(index, { firstToNWins: {
+                      ...phase.firstToNWins ?? DEFAULT_FIRST_TO_N_WINS_SETTINGS,
+                      drawCountsAsWin: event.currentTarget.checked,
+                    } })} />
+                  <strong>{t("ドローを勝利にカウント")}</strong>
+                  <small>{t("ONの場合は両者に1勝を加算します。OFFの場合はドローのたびに追加試合を1試合行います。")}</small>
+                </label>
+                <label className="local-event-first-to-n-wins-option">
+                  <input type="checkbox" checked={phase.firstToNWins?.suddenDeath ?? false}
+                    onChange={(event) => updatePhase(index, { firstToNWins: {
+                      ...phase.firstToNWins ?? DEFAULT_FIRST_TO_N_WINS_SETTINGS,
+                      suddenDeath: event.currentTarget.checked,
+                    } })} />
+                  <strong>{t("サドンデス")}</strong>
+                  <small>{t("全試合終了時に同点の場合、決着がつくまで追加試合を行います。")}</small>
+                </label>
               </div>
             )}
               </div>

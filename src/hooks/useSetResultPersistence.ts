@@ -8,6 +8,7 @@ import {
 import type { SetSlot, SetSnapshot } from "../domain/bracketProgression";
 import type { SetResultDraftState, SetScoreDraft } from "./useSetResultDrafts";
 import type { ApplyExternalScoreReportInput } from "../domain/tournamentWorkspaceRepository";
+import type { OverlaySetOutcome } from "./useObsOverlay";
 
 type SlotScore = { entrantId: string; score: number };
 type SideDrafts = Record<string, "1P" | "2P" | "">;
@@ -30,6 +31,7 @@ type SaveSetResultInput = {
   set: SetSnapshot;
   confirmed: boolean;
   directWinnerId: string | null;
+  directDraw?: boolean;
   scoreDrafts: SetScoreDraft;
   sideDrafts: SideDrafts;
 };
@@ -57,7 +59,12 @@ type UseSetResultPersistenceOptions<TWorkspace> = {
   ) => Promise<SideDrafts | void>;
   buildSlotScores: (set: SetSnapshot, drafts: SetScoreDraft) => SlotScore[];
   resolveWinnerId: (set: SetSnapshot, drafts: SetScoreDraft) => string;
-  syncOverlayScores: (set: SetSnapshot, slotScores: SlotScore[], sideDrafts?: SideDrafts) => Promise<void>;
+  syncOverlayScores: (
+    set: SetSnapshot,
+    slotScores: SlotScore[],
+    sideDrafts?: SideDrafts,
+    outcome?: OverlaySetOutcome,
+  ) => Promise<void>;
   saveSetDraft: (setId: string, draft: SetResultDraftState) => void;
   removeInterimDraft: (setId: string) => void;
   removeDraftsForSet: (setId: string) => void;
@@ -97,14 +104,25 @@ export function useSetResultPersistence<TWorkspace>({
       const overlaySideDrafts = savedSideDrafts ?? input.sideDrafts;
 
       const directWin = input.directWinnerId !== null;
-      const slotScores = directWin
+      const slotScores = input.directDraw
+        ? []
+        : directWin
         ? input.set.slots
           .filter((slot): slot is SetSlot & { entrantId: string } => slot.entrantId !== null)
           .map((slot) => ({ entrantId: slot.entrantId, score: 0 }))
         : buildSlotScores(input.set, input.scoreDrafts);
-      const winnerId = input.directWinnerId ?? resolveWinnerId(input.set, input.scoreDrafts);
+      const winnerId = input.directDraw ? "" : input.directWinnerId ?? resolveWinnerId(input.set, input.scoreDrafts);
+      const firstToNWins = input.event.phaseGroups?.find(
+        (group) => group.phaseGroupId === input.set.phaseGroupId,
+      )?.firstToNWins;
+      const isDraw = input.confirmed
+        && winnerId === ""
+        && firstToNWins != null
+        && (input.directDraw === true
+          || (slotScores.length === 2
+            && slotScores.every((score) => score.score >= 0 && score.score === slotScores[0].score)));
 
-      if (winnerId === "") {
+      if (winnerId === "" && !isDraw) {
         if (input.confirmed) {
           setError(t("スコアから勝者を特定できませんでした。入力を確認してください。"));
           return;
@@ -123,7 +141,7 @@ export function useSetResultPersistence<TWorkspace>({
 
         let overlaySyncFailed = false;
         try {
-          await syncOverlayScores(input.set, slotScores, overlaySideDrafts);
+          await syncOverlayScores(input.set, slotScores, overlaySideDrafts, { winnerId: null, completed: false });
         } catch {
           overlaySyncFailed = true;
         }
@@ -150,21 +168,25 @@ export function useSetResultPersistence<TWorkspace>({
       setWorkspace(workspace);
       saveSetDraft(input.setId, {
         winnerId,
-        scoreDrafts: input.scoreDrafts,
+        scoreDrafts: input.directDraw ? {} : input.scoreDrafts,
         directWin,
       });
       removeInterimDraft(input.setId);
 
       let overlaySyncFailed = false;
       try {
-        await syncOverlayScores(input.set, slotScores, overlaySideDrafts);
+        await syncOverlayScores(input.set, slotScores, overlaySideDrafts, {
+          winnerId: isDraw ? null : winnerId,
+          completed: true,
+          confirmed: input.confirmed,
+        });
       } catch {
         overlaySyncFailed = true;
       }
 
       let externalReportFailed = false;
       let externalReportSent = false;
-      if (input.confirmed && onConfirmedResult) {
+      if (input.confirmed && onConfirmedResult && !isDraw) {
         try {
           externalReportSent = await onConfirmedResult({
             eventId: input.event.eventId,
@@ -184,7 +206,9 @@ export function useSetResultPersistence<TWorkspace>({
       }
 
       const saveMessage =
-        input.confirmed
+        isDraw
+          ? t("ドローを確定しました。")
+          : input.confirmed
           ? externalReportFailed
             ? t("結果を確定しましたが、外部報告は送信できませんでした。")
             : externalReportSent
@@ -249,7 +273,11 @@ export function useSetResultPersistence<TWorkspace>({
       closeMatchDialog();
       let overlaySyncFailed = false;
       try {
-        await syncOverlayScores(input.set, input.result.slotScores);
+        await syncOverlayScores(input.set, input.result.slotScores, undefined, {
+          winnerId: input.result.winnerId,
+          completed: true,
+          confirmed: true,
+        });
       } catch {
         overlaySyncFailed = true;
       }

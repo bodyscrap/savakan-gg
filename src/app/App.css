@@ -1556,6 +1556,93 @@ button:disabled {
   white-space: nowrap;
 }
 
+.local-event-max-matches {
+  display: inline-grid;
+  grid-template-columns: auto 5rem;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.8rem;
+}
+
+.local-event-max-matches input {
+  width: 100%;
+}
+
+.local-event-first-to-n-wins {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 0.6rem;
+  padding: 0.5rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.45rem;
+  white-space: normal;
+  width: 100%;
+}
+
+.local-event-first-to-n-wins-primary-settings {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(6rem, 0.5fr) minmax(12rem, 1fr);
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.local-event-first-to-n-wins > label:not(.local-event-draw-option):not(.local-event-first-to-n-wins-option) {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 6rem;
+}
+
+.local-event-first-to-n-wins input:not([type="checkbox"]),
+.local-event-first-to-n-wins select {
+  min-width: 6rem;
+  height: 2.4rem;
+}
+
+.local-event-first-to-n-wins-primary-settings input:not([type="checkbox"]) {
+  width: 5rem;
+  min-width: 5rem;
+}
+
+.local-event-first-to-n-wins .local-event-draw-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.4rem;
+}
+
+.local-event-first-to-n-wins-total,
+.local-event-first-to-n-wins-help {
+  margin: 0;
+  align-self: center;
+}
+
+.local-event-first-to-n-wins .local-event-first-to-n-wins-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  white-space: normal;
+}
+
+.local-event-first-to-n-wins-option input[type="checkbox"] {
+  flex: 0 0 auto;
+}
+
+.local-event-first-to-n-wins-option strong {
+  flex: 0 0 auto;
+}
+
+.local-event-first-to-n-wins-option small {
+  color: var(--muted);
+  min-width: 0;
+}
+
+.local-event-first-to-n-wins-option {
+  margin: 0;
+}
+
 .local-event-phase-fields label {
   display: grid;
   align-content: start;
@@ -1822,6 +1909,106 @@ button:disabled {
   display: grid;
   gap: 0.8rem;
   font-size: calc(0.92rem * var(--bracket-scale));
+}
+
+.first-to-n-wins-board {
+  --bracket-scale: 1;
+  display: grid;
+  gap: calc(0.7rem * var(--bracket-scale));
+  margin-top: 0.6rem;
+  font-size: calc(0.92rem * var(--bracket-scale));
+}
+
+.first-to-n-wins-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.8rem;
+  border-bottom: 1px solid #dbe3f0;
+  padding-bottom: 0.55rem;
+}
+
+.first-to-n-wins-header h3 {
+  margin: 0;
+}
+
+.first-to-n-wins-cap {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.first-to-n-wins-matches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  gap: calc(0.65rem * var(--bracket-scale));
+}
+
+.first-to-n-wins-match {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.45rem 0.8rem;
+  padding: calc(0.65rem * var(--bracket-scale));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.first-to-n-wins-match:hover,
+.first-to-n-wins-match:focus-visible {
+  border-color: #2563eb;
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+.first-to-n-wins-match:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.first-to-n-wins-match-number {
+  color: #1d4ed8;
+  font-size: calc(0.75rem * var(--bracket-scale));
+  font-weight: 700;
+}
+
+.first-to-n-wins-player-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: calc(0.42rem * var(--bracket-scale));
+  min-width: 0;
+}
+
+.first-to-n-wins-winner {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.first-to-n-wins-player-row .simple-player-name {
+  min-width: 0;
+}
+
+.first-to-n-wins-player-row .simple-games.draw {
+  background: #ffedd5;
+  border-color: #fdba74;
+  color: #9a3412;
+}
+
+.first-to-n-wins-champion {
+  display: inline-flex;
+  align-items: center;
+  margin: 0.45rem 0 0;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid #86efac;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #14532d;
+  font-weight: 800;
 }
 
 .round-robin-board-header {
@@ -2758,6 +2945,11 @@ button:disabled {
   height: 2.5rem;
   padding-top: 0.45rem;
   padding-bottom: 0.45rem;
+}
+
+.overlay-component-geometry .overlay-history-limit {
+  height: 2.5rem;
+  padding: 0.45rem 0.75rem;
 }
 
 .overlay-component-source-controls textarea {

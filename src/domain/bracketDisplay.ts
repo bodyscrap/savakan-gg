@@ -37,6 +37,16 @@ export type PhaseGroupSnapshot = {
   seedMap?: unknown;
   seedOrder?: string[];
   seeds?: PhaseGroupSeedSnapshot[];
+  firstToNWins?: FirstToNWinsPhaseSnapshot | null;
+};
+
+export type FirstToNWinsPhaseSnapshot = {
+  phaseSetCount: number;
+  winsRequired: number;
+  playerOneEntrantId: string;
+  playAllMatches: boolean;
+  drawCountsAsWin: boolean;
+  suddenDeath: boolean;
 };
 
 export type PhasePoolGroup = {
@@ -52,6 +62,7 @@ export type PhasePoolGroup = {
   seedMap: unknown;
   seedOrder: string[];
   seeds: PhaseGroupSeedSnapshot[];
+  firstToNWins?: FirstToNWinsPhaseSnapshot | null;
   sets: SetSnapshot[];
   columns: RoundColumn[];
 };
@@ -330,6 +341,7 @@ export function buildPhasePoolGroups(event: EventSnapshot | null): PhasePoolGrou
     const seedMap = phaseGroupMetadata.seedMap ?? null;
     const seedOrder = phaseGroupMetadata.seedOrder ?? [];
     const seeds = phaseGroupMetadata.seeds ?? [];
+    const firstToNWins = phaseGroupMetadata.firstToNWins ?? null;
     const hasStablePhasePoolIdentity = set.phaseOrder !== null && phaseGroupDisplayIdentifier !== null;
     const phaseGroupId = set.phaseGroupId ?? phaseGroupMetadata.phaseGroupId ?? null;
     const groupKey = phaseGroupId
@@ -356,6 +368,9 @@ export function buildPhasePoolGroups(event: EventSnapshot | null): PhasePoolGrou
       if (found.seeds.length === 0 && seeds.length > 0) {
         found.seeds = seeds;
       }
+      if (!found.firstToNWins && firstToNWins) {
+        found.firstToNWins = firstToNWins;
+      }
       continue;
     }
 
@@ -372,6 +387,7 @@ export function buildPhasePoolGroups(event: EventSnapshot | null): PhasePoolGrou
       seedMap,
       seedOrder,
       seeds,
+      firstToNWins,
       sets: [set],
       columns: [],
     });

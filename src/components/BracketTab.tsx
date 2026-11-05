@@ -10,6 +10,7 @@ import type { PhaseGroupExternalEditor } from "../domain/tournamentWorkspaceRepo
 import { EliminationBracket, type EliminationBracketSectionView } from "./EliminationBracket";
 import { getBracketProgressionModel } from "../domain/bracketProgression";
 import { RoundRobinBracket } from "./RoundRobinBracket";
+import { FirstToNWinsBracket } from "./FirstToNWinsBracket";
 import type { RoundRobinMatrixRowView } from "./RoundRobinMatrix";
 import type { FeatureMessage } from "../domain/messages";
 import { PlayerSeedSwapToggle, type PlayerSeedSwapControls } from "./PlayerSeedSwap";
@@ -82,6 +83,11 @@ type BracketTabProps = {
   canReport: boolean;
   onReport: () => void;
   roundRobin: RoundRobinView;
+  firstToNWinsAllSets: SetSnapshot[];
+  activeOverlaySetId: string | null;
+  onUpdateStreamStart: () => void;
+  directWinSetIds: ReadonlySet<string>;
+  getSetSlotSide: (setId: string, entrantId: string) => "1P" | "2P" | "";
   eliminationSections: EliminationBracketSectionView[];
   onRoundRobinMatchClick: (set: SetSnapshot, event: MouseEvent<HTMLButtonElement>) => void;
   onEliminationSetActivate: (set: SetSnapshot, event: MouseEvent<HTMLElement>) => void;
@@ -137,6 +143,11 @@ export function BracketTab({
   canReport,
   onReport,
   roundRobin,
+  firstToNWinsAllSets,
+  activeOverlaySetId,
+  onUpdateStreamStart,
+  directWinSetIds,
+  getSetSlotSide,
   eliminationSections,
   onRoundRobinMatchClick,
   onEliminationSetActivate,
@@ -324,6 +335,20 @@ export function BracketTab({
                     qualifyingCount={roundRobin.qualifyingCount}
                     diagnostics={roundRobin.diagnostics}
                     onMatchClick={onRoundRobinMatchClick}
+                  />
+                ) : selectedBracketModel === "first_to_n_wins" && selectedPhasePoolGroup.firstToNWins ? (
+                  <FirstToNWinsBracket
+                    settings={selectedPhasePoolGroup.firstToNWins}
+                    sets={selectedPhasePoolGroup.sets}
+                    allSets={firstToNWinsAllSets}
+                    activeOverlaySetId={activeOverlaySetId}
+                    directWinSetIds={directWinSetIds}
+                    scaleStyle={bracketScaleStyle}
+                    interactionDisabled={seedSwap?.active}
+                    streamStartUpdateDisabled={busy}
+                    onUpdateStreamStart={onUpdateStreamStart}
+                    getSetSlotSide={getSetSlotSide}
+                    onActivateSet={onEliminationSetActivate}
                   />
                 ) : (
                   <>

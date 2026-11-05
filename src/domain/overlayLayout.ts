@@ -5,7 +5,9 @@ export const overlayTextSources = [
   "redPlayerName", "bluePlayerName",
   "roundText", "setName", "roundName", "eventName", "eventAlias", "text",
 ] as const;
-export const overlayNumberSources = ["redSetWins", "blueSetWins", "number"] as const;
+export const overlayNumberSources = [
+  "redSetWins", "blueSetWins", "firstToNWinsPlayerOneWins", "firstToNWinsPlayerTwoWins", "number",
+] as const;
 export const overlayAnimationValueSources = [
   "redPlayerName", "bluePlayerName", "roundText", "setName", "roundName",
   "redSetWins", "blueSetWins",
@@ -17,6 +19,7 @@ export type OverlaySource = typeof overlaySources[number];
 export const overlaySourceLabels: Record<OverlaySource, string> = {
   text: "固定テキスト", number: "固定数値", redPlayerName: "1P プレイヤー名", bluePlayerName: "2P プレイヤー名",
   redSetWins: "1P 取得ゲーム数", blueSetWins: "2P 取得ゲーム数", roundText: "セット・ラウンド情報",
+  firstToNWinsPlayerOneWins: "1P F2NW 取得Set数", firstToNWinsPlayerTwoWins: "2P F2NW 取得Set数",
   setName: "Phase / Pool / Set名", roundName: "ラウンド名", eventName: "イベント名", eventAlias: "イベントエイリアス",
   redItems: "1P 選択アイテム", blueItems: "2P 選択アイテム",
   clock: "現在の日時",
@@ -24,7 +27,7 @@ export const overlaySourceLabels: Record<OverlaySource, string> = {
 export type OverlayComponent = {
   id: string;
   name: string;
-  kind: "text" | "number" | "image" | "item" | "clock";
+  kind: "text" | "number" | "image" | "item" | "clock" | "firstToNWins" | "firstToNWinsVertical";
   source: OverlaySource;
   text: string;
   image: string;
@@ -39,6 +42,7 @@ export type OverlayComponent = {
   itemCategory?: 1 | 2 | 3;
   delimiter?: string;
   clockFormat?: string;
+  historyLimit?: number;
   wrapText?: boolean;
   shrinkText?: boolean;
   x: number;
@@ -59,7 +63,12 @@ export type OverlayComponent = {
 };
 export const overlayKindLabels: Record<OverlayComponent["kind"], string> = {
   text: "テキスト", number: "数値", image: "画像", item: "アイテム", clock: "時計",
+  firstToNWins: "F2NW(横)", firstToNWinsVertical: "F2NW(縦)",
 };
+type FirstToNWinsKind = "firstToNWins" | "firstToNWinsVertical";
+function isFirstToNWinsKind(kind: unknown): kind is FirstToNWinsKind {
+  return kind === "firstToNWins" || kind === "firstToNWinsVertical";
+}
 export type OverlayPreset = {
   id: string;
   name: string;
@@ -76,6 +85,7 @@ export type OverlayLayouts = {
 };
 export const MAX_LAYOUT_BYTES = 32 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+export const MAX_OVERLAY_HISTORY_LIMIT = Number.MAX_SAFE_INTEGER;
 export type OverlayTestItemInputs = [string, string, string];
 
 export function parseOverlayTestItems(values: OverlayTestItemInputs): string[][] {
@@ -308,12 +318,13 @@ export function newOverlayComponent(
   return {
     id: crypto.randomUUID(), name: trimmedName, kind, source: kind === "clock" ? "clock" : kind === "item" ? "redItems" : kind === "number" ? "number" : "text",
     text: t("テキスト"), image: "", ...(kind === "number" ? { numberValue: 0 } : {}),
+    ...(isFirstToNWinsKind(kind) ? { historyLimit: 0 } : {}),
     imageAnimationOnDisplay: false,
     ...(kind === "image" ? { preserveAspectRatio: true, imageAlpha: 255, flipHorizontal: false } : {}),
     ...(kind === "item" ? { itemCategory: 1 as const, delimiter: " / " } : {}),
     ...(kind === "clock" ? { clockFormat: "YYYY-MM-DD HH:mm:ss" } : {}),
     ...(kind === "text" || kind === "number" || kind === "item" ? { wrapText: true, shrinkText: false } : {}),
-    x: 0, y: 0, width: 400, height: 100, fontFamily: "sans-serif", fontSize: 48,
+    x: 0, y: 0, width: 400, height: kind === "firstToNWinsVertical" ? 400 : 100, fontFamily: "sans-serif", fontSize: 48,
     color: "#ffffff", background: "#000000", align: "center", verticalAlign: "center", bold: true, visible: true,
   };
 }
@@ -424,12 +435,18 @@ function validComponent(value: unknown): value is StoredOverlayComponent {
   return record(value)
     && stringIn(value.id, 128) && value.id.length > 0
     && (value.name === undefined || stringIn(value.name, 256) && value.name.trim().length > 0)
-    && (value.kind === "text" || value.kind === "number" || value.kind === "image" || value.kind === "item" || value.kind === "clock")
+    && (value.kind === "text" || value.kind === "number" || value.kind === "image" || value.kind === "item"
+      || value.kind === "clock" || isFirstToNWinsKind(value.kind))
     && overlaySources.some((source) => source === value.source)
     && (value.kind === "clock"
       ? value.source === "clock" && stringIn(value.clockFormat, 256) && value.clockFormat.length > 0
       : value.source !== "clock")
+    && (!isFirstToNWinsKind(value.kind) || value.source === "text")
     && (value.clockFormat === undefined || stringIn(value.clockFormat, 256) && value.clockFormat.length > 0)
+    && (isFirstToNWinsKind(value.kind)
+      ? value.historyLimit === undefined
+        || numberIn(value.historyLimit, 0, MAX_OVERLAY_HISTORY_LIMIT) && Number.isSafeInteger(value.historyLimit)
+      : value.historyLimit === undefined)
     && (value.wrapText === undefined || typeof value.wrapText === "boolean")
     && (value.shrinkText === undefined || typeof value.shrinkText === "boolean")
     && (value.kind === "item"
@@ -518,11 +535,16 @@ export function parseOverlayLayouts(value: unknown): OverlayLayouts {
         );
         return {
           ...storedComponent,
+          ...(isFirstToNWinsKind(storedComponent.kind) ? { historyLimit: storedComponent.historyLimit ?? 0 } : {}),
           imageAnimationOnDisplay: storedComponent.imageAnimationOnDisplay ?? false,
           ...(validAnimationValueSource ? { imageAnimationValueSource: validAnimationValueSource } : {}),
           ...(storedComponent.kind === "image" && storedComponent.imageAlpha === undefined
             ? { imageAlpha: imageOpacity === undefined ? 255 : Math.round(imageOpacity * 255 / 100) } : {}),
-          name: component.name ?? legacyComponentName(component),
+          name: isFirstToNWinsKind(component.kind)
+            && (component.name === undefined || component.name === "First to N wins スコアボード"
+              || component.name === "First to N wins scoreboard")
+            ? t(overlayKindLabels[component.kind])
+            : component.name ?? legacyComponentName(component),
           kind: component.kind === "text" && (component.source === "redSetWins" || component.source === "blueSetWins")
             ? "number" : component.kind,
         };

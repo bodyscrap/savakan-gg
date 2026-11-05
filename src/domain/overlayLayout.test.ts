@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  builtInOverlayPreset, copyOverlayPreset, isOverlayImage, MAX_IMAGE_BYTES, MAX_LAYOUT_BYTES, mergeOverlayLayouts, newOverlayComponent, newOverlayPreset,
+  builtInOverlayPreset, copyOverlayPreset, isOverlayImage, MAX_IMAGE_BYTES, MAX_LAYOUT_BYTES, mergeOverlayLayouts, newOverlayComponent, newOverlayPreset, overlayKindLabels,
   overlayPreviewTransform, overlayResolutionAtAspect, overlayColorParts, overlayColorWithAlpha, overlayColorHsv, overlayColorFromHsv, overlayComponentSelection, overlayComponentDropIndex, overlayComponentBounds, overlayComponentsIntersecting, matchOverlayComponentSizes, centerOverlayComponents, moveOverlayComponents, overlayImageDimensions, fitOverlayImageToCanvas, overlayNumberSources, overlayItemSources, overlaySources, parseOverlayLayouts, parseOverlayLayoutsFile, parseOverlayTestItems, type OverlayLayouts,
 } from "./overlayLayout";
 import { formatOverlayClock, resolveOverlayBackground, resolveOverlayText, resolveOverlayVerticalAlign, resolveOverlayTextOverflow } from "./overlayRenderer.js";
@@ -53,10 +53,44 @@ describe("overlay preview viewport", () => {
 });
 
 describe("overlay component default alpha", () => {
-  it.each(["text", "number", "item", "image", "clock"] as const)("defaults %s foreground and background alpha to 255", (kind) => {
+  it.each(["text", "number", "item", "image", "clock", "firstToNWins", "firstToNWinsVertical"] as const)("defaults %s foreground and background alpha to 255", (kind) => {
     const component = newOverlayComponent(kind);
     expect(overlayColorParts(component.color).alpha).toBe(255);
     expect(overlayColorParts(component.background)).toEqual({ rgb: "#000000", alpha: 255 });
+  });
+  it("persists First to N wins history limits and defaults legacy values to all history", () => {
+    expect(overlayKindLabels.firstToNWins).toBe("F2NW(横)");
+    expect(overlayKindLabels.firstToNWinsVertical).toBe("F2NW(縦)");
+    const component = newOverlayComponent("firstToNWins");
+    expect(component.historyLimit).toBe(0);
+    const value = layouts();
+    value.presets[0].components = [component];
+    expect(parseOverlayLayoutsFile(JSON.stringify(value))).toEqual(value);
+
+    const legacy = structuredClone(value);
+    delete legacy.presets[0].components[0].historyLimit;
+    expect(parseOverlayLayoutsFile(JSON.stringify(legacy)).presets[0].components[0].historyLimit).toBe(0);
+
+    const oldName = structuredClone(value);
+    oldName.presets[0].components[0].name = "First to N wins スコアボード";
+    expect(parseOverlayLayoutsFile(JSON.stringify(oldName)).presets[0].components[0].name).toBe("F2NW(横)");
+
+    const vertical = newOverlayComponent("firstToNWinsVertical");
+    expect(vertical).toMatchObject({ kind: "firstToNWinsVertical", historyLimit: 0, width: 400, height: 400 });
+    const verticalLayout = layouts();
+    verticalLayout.presets[0].components = [vertical];
+    expect(parseOverlayLayoutsFile(JSON.stringify(verticalLayout))).toEqual(verticalLayout);
+    const unnamedVertical: {
+      presets: Array<{ components: Array<{ name?: string; [key: string]: unknown }> }>;
+    } = JSON.parse(JSON.stringify(verticalLayout));
+    delete unnamedVertical.presets[0].components[0].name;
+    expect(parseOverlayLayoutsFile(JSON.stringify(unnamedVertical)).presets[0].components[0].name).toBe("F2NW(縦)");
+
+    for (const historyLimit of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const invalid = structuredClone(value);
+      invalid.presets[0].components[0].historyLimit = historyLimit;
+      expect(() => parseOverlayLayoutsFile(JSON.stringify(invalid))).toThrow();
+    }
   });
   it("defaults newly created preset components to opaque colors", () => {
     for (const component of newOverlayPreset().components) {
@@ -1035,6 +1069,23 @@ describe("overlay layout format", () => {
 });
 
 describe("overlay content bindings", () => {
+  it.each([
+    { source: "firstToNWinsPlayerOneWins", expected: "12" },
+    { source: "firstToNWinsPlayerTwoWins", expected: "0" },
+  ] as const)("binds $source to F2NW set wins instead of current game wins", ({ source, expected }) => {
+    const component = { ...newOverlayComponent("number"), source };
+    const live = {
+      ...state,
+      firstToNWins: {
+        playerOneName: "Player One", playerTwoName: "Player Two",
+        playerOneWins: 12, playerTwoWins: 0,
+        setNumbers: [], setCompleted: [], playerOneResults: [], playerTwoResults: [],
+      },
+    };
+    expect(resolveOverlayText(component, live)).toBe(expected);
+    expect(resolveOverlayText(component, { ...live, active: false })).toBe("");
+    expect(resolveOverlayText(component, { ...live, firstToNWins: null })).toBe("");
+  });
   it("keeps names and scores intact and splits set and round information", () => {
     const component = newOverlayComponent("text");
     expect(resolveOverlayText({ ...component, source: "redPlayerName" }, state)).toBe("Player <A>");

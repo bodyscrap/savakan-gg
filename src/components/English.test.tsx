@@ -228,6 +228,7 @@ describe("English component rendering", () => {
       testEventName: "テスト大会", testEventAlias: "テスト大会", testPhaseName: "Phase",
       testPoolName: "A", testSetName: "1",
       testRoundName: "Grand Finals", testRedName: "設定", testBlueName: "青プレイヤー", testRedWins: 1, testBlueWins: 2,
+      testFirstToNWinsRequired: 10, testDrawCountsAsWin: false, testFirstToNWinsHistory: "1212121212121212121",
       testRedItems: ["選択A 選択B", "", "選択C"], testBlueItems: ["選択D", "選択E", ""],
       previewWrapRef: { current: null }, previewIframeRef: { current: null },
       onOpenUrl: noop,
@@ -236,6 +237,8 @@ describe("English component rendering", () => {
       onTestRoundNameChange: noop, onTestBlueNameChange: noop,
       onTestRedItemsChange: noop, onTestBlueItemsChange: noop,
       onTestRedWinsChange: noop, onTestBlueWinsChange: noop, onToggleTestOverlay: noop, onFullyStop: noop, onPreviewLoad: noop,
+      onTestFirstToNWinsRequiredChange: noop, onTestDrawCountsAsWinChange: noop,
+      onTestFirstToNWinsHistoryChange: noop,
     };
     const html = renderToStaticMarkup(<OverlayControl {...props} />);
     expect(html).toContain("Stream settings Status: Live (set-id)");
@@ -251,6 +254,11 @@ describe("English component rendering", () => {
     expect(html).toContain("Test pool name");
     expect(html).toContain("Test set name");
     expect(html).toContain("Test round name");
+    expect(html).toContain("First to N wins");
+    expect(html).toContain("Target wins");
+    expect(html).toContain("Count draws as wins");
+    expect(html).toContain("Match history");
+    expect(html).toContain("Use 1 for a 1P win, 2 for a 2P win, and d for a draw.");
     expect(html).toContain("Dummy item lists (space-separated)");
     expect(html).toContain("Live streams show each player&#x27;s saved selections from Snapshot &amp; metadata settings.");
     for (const side of ["1P", "2P"]) {

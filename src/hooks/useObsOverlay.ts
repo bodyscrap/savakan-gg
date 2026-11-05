@@ -6,6 +6,7 @@ import type { AppTab } from "../components/AppShell";
 import type { SetSlot, SetSnapshot } from "../domain/bracketProgression";
 import type { OverlayRenderState } from "../domain/overlayRenderer.js";
 import { parseOverlayTestItems, type OverlayTestItemInputs } from "../domain/overlayLayout";
+import { buildOverlayTestFirstToNWins } from "../domain/overlayTestData";
 
 export type ObsOverlayState = OverlayRenderState & {
   active: boolean;
@@ -22,6 +23,24 @@ export type ObsOverlayState = OverlayRenderState & {
   showSetInfo: boolean;
   showEventAlias: boolean;
   overlayUrl: string;
+};
+
+export type FirstToNWinsOverlayData = {
+  playerOneName: string;
+  playerTwoName: string;
+  winnerName: string | null;
+  playerOneWins: number;
+  playerTwoWins: number;
+  setNumbers: number[];
+  setCompleted: boolean[];
+  playerOneResults: Array<boolean | null>;
+  playerTwoResults: Array<boolean | null>;
+};
+
+export type OverlaySetOutcome = {
+  winnerId: string | null;
+  completed: boolean;
+  confirmed?: boolean;
 };
 
 export function isOverlayActiveForSet(
@@ -43,6 +62,7 @@ export type ObsOverlaySetInput = {
   blueEntrantId?: string | null;
   redItems?: string[][];
   blueItems?: string[][];
+  firstToNWins?: FirstToNWinsOverlayData | null;
   redSetWins: number;
   blueSetWins: number;
   fontScale: number;
@@ -191,6 +211,9 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
   const [testOverlayBlueItems, setTestOverlayBlueItems] = useState<OverlayTestItemInputs>(["2P-A 2P-B", "2P-C 2P-D", "2P-E 2P-F"]);
   const [testOverlayRedWins, setTestOverlayRedWins] = useState(0);
   const [testOverlayBlueWins, setTestOverlayBlueWins] = useState(0);
+  const [testOverlayFirstToNWinsRequired, setTestOverlayFirstToNWinsRequired] = useState(10);
+  const [testOverlayDrawCountsAsWin, setTestOverlayDrawCountsAsWin] = useState(false);
+  const [testOverlayFirstToNWinsHistory, setTestOverlayFirstToNWinsHistory] = useState("1212121212121212121");
   const [isTestOverlayActive, setIsTestOverlayActive] = useState(false);
   const testOverlaySetLabel = `${testOverlayPhaseName.trim() || "-"} / Pool ${testOverlayPoolName.trim() || "-"} / Set ${testOverlaySetName.trim() || "-"}`;
   const overlaySelectionKeyRef = useRef<string | null>(null);
@@ -303,6 +326,13 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
               blueItems: parseOverlayTestItems(testOverlayBlueItems),
               redSetWins: normalizeObsSetWins(testOverlayRedWins),
               blueSetWins: normalizeObsSetWins(testOverlayBlueWins),
+              firstToNWins: buildOverlayTestFirstToNWins({
+                playerOneName: testOverlayRedName.trim() || t("テストプレイヤー1"),
+                playerTwoName: testOverlayBlueName.trim() || t("テストプレイヤー2"),
+                winsRequired: testOverlayFirstToNWinsRequired,
+                drawCountsAsWin: testOverlayDrawCountsAsWin,
+                history: testOverlayFirstToNWinsHistory,
+              }),
               fontScale: normalizeObsFontScale(obsOverlayState.fontScale),
             },
           });
@@ -338,6 +368,9 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     testOverlayEventAlias,
     testOverlayRedWins,
     testOverlayBlueWins,
+    testOverlayFirstToNWinsRequired,
+    testOverlayDrawCountsAsWin,
+    testOverlayFirstToNWinsHistory,
   ]);
 
   useEffect(() => {
@@ -415,6 +448,13 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
       blueItems: parseOverlayTestItems(testOverlayBlueItems),
       redSetWins: testOverlayRedWins,
       blueSetWins: testOverlayBlueWins,
+      firstToNWins: buildOverlayTestFirstToNWins({
+        playerOneName: testOverlayRedName.trim() || t("テストプレイヤー1"),
+        playerTwoName: testOverlayBlueName.trim() || t("テストプレイヤー2"),
+        winsRequired: testOverlayFirstToNWinsRequired,
+        drawCountsAsWin: testOverlayDrawCountsAsWin,
+        history: testOverlayFirstToNWinsHistory,
+      }),
       fontScale: obsOverlayState.fontScale,
     }, forceSwitch);
   }
@@ -483,6 +523,13 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
     setTestOverlayRedWins: (value: number) => setTestOverlayRedWins(normalizeObsSetWins(value)),
     testOverlayBlueWins,
     setTestOverlayBlueWins: (value: number) => setTestOverlayBlueWins(normalizeObsSetWins(value)),
+    testOverlayFirstToNWinsRequired,
+    setTestOverlayFirstToNWinsRequired: (value: number) =>
+      setTestOverlayFirstToNWinsRequired(Math.max(1, normalizeObsSetWins(value))),
+    testOverlayDrawCountsAsWin,
+    setTestOverlayDrawCountsAsWin,
+    testOverlayFirstToNWinsHistory,
+    setTestOverlayFirstToNWinsHistory,
     isTestOverlayActive,
     overlayPreviewWrapRef,
     overlayPreviewIframeRef,

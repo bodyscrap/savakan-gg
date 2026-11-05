@@ -34,7 +34,7 @@ function mockElement(tagName) {
   const attributes = new Map();
   const children = [];
   const element = {
-    tagName, children, dataset: {}, style: {
+    tagName, children, dataset: {}, textContent: "", style: {
       removeProperty(name) {
         delete this[name.replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase())];
       },
@@ -46,10 +46,12 @@ function mockElement(tagName) {
     setAttribute(name, value) { attributes.set(name, String(value)); },
     removeAttribute(name) { attributes.delete(name); },
     addEventListener() {},
-    append(child) {
-      child.remove?.();
-      children.push(child);
-      child.parentElement = this;
+    append(...next) {
+      for (const child of next) {
+        child.remove?.();
+        children.push(child);
+        child.parentElement = this;
+      }
     },
     remove() {
       if (!this.parentElement) return;
@@ -181,6 +183,7 @@ describe("overlay text fitting with measured dimensions", () => {
         removeEventListener: vi.fn(),
       },
     });
+
     vi.stubGlobal("setInterval", vi.fn(() => 1));
     vi.stubGlobal("clearInterval", vi.fn());
 
@@ -215,6 +218,160 @@ describe("overlay text fitting with measured dimensions", () => {
       zIndex: "0",
       pointerEvents: "none",
     });
+    dispose();
+  });
+
+  it("renders First to N wins rows and limits history to the latest sets", () => {
+    const tableSection = (table, tagName) => table.children.find((child) => child.tagName === tagName);
+    const stage = mockElement("DIV");
+    vi.stubGlobal("document", {
+      createElement(tagName) { return mockElement(tagName.toUpperCase()); },
+      fonts: {
+        ready: Promise.resolve(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+    vi.stubGlobal("getComputedStyle", () => ({ paddingTop: "0px", paddingBottom: "0px" }));
+    const preset = {
+      width: 400,
+      height: 100,
+      components: [{
+        kind: "firstToNWins", id: "board", visible: true, source: "text", historyLimit: 2,
+        background: "#000000", color: "#ffffff", fontFamily: "sans-serif", fontSize: 20,
+        bold: true, align: "center", x: 0, y: 0, width: 400, height: 100,
+      }],
+    };
+    const state = {
+      active: true, fullyStopped: false, redPlayerName: "", bluePlayerName: "",
+      redSetWins: 0, blueSetWins: 0, roundText: "", eventName: "", eventAlias: "",
+      firstToNWins: {
+        playerOneName: "Player One", playerTwoName: "Player Two",
+        winnerName: "Player One",
+        playerOneWins: 3, playerTwoWins: 1,
+        setNumbers: [1, 2, 3, 4],
+        setCompleted: [true, true, true, true],
+        playerOneResults: [true, false, true, true],
+        playerTwoResults: [false, true, false, false],
+      },
+    };
+
+    const dispose = renderOverlayPreset(stage, preset, state);
+    const table = stage.children[0].children[0].children[0];
+    expect(table.children[0].tagName).toBe("THEAD");
+    expect(table.children[0].children[0].children.map((cell) => cell.textContent)).toEqual(["", "", "勝", "3", "4"]);
+    expect(table.children[1].children.map((row) => row.children.map((cell) =>
+      cell.children[0]?.textContent || cell.textContent))).toEqual([
+      ["勝者", "Player One", "3", "〇", "〇"],
+      ["敗者", "Player Two", "1", "×", "×"],
+    ]);
+    expect(table.children[1].children.map((row) => row.children[0].style.width)).toEqual(["3em", "3em"]);
+    expect(stage.children[0].children[0].style).toMatchObject({ whiteSpace: "nowrap", overflowWrap: "normal" });
+    expect(table.children[1].children.map((row) => row.children[1].children[0].style.whiteSpace))
+      .toEqual(["pre-wrap", "pre-wrap"]);
+    expect(table.children[1].children[0].children.slice(2).map((cell) => cell.style.width))
+      .toEqual(["calc(1ch + 0.5em)", "calc(1ch + 0.5em)", "calc(1ch + 0.5em)"]);
+    expect(table.children[1].children[1].children.slice(2).map((cell) => cell.style.width))
+      .toEqual(["calc(1ch + 0.5em)", "calc(1ch + 0.5em)", "calc(1ch + 0.5em)"]);
+    dispose();
+
+    state.firstToNWins.winnerName = null;
+    state.firstToNWins.playerOneResults = [false, false, false, false];
+    state.firstToNWins.playerTwoResults = [false, false, false, false];
+    const disposeDraw = renderOverlayPreset(stage, preset, state);
+    const drawTable = stage.children[0].children[0].children[0];
+    expect(drawTable.children[0].tagName).toBe("THEAD");
+    expect(tableSection(drawTable, "THEAD").children[0].children.map((cell) => cell.textContent))
+      .toEqual(["", "", "勝", "3", "4"]);
+    expect(tableSection(drawTable, "TBODY").children.map((row) => row.children.map((cell) =>
+      cell.children[0]?.textContent || cell.textContent)))
+      .toEqual([["", "Player One", "3", "×", "×"], ["", "Player Two", "1", "×", "×"]]);
+    disposeDraw();
+
+    state.firstToNWins.playerOneResults = [true, false, true, true];
+    state.firstToNWins.playerTwoResults = [false, true, false, false];
+    preset.components[0].historyLimit = 0;
+    const disposeAll = renderOverlayPreset(stage, preset, state);
+    const fullHistoryTable = stage.children[0].children[0].children[0];
+    expect(tableSection(fullHistoryTable, "THEAD").children[0].children.map((cell) => cell.textContent))
+      .toEqual(["", "", "勝", "1", "2", "3", "4"]);
+    disposeAll();
+
+    state.firstToNWins.setNumbers = [1, 2, 3, 4, 5];
+    state.firstToNWins.setCompleted = [true, true, true, false, false];
+    state.firstToNWins.playerOneResults = [true, false, true, null, null];
+    state.firstToNWins.playerTwoResults = [false, true, false, null, null];
+    preset.components[0].historyLimit = 2;
+    const disposeConfirmed = renderOverlayPreset(stage, preset, state);
+    const confirmedTable = stage.children[0].children[0].children[0];
+    expect(tableSection(confirmedTable, "THEAD").children[0].children.map((cell) => cell.textContent))
+      .toEqual(["", "", "勝", "2", "3"]);
+    disposeConfirmed();
+
+    state.firstToNWins.setCompleted = [true, false, false, false, false];
+    state.firstToNWins.playerOneResults = [true, null, null, null, null];
+    state.firstToNWins.playerTwoResults = [false, null, null, null, null];
+    const disposePending = renderOverlayPreset(stage, preset, state);
+    const pendingTable = stage.children[0].children[0].children[0];
+    expect(tableSection(pendingTable, "THEAD").children[0].children.map((cell) => cell.textContent)).toEqual(["", "", "勝", "1", "2"]);
+    disposePending();
+
+    state.firstToNWins.setNumbers = Array.from({ length: 12 }, (_item, index) => index + 1);
+    state.firstToNWins.setCompleted = Array(12).fill(true);
+    state.firstToNWins.playerOneResults = Array(12).fill(true);
+    state.firstToNWins.playerTwoResults = Array(12).fill(false);
+    const disposeDoubleDigits = renderOverlayPreset(stage, preset, state);
+    const doubleDigitTable = stage.children[0].children[0].children[0];
+    expect(tableSection(doubleDigitTable, "TBODY").children[0].children.slice(2).map((cell) => cell.style.width))
+      .toEqual(["calc(2ch + 0.5em)", "calc(2ch + 0.5em)", "calc(2ch + 0.5em)"]);
+    disposeDoubleDigits();
+  });
+
+  it("renders vertical First to N wins sets from top to bottom", () => {
+    const stage = mockElement("DIV");
+    vi.stubGlobal("document", {
+      createElement(tagName) { return mockElement(tagName.toUpperCase()); },
+      fonts: {
+        ready: Promise.resolve(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+    vi.stubGlobal("getComputedStyle", () => ({ paddingTop: "0px", paddingBottom: "0px" }));
+    const preset = {
+      width: 400,
+      height: 400,
+      components: [{
+        kind: "firstToNWinsVertical", id: "board", visible: true, source: "text", historyLimit: 0,
+        background: "#000000", color: "#ffffff", fontFamily: "sans-serif", fontSize: 20,
+        bold: true, align: "center", x: 0, y: 0, width: 400, height: 400,
+      }],
+    };
+    const state = {
+      active: true, fullyStopped: false, redPlayerName: "", bluePlayerName: "",
+      redSetWins: 0, blueSetWins: 0, roundText: "", eventName: "", eventAlias: "",
+      firstToNWins: {
+        playerOneName: "Player One", playerTwoName: "Player Two",
+        winnerName: "Player One",
+        playerOneWins: 2, playerTwoWins: 1,
+        setNumbers: [1, 2, 3],
+        setCompleted: [true, true, true],
+        playerOneResults: [true, false, true],
+        playerTwoResults: [false, true, false],
+      },
+    };
+
+    const dispose = renderOverlayPreset(stage, preset, state);
+    const table = stage.children[0].children[0].children[0];
+    expect(table.children[0].tagName).toBe("THEAD");
+    expect(table.children[0].children[0].children.map((cell) => cell.textContent)).toEqual(["", "勝者", "敗者"]);
+    expect(table.children[0].children[1].children.map((cell) => cell.children[0]?.textContent || cell.textContent))
+      .toEqual(["", "Player One", "Player Two"]);
+    expect(stage.children[0].children[0].style).toMatchObject({ whiteSpace: "nowrap", overflowWrap: "normal" });
+    expect(table.children[0].children[1].children.slice(1).map((cell) => cell.children[0].style.whiteSpace))
+      .toEqual(["pre-wrap", "pre-wrap"]);
+    expect(table.children[1].children.map((row) => row.children.map((cell) => cell.textContent)))
+      .toEqual([["勝", "2", "1"], ["1", "〇", "×"], ["2", "×", "〇"], ["3", "〇", "×"]]);
     dispose();
   });
 

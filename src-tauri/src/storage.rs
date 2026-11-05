@@ -940,6 +940,7 @@ mod score_edit_lock_tests {
                     third_place_match: false,
                     fifth_place_match: false,
                     grand_final_reset: true,
+                    first_to_n_wins: None,
                 },
                 crate::models::LocalEventPhaseConfig {
                     name: "Final".to_owned(),
@@ -959,6 +960,7 @@ mod score_edit_lock_tests {
                     third_place_match: false,
                     fifth_place_match: false,
                     grand_final_reset: true,
+                    first_to_n_wins: None,
                 },
             ],
         };
@@ -3892,6 +3894,17 @@ fn load_event_snapshot(
             )
         });
     }
+    let pending_results = snapshot
+        .events
+        .iter()
+        .map(|event| {
+            load_local_meta(app, slug, &event.event_id).map(|meta| meta.pending_set_results)
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    reconcile_first_to_n_schedules(&mut snapshot, &pending_results)?;
     Ok(snapshot)
 }
 
@@ -4128,7 +4141,8 @@ fn restore_pending_result_to_event(event: &mut EventSnapshot, result: &LocalSetR
         return;
     }
 
-    set.winner_id = result.confirmed.then_some(result.winner_id.clone());
+    set.winner_id = (result.confirmed && !result.winner_id.trim().is_empty())
+        .then_some(result.winner_id.clone());
     set.state = if result.confirmed { 3 } else { 2 };
 
     if result.confirmed {
@@ -4140,6 +4154,11 @@ fn restore_pending_result_to_event(event: &mut EventSnapshot, result: &LocalSetR
                 .map(|score| score.entrant_id.clone()),
             &known_entrant_names,
         );
+    }
+    if result.confirmed && result.winner_id.trim().is_empty() && result.slot_scores.is_empty() {
+        for slot in &mut set.slots {
+            slot.score = None;
+        }
     }
 
     for slot in &mut set.slots {
@@ -11021,6 +11040,323 @@ pub fn apply_external_score_report(
     upsert_local_set_result_inner(app, input.result, Some(authorization))
 }
 
+fn append_first_to_n_set_if_needed(
+    snapshot: &mut TournamentSnapshot,
+    event_id: &str,
+    phase_group_id: &str,
+) -> Result<Option<String>, String> {
+    let event = snapshot
+        .events
+        .iter_mut()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| "First to N winsのイベントが見つかりません。".to_owned())?;
+    let settings = event
+        .phase_groups
+        .iter()
+        .find(|group| group.phase_group_id == phase_group_id)
+        .and_then(|group| group.first_to_n_wins.clone())
+        .ok_or_else(|| "First to N winsの設定が見つかりません。".to_owned())?;
+    let mut group_sets = event
+        .sets
+        .iter()
+        .filter(|set| set.phase_group_id.as_deref() == Some(phase_group_id))
+        .collect::<Vec<_>>();
+    group_sets.sort_by_key(|set| {
+        set.identifier
+            .as_deref()
+            .and_then(|identifier| identifier.parse::<usize>().ok())
+            .unwrap_or(usize::MAX)
+    });
+    let template = group_sets
+        .last()
+        .map(|set| (*set).clone())
+        .ok_or_else(|| "First to N winsのSetが見つかりません。".to_owned())?;
+    let mut player_one_wins = 0;
+    let mut player_two_wins = 0;
+    let mut draws = 0_usize;
+    let mut winner_decided = false;
+    for set in &group_sets {
+        if set.state < 3 {
+            continue;
+        }
+        match set
+            .winner_id
+            .as_deref()
+            .filter(|winner_id| !winner_id.trim().is_empty())
+        {
+            Some(winner_id) if winner_id == settings.player_one_entrant_id => {
+                player_one_wins += 1;
+            }
+            Some(_) => player_two_wins += 1,
+            None => {
+                draws += 1;
+                if settings.draw_counts_as_win {
+                    player_one_wins += 1;
+                    player_two_wins += 1;
+                }
+            }
+        }
+        if !winner_decided
+            && ((player_one_wins >= settings.wins_required && player_one_wins > player_two_wins)
+                || (player_two_wins >= settings.wins_required && player_two_wins > player_one_wins))
+        {
+            winner_decided = true;
+        }
+    }
+    if winner_decided && !settings.play_all_matches {
+        return Ok(None);
+    }
+
+    let required_matches = settings
+        .phase_set_count
+        .checked_add(if settings.draw_counts_as_win {
+            0
+        } else {
+            draws
+        })
+        .ok_or_else(|| "First to N winsの試合数が大きすぎます。".to_owned())?;
+    let all_matches_completed = group_sets.iter().all(|set| set.state >= 3);
+    let should_append = group_sets.len() < required_matches
+        || (group_sets.len() >= required_matches
+            && all_matches_completed
+            && !winner_decided
+            && settings.sudden_death);
+    if !should_append {
+        return Ok(None);
+    }
+
+    let sequence = group_sets.len() + 1;
+    let mut numeric_set_id = event
+        .sets
+        .iter()
+        .filter_map(|set| set.set_id.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "First to N winsのSet IDが上限を超えました。".to_owned())?;
+    while event
+        .sets
+        .iter()
+        .any(|set| set.set_id == numeric_set_id.to_string())
+    {
+        numeric_set_id = numeric_set_id
+            .checked_add(1)
+            .ok_or_else(|| "First to N winsのSet IDが上限を超えました。".to_owned())?;
+    }
+    let mut next_set = template;
+    next_set.set_id = numeric_set_id.to_string();
+    next_set.identifier = Some(sequence.to_string());
+    next_set.full_round_text = format!("Set {sequence}");
+    next_set.round = Some(sequence as i64);
+    next_set.state = 1;
+    next_set.winner_id = None;
+    next_set.winner_placement = None;
+    next_set.loser_placement = None;
+    for slot in &mut next_set.slots {
+        slot.score = None;
+    }
+
+    let group = event
+        .phase_groups
+        .iter_mut()
+        .find(|group| group.phase_group_id == phase_group_id)
+        .ok_or_else(|| "First to N winsのフェーズグループが見つかりません。".to_owned())?;
+    group.set_ids.push(next_set.set_id.clone());
+    let appended_set_id = next_set.set_id.clone();
+    event.sets.push(next_set);
+    Ok(Some(appended_set_id))
+}
+
+fn align_first_to_n_set_sides_with_previous(
+    snapshot: &TournamentSnapshot,
+    set_play_sides: &mut Vec<SetPlaySideMeta>,
+    event_id: &str,
+    previous_set_id: &str,
+    next_set_id: &str,
+    settings: &crate::models::FirstToNWinsPhaseSnapshot,
+) -> Result<(), String> {
+    let event = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| "First to N winsのイベントが見つかりません。".to_owned())?;
+    let previous_set = event
+        .sets
+        .iter()
+        .find(|set| set.set_id == previous_set_id)
+        .ok_or_else(|| "サイド継承元のFirst to N wins Setが見つかりません。".to_owned())?;
+    let next_set = event
+        .sets
+        .iter()
+        .find(|set| set.set_id == next_set_id)
+        .ok_or_else(|| "サイド継承先のFirst to N wins Setが見つかりません。".to_owned())?;
+    let previous_entrants = previous_set
+        .slots
+        .iter()
+        .take(2)
+        .map(|slot| {
+            slot.entrant_id
+                .as_deref()
+                .ok_or_else(|| "サイド継承元Setの対戦相手が確定していません。".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let next_entrants = next_set
+        .slots
+        .iter()
+        .take(2)
+        .map(|slot| {
+            slot.entrant_id
+                .as_deref()
+                .ok_or_else(|| "サイド継承先Setの対戦相手が確定していません。".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if previous_entrants.len() != 2
+        || next_entrants.len() != 2
+        || previous_entrants.iter().any(|id| !next_entrants.contains(id))
+    {
+        return Err("First to N winsの追加Setで対戦相手が一致しません。".to_owned());
+    }
+
+    let side_for = |entrant_id: &str| {
+        set_play_sides
+            .iter()
+            .find(|side| side.set_id == previous_set_id && side.entrant_id == entrant_id)
+            .map(|side| side.play_side.clone())
+    };
+    let previous_upper_side = side_for(previous_entrants[0])
+        .or_else(|| side_for(previous_entrants[1]).map(opposite_side))
+        .unwrap_or_else(|| {
+            if previous_entrants[0] == settings.player_one_entrant_id {
+                crate::models::PlaySide::OneP
+            } else {
+                crate::models::PlaySide::TwoP
+            }
+        });
+
+    set_play_sides
+        .retain(|side| side.set_id != next_set_id);
+    for entrant_id in next_entrants {
+        let play_side = if entrant_id == previous_entrants[0] {
+            previous_upper_side.clone()
+        } else {
+            opposite_side(previous_upper_side.clone())
+        };
+        set_play_sides.push(SetPlaySideMeta {
+            set_id: next_set_id.to_owned(),
+            entrant_id: entrant_id.to_owned(),
+            play_side,
+        });
+    }
+    Ok(())
+}
+
+fn reconcile_first_to_n_schedules(
+    snapshot: &mut TournamentSnapshot,
+    pending_results: &[LocalSetResultMeta],
+) -> Result<(), String> {
+    loop {
+        let set_count_before = snapshot
+            .events
+            .iter()
+            .map(|event| event.sets.len())
+            .sum::<usize>();
+        let first_to_n_groups = snapshot
+            .events
+            .iter()
+            .flat_map(|event| {
+                event
+                    .phase_groups
+                    .iter()
+                    .filter(|group| group.first_to_n_wins.is_some())
+                    .map(|group| (event.event_id.clone(), group.phase_group_id.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (event_id, phase_group_id) in first_to_n_groups {
+            append_first_to_n_set_if_needed(snapshot, &event_id, &phase_group_id)?;
+        }
+
+        let set_count_after = snapshot
+            .events
+            .iter()
+            .map(|event| event.sets.len())
+            .sum::<usize>();
+        if set_count_after == set_count_before {
+            return Ok(());
+        }
+
+        for event in &mut snapshot.events {
+            restore_matching_pending_results_for_event(event, pending_results);
+        }
+    }
+}
+
+fn ensure_first_to_n_set_is_next(
+    snapshot: &TournamentSnapshot,
+    event_id: &str,
+    phase_group_id: &str,
+    set_id: &str,
+    settings: &crate::models::FirstToNWinsPhaseSnapshot,
+) -> Result<(), String> {
+    let event = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .ok_or_else(|| "First to N winsのイベントが見つかりません。".to_owned())?;
+    let mut group_sets = event
+        .sets
+        .iter()
+        .filter(|set| set.phase_group_id.as_deref() == Some(phase_group_id))
+        .collect::<Vec<_>>();
+    group_sets.sort_by_key(|set| {
+        set.identifier
+            .as_deref()
+            .and_then(|identifier| identifier.parse::<usize>().ok())
+            .unwrap_or(usize::MAX)
+    });
+
+    let mut player_one_wins = 0;
+    let mut player_two_wins = 0;
+    let mut winner_decided = false;
+    let mut next_set_id = None;
+    for set in &group_sets {
+        if set.state < 3 {
+            if next_set_id.is_none() {
+                next_set_id = Some(set.set_id.as_str());
+            }
+            continue;
+        }
+        match set
+            .winner_id
+            .as_deref()
+            .filter(|winner_id| !winner_id.trim().is_empty())
+        {
+            Some(winner_id) if winner_id == settings.player_one_entrant_id => {
+                player_one_wins += 1;
+            }
+            Some(_) => player_two_wins += 1,
+            None if settings.draw_counts_as_win => {
+                player_one_wins += 1;
+                player_two_wins += 1;
+            }
+            None => {}
+        }
+        if !winner_decided
+            && ((player_one_wins >= settings.wins_required && player_one_wins > player_two_wins)
+                || (player_two_wins >= settings.wins_required && player_two_wins > player_one_wins))
+        {
+            winner_decided = true;
+        }
+    }
+
+    if winner_decided && !settings.play_all_matches {
+        return Err("目標勝利数に達したため、以降のSetは進行できません。".to_owned());
+    }
+    if next_set_id != Some(set_id) {
+        return Err("First to N winsのSetは先頭から順に進行してください。".to_owned());
+    }
+    Ok(())
+}
+
 fn upsert_local_set_result_inner(
     app: &AppHandle,
     input: LocalSetResultInput,
@@ -11067,19 +11403,49 @@ fn upsert_local_set_result_inner(
         .events
         .iter()
         .find(|event| event.event_id == input.event_id)
-        .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
-        .map(|set| {
-            (
+        .and_then(|event| {
+            let set = event.sets.iter().find(|set| set.set_id == input.set_id)?;
+            let first_to_n_wins = event.phase_groups.iter().any(|group| {
+                group.phase_group_id == set.phase_group_id.clone().unwrap_or_default()
+                    && group.first_to_n_wins.is_some()
+            });
+            Some((
                 (
-                    set.state >= 3 && set.winner_id.is_some(),
+                    set.state >= 3 && (set.winner_id.is_some() || first_to_n_wins),
                     is_round_robin_set(&snapshot, &input.event_id, set),
                 ),
                 set.phase_group_id.clone().unwrap_or_default(),
-            )
+            ))
         })
         .ok_or_else(|| {
             "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned()
         })?;
+    let first_to_n_settings = snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == input.event_id)
+        .and_then(|event| {
+            event
+                .phase_groups
+                .iter()
+                .find(|group| group.phase_group_id == phase_group_id)
+        })
+        .and_then(|group| group.first_to_n_wins.clone());
+    let is_draw = input.confirmed && input.winner_id.trim().is_empty();
+    if is_draw && first_to_n_settings.is_none() {
+        return Err("勝者がいない結果はFirst to N winsのSetでのみ確定できます。".to_owned());
+    }
+    if input.confirmed {
+        if let Some(settings) = first_to_n_settings.as_ref() {
+            ensure_first_to_n_set_is_next(
+                &snapshot,
+                &input.event_id,
+                &phase_group_id,
+                &input.set_id,
+                settings,
+            )?;
+        }
+    }
     if let Some(sender_user_id) = external_report_authorization {
         if phase_group_id.trim().is_empty() {
             return Err("外部報告の対象プールを特定できません。".to_owned());
@@ -11134,7 +11500,7 @@ fn upsert_local_set_result_inner(
                 "ローカル結果の保存対象setがローカルsnapshotに見つかりません。".to_owned()
             })?;
 
-        set_snapshot.winner_id = input.confirmed.then_some(input.winner_id.clone());
+        set_snapshot.winner_id = (input.confirmed && !is_draw).then_some(input.winner_id.clone());
         set_snapshot.state = if input.confirmed { 3 } else { 2 };
         if input.confirmed {
             restore_missing_slot_entrants(
@@ -11151,13 +11517,33 @@ fn upsert_local_set_result_inner(
             .iter()
             .map(|score| score.entrant_id.clone())
             .collect::<Vec<_>>();
-        if input.winner_id.trim().is_empty()
-            || !result_entrant_ids_match_set_roster(
-                set_snapshot,
-                &input.winner_id,
-                &score_entrant_ids,
-            )
-        {
+        let score_roster_matches = if is_draw {
+            let entrants = set_snapshot
+                .slots
+                .iter()
+                .filter_map(|slot| slot.entrant_id.as_deref())
+                .collect::<HashSet<_>>();
+            let draw_scores_valid = input.slot_scores.is_empty()
+                || (input.slot_scores.len() == 2
+                    && input.slot_scores.iter().all(|score| score.score >= 0)
+                    && input.slot_scores[0].score == input.slot_scores[1].score);
+            entrants.len() == 2
+                && draw_scores_valid
+                && (input.slot_scores.is_empty()
+                    || (score_entrant_ids.iter().collect::<HashSet<_>>().len() == 2
+                        && score_entrant_ids
+                            .iter()
+                            .all(|entrant_id| entrants.contains(entrant_id.as_str()))))
+                && !input.direct_win
+        } else {
+            !input.winner_id.trim().is_empty()
+                && result_entrant_ids_match_set_roster(
+                    set_snapshot,
+                    &input.winner_id,
+                    &score_entrant_ids,
+                )
+        };
+        if !score_roster_matches {
             return Err(
                 "現在のset参加者と結果入力が一致しません。組み合わせを確認してから入力し直してください。"
                     .to_owned(),
@@ -11165,6 +11551,10 @@ fn upsert_local_set_result_inner(
         }
 
         for slot in &mut set_snapshot.slots {
+            if is_draw && input.slot_scores.is_empty() {
+                slot.score = None;
+                continue;
+            }
             if let Some(entrant_id) = slot.entrant_id.as_ref() {
                 if let Some(found) = input
                     .slot_scores
@@ -11186,6 +11576,13 @@ fn upsert_local_set_result_inner(
 
     let score_csv = if input.direct_win {
         String::new()
+    } else if is_draw && input.slot_scores.is_empty() {
+        String::new()
+    } else if is_draw {
+        format!(
+            "{}-{}",
+            input.slot_scores[0].score, input.slot_scores[1].score
+        )
     } else {
         derive_score_csv_from_slot_scores(&input.slot_scores, &input.winner_id)?
     };
@@ -11373,6 +11770,23 @@ fn upsert_local_set_result_inner(
         local_meta
             .set_play_sides
             .retain(|side| !invalidated_set_ids.contains(&side.set_id));
+    }
+
+    if should_advance && first_to_n_settings.is_some() {
+        if let Some(settings) = first_to_n_settings.as_ref() {
+            if let Some(next_set_id) =
+                append_first_to_n_set_if_needed(&mut snapshot, &applied_event_id, &phase_group_id)?
+            {
+                align_first_to_n_set_sides_with_previous(
+                    &snapshot,
+                    &mut local_meta.set_play_sides,
+                    &applied_event_id,
+                    &input.set_id,
+                    &next_set_id,
+                    settings,
+                )?;
+            }
+        }
     }
 
     save_local_meta(app, &applied_event_id, &local_meta)?;
@@ -11882,6 +12296,35 @@ pub fn upsert_local_set_play_side(
         .find(|event| event.event_id == input.event_id)
         .and_then(|event| event.sets.iter().find(|set| set.set_id == input.set_id))
         .ok_or_else(|| "サイド保存対象のsetが見つかりません。".to_owned())?;
+    let first_to_n_settings = set_snapshot
+        .phase_group_id
+        .as_deref()
+        .and_then(|phase_group_id| {
+            snapshot
+                .events
+                .iter()
+                .find(|event| event.event_id == input.event_id)
+                .and_then(|event| {
+                    event
+                        .phase_groups
+                        .iter()
+                        .find(|group| group.phase_group_id == phase_group_id)
+                })
+        })
+        .and_then(|group| group.first_to_n_wins.as_ref());
+    if input.play_side.is_some() {
+        if let (Some(phase_group_id), Some(settings)) =
+            (set_snapshot.phase_group_id.as_deref(), first_to_n_settings)
+        {
+            ensure_first_to_n_set_is_next(
+                &snapshot,
+                &input.event_id,
+                phase_group_id,
+                &input.set_id,
+                settings,
+            )?;
+        }
+    }
 
     let snapshot_entrant_ids = set_snapshot
         .slots
@@ -11908,6 +12351,41 @@ pub fn upsert_local_set_play_side(
         .retain(|item| item.set_id != input.set_id);
 
     if let Some(play_side) = input.play_side {
+        if first_to_n_settings.is_some() {
+            if let Some(phase_group_id) = set_snapshot.phase_group_id.as_deref() {
+                let event = snapshot
+                    .events
+                    .iter()
+                    .find(|event| event.event_id == input.event_id)
+                    .ok_or_else(|| "First to N winsのイベントが見つかりません。".to_owned())?;
+                let mut group_sets = event
+                    .sets
+                    .iter()
+                    .filter(|set| set.phase_group_id.as_deref() == Some(phase_group_id))
+                    .collect::<Vec<_>>();
+                group_sets.sort_by_key(|set| {
+                    set.identifier
+                        .as_deref()
+                        .and_then(|identifier| identifier.parse::<usize>().ok())
+                        .unwrap_or(usize::MAX)
+                });
+                let current_index = group_sets
+                    .iter()
+                    .position(|set| set.set_id == input.set_id)
+                    .ok_or_else(|| {
+                        "First to N winsのサイド保存対象Setが見つかりません。".to_owned()
+                    })?;
+                let future_set_ids = group_sets
+                    .iter()
+                    .skip(current_index + 1)
+                    .map(|set| set.set_id.as_str())
+                    .collect::<HashSet<_>>();
+                local_meta
+                    .set_play_sides
+                    .retain(|side| !future_set_ids.contains(side.set_id.as_str()));
+            }
+        }
+
         let opponent_id = entrant_ids
             .iter()
             .find(|id| id.as_str() != input.entrant_id)
@@ -12307,3 +12785,7 @@ pub fn set_event_last_phase_pool_selection(
 #[cfg(test)]
 #[path = "storage/tests/progression_source_tests.rs"]
 mod progression_source_tests;
+
+#[cfg(test)]
+#[path = "storage/tests/first_to_n_wins_tests.rs"]
+mod first_to_n_wins_tests;

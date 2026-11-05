@@ -183,13 +183,23 @@ export type TournamentShareArchive = {
 export type LocalEventPhaseConfig = {
   name: string;
   poolCount: number;
-  bracketType: "SINGLE_ELIMINATION" | "DOUBLE_ELIMINATION" | "ROUND_ROBIN";
+  bracketType: "SINGLE_ELIMINATION" | "DOUBLE_ELIMINATION" | "ROUND_ROBIN" | "FIRST_TO_N_WINS";
   qualifiersPerPool: number;
   tiebreakOrder: LocalEventTieBreakRule[];
   enabledTiebreakRules: LocalEventTieBreakRule[];
   thirdPlaceMatch: boolean;
   fifthPlaceMatch: boolean;
   grandFinalReset: boolean;
+  firstToNWins?: LocalEventFirstToNWinsConfig | null;
+};
+
+export type LocalEventFirstToNWinsConfig = {
+  phaseSetCount: number;
+  winsRequired: number;
+  playerOneEntrantId: string;
+  playAllMatches: boolean;
+  drawCountsAsWin: boolean;
+  suddenDeath: boolean;
 };
 
 export type LocalEventTieBreakRule =

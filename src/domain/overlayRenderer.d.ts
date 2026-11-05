@@ -9,6 +9,17 @@ export type OverlayRenderState = {
   bluePlayerName: string;
   redSetWins: number;
   blueSetWins: number;
+  firstToNWins?: {
+    playerOneName: string;
+    playerTwoName: string;
+    winnerName?: string | null;
+    playerOneWins: number;
+    playerTwoWins: number;
+    setNumbers: number[];
+    setCompleted: boolean[];
+    playerOneResults: Array<boolean | null>;
+    playerTwoResults: Array<boolean | null>;
+  } | null;
   redItems?: string[][];
   blueItems?: string[][];
   roundText: string | null;

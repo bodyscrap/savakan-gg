@@ -36,6 +36,7 @@ function mockLocalPhaseState(
   requireItemSelections = true,
   selectionsConfirmed = true,
   grandFinalReset = true,
+  winsRequired = 10,
 ) {
   const phases: LocalEventPhaseConfig[] = Array.from({ length: 3 }, (_, index) => ({
     name: `Custom phase ${index + 1}`,
@@ -47,6 +48,16 @@ function mockLocalPhaseState(
     thirdPlaceMatch: checked,
     fifthPlaceMatch: checked,
     grandFinalReset,
+    firstToNWins: bracketType === "FIRST_TO_N_WINS"
+      ? {
+        phaseSetCount: winsRequired * 2 - 1,
+        winsRequired,
+        playerOneEntrantId: "player-0",
+        playAllMatches: false,
+        drawCountsAsWin: false,
+        suddenDeath: false,
+      }
+      : undefined,
   }));
   registration = {
       ...defaultLocalEventRegistration(),
@@ -79,6 +90,31 @@ function snapshotElement() {
     canCreateSnapshot={false} onCreateSnapshot={vi.fn()}
     senderUserId="sender" canCreateLocalSnapshot onCreateLocalSnapshot={vi.fn()}
   />;
+}
+
+function clickLocalEventCreateButton(form: React.ReactElement) {
+  const findClick = (node: React.ReactNode): (() => void) | null => {
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const click = findClick(child);
+        if (click) return click;
+      }
+      return null;
+    }
+    if (!React.isValidElement(node)) return null;
+    const props = node.props as {
+      type?: string;
+      children?: React.ReactNode;
+      onClick?: () => void;
+    };
+    if (props.type === "button" && props.children === "ローカルeventを作成" && props.onClick) {
+      return props.onClick;
+    }
+    return findClick(props.children);
+  };
+  const click = findClick(form);
+  expect(click).toBeTypeOf("function");
+  click?.();
 }
 
 describe("snapshot creation defaults", () => {
@@ -218,12 +254,49 @@ describe("local event phase settings", () => {
     const html = renderToStaticMarkup(form);
     expect(html.match(new RegExp(`<input type="checkbox"${enabled ? ' checked=""' : ""}/>GF Reset`, "g")))
       .toHaveLength(3);
-    form.props.children[2].props.children[2].props.children.props.onClick();
+    clickLocalEventCreateButton(form);
     expect(onCreate.mock.calls[0][0].phases.map((phase) => phase.grandFinalReset)).toEqual([enabled, enabled, enabled]);
   });
 
   it.each(["SINGLE_ELIMINATION", "ROUND_ROBIN"] as const)("does not show GF Reset for %s", (type) => {
     expect(renderLocalPhases(1, type, 8)).not.toContain("GF Reset");
+  });
+
+  it("shows First to N wins controls for a two-player local event", () => {
+    const html = renderLocalPhases(1, "FIRST_TO_N_WINS", 2);
+    expect(html).toMatch(/<option value="FIRST_TO_N_WINS"[^>]*>First to N wins<\/option>/);
+    expect(html).toContain("目標勝利数");
+    expect(html).not.toContain("先にこのSet数勝利したプレイヤーが勝ちとなります。");
+    expect(html).toContain("総試合数: 19試合 (2N-1)");
+    expect(html).toContain("初期1Pプレイヤー");
+    expect(html).toContain("全試合の実施");
+    expect(html).toContain("ドローを勝利にカウント");
+    expect(html).toContain("サドンデス");
+    expect(html).toContain("Player 0");
+    expect(html).toContain("Player 1");
+  });
+
+  it("derives the total scheduled matches as 2N-1 from the target wins", () => {
+    vi.mocked(React.useEffect).mockImplementation(() => {});
+    mockLocalPhaseState(1, "FIRST_TO_N_WINS", 2, 1, true, true, true, true, 3);
+    const onCreate = vi.fn<(input: CreateLocalEventSnapshotInput) => void>();
+    const tree = CreateSnapshot({ ...snapshotElement().props, onCreateLocalSnapshot: onCreate });
+    const localForm = tree.props.children[2];
+    const form = localForm.type(localForm.props);
+
+    expect(renderToStaticMarkup(form)).toContain("総試合数: 5試合 (2N-1)");
+    clickLocalEventCreateButton(form);
+    expect(onCreate.mock.calls[0][0].phases[0].firstToNWins).toMatchObject({
+      winsRequired: 3,
+      phaseSetCount: 5,
+    });
+  });
+
+  it("does not allow First to N wins to span multiple phases", () => {
+    const html = renderLocalPhases(2, "FIRST_TO_N_WINS", 2);
+    expect(html).toMatch(/<option value="2"[^>]*disabled/);
+    expect(html).toContain("First to N wins は1フェーズのみ指定できます。");
+    expect(html).toContain('<button type="button" disabled="">ローカルeventを作成</button>');
   });
 
   it.each([false, true])("gates creation of incomplete registrations when required=%s", (required) => {
@@ -248,7 +321,7 @@ describe("local event phase settings", () => {
           const tree = CreateSnapshot({ ...snapshotElement().props, onCreateLocalSnapshot: onCreate });
           const localForm = tree.props.children[2];
           const form = localForm.type(localForm.props);
-          form.props.children[2].props.children[2].props.children.props.onClick();
+          clickLocalEventCreateButton(form);
           expect(onCreate).toHaveBeenCalledOnce();
           const submitted = onCreate.mock.calls[0][0];
           expect(submitted.participants).toHaveLength(phaseCount === 1 ? players * 2 : 32);

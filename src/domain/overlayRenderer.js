@@ -26,6 +26,8 @@ export function resolveOverlayText(component, state, now = new Date()) {
   if (component.source === "number") return String(component.numberValue);
   if (component.source === "eventAlias") return String(state.eventAlias ?? "");
   if (!state.active) return "";
+  if (component.source === "firstToNWinsPlayerOneWins") return String(state.firstToNWins?.playerOneWins ?? "");
+  if (component.source === "firstToNWinsPlayerTwoWins") return String(state.firstToNWins?.playerTwoWins ?? "");
   const lines = String(state.roundText || "").split(/\r?\n/).filter((line) => line.trim());
   if (component.source === "setName") return lines[0] || "";
   if (component.source === "roundName") return lines.slice(1).join("\n");
@@ -341,6 +343,202 @@ function releaseElementPlaybackUrls(element) {
   for (const image of element.querySelectorAll?.("img") ?? []) releaseImagePlaybackUrl(image);
 }
 
+function firstToNWinsResultLabel(name, winnerName) {
+  if (!winnerName) return "";
+  return name === winnerName ? "勝者" : "敗者";
+}
+
+function renderFirstToNWinsScoreboard(container, component, state, nameElements) {
+  container.replaceChildren();
+  Object.assign(container.style, {
+    display: "block", width: "100%", height: "100%", overflow: "hidden",
+    whiteSpace: "nowrap", overflowWrap: "normal",
+  });
+  const data = state.firstToNWins;
+  if (!data) return;
+
+  const length = Math.min(
+    data.setNumbers.length,
+    data.setCompleted.length,
+    data.playerOneResults.length,
+    data.playerTwoResults.length,
+  );
+  const historyLimit = component.historyLimit ?? 0;
+  const historyIndices = Array.from({ length }, (_item, index) => index);
+  const displayedIndices = historyLimit > 0
+    ? (() => {
+      const completedIndices = historyIndices.filter((index) => data.setCompleted[index]);
+      if (completedIndices.length >= historyLimit) return completedIndices.slice(-historyLimit);
+      const remaining = historyLimit - completedIndices.length;
+      const pendingIndices = historyIndices.filter((index) => !data.setCompleted[index]).slice(0, remaining);
+      return [...completedIndices, ...pendingIndices].sort((left, right) => left - right);
+    })()
+    : historyIndices;
+  const cellWidth = `calc(${Math.max(1, String(Math.max(1, length)).length)}ch + 0.5em)`;
+  const table = document.createElement("table");
+  Object.assign(table.style, {
+    borderCollapse: "collapse", width: "100%", height: "100%", tableLayout: "fixed",
+    color: "inherit", font: "inherit",
+  });
+  if (component.kind === "firstToNWinsVertical") {
+    const head = document.createElement("thead");
+    const resultRow = document.createElement("tr");
+    const resultLabel = document.createElement("th");
+    Object.assign(resultLabel.style, {
+      border: "1px solid currentColor", padding: "0.08em 0.3em",
+      textAlign: "center",
+    });
+    resultRow.append(resultLabel);
+    for (const name of [data.playerOneName, data.playerTwoName]) {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = firstToNWinsResultLabel(name, data.winnerName);
+      Object.assign(cell.style, {
+        border: "1px solid currentColor", padding: "0.08em 0.3em",
+        textAlign: "center", whiteSpace: "nowrap",
+      });
+      resultRow.append(cell);
+    }
+    head.append(resultRow);
+
+    const headerRow = document.createElement("tr");
+    const headers = ["", data.playerOneName, data.playerTwoName];
+    for (const [index, text] of headers.entries()) {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      Object.assign(cell.style, {
+        border: "1px solid currentColor", padding: "0.08em 0.3em",
+        textAlign: index === 0 ? "center" : "left", overflow: "hidden", textOverflow: "ellipsis",
+      });
+      if (index === 0) {
+        cell.textContent = text;
+      } else {
+        const name = document.createElement("span");
+        cell.append(name);
+        nameElements.push({ element: cell, component, text });
+      }
+      headerRow.append(cell);
+    }
+    head.append(headerRow);
+    table.append(head);
+
+    const body = document.createElement("tbody");
+    const winsRow = document.createElement("tr");
+    const winsLabel = document.createElement("th");
+    winsLabel.scope = "row";
+    winsLabel.textContent = "勝";
+    Object.assign(winsLabel.style, {
+      border: "1px solid currentColor", padding: "0.08em 0.3em", textAlign: "center",
+    });
+    winsRow.append(winsLabel);
+    for (const wins of [data.playerOneWins, data.playerTwoWins]) {
+      const cell = document.createElement("td");
+      cell.textContent = String(wins);
+      Object.assign(cell.style, {
+        border: "1px solid currentColor", padding: "0.08em 0.3em", textAlign: "center",
+        fontWeight: "900",
+      });
+      winsRow.append(cell);
+    }
+    body.append(winsRow);
+    for (const index of displayedIndices) {
+      const row = document.createElement("tr");
+      const setCell = document.createElement("th");
+      setCell.scope = "row";
+      setCell.textContent = String(data.setNumbers[index]);
+      Object.assign(setCell.style, {
+        border: "1px solid currentColor", padding: "0.08em 0.3em", textAlign: "center",
+      });
+      row.append(setCell);
+      for (const result of [data.playerOneResults[index], data.playerTwoResults[index]]) {
+        const cell = document.createElement("td");
+        cell.textContent = result === true ? "〇" : result === false ? "×" : "";
+        Object.assign(cell.style, {
+          border: "1px solid currentColor", padding: "0.08em 0.3em", textAlign: "center",
+          fontWeight: "900",
+        });
+        row.append(cell);
+      }
+      body.append(row);
+    }
+    table.append(body);
+    container.append(table);
+    return;
+  }
+
+  const head = document.createElement("thead");
+  const headerRow = document.createElement("tr");
+  const playerHeader = document.createElement("th");
+  const winsHeader = document.createElement("th");
+  const resultHeader = document.createElement("th");
+  playerHeader.scope = "col";
+  winsHeader.scope = "col";
+  resultHeader.scope = "col";
+  winsHeader.textContent = "勝";
+  for (const cell of [resultHeader, playerHeader, winsHeader]) {
+    Object.assign(cell.style, { border: "1px solid currentColor", padding: "0.08em 0.3em" });
+    headerRow.append(cell);
+  }
+  Object.assign(resultHeader.style, { width: "3em", boxSizing: "border-box" });
+  winsHeader.style.width = cellWidth;
+  for (const index of displayedIndices) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = String(data.setNumbers[index]);
+    Object.assign(cell.style, {
+      border: "1px solid currentColor", padding: "0.08em 0.25em", width: cellWidth,
+      boxSizing: "border-box", textAlign: "center",
+    });
+    headerRow.append(cell);
+  }
+  head.append(headerRow);
+  table.append(head);
+
+  const body = document.createElement("tbody");
+  for (const [name, wins, results] of [
+    [data.playerOneName, data.playerOneWins, data.playerOneResults],
+    [data.playerTwoName, data.playerTwoWins, data.playerTwoResults],
+  ]) {
+    const row = document.createElement("tr");
+    const nameCell = document.createElement("th");
+    nameCell.scope = "row";
+    Object.assign(nameCell.style, {
+      border: "1px solid currentColor", padding: "0.08em 0.3em", textAlign: "left",
+      maxWidth: "8em", overflow: "hidden", textOverflow: "ellipsis",
+    });
+    const resultCell = document.createElement("th");
+    resultCell.scope = "row";
+    resultCell.textContent = firstToNWinsResultLabel(name, data.winnerName);
+    Object.assign(resultCell.style, {
+      border: "1px solid currentColor", padding: "0.08em 0.3em",
+      width: "3em", boxSizing: "border-box", textAlign: "center", whiteSpace: "nowrap",
+    });
+    const nameContent = document.createElement("span");
+    nameCell.append(nameContent);
+    nameElements.push({ element: nameCell, component, text: name });
+    const winsCell = document.createElement("td");
+    winsCell.textContent = String(wins);
+    Object.assign(winsCell.style, {
+      border: "1px solid currentColor", padding: "0.08em 0.3em", textAlign: "center",
+      fontWeight: "900", width: cellWidth, boxSizing: "border-box",
+    });
+    row.append(resultCell, nameCell, winsCell);
+    for (const index of displayedIndices) {
+      const cell = document.createElement("td");
+      const result = results[index];
+      cell.textContent = result === true ? "〇" : result === false ? "×" : "";
+      Object.assign(cell.style, {
+        border: "1px solid currentColor", padding: "0.08em 0.25em", textAlign: "center",
+        fontWeight: "900", width: cellWidth, boxSizing: "border-box",
+      });
+      row.append(cell);
+    }
+    body.append(row);
+  }
+  table.append(body);
+  container.append(table);
+}
+
 export function renderOverlayPreset(stage, preset, state) {
   Object.assign(stage.style, {
     position: "relative", width: `${preset.width}px`, height: `${preset.height}px`,
@@ -366,6 +564,7 @@ export function renderOverlayPreset(stage, preset, state) {
   const previous = new Map(Array.from(stage.children, (element) => [element.dataset.componentId, element]));
   const clocks = [];
   const textElements = [];
+  const scoreboardNameElements = [];
   const now = new Date();
   const previousObservation = observedOverlayValues.get(stage);
   const hasPreviousObservation = previousObservation && previousObservation.presetId === preset.id;
@@ -554,7 +753,9 @@ export function renderOverlayPreset(stage, preset, state) {
           element.firstElementChild.style.removeProperty("z-index");
           element.firstElementChild.style.removeProperty("pointer-events");
         }
-        if (component.kind === "clock") {
+        if (component.kind === "firstToNWins" || component.kind === "firstToNWinsVertical") {
+          renderFirstToNWinsScoreboard(element.firstElementChild, component, state, scoreboardNameElements);
+        } else if (component.kind === "clock") {
           element.firstElementChild.textContent = text;
           clocks.push({ element, format: component.clockFormat, content: element.firstElementChild });
         } else {
@@ -571,6 +772,7 @@ export function renderOverlayPreset(stage, preset, state) {
   for (const image of imagesToRestart) restartImageAnimation(image);
   const fitTexts = () => {
     for (const { element, component, text } of textElements) fitOverlayText(element, component, text);
+    for (const { element, component, text } of scoreboardNameElements) fitOverlayText(element, component, text);
   };
   fitTexts();
   let disposed = false;
