@@ -95,7 +95,12 @@ describe("player metadata save controls", () => {
 
   it("collapses item category settings by default and combines the participant heading and count", () => {
     const html = renderToStaticMarkup(<EventSetting {...setup()} />);
-    expect(html).toMatch(/<details class="item-category-settings"><summary><h3>アイテム選択カテゴリの設定<\/h3><\/summary>[\s\S]*設定の適用&amp;保存[\s\S]*<\/details>/);
+    expect(html).toMatch(/<details class="item-category-settings"><summary><h3>アイテム選択カテゴリの設定<\/h3><\/summary>[\s\S]*カテゴリは最大3つまで設定できます。[\s\S]*<\/details>/);
+    const itemSettings = html.match(/<details class="item-category-settings">[\s\S]*?<\/details>/)?.[0] ?? "";
+    expect(itemSettings).not.toContain("プレイヤー表示");
+    expect(itemSettings).not.toContain("設定の適用&amp;保存");
+    expect(html).toMatch(/プレイヤー表示[\s\S]*<details class="item-category-settings">[\s\S]*<\/details>[\s\S]*設定の適用&amp;保存/);
+    expect(html).toContain("1P/2P決定方法、プレイヤー表示、アイテム選択カテゴリの設定を適用して保存します。");
     expect(html).not.toMatch(/<details[^>]*\bopen\b/);
     expect(html).toContain("<h3>参加者一覧(1 人)</h3>");
     expect(html).not.toContain("参加人数:");

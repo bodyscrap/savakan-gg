@@ -542,6 +542,7 @@ export const componentTranslations: Record<string, string> = {
   "プレイヤー表示": "Player display",
   "エイリアス名を使う": "Use aliases",
   "プレイヤー表示を更新": "Update player display",
+  "1P/2P決定方法、プレイヤー表示、アイテム選択カテゴリの設定を適用して保存します。": "Applies and saves the 1P/2P method, player display, and item selection category settings.",
   "設定の適用&保存": "Apply & save settings",
   "カテゴリは最大3つまで設定できます。カテゴリ重複は不可で、カテゴリごとの件数条件と全体件数条件を設定します。": "Configure up to three distinct categories. Set item count limits for each category and for the overall selection.",
   "初期PhaseのプレイヤーSeedシャッフル": "Shuffle player seeds in the initial phase",

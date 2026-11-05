@@ -1958,6 +1958,11 @@ button:disabled {
   overflow: hidden;
 }
 
+.first-to-n-wins-match-completed {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 1px #86efac inset;
+}
+
 .first-to-n-wins-match:hover,
 .first-to-n-wins-match:focus-visible {
   border-color: #2563eb;

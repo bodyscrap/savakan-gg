@@ -1,5 +1,9 @@
 import { t } from "../i18n";
-import { isCompletedSet, type FirstToNWinsPhaseSnapshot } from "../domain/bracketDisplay";
+import {
+  isCompletedSet,
+  resolveEntrantDisplayName,
+  type FirstToNWinsPhaseSnapshot,
+} from "../domain/bracketDisplay";
 import type { SetSnapshot } from "../domain/bracketProgression";
 import type { CSSProperties, MouseEvent } from "react";
 
@@ -8,6 +12,8 @@ type Props = {
   sets: SetSnapshot[];
   allSets: SetSnapshot[];
   directWinSetIds?: ReadonlySet<string>;
+  aliasNamesByEntrantId?: Record<string, string | undefined>;
+  useAliasName?: boolean;
   activeOverlaySetId?: string | null;
   scaleStyle: CSSProperties;
   interactionDisabled?: boolean;
@@ -22,6 +28,8 @@ export function FirstToNWinsBracket({
   sets,
   allSets,
   directWinSetIds = new Set(),
+  aliasNamesByEntrantId = {},
+  useAliasName = false,
   activeOverlaySetId = null,
   scaleStyle,
   interactionDisabled,
@@ -30,6 +38,13 @@ export function FirstToNWinsBracket({
   getSetSlotSide,
   onActivateSet,
 }: Props) {
+  const displayName = (slot: SetSnapshot["slots"][number] | undefined) => slot
+    ? resolveEntrantDisplayName(
+      slot.entrantName,
+      slot.entrantId ? aliasNamesByEntrantId[slot.entrantId] : undefined,
+      useAliasName,
+    )
+    : "";
   const eventOrder = new Map(allSets.map((set, index) => [set.setId, index + 1]));
   const setOrder = (set: SetSnapshot) => {
     const identity = Number(set.identifier);
@@ -42,12 +57,14 @@ export function FirstToNWinsBracket({
   const sequenceBySetId = new Map(orderedAllSets.map((set, index) => [set.setId, index + 1]));
   const nextUncompletedSet = orderedAllSets.find((set) => !isCompletedSet(set));
   const orderedSets = [...sets].sort((left, right) => setOrder(left) - setOrder(right));
-  const playerOneName = orderedSets
+  const playerOneSlot = orderedSets
     .flatMap((set) => set.slots)
-    .find((slot) => slot.entrantId === settings.playerOneEntrantId)?.entrantName ?? "";
-  const playerTwoName = orderedSets
+    .find((slot) => slot.entrantId === settings.playerOneEntrantId);
+  const playerTwoSlot = orderedSets
     .flatMap((set) => set.slots)
-    .find((slot) => slot.entrantId !== settings.playerOneEntrantId && slot.entrantId !== null)?.entrantName ?? "";
+    .find((slot) => slot.entrantId !== settings.playerOneEntrantId && slot.entrantId !== null);
+  const playerOneName = displayName(playerOneSlot);
+  const playerTwoName = displayName(playerTwoSlot);
   let playerOneWins = 0;
   let playerTwoWins = 0;
   let clinchedSequence: number | null = null;
@@ -73,11 +90,9 @@ export function FirstToNWinsBracket({
         : set.winnerId;
     }
   }
-  const clinchedWinnerName = clinchedWinnerId === settings.playerOneEntrantId
-    ? playerOneName
-    : orderedSets
-      .flatMap((set) => set.slots)
-      .find((slot) => slot.entrantId === clinchedWinnerId)?.entrantName ?? "";
+  const clinchedWinnerSlot = orderedSets.flatMap((set) => set.slots)
+    .find((slot) => slot.entrantId === clinchedWinnerId);
+  const clinchedWinnerName = displayName(clinchedWinnerSlot);
   const nextUncompletedSequence = nextUncompletedSet
     ? sequenceBySetId.get(nextUncompletedSet.setId) ?? null
     : null;
@@ -143,6 +158,8 @@ export function FirstToNWinsBracket({
           const playerOne = set.slots.find((slot) => slot.entrantId === settings.playerOneEntrantId);
           const playerTwo = set.slots.find((slot) =>
             slot.entrantId !== settings.playerOneEntrantId && slot.entrantId !== null);
+          const playerOneDisplayName = displayName(playerOne) || playerOneName;
+          const playerTwoDisplayName = displayName(playerTwo) || playerTwoName;
           const isPlayableSet = !isCompletedSet(set)
             && sequence === nextUncompletedSequence
             && (lastActiveSequence === null || sequence <= lastActiveSequence);
@@ -156,10 +173,11 @@ export function FirstToNWinsBracket({
             : "";
           const nextSequence = nextUncompletedSequence;
           const isDirectWin = directWinSetIds.has(set.setId);
+          const isCompleted = isCompletedSet(set);
           return (
             <button
               type="button"
-              className={`first-to-n-wins-match${activeOverlaySetId === set.setId ? " set-card-live" : ""}`}
+              className={`first-to-n-wins-match${isCompleted ? " first-to-n-wins-match-completed" : ""}${activeOverlaySetId === set.setId ? " set-card-live" : ""}`}
               key={set.setId}
               disabled={interactionDisabled
                 || (lastActiveSequence !== null && sequence > lastActiveSequence)
@@ -167,8 +185,8 @@ export function FirstToNWinsBracket({
               onClick={(event) => onActivateSet(set, event)}
               aria-label={t("Set {number}: {playerOne} 対 {playerTwo}", {
                 number: sequence,
-                playerOne: playerOne?.entrantName ?? playerOneName,
-                playerTwo: playerTwo?.entrantName ?? playerTwoName,
+                playerOne: playerOneDisplayName,
+                playerTwo: playerTwoDisplayName,
               })}
             >
               <span className="first-to-n-wins-match-number">
@@ -181,9 +199,9 @@ export function FirstToNWinsBracket({
                 </span>
                 <span
                   className={`simple-player-name${set.winnerId === playerOne?.entrantId ? " first-to-n-wins-winner" : ""}`}
-                  title={playerOne?.entrantName ?? playerOneName}
+                  title={playerOneDisplayName}
                 >
-                  {playerOne?.entrantName ?? playerOneName}
+                  {playerOneDisplayName}
                 </span>
                 <span
                   className={`simple-games${isDraw(set) ? " draw" : set.winnerId === playerOne?.entrantId ? " win" : set.winnerId ? " lose" : ""}`}
@@ -198,9 +216,9 @@ export function FirstToNWinsBracket({
                 </span>
                 <span
                   className={`simple-player-name${set.winnerId === playerTwo?.entrantId ? " first-to-n-wins-winner" : ""}`}
-                  title={playerTwo?.entrantName ?? playerTwoName}
+                  title={playerTwoDisplayName}
                 >
-                  {playerTwo?.entrantName ?? playerTwoName}
+                  {playerTwoDisplayName}
                 </span>
                 <span
                   className={`simple-games${isDraw(set) ? " draw" : set.winnerId === playerTwo?.entrantId ? " win" : set.winnerId ? " lose" : ""}`}

@@ -207,11 +207,6 @@ export function EventSetting({ event, rules, playerMeta, actions, seedSwap }: Ev
               </div>
             </div>
 
-            <details className="item-category-settings">
-            <summary><h3>{t("アイテム選択カテゴリの設定")}</h3></summary>
-            <div className="tournament-settings">
-            <CategorySettingsFields rules={rules} actions={actions} />
-
             <div className="setting-row">
               <p className="setting-row-title">{t("プレイヤー表示")}</p>
               <div className="setting-row-fields player-display">
@@ -226,12 +221,19 @@ export function EventSetting({ event, rules, playerMeta, actions, seedSwap }: Ev
               </div>
             </div>
 
-            <div className="setting-row save">
-              <button type="button" className="ghost" onClick={onSaveEventManagementSetting}>{t("設定の適用&保存")}</button>
-            </div>
+            <details className="item-category-settings">
+            <summary><h3>{t("アイテム選択カテゴリの設定")}</h3></summary>
+            <div className="tournament-settings">
+            <CategorySettingsFields rules={rules} actions={actions} />
+
             </div>
           <p className="meta">{t("カテゴリは最大3つまで設定できます。カテゴリ重複は不可で、カテゴリごとの件数条件と全体件数条件を設定します。")}</p>
             </details>
+
+            <div className="setting-row save">
+              <p className="meta">{t("1P/2P決定方法、プレイヤー表示、アイテム選択カテゴリの設定を適用して保存します。")}</p>
+              <button type="button" className="ghost" onClick={onSaveEventManagementSetting}>{t("設定の適用&保存")}</button>
+            </div>
           </div>
 
           <div className="setting-row" style={{ marginTop: "0.9rem" }}>

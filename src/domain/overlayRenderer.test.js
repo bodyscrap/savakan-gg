@@ -258,6 +258,9 @@ describe("overlay text fitting with measured dimensions", () => {
 
     const dispose = renderOverlayPreset(stage, preset, state);
     const table = stage.children[0].children[0].children[0];
+    expect(stage.children[0].style.fontWeight).toBe("700");
+    expect(table.children.flatMap((section) => section.children.flatMap((row) => row.children))
+      .every((cell) => cell.style.fontWeight === "inherit")).toBe(true);
     expect(table.children[0].tagName).toBe("THEAD");
     expect(table.children[0].children[0].children.map((cell) => cell.textContent)).toEqual(["", "", "勝", "3", "4"]);
     expect(table.children[1].children.map((row) => row.children.map((cell) =>
@@ -274,6 +277,14 @@ describe("overlay text fitting with measured dimensions", () => {
     expect(table.children[1].children[1].children.slice(2).map((cell) => cell.style.width))
       .toEqual(["calc(1ch + 0.5em)", "calc(1ch + 0.5em)", "calc(1ch + 0.5em)"]);
     dispose();
+
+    preset.components[0].bold = false;
+    const disposeNotBold = renderOverlayPreset(stage, preset, state);
+    const notBoldTable = stage.children[0].children[0].children[0];
+    expect(stage.children[0].style.fontWeight).toBe("400");
+    expect(notBoldTable.children.flatMap((section) => section.children.flatMap((row) => row.children))
+      .every((cell) => cell.style.fontWeight === "inherit")).toBe(true);
+    disposeNotBold();
 
     state.firstToNWins.winnerName = null;
     state.firstToNWins.playerOneResults = [false, false, false, false];
@@ -354,7 +365,7 @@ describe("overlay text fitting with measured dimensions", () => {
         playerOneName: "Player One", playerTwoName: "Player Two",
         winnerName: "Player One",
         playerOneWins: 2, playerTwoWins: 1,
-        setNumbers: [1, 2, 3],
+        setNumbers: [1, 2, 12],
         setCompleted: [true, true, true],
         playerOneResults: [true, false, true],
         playerTwoResults: [false, true, false],
@@ -363,15 +374,22 @@ describe("overlay text fitting with measured dimensions", () => {
 
     const dispose = renderOverlayPreset(stage, preset, state);
     const table = stage.children[0].children[0].children[0];
+    expect(stage.children[0].style.fontWeight).toBe("700");
+    expect(table.children.flatMap((section) => section.children.flatMap((row) => row.children))
+      .every((cell) => cell.style.fontWeight === "inherit")).toBe(true);
     expect(table.children[0].tagName).toBe("THEAD");
     expect(table.children[0].children[0].children.map((cell) => cell.textContent)).toEqual(["", "勝者", "敗者"]);
     expect(table.children[0].children[1].children.map((cell) => cell.children[0]?.textContent || cell.textContent))
       .toEqual(["", "Player One", "Player Two"]);
+    expect(table.children[0].children[0].children[0].style.width).toBe("calc(2ch + 0.5em)");
+    expect(table.children[0].children[1].children[0].style.width).toBe("calc(2ch + 0.5em)");
     expect(stage.children[0].children[0].style).toMatchObject({ whiteSpace: "nowrap", overflowWrap: "normal" });
     expect(table.children[0].children[1].children.slice(1).map((cell) => cell.children[0].style.whiteSpace))
       .toEqual(["pre-wrap", "pre-wrap"]);
     expect(table.children[1].children.map((row) => row.children.map((cell) => cell.textContent)))
-      .toEqual([["勝", "2", "1"], ["1", "〇", "×"], ["2", "×", "〇"], ["3", "〇", "×"]]);
+      .toEqual([["勝", "2", "1"], ["1", "〇", "×"], ["2", "×", "〇"], ["12", "〇", "×"]]);
+    expect(table.children[1].children.map((row) => row.children[0].style.width))
+      .toEqual(["calc(2ch + 0.5em)", "calc(2ch + 0.5em)", "calc(2ch + 0.5em)", "calc(2ch + 0.5em)"]);
     dispose();
   });
 

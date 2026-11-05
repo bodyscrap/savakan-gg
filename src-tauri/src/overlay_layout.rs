@@ -238,8 +238,16 @@ impl Layouts {
                     || c.name.as_ref().is_some_and(|name| {
                         name.trim().is_empty() || name.encode_utf16().count() > 256
                     })
-                    || !["text", "number", "image", "item", "clock", "firstToNWins"]
-                        .contains(&c.kind.as_str())
+                    || ![
+                        "text",
+                        "number",
+                        "image",
+                        "item",
+                        "clock",
+                        "firstToNWins",
+                        "firstToNWinsVertical",
+                    ]
+                    .contains(&c.kind.as_str())
                     || ![
                         "text",
                         "number",
@@ -264,7 +272,8 @@ impl Layouts {
                     } else {
                         c.source == "clock"
                     })
-                    || (c.kind == "firstToNWins" && c.source != "text")
+                    || (["firstToNWins", "firstToNWinsVertical"].contains(&c.kind.as_str())
+                        && c.source != "text")
                     || c.clock_format
                         .as_ref()
                         .is_some_and(|value| value.is_empty() || value.encode_utf16().count() > 256)
@@ -966,17 +975,19 @@ mod tests {
     #[test]
     fn persists_first_to_n_wins_history_limit_and_rejects_oversized_values() {
         let mut layouts = sample();
-        let component = &mut layouts.presets[0].components[0];
-        component.kind = "firstToNWins".to_owned();
-        for history_limit in [0, 1, 9_007_199_254_740_991] {
-            layouts.presets[0].components[0].history_limit = Some(history_limit);
-            layouts.validate().unwrap();
-            let decoded: Layouts =
-                serde_json::from_slice(&serde_json::to_vec(&layouts).unwrap()).unwrap();
-            assert_eq!(
-                decoded.presets[0].components[0].history_limit,
-                Some(history_limit)
-            );
+        for kind in ["firstToNWins", "firstToNWinsVertical"] {
+            layouts.presets[0].components[0].kind = kind.to_owned();
+            for history_limit in [0, 1, 9_007_199_254_740_991] {
+                layouts.presets[0].components[0].history_limit = Some(history_limit);
+                layouts.validate().unwrap();
+                let decoded: Layouts =
+                    serde_json::from_slice(&serde_json::to_vec(&layouts).unwrap()).unwrap();
+                assert_eq!(decoded.presets[0].components[0].kind, kind);
+                assert_eq!(
+                    decoded.presets[0].components[0].history_limit,
+                    Some(history_limit)
+                );
+            }
         }
         layouts.presets[0].components[0].history_limit = Some(9_007_199_254_740_992);
         assert!(layouts.validate().is_err());

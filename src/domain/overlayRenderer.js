@@ -348,6 +348,16 @@ function firstToNWinsResultLabel(name, winnerName) {
   return name === winnerName ? "勝者" : "敗者";
 }
 
+function inheritFirstToNWinsFontWeight(table) {
+  for (const section of table.children) {
+    for (const row of section.children) {
+      for (const cell of row.children) {
+        cell.style.fontWeight = "inherit";
+      }
+    }
+  }
+}
+
 function renderFirstToNWinsScoreboard(container, component, state, nameElements) {
   container.replaceChildren();
   Object.assign(container.style, {
@@ -375,6 +385,11 @@ function renderFirstToNWinsScoreboard(container, component, state, nameElements)
     })()
     : historyIndices;
   const cellWidth = `calc(${Math.max(1, String(Math.max(1, length)).length)}ch + 0.5em)`;
+  const verticalLabelWidth = `calc(${Math.max(
+    2,
+    String(Math.max(data.playerOneWins, data.playerTwoWins)).length,
+    ...displayedIndices.map((index) => String(data.setNumbers[index]).length),
+  )}ch + 0.5em)`;
   const table = document.createElement("table");
   Object.assign(table.style, {
     borderCollapse: "collapse", width: "100%", height: "100%", tableLayout: "fixed",
@@ -386,7 +401,7 @@ function renderFirstToNWinsScoreboard(container, component, state, nameElements)
     const resultLabel = document.createElement("th");
     Object.assign(resultLabel.style, {
       border: "1px solid currentColor", padding: "0.08em 0.3em",
-      textAlign: "center",
+      width: verticalLabelWidth, boxSizing: "border-box", textAlign: "center",
     });
     resultRow.append(resultLabel);
     for (const name of [data.playerOneName, data.playerTwoName]) {
@@ -408,6 +423,8 @@ function renderFirstToNWinsScoreboard(container, component, state, nameElements)
       cell.scope = "col";
       Object.assign(cell.style, {
         border: "1px solid currentColor", padding: "0.08em 0.3em",
+        width: index === 0 ? verticalLabelWidth : "auto",
+        boxSizing: "border-box",
         textAlign: index === 0 ? "center" : "left", overflow: "hidden", textOverflow: "ellipsis",
       });
       if (index === 0) {
@@ -428,7 +445,8 @@ function renderFirstToNWinsScoreboard(container, component, state, nameElements)
     winsLabel.scope = "row";
     winsLabel.textContent = "勝";
     Object.assign(winsLabel.style, {
-      border: "1px solid currentColor", padding: "0.08em 0.3em", textAlign: "center",
+      border: "1px solid currentColor", padding: "0.08em 0.3em",
+      width: verticalLabelWidth, boxSizing: "border-box", textAlign: "center",
     });
     winsRow.append(winsLabel);
     for (const wins of [data.playerOneWins, data.playerTwoWins]) {
@@ -436,7 +454,6 @@ function renderFirstToNWinsScoreboard(container, component, state, nameElements)
       cell.textContent = String(wins);
       Object.assign(cell.style, {
         border: "1px solid currentColor", padding: "0.08em 0.3em", textAlign: "center",
-        fontWeight: "900",
       });
       winsRow.append(cell);
     }
@@ -447,7 +464,8 @@ function renderFirstToNWinsScoreboard(container, component, state, nameElements)
       setCell.scope = "row";
       setCell.textContent = String(data.setNumbers[index]);
       Object.assign(setCell.style, {
-        border: "1px solid currentColor", padding: "0.08em 0.3em", textAlign: "center",
+        border: "1px solid currentColor", padding: "0.08em 0.3em",
+        width: verticalLabelWidth, boxSizing: "border-box", textAlign: "center",
       });
       row.append(setCell);
       for (const result of [data.playerOneResults[index], data.playerTwoResults[index]]) {
@@ -455,13 +473,13 @@ function renderFirstToNWinsScoreboard(container, component, state, nameElements)
         cell.textContent = result === true ? "〇" : result === false ? "×" : "";
         Object.assign(cell.style, {
           border: "1px solid currentColor", padding: "0.08em 0.3em", textAlign: "center",
-          fontWeight: "900",
         });
         row.append(cell);
       }
       body.append(row);
     }
     table.append(body);
+    inheritFirstToNWinsFontWeight(table);
     container.append(table);
     return;
   }
@@ -520,7 +538,7 @@ function renderFirstToNWinsScoreboard(container, component, state, nameElements)
     winsCell.textContent = String(wins);
     Object.assign(winsCell.style, {
       border: "1px solid currentColor", padding: "0.08em 0.3em", textAlign: "center",
-      fontWeight: "900", width: cellWidth, boxSizing: "border-box",
+      width: cellWidth, boxSizing: "border-box",
     });
     row.append(resultCell, nameCell, winsCell);
     for (const index of displayedIndices) {
@@ -529,13 +547,14 @@ function renderFirstToNWinsScoreboard(container, component, state, nameElements)
       cell.textContent = result === true ? "〇" : result === false ? "×" : "";
       Object.assign(cell.style, {
         border: "1px solid currentColor", padding: "0.08em 0.25em", textAlign: "center",
-        fontWeight: "900", width: cellWidth, boxSizing: "border-box",
+        width: cellWidth, boxSizing: "border-box",
       });
       row.append(cell);
     }
     body.append(row);
   }
   table.append(body);
+  inheritFirstToNWinsFontWeight(table);
   container.append(table);
 }
 

@@ -84,6 +84,8 @@ type BracketTabProps = {
   onReport: () => void;
   roundRobin: RoundRobinView;
   firstToNWinsAllSets: SetSnapshot[];
+  aliasNamesByEntrantId?: Record<string, string | undefined>;
+  useAliasName?: boolean;
   activeOverlaySetId: string | null;
   onUpdateStreamStart: () => void;
   directWinSetIds: ReadonlySet<string>;
@@ -144,6 +146,8 @@ export function BracketTab({
   onReport,
   roundRobin,
   firstToNWinsAllSets,
+  aliasNamesByEntrantId,
+  useAliasName,
   activeOverlaySetId,
   onUpdateStreamStart,
   directWinSetIds,
@@ -341,6 +345,8 @@ export function BracketTab({
                     settings={selectedPhasePoolGroup.firstToNWins}
                     sets={selectedPhasePoolGroup.sets}
                     allSets={firstToNWinsAllSets}
+                    aliasNamesByEntrantId={aliasNamesByEntrantId}
+                    useAliasName={useAliasName}
                     activeOverlaySetId={activeOverlaySetId}
                     directWinSetIds={directWinSetIds}
                     scaleStyle={bracketScaleStyle}

@@ -26,6 +26,41 @@ function set(setId: string, identifier: string, state: number, winnerId: string 
 }
 
 describe("FirstToNWinsBracket", () => {
+  it("uses entrant aliases for First to N wins names when enabled", () => {
+    const first = set("1", "1", 2, null);
+    const renderBracket = (useAliasName: boolean) => renderToStaticMarkup(
+      <FirstToNWinsBracket
+        settings={{
+          phaseSetCount: 1,
+          winsRequired: 1,
+          playerOneEntrantId: "player-1",
+          playAllMatches: true,
+          drawCountsAsWin: false,
+          suddenDeath: false,
+        }}
+        sets={[first]}
+        allSets={[first]}
+        aliasNamesByEntrantId={{ "player-1": "Alias One", "player-2": "Alias Two" }}
+        useAliasName={useAliasName}
+        scaleStyle={{}}
+        getSetSlotSide={() => ""}
+        onActivateSet={vi.fn()}
+      />,
+    );
+
+    const aliased = renderBracket(true);
+    expect(aliased).toContain("初期1P: Alias One / 2P: Alias Two");
+    expect(aliased).toContain("Alias One 0 - 0 Alias Two");
+    expect(aliased).toContain('title="Alias One">Alias One</span>');
+    expect(aliased).toContain('title="Alias Two">Alias Two</span>');
+    expect(aliased).not.toContain("Player 1");
+    expect(aliased).not.toContain("Player 2");
+
+    const originalNames = renderBracket(false);
+    expect(originalNames).toContain("title=\"Player 1\">Player 1</span>");
+    expect(originalNames).toContain("title=\"Player 2\">Player 2</span>");
+  });
+
   it.each([
     { activeOverlaySetId: "1", busy: false, disabled: false },
     { activeOverlaySetId: null, busy: false, disabled: true },
@@ -77,7 +112,7 @@ describe("FirstToNWinsBracket", () => {
         onActivateSet={vi.fn()}
       />,
     );
-    const buttons = html.match(/<button[^>]*class="first-to-n-wins-match"[^>]*>/g) ?? [];
+    const buttons = html.match(/<button[^>]*class="[^"]*first-to-n-wins-match[^"]*"[^>]*>/g) ?? [];
 
     expect(html.indexOf("Set 1")).toBeLessThan(html.indexOf("Set 2"));
     expect(html.indexOf("Set 2")).toBeLessThan(html.indexOf("Set 3"));
@@ -113,6 +148,32 @@ describe("FirstToNWinsBracket", () => {
     expect(html).toContain('<span class="set-live-badge">配信中</span>');
   });
 
+  it("highlights completed matches with a distinct frame class", () => {
+    const completed = set("1", "1", 3, "player-1");
+    const pending = set("2", "2", 1, null);
+    const html = renderToStaticMarkup(
+      <FirstToNWinsBracket
+        settings={{
+          phaseSetCount: 2,
+          winsRequired: 2,
+          playerOneEntrantId: "player-1",
+          playAllMatches: true,
+          drawCountsAsWin: false,
+          suddenDeath: false,
+        }}
+        sets={[completed, pending]}
+        allSets={[completed, pending]}
+        scaleStyle={{}}
+        getSetSlotSide={() => ""}
+        onActivateSet={vi.fn()}
+      />,
+    );
+    const buttons = html.match(/<button[^>]*class="[^"]*first-to-n-wins-match[^"]*"[^>]*>/g) ?? [];
+
+    expect(buttons[0]).toContain("first-to-n-wins-match-completed");
+    expect(buttons[1]).not.toContain("first-to-n-wins-match-completed");
+  });
+
   it("does not allow a completed later set to bypass the first uncompleted match", () => {
     const first = set("1", "1", 1, null);
     const skipped = set("2", "2", 3, "player-2");
@@ -134,7 +195,7 @@ describe("FirstToNWinsBracket", () => {
         onActivateSet={vi.fn()}
       />,
     );
-    const buttons = html.match(/<button[^>]*class="first-to-n-wins-match"[^>]*>/g) ?? [];
+    const buttons = html.match(/<button[^>]*class="[^"]*first-to-n-wins-match[^"]*"[^>]*>/g) ?? [];
 
     expect(buttons).toHaveLength(3);
     expect(buttons[0]).not.toContain("disabled");
@@ -163,8 +224,8 @@ describe("FirstToNWinsBracket", () => {
         onActivateSet={vi.fn()}
       />,
     );
-    const defaultButtons = renderBracket(false).match(/<button[^>]*class="first-to-n-wins-match"[^>]*>/g) ?? [];
-    const allMatchesButtons = renderBracket(true).match(/<button[^>]*class="first-to-n-wins-match"[^>]*>/g) ?? [];
+    const defaultButtons = renderBracket(false).match(/<button[^>]*class="[^"]*first-to-n-wins-match[^"]*"[^>]*>/g) ?? [];
+    const allMatchesButtons = renderBracket(true).match(/<button[^>]*class="[^"]*first-to-n-wins-match[^"]*"[^>]*>/g) ?? [];
 
     expect(defaultButtons[2]).toContain("disabled");
     expect(allMatchesButtons[2]).not.toContain("disabled");
@@ -190,7 +251,7 @@ describe("FirstToNWinsBracket", () => {
         onActivateSet={vi.fn()}
       />,
     );
-    const buttons = html.match(/<button[^>]*class="first-to-n-wins-match"[^>]*>/g) ?? [];
+    const buttons = html.match(/<button[^>]*class="[^"]*first-to-n-wins-match[^"]*"[^>]*>/g) ?? [];
 
     expect(html).toContain("現在の勝利数: Player 1 1 - 1 Player 2");
     expect(html.match(/class="simple-games draw"/g)).toHaveLength(2);

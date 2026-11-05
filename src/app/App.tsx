@@ -3361,6 +3361,8 @@ function App() {
               },
             }}
             firstToNWinsAllSets={selectedEvent?.sets ?? []}
+            aliasNamesByEntrantId={currentPlayerDisplayAliasSnapshot?.aliasesByEntrantId ?? EMPTY_PLAYER_ALIAS_MAP}
+            useAliasName={currentPlayerDisplayAliasSnapshot?.enabled ?? false}
             activeOverlaySetId={obsOverlayState?.active ? obsOverlayState.currentSetId : null}
             onUpdateStreamStart={() => void updateActiveFirstToNWinsStreamStart()}
             directWinSetIds={new Set(pendingSetResults
