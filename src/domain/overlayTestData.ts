@@ -2,6 +2,8 @@ import type { OverlayRenderState } from "./overlayRenderer.js";
 
 type TestFirstToNWinsData = NonNullable<OverlayRenderState["firstToNWins"]> & {
   winnerName: string | null;
+  redPlayerWins: number;
+  bluePlayerWins: number;
 };
 
 export type OverlayTestFirstToNWinsInput = {
@@ -83,6 +85,8 @@ export function buildOverlayTestFirstToNWins(
     winsRequired,
     playerOneWins,
     playerTwoWins,
+    redPlayerWins: playerOneWins,
+    bluePlayerWins: playerTwoWins,
     setNumbers: outcomes.map((_outcome, index) => index + 1),
     setCompleted: outcomes.map(() => true),
     playerOneResults,

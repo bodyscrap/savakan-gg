@@ -1082,6 +1082,8 @@ describe("overlay content bindings", () => {
   it.each([
     { source: "firstToNWinsPlayerOneWins", expected: "12" },
     { source: "firstToNWinsPlayerTwoWins", expected: "0" },
+    { source: "firstToNWinsRedWins", expected: "3" },
+    { source: "firstToNWinsBlueWins", expected: "9" },
   ] as const)("binds $source to F2NW set wins instead of current game wins", ({ source, expected }) => {
     const component = { ...newOverlayComponent("number"), source };
     const live = {
@@ -1090,6 +1092,7 @@ describe("overlay content bindings", () => {
         playerOneName: "Player One", playerTwoName: "Player Two",
         winsRequired: 3,
         playerOneWins: 12, playerTwoWins: 0,
+        redPlayerWins: 3, bluePlayerWins: 9,
         setNumbers: [], setCompleted: [], playerOneResults: [], playerTwoResults: [],
       },
     };

@@ -97,13 +97,18 @@ describe("First to N wins overlay history", () => {
       }],
     };
 
-    expect(buildFirstToNWinsOverlayData(event, set1, { one: "Alias One" }, true)).toEqual({
+    expect(buildFirstToNWinsOverlayData(event, set1, { one: "Alias One" }, true, {
+      redEntrantId: "one",
+      blueEntrantId: "two",
+    })).toEqual({
       playerOneName: "Alias One",
       playerTwoName: "Initial Player Two",
       winnerName: null,
       winsRequired: 2,
       playerOneWins: 1,
       playerTwoWins: 1,
+      redPlayerWins: 1,
+      bluePlayerWins: 1,
       setNumbers: [1, 2, 3],
       setCompleted: [true, true, true],
       playerOneResults: [true, false, false],
@@ -145,9 +150,14 @@ describe("First to N wins overlay history", () => {
       }],
     };
 
-    expect(buildFirstToNWinsOverlayData(event, first, {}, false)).toMatchObject({
+    expect(buildFirstToNWinsOverlayData(event, first, {}, false, {
+      redEntrantId: "two",
+      blueEntrantId: "one",
+    })).toMatchObject({
       playerOneWins: 2,
       playerTwoWins: 0,
+      redPlayerWins: 0,
+      bluePlayerWins: 2,
       winnerName: "Player One",
     });
   });

@@ -6,7 +6,8 @@ export const overlayTextSources = [
   "roundText", "setName", "roundName", "phaseName", "poolName", "setLabel", "eventName", "eventAlias", "text",
 ] as const;
 export const overlayNumberSources = [
-  "redSetWins", "blueSetWins", "firstToNWinsPlayerOneWins", "firstToNWinsPlayerTwoWins", "number",
+  "redSetWins", "blueSetWins", "firstToNWinsPlayerOneWins", "firstToNWinsPlayerTwoWins",
+  "firstToNWinsRedWins", "firstToNWinsBlueWins", "number",
 ] as const;
 export const overlayAnimationValueSources = [
   "redPlayerName", "bluePlayerName", "roundText", "setName", "roundName", "phaseName", "poolName", "setLabel",
@@ -19,7 +20,8 @@ export type OverlaySource = typeof overlaySources[number];
 export const overlaySourceLabels: Record<OverlaySource, string> = {
   text: "固定テキスト", number: "固定数値", redPlayerName: "1P プレイヤー名", bluePlayerName: "2P プレイヤー名",
   redSetWins: "1P 取得ゲーム数", blueSetWins: "2P 取得ゲーム数", roundText: "セット・ラウンド情報",
-  firstToNWinsPlayerOneWins: "1P F2NW 取得Set数", firstToNWinsPlayerTwoWins: "2P F2NW 取得Set数",
+  firstToNWinsPlayerOneWins: "F2NW取得セット数1", firstToNWinsPlayerTwoWins: "F2NW取得セット数2",
+  firstToNWinsRedWins: "1P F2NW 取得Set数", firstToNWinsBlueWins: "2P F2NW 取得Set数",
   setName: "Phase / Pool / Set名", roundName: "ラウンド名", phaseName: "Phase", poolName: "Pool", setLabel: "Set",
   eventName: "イベント名", eventAlias: "イベントエイリアス",
   redItems: "1P 選択アイテム", blueItems: "2P 選択アイテム",

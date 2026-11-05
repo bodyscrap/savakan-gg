@@ -28,6 +28,8 @@ export function resolveOverlayText(component, state, now = new Date()) {
   if (!state.active) return "";
   if (component.source === "firstToNWinsPlayerOneWins") return String(state.firstToNWins?.playerOneWins ?? "");
   if (component.source === "firstToNWinsPlayerTwoWins") return String(state.firstToNWins?.playerTwoWins ?? "");
+  if (component.source === "firstToNWinsRedWins") return String(state.firstToNWins?.redPlayerWins ?? "");
+  if (component.source === "firstToNWinsBlueWins") return String(state.firstToNWins?.bluePlayerWins ?? "");
   if (component.source === "phaseName" || component.source === "poolName" || component.source === "setLabel") {
     return String(state[component.source] ?? "");
   }

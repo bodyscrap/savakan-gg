@@ -19,6 +19,8 @@ export type OverlayRenderState = {
     winsRequired: number;
     playerOneWins: number;
     playerTwoWins: number;
+    redPlayerWins?: number;
+    bluePlayerWins?: number;
     setNumbers: number[];
     setCompleted: boolean[];
     playerOneResults: Array<boolean | null>;

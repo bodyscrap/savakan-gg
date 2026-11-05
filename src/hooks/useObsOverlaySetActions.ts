@@ -37,6 +37,7 @@ export function buildFirstToNWinsOverlayData(
   activeSet: SetSnapshot,
   aliasesByEntrantId: Record<string, string>,
   useAliasName: boolean,
+  sideEntrantIds: { redEntrantId?: string | null; blueEntrantId?: string | null } = {},
 ): FirstToNWinsOverlayData | null {
   const phaseGroup = buildPhasePoolGroups(event).find((group) =>
     group.firstToNWins && group.sets.some((set) => set.setId === activeSet.setId));
@@ -103,6 +104,9 @@ export function buildFirstToNWinsOverlayData(
     }
   }
 
+  const winsForEntrant = (entrantId: string | null | undefined) =>
+    entrantId === playerOneId ? playerOneWins : entrantId === playerTwoId ? playerTwoWins : 0;
+
   return {
     playerOneName: nameFor(playerOneId),
     playerTwoName: nameFor(playerTwoId),
@@ -110,6 +114,8 @@ export function buildFirstToNWinsOverlayData(
     winsRequired: settings.winsRequired,
     playerOneWins,
     playerTwoWins,
+    redPlayerWins: winsForEntrant(sideEntrantIds.redEntrantId),
+    bluePlayerWins: winsForEntrant(sideEntrantIds.blueEntrantId),
     setNumbers: orderedSets.map((_set, index) => index + 1),
     setCompleted,
     playerOneResults,
@@ -252,7 +258,7 @@ export function useObsOverlaySetActions({
       redSetWins: overlaySides.redSetWins,
       blueSetWins: overlaySides.blueSetWins,
       firstToNWins: buildFirstToNWinsOverlayData(
-        selectedEvent, set, aliasNamesByEntrantId, useAliasName,
+        selectedEvent, set, aliasNamesByEntrantId, useAliasName, overlaySides,
       ),
       redEntrantId: overlaySides.redEntrantId,
       blueEntrantId: overlaySides.blueEntrantId,
@@ -382,7 +388,7 @@ export function useObsOverlaySetActions({
           redSetWins: nextSides.redSetWins,
           blueSetWins: nextSides.blueSetWins,
           firstToNWins: buildFirstToNWinsOverlayData(
-            updatedEvent, nextSet, aliasNamesByEntrantId, useAliasName,
+            updatedEvent, nextSet, aliasNamesByEntrantId, useAliasName, nextSides,
           ),
           redEntrantId: nextSides.redEntrantId,
           blueEntrantId: nextSides.blueEntrantId,
@@ -422,7 +428,7 @@ export function useObsOverlaySetActions({
       redSetWins: overlaySides.redSetWins,
       blueSetWins: overlaySides.blueSetWins,
       firstToNWins: buildFirstToNWinsOverlayData(
-        updatedEvent, set, aliasNamesByEntrantId, useAliasName,
+        updatedEvent, set, aliasNamesByEntrantId, useAliasName, overlaySides,
       ),
       redEntrantId: overlaySides.redEntrantId,
       blueEntrantId: overlaySides.blueEntrantId,
@@ -468,7 +474,7 @@ export function useObsOverlaySetActions({
       redSetWins: currentOverlayState.redSetWins,
       blueSetWins: currentOverlayState.blueSetWins,
       firstToNWins: buildFirstToNWinsOverlayData(
-        selectedEvent, set, aliasNamesByEntrantId, useAliasName,
+        selectedEvent, set, aliasNamesByEntrantId, useAliasName, overlaySides,
       ),
       redEntrantId: overlaySides.redEntrantId,
       blueEntrantId: overlaySides.blueEntrantId,

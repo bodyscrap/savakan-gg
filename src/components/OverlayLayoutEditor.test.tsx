@@ -16,8 +16,10 @@ function renderEditor(savedLayouts: OverlayLayouts, disabled = false) {
 
 describe("overlay preset workspace", () => {
   it.each([
-    { source: "firstToNWinsPlayerOneWins", label: "1P F2NW 取得Set数" },
-    { source: "firstToNWinsPlayerTwoWins", label: "2P F2NW 取得Set数" },
+    { source: "firstToNWinsPlayerOneWins", label: "F2NW取得セット数1" },
+    { source: "firstToNWinsPlayerTwoWins", label: "F2NW取得セット数2" },
+    { source: "firstToNWinsRedWins", label: "1P F2NW 取得Set数" },
+    { source: "firstToNWinsBlueWins", label: "2P F2NW 取得Set数" },
   ] as const)("shows $label for its numeric display source", ({ source, label }) => {
     const preset = newOverlayPreset();
     preset.components = [{ ...newOverlayComponent("number"), source }];

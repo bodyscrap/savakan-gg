@@ -258,6 +258,8 @@ impl Layouts {
                         "blueSetWins",
                         "firstToNWinsPlayerOneWins",
                         "firstToNWinsPlayerTwoWins",
+                        "firstToNWinsRedWins",
+                        "firstToNWinsBlueWins",
                         "roundText",
                         "setName",
                         "roundName",
@@ -301,6 +303,8 @@ impl Layouts {
                             "blueSetWins",
                             "firstToNWinsPlayerOneWins",
                             "firstToNWinsPlayerTwoWins",
+                            "firstToNWinsRedWins",
+                            "firstToNWinsBlueWins",
                             "number",
                         ]
                         .contains(&c.source.as_str()))
@@ -951,7 +955,12 @@ mod tests {
     }
     #[test]
     fn persists_first_to_n_wins_numeric_sources() {
-        for source in ["firstToNWinsPlayerOneWins", "firstToNWinsPlayerTwoWins"] {
+        for source in [
+            "firstToNWinsPlayerOneWins",
+            "firstToNWinsPlayerTwoWins",
+            "firstToNWinsRedWins",
+            "firstToNWinsBlueWins",
+        ] {
             let mut layouts = sample();
             let component = &mut layouts.presets[0].components[0];
             component.kind = "number".to_owned();

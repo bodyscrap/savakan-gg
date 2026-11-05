@@ -478,6 +478,8 @@ fn build_mobile_first_to_n_overlay_data(
     event: &models::EventSnapshot,
     set_id: &str,
     alias_names_by_id: &HashMap<String, String>,
+    red_entrant_id: Option<&str>,
+    blue_entrant_id: Option<&str>,
 ) -> Option<ObsOverlayFirstToNWins> {
     let active_set = event.sets.iter().find(|set| set.set_id == set_id)?;
     let phase_group_id = active_set.phase_group_id.as_deref()?;
@@ -591,6 +593,17 @@ fn build_mobile_first_to_n_overlay_data(
         }
     }
 
+    let wins_for_entrant = |entrant_id: Option<&str>| {
+        let wins = if entrant_id == Some(player_one_id) {
+            player_one_wins
+        } else if entrant_id == Some(player_two_id) {
+            player_two_wins
+        } else {
+            0
+        };
+        u32::try_from(wins).ok()
+    };
+
     Some(ObsOverlayFirstToNWins {
         player_one_name: name_for(player_one_id),
         player_two_name: name_for(player_two_id),
@@ -598,6 +611,8 @@ fn build_mobile_first_to_n_overlay_data(
         wins_required: settings.wins_required,
         player_one_wins: u32::try_from(player_one_wins).ok()?,
         player_two_wins: u32::try_from(player_two_wins).ok()?,
+        red_player_wins: wins_for_entrant(red_entrant_id)?,
+        blue_player_wins: wins_for_entrant(blue_entrant_id)?,
         set_numbers: (0..ordered_sets.len())
             .map(|index| u32::try_from(index + 1).ok())
             .collect::<Option<Vec<_>>>()?,
@@ -874,12 +889,19 @@ mod mobile_first_to_n_tests {
         }))
         .unwrap();
 
-        let overlay = build_mobile_first_to_n_overlay_data(&event, "set-2", &HashMap::new())
-            .expect("First to N event should produce scoreboard data");
+        let overlay = build_mobile_first_to_n_overlay_data(
+            &event,
+            "set-2",
+            &HashMap::new(),
+            Some("two"),
+            Some("one"),
+        )
+        .expect("First to N event should produce scoreboard data");
         assert_eq!(overlay.player_one_name, "Player One");
         assert_eq!(overlay.player_two_name, "Player Two");
         assert_eq!(overlay.wins_required, 2);
         assert_eq!((overlay.player_one_wins, overlay.player_two_wins), (1, 0));
+        assert_eq!((overlay.red_player_wins, overlay.blue_player_wins), (0, 1));
         assert_eq!(overlay.set_numbers, vec![1, 2]);
         assert_eq!(overlay.set_completed, vec![true, false]);
         assert_eq!(overlay.player_one_results, vec![Some(true), None]);
@@ -1847,6 +1869,10 @@ struct ObsOverlayFirstToNWins {
     wins_required: usize,
     player_one_wins: u32,
     player_two_wins: u32,
+    #[serde(default)]
+    red_player_wins: u32,
+    #[serde(default)]
+    blue_player_wins: u32,
     set_numbers: Vec<u32>,
     #[serde(default)]
     set_completed: Vec<bool>,
@@ -6197,6 +6223,8 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                         event,
                         &payload.set_id,
                         &alias_names_by_id,
+                        payload.red_entrant_id.as_deref(),
+                        payload.blue_entrant_id.as_deref(),
                     )
                 })
         } else {
