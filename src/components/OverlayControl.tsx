@@ -4,7 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { builtInOverlayPreset, parseOverlayLayouts, parseOverlayTestItems, type OverlayLayouts, type OverlayTestItemInputs } from "../domain/overlayLayout";
 import { OverlayLayoutEditor } from "./OverlayLayoutEditor";
 import type { OverlayRenderState } from "../domain/overlayRenderer.js";
-import { buildOverlayTestFirstToNWins, isValidOverlayTestFirstToNWinsHistory } from "../domain/overlayTestData";
+import {
+  buildOverlayTestDisplayParts,
+  buildOverlayTestFirstToNWins,
+  isValidOverlayTestFirstToNWinsHistory,
+} from "../domain/overlayTestData";
 
 export type ObsOverlayState = OverlayRenderState & {
   active: boolean;
@@ -119,11 +123,13 @@ export function OverlayControl({
     .sort(([left], [right]) => left.localeCompare(right)));
   const [visibilityOverrides, setVisibilityOverrides] = useState<Record<string, boolean>>({});
   const isSwitchingFromLiveSet = Boolean(overlayState?.active && !isTestOverlayActive);
+  const testDisplayParts = buildOverlayTestDisplayParts(testPhaseName, testPoolName, testSetName);
   const editorState = overlayState && !overlayState.active ? {
     ...overlayState,
     eventName: testEventName,
     eventAlias: testEventAlias,
     roundText: `${testPhaseName.trim() || "-"} / Pool ${testPoolName.trim() || "-"} / Set ${testSetName.trim() || "-"}\n${testRoundName}`,
+    ...testDisplayParts,
     redPlayerName: testRedName,
     bluePlayerName: testBlueName,
     redSetWins: testRedWins,

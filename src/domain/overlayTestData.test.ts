@@ -1,8 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildOverlayTestDisplayParts,
   buildOverlayTestFirstToNWins,
   isValidOverlayTestFirstToNWinsHistory,
 } from "./overlayTestData";
+
+describe("overlay test display parts", () => {
+  it("uses the configured dummy Phase, Pool, and Set names independently", () => {
+    expect(buildOverlayTestDisplayParts("Main", "A", "W-Final")).toEqual({
+      phaseName: "Main",
+      poolName: "Pool A",
+      setLabel: "Set W-Final",
+    });
+  });
+
+  it("uses visible fallback labels for blank dummy names", () => {
+    expect(buildOverlayTestDisplayParts(" ", "", " ")).toEqual({
+      phaseName: "-",
+      poolName: "Pool -",
+      setLabel: "Set -",
+    });
+  });
+});
 
 describe("overlay test First to N wins data", () => {
   it("builds scores and history from compact outcomes", () => {

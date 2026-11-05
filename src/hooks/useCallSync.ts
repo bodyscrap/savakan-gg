@@ -8,6 +8,8 @@ type UseCallSyncOptions = {
   communicationDisabled: boolean;
   canBroadcastSync: boolean;
   shouldWarnIdentityChange: boolean;
+  forceClearingOwnCalls: boolean;
+  setForceClearingOwnCalls: (value: boolean) => void;
   resetDisplay: (options?: { clearOwnOnly?: boolean; rebuild?: boolean }) => void;
   refreshCalls: () => Promise<void>;
   onError: (error: string) => void;
@@ -19,6 +21,8 @@ export function useCallSync({
   communicationDisabled,
   canBroadcastSync,
   shouldWarnIdentityChange,
+  forceClearingOwnCalls,
+  setForceClearingOwnCalls,
   resetDisplay,
   refreshCalls,
   onError,
@@ -67,5 +71,44 @@ export function useCallSync({
     onMessage(t("未解決の呼び出しから表示を初期化しました。"));
   }
 
-  return { requestUnresolvedCallSyncBroadcast, initializeCallListDisplay };
+  async function forceClearOwnCalls() {
+    if (forceClearingOwnCalls) {
+      return;
+    }
+    onError("");
+    onMessage("");
+    if (communicationDisabled || !canBroadcastSync) {
+      onError(t("ローカル通信を有効にし、設定タブで送信者名・8桁ユーザーID・ネットワークデバイスを保存してください。"));
+      return;
+    }
+    if (shouldWarnIdentityChange) {
+      window.alert(t("送信者情報が変更されています。意図しない挙動になることがあります。"));
+    }
+    if (!await window.confirm(t("自端末が発行した未解決の呼び出しをすべて解決報告としてブロードキャストします。実行しますか？"))) {
+      return;
+    }
+
+    setForceClearingOwnCalls(true);
+    try {
+      const resolvedCount = await invoke<number>("force_clear_own_player_calls", {
+        profile: senderProfile,
+      });
+      await refreshCalls();
+      resetDisplay({ rebuild: true });
+      onMessage(resolvedCount === 0
+        ? t("自端末が発行した未解決の呼び出しはありません。")
+        : t("自端末発行の呼び出しを解決報告としてブロードキャストしました: {p0}件", { p0: resolvedCount }));
+    } catch (error) {
+      await refreshCalls().catch((refreshError) => onError(String(refreshError)));
+      onError(String(error));
+    } finally {
+      setForceClearingOwnCalls(false);
+    }
+  }
+
+  return {
+    requestUnresolvedCallSyncBroadcast,
+    initializeCallListDisplay,
+    forceClearOwnCalls,
+  };
 }

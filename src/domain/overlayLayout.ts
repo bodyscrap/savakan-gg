@@ -3,13 +3,13 @@ import defaultOverlayPreset from "./defaultOverlayPreset.json";
 
 export const overlayTextSources = [
   "redPlayerName", "bluePlayerName",
-  "roundText", "setName", "roundName", "eventName", "eventAlias", "text",
+  "roundText", "setName", "roundName", "phaseName", "poolName", "setLabel", "eventName", "eventAlias", "text",
 ] as const;
 export const overlayNumberSources = [
   "redSetWins", "blueSetWins", "firstToNWinsPlayerOneWins", "firstToNWinsPlayerTwoWins", "number",
 ] as const;
 export const overlayAnimationValueSources = [
-  "redPlayerName", "bluePlayerName", "roundText", "setName", "roundName",
+  "redPlayerName", "bluePlayerName", "roundText", "setName", "roundName", "phaseName", "poolName", "setLabel",
   "redSetWins", "blueSetWins",
 ] as const;
 export type OverlayAnimationValueSource = typeof overlayAnimationValueSources[number];
@@ -20,7 +20,8 @@ export const overlaySourceLabels: Record<OverlaySource, string> = {
   text: "固定テキスト", number: "固定数値", redPlayerName: "1P プレイヤー名", bluePlayerName: "2P プレイヤー名",
   redSetWins: "1P 取得ゲーム数", blueSetWins: "2P 取得ゲーム数", roundText: "セット・ラウンド情報",
   firstToNWinsPlayerOneWins: "1P F2NW 取得Set数", firstToNWinsPlayerTwoWins: "2P F2NW 取得Set数",
-  setName: "Phase / Pool / Set名", roundName: "ラウンド名", eventName: "イベント名", eventAlias: "イベントエイリアス",
+  setName: "Phase / Pool / Set名", roundName: "ラウンド名", phaseName: "Phase", poolName: "Pool", setLabel: "Set",
+  eventName: "イベント名", eventAlias: "イベントエイリアス",
   redItems: "1P 選択アイテム", blueItems: "2P 選択アイテム",
   clock: "現在の日時",
 };

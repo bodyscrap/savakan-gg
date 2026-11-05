@@ -13,6 +13,8 @@ function setup(canBroadcastSync = true) {
     communicationDisabled: false,
     canBroadcastSync,
     shouldWarnIdentityChange: false,
+    forceClearingOwnCalls: false,
+    setForceClearingOwnCalls: vi.fn(),
     resetDisplay: vi.fn(),
     refreshCalls: vi.fn(async () => undefined),
     onError: vi.fn(),
@@ -73,5 +75,33 @@ describe("call resend requests", () => {
     expect(options.onError).toHaveBeenLastCalledWith("Error: UDP failure");
     expect(options.onMessage).toHaveBeenCalledTimes(1);
     expect(options.onMessage).toHaveBeenCalledWith("");
+  });
+
+  it("broadcasts resolution reports for all own calls and refreshes the list", async () => {
+    vi.stubGlobal("window", { confirm: vi.fn(async () => true) });
+    vi.mocked(invoke).mockResolvedValue(3);
+    const { options, forceClearOwnCalls } = setup();
+
+    await forceClearOwnCalls();
+
+    expect(invoke).toHaveBeenCalledWith("force_clear_own_player_calls", {
+      profile: options.senderProfile,
+    });
+    expect(options.refreshCalls).toHaveBeenCalledOnce();
+    expect(options.resetDisplay).toHaveBeenCalledWith({ rebuild: true });
+    expect(options.setForceClearingOwnCalls).toHaveBeenNthCalledWith(1, true);
+    expect(options.setForceClearingOwnCalls).toHaveBeenNthCalledWith(2, false);
+    expect(options.onMessage).toHaveBeenLastCalledWith(expect.stringContaining("3件"));
+  });
+
+  it("does not force-clear calls when confirmation is cancelled", async () => {
+    vi.stubGlobal("window", { confirm: vi.fn(async () => false) });
+    const { options, forceClearOwnCalls } = setup();
+
+    await forceClearOwnCalls();
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(options.resetDisplay).not.toHaveBeenCalled();
+    expect(options.setForceClearingOwnCalls).not.toHaveBeenCalled();
   });
 });

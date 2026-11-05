@@ -28,6 +28,9 @@ export function resolveOverlayText(component, state, now = new Date()) {
   if (!state.active) return "";
   if (component.source === "firstToNWinsPlayerOneWins") return String(state.firstToNWins?.playerOneWins ?? "");
   if (component.source === "firstToNWinsPlayerTwoWins") return String(state.firstToNWins?.playerTwoWins ?? "");
+  if (component.source === "phaseName" || component.source === "poolName" || component.source === "setLabel") {
+    return String(state[component.source] ?? "");
+  }
   const lines = String(state.roundText || "").split(/\r?\n/).filter((line) => line.trim());
   if (component.source === "setName") return lines[0] || "";
   if (component.source === "roundName") return lines.slice(1).join("\n");

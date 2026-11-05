@@ -42,6 +42,8 @@ type SettingsScreenProps = {
   onCallListColorSecondsBlur: (value: string) => void;
   hasCallListMessages: boolean;
   onClearCallList: () => void;
+  canForceClearOwnCalls: boolean;
+  onForceClearOwnCalls: () => void;
   disableOwnCallActions: boolean;
   onDisableOwnCallActionsChange: (checked: boolean) => void;
   disableOtherCallActions: boolean;
@@ -84,6 +86,8 @@ export function SettingsScreen({
   onCallListColorSecondsBlur,
   hasCallListMessages,
   onClearCallList,
+  canForceClearOwnCalls,
+  onForceClearOwnCalls,
   disableOwnCallActions,
   onDisableOwnCallActionsChange,
   disableOtherCallActions,
@@ -252,6 +256,10 @@ export function SettingsScreen({
           <div className="call-list-settings-actions">
             <button type="button" className="ghost" onClick={onClearCallList} disabled={!hasCallListMessages}>{t("呼び出しリストの表示を初期化")}</button>
             <p className="meta call-list-sync-note">{t("他端末の呼び出しを最新化する場合は、呼び出しリスト画面の「呼び出しの同期」を使用してください。")}</p>
+          </div>
+          <div className="call-list-settings-actions">
+            <button type="button" className="ghost" onClick={onForceClearOwnCalls} disabled={!canForceClearOwnCalls}>{t("自端末発行の呼び出しを強制クリア")}</button>
+            <p className="meta call-list-sync-note">{t("自端末発行の未解決呼び出しを、各呼び出しの解決報告ブロードキャストでクリアします。")}</p>
           </div>
         </div>
 

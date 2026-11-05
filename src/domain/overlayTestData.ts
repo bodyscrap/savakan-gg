@@ -12,6 +12,21 @@ export type OverlayTestFirstToNWinsInput = {
   history: string;
 };
 
+export function buildOverlayTestDisplayParts(
+  phaseName: string,
+  poolName: string,
+  setName: string,
+): { phaseName: string; poolName: string; setLabel: string } {
+  const phase = phaseName.trim() || "-";
+  const pool = poolName.trim() || "-";
+  const set = setName.trim() || "-";
+  return {
+    phaseName: phase,
+    poolName: `Pool ${pool}`,
+    setLabel: `Set ${set}`,
+  };
+}
+
 export function isValidOverlayTestFirstToNWinsHistory(history: string): boolean {
   return /^[12d\s]*$/i.test(history);
 }

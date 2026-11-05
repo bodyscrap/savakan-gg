@@ -6,7 +6,7 @@ import type { AppTab } from "../components/AppShell";
 import type { SetSlot, SetSnapshot } from "../domain/bracketProgression";
 import type { OverlayRenderState } from "../domain/overlayRenderer.js";
 import { parseOverlayTestItems, type OverlayTestItemInputs } from "../domain/overlayLayout";
-import { buildOverlayTestFirstToNWins } from "../domain/overlayTestData";
+import { buildOverlayTestDisplayParts, buildOverlayTestFirstToNWins } from "../domain/overlayTestData";
 
 export type ObsOverlayState = OverlayRenderState & {
   active: boolean;
@@ -56,6 +56,9 @@ export type ObsOverlaySetInput = {
   eventName: string;
   eventAlias: string;
   roundText: string;
+  phaseName?: string;
+  poolName?: string;
+  setLabel?: string;
   redPlayerName: string;
   bluePlayerName: string;
   redEntrantId?: string | null;
@@ -320,6 +323,11 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
               eventName: testOverlayEventName.trim(),
               eventAlias: testOverlayEventAlias.trim(),
               roundText: `${testOverlaySetLabel}\n${testOverlayRoundName}`,
+              ...buildOverlayTestDisplayParts(
+                testOverlayPhaseName,
+                testOverlayPoolName,
+                testOverlaySetName,
+              ),
               redPlayerName: testOverlayRedName.trim() || t("テストプレイヤー1"),
               bluePlayerName: testOverlayBlueName.trim() || t("テストプレイヤー2"),
               redItems: parseOverlayTestItems(testOverlayRedItems),
@@ -442,6 +450,11 @@ export function useObsOverlay({ activeTab, slug, selectedEventId, setError }: Us
       eventName: testOverlayEventName.trim(),
       eventAlias: testOverlayEventAlias.trim(),
       roundText: `${testOverlaySetLabel}\n${testOverlayRoundName}`,
+      ...buildOverlayTestDisplayParts(
+        testOverlayPhaseName,
+        testOverlayPoolName,
+        testOverlaySetName,
+      ),
       redPlayerName: testOverlayRedName.trim() || t("テストプレイヤー1"),
       bluePlayerName: testOverlayBlueName.trim() || t("テストプレイヤー2"),
       redItems: parseOverlayTestItems(testOverlayRedItems),

@@ -9,6 +9,9 @@ export type OverlayRenderState = {
   bluePlayerName: string;
   redSetWins: number;
   blueSetWins: number;
+  phaseName?: string | null;
+  poolName?: string | null;
+  setLabel?: string | null;
   firstToNWins?: {
     playerOneName: string;
     playerTwoName: string;

@@ -75,6 +75,7 @@ function mobileErrorDetail(raw) {
         'slug, eventId and token are required': 'missingTokenScope',
         'set not found': 'setNotFound',
         'target set does not exist': 'setNotFound',
+        '対象の試合の配信開始記録が見つかりません。': 'streamStartRecordMissing',
         'path/query and payload scope mismatch': 'scopeMismatch',
         'completed set results cannot be changed': 'completedResult',
         'slotScores contains unknown entrantId': 'unknownScoreEntrant',

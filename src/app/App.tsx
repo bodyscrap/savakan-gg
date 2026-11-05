@@ -209,6 +209,7 @@ function getCallListResolveDialogTitle(dialog: {
 function App() {
   useLanguage();
   const [activeTab, setActiveTab] = useState<AppTab>("create");
+  const [forceClearingOwnCalls, setForceClearingOwnCalls] = useState(false);
   const localEventDraft = useLocalEventDraft();
   const selectTab = async (tab: AppTab) => {
     if (tab === "tournament" && activeTab !== "tournament") {
@@ -1604,11 +1605,14 @@ function App() {
   const {
     requestUnresolvedCallSyncBroadcast,
     initializeCallListDisplay,
+    forceClearOwnCalls,
   } = useCallSync({
     senderProfile,
     communicationDisabled: disableLocalCommunication,
     canBroadcastSync: canBroadcastCallListSync,
     shouldWarnIdentityChange: senderIdentityChanged,
+    forceClearingOwnCalls,
+    setForceClearingOwnCalls,
     resetDisplay: resetCallListDisplay,
     refreshCalls: refreshPlayerCalls,
     onError: setError,
@@ -3238,6 +3242,11 @@ function App() {
             onCallListColorSecondsBlur={commitCallListColorSeconds}
             hasCallListMessages={hasCallListMessages}
             onClearCallList={initializeCallListDisplay}
+            canForceClearOwnCalls={unresolvedCallRootCounts.own > 0
+              && !disableLocalCommunication
+              && canBroadcastCallListSync
+              && !forceClearingOwnCalls}
+            onForceClearOwnCalls={() => void forceClearOwnCalls()}
             disableOwnCallActions={disableOwnCallActions}
             onDisableOwnCallActionsChange={setDisableOwnCallActions}
             disableOtherCallActions={disableOtherCallActions}

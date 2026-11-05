@@ -49,6 +49,16 @@ test('embedded mobile and OBS scripts parse as JavaScript', () => {
     }
 });
 
+test('mobile First to N controls include draw, next-set, and stream-time actions', () => {
+    assert.ok(mobileHtml.includes('data-draw-match'));
+    assert.ok(mobileHtml.includes('draw: isDraw'));
+    assert.ok(mobileHtml.includes('&& (drawSelected || (confirmed && scoresAreTied))'));
+    assert.ok(mobileHtml.includes('&& slotScores[0].score === slotScores[1].score'));
+    assert.ok(mobileHtml.includes('id="nextSetBtn"'));
+    assert.ok(mobileHtml.includes('id="updateStreamStartBtn"'));
+    assert.ok(mobileHtml.includes('/mobile/api/set-stream-start'));
+});
+
 test('every translation has both languages and matching parameters', () => {
     for (const [key, pair] of Object.entries(messages)) {
         assert.equal(pair.length, 2, key);
@@ -109,6 +119,7 @@ test('stored language, storage changes, and blocked storage are safe', () => {
 test('known API errors translate exactly without altering arbitrary diagnostics', () => {
     const env = setup({ saved: 'en' });
     assert.equal(env.run("mobileErrorDetail('{\"error\":\"completed set results cannot be changed\"}')"), messages.completedResult[1]);
+    assert.equal(env.run("mobileErrorDetail('対象の試合の配信開始記録が見つかりません。')"), messages.streamStartRecordMissing[1]);
     assert.equal(env.run("mobileErrorDetail('{\"error\":\"このSetに未解決の呼び出しがあります。解決してから操作してください。\"}')"), messages.callsUnresolved[1]);
     assert.equal(env.run("mobileErrorDetail('unauthorized player 検索')"), 'unauthorized player 検索');
     assert.equal(env.run("mobileErrorDetail('{\"error\":\"大会名: 検索\"}')"), '大会名: 検索');

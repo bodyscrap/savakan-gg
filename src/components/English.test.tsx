@@ -71,6 +71,8 @@ const settingsProps: ComponentProps<typeof SettingsScreen> = {
   onCallListColorSecondsBlur: noop,
   hasCallListMessages: false,
   onClearCallList: noop,
+  canForceClearOwnCalls: true,
+  onForceClearOwnCalls: noop,
   disableOwnCallActions: false,
   onDisableOwnCallActionsChange: noop,
   disableOtherCallActions: false,
@@ -88,6 +90,7 @@ describe("English component rendering", () => {
     expect(html).toContain("Network device");
     expect(html).toContain("Mobile input sync settings");
     expect(html).toContain("Call list settings");
+    expect(html).toContain("Force-clear calls issued by this device");
     expect(html).toContain('placeholder="e.g. Stream PC-A"');
     expect(html).toContain('value="送信者・日本語 {value1}"');
     expect(html).toContain("日本語ネットワーク");

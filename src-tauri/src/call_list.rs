@@ -551,6 +551,45 @@ pub fn load_player_calls(app: tauri::AppHandle) -> Result<Vec<PlayerCall>, Strin
     load(&app)
 }
 
+#[tauri::command]
+pub fn force_clear_own_player_calls(
+    app: tauri::AppHandle,
+    profile: crate::models::SenderProfile,
+) -> Result<usize, String> {
+    crate::validate_sender_profile(&profile)?;
+    let calls = load_player_calls(app.clone())?
+        .into_iter()
+        .filter(|call| is_own_unresolved_call(call, &profile.sender_user_id))
+        .collect::<Vec<_>>();
+
+    for call in &calls {
+        let input = crate::SendMailboxMessageInput {
+            destination: Some(DESTINATION.to_owned()),
+            profile: profile.clone(),
+            method: "call_player".to_owned(),
+            subject: format!("Resolved: {}", call.message.subject),
+            body: "呼び出しを解決しました。".to_owned(),
+            delivery_target_mode: "broadcast".to_owned(),
+            delivery_target_ip: None,
+            message_type: Some("resolve".to_owned()),
+            message_meta: call.message.message_meta.clone(),
+            thread_id: None,
+            parent_message_id: None,
+        };
+        let message = crate::build_message_from_input(&input)?;
+        send(&app, &input, message)?;
+    }
+
+    Ok(calls.len())
+}
+
+fn is_own_unresolved_call(call: &PlayerCall, sender_user_id: &str) -> bool {
+    call.message.method == "call_player"
+        && call.message.message_type == "normal"
+        && call.message.parent_message_id.is_none()
+        && call.message.sender_user_id.trim() == sender_user_id.trim()
+}
+
 pub fn send(
     app: &tauri::AppHandle,
     input: &SendMailboxMessageInput,
@@ -948,6 +987,27 @@ mod tests {
         assert_eq!(calls[0].message.sender_user_id, "12345678");
         apply(&mut calls, &resolved, "now", "12345678").unwrap();
         assert_eq!(calls.len(), 1);
+    }
+
+    #[test]
+    fn force_clear_targets_only_own_unresolved_root_calls() {
+        let own = PlayerCall {
+            message: message("12345678", "normal"),
+            received_at: "now".to_owned(),
+        };
+        let remote = PlayerCall {
+            message: message("87654321", "normal"),
+            received_at: "now".to_owned(),
+        };
+        let mut reply = own.clone();
+        reply.message.message_type = "resolve".to_owned();
+        let mut child = own.clone();
+        child.message.parent_message_id = Some("parent".to_owned());
+
+        assert!(is_own_unresolved_call(&own, " 12345678 "));
+        assert!(!is_own_unresolved_call(&remote, "12345678"));
+        assert!(!is_own_unresolved_call(&reply, "12345678"));
+        assert!(!is_own_unresolved_call(&child, "12345678"));
     }
 
     #[test]

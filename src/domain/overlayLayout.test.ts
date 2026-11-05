@@ -1095,6 +1095,14 @@ describe("overlay content bindings", () => {
     expect(resolveOverlayText({ ...component, source: "setName" }, state)).toBe("Phase / Pool A / Set X");
     expect(resolveOverlayText({ ...component, source: "roundName" }, state)).toBe("GF Reset");
   });
+  it("binds Phase, Pool, and Set to independent overlay fields", () => {
+    const component = newOverlayComponent("text");
+    const live = { ...state, phaseName: "Main", poolName: "Pool A", setLabel: "Set B" };
+    expect(resolveOverlayText({ ...component, source: "phaseName" }, live)).toBe("Main");
+    expect(resolveOverlayText({ ...component, source: "poolName" }, live)).toBe("Pool A");
+    expect(resolveOverlayText({ ...component, source: "setLabel" }, live)).toBe("Set B");
+    expect(resolveOverlayText({ ...component, source: "setLabel" }, { ...live, active: false })).toBe("");
+  });
   it("clears live fields when stopped but preserves static text and alias", () => {
     const component = newOverlayComponent("text"), stopped = { ...state, active: false };
     expect(resolveOverlayText({ ...component, source: "redSetWins" }, stopped)).toBe("");

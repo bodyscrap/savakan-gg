@@ -226,6 +226,7 @@ struct MobileSetListItem {
     phase_name: Option<String>,
     phase_group_name: Option<String>,
     is_intermediate: bool,
+    is_first_to_n_wins: bool,
     matchup_ready: bool,
     score_edit_locked: bool,
     state: i64,
@@ -465,6 +466,426 @@ fn mobile_set_has_matchup(slots: &[models::SetSlotSnapshot]) -> bool {
         })
 }
 
+fn mobile_set_is_first_to_n_wins(event: &models::EventSnapshot, set: &SetSnapshot) -> bool {
+    set.phase_group_id.as_deref().is_some_and(|phase_group_id| {
+        event.phase_groups.iter().any(|group| {
+            group.phase_group_id == phase_group_id && group.first_to_n_wins.is_some()
+        })
+    })
+}
+
+fn build_mobile_first_to_n_overlay_data(
+    event: &models::EventSnapshot,
+    set_id: &str,
+    alias_names_by_id: &HashMap<String, String>,
+) -> Option<ObsOverlayFirstToNWins> {
+    let active_set = event.sets.iter().find(|set| set.set_id == set_id)?;
+    let phase_group_id = active_set.phase_group_id.as_deref()?;
+    let phase_group = event
+        .phase_groups
+        .iter()
+        .find(|group| group.phase_group_id == phase_group_id)?;
+    let settings = phase_group.first_to_n_wins.as_ref()?;
+
+    let event_order = event
+        .sets
+        .iter()
+        .enumerate()
+        .map(|(index, set)| (set.set_id.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    let mut ordered_sets = event
+        .sets
+        .iter()
+        .filter(|set| set.phase_group_id.as_deref() == Some(phase_group_id))
+        .map(|set| resolve_mobile_set_entrants(event, &set.set_id).unwrap_or_else(|| set.clone()))
+        .collect::<Vec<_>>();
+    ordered_sets.sort_by_key(|set| {
+        (
+            set.identifier
+                .as_deref()
+                .and_then(|identifier| identifier.parse::<usize>().ok())
+                .unwrap_or(usize::MAX),
+            event_order
+                .get(set.set_id.as_str())
+                .copied()
+                .unwrap_or(usize::MAX),
+        )
+    });
+
+    let player_one_id = settings.player_one_entrant_id.as_str();
+    let player_two_id = phase_group
+        .seeds
+        .iter()
+        .filter_map(|seed| seed.entrant_id.as_deref())
+        .find(|entrant_id| *entrant_id != player_one_id)
+        .or_else(|| {
+            ordered_sets
+                .iter()
+                .flat_map(|set| set.slots.iter())
+                .filter_map(|slot| slot.entrant_id.as_deref())
+                .find(|entrant_id| *entrant_id != player_one_id)
+        })?;
+
+    let name_for = |entrant_id: &str| {
+        let entrant_name = phase_group
+            .seeds
+            .iter()
+            .find(|seed| seed.entrant_id.as_deref() == Some(entrant_id))
+            .and_then(|seed| seed.entrant_name.as_deref())
+            .or_else(|| {
+                ordered_sets
+                    .iter()
+                    .flat_map(|set| set.slots.iter())
+                    .find(|slot| slot.entrant_id.as_deref() == Some(entrant_id))
+                    .map(|slot| slot.entrant_name.as_str())
+            })
+            .unwrap_or(entrant_id);
+        mobile_entrant_display_name(Some(entrant_id), entrant_name, alias_names_by_id).to_owned()
+    };
+
+    let mut player_one_wins = 0;
+    let mut player_two_wins = 0;
+    let mut winner_id = None;
+    let mut player_one_results = Vec::with_capacity(ordered_sets.len());
+    let mut player_two_results = Vec::with_capacity(ordered_sets.len());
+    let set_completed = ordered_sets
+        .iter()
+        .map(|set| set.state == 3)
+        .collect::<Vec<_>>();
+
+    for (index, set) in ordered_sets.iter().enumerate() {
+        if set_completed[index] && set.winner_id.as_deref() == Some(player_one_id) {
+            player_one_wins += 1;
+            player_one_results.push(Some(true));
+            player_two_results.push(Some(false));
+        } else if set_completed[index] && set.winner_id.as_deref() == Some(player_two_id) {
+            player_two_wins += 1;
+            player_one_results.push(Some(false));
+            player_two_results.push(Some(true));
+        } else if set_completed[index] && set.winner_id.is_none() {
+            if settings.draw_counts_as_win {
+                player_one_wins += 1;
+                player_two_wins += 1;
+                player_one_results.push(Some(true));
+                player_two_results.push(Some(true));
+            } else {
+                player_one_results.push(Some(false));
+                player_two_results.push(Some(false));
+            }
+        } else {
+            player_one_results.push(None);
+            player_two_results.push(None);
+        }
+
+        if winner_id.is_none()
+            && ((player_one_wins >= settings.wins_required
+                && player_one_wins > player_two_wins)
+                || (player_two_wins >= settings.wins_required
+                    && player_two_wins > player_one_wins))
+        {
+            winner_id = Some(if player_one_wins > player_two_wins {
+                player_one_id
+            } else {
+                player_two_id
+            });
+        }
+    }
+
+    Some(ObsOverlayFirstToNWins {
+        player_one_name: name_for(player_one_id),
+        player_two_name: name_for(player_two_id),
+        winner_name: winner_id.map(name_for),
+        player_one_wins: u32::try_from(player_one_wins).ok()?,
+        player_two_wins: u32::try_from(player_two_wins).ok()?,
+        set_numbers: (0..ordered_sets.len())
+            .map(|index| u32::try_from(index + 1).ok())
+            .collect::<Option<Vec<_>>>()?,
+        set_completed,
+        player_one_results,
+        player_two_results,
+    })
+}
+
+fn mobile_first_to_n_next_set_ids(
+    event: &models::EventSnapshot,
+    confirmed_pending_results: &HashMap<String, Option<String>>,
+) -> HashSet<String> {
+    let event_order = event
+        .sets
+        .iter()
+        .enumerate()
+        .map(|(index, set)| (set.set_id.as_str(), index))
+        .collect::<HashMap<_, _>>();
+    event
+        .phase_groups
+        .iter()
+        .filter_map(|group| {
+            let settings = group.first_to_n_wins.as_ref()?;
+            let mut sets = event
+                .sets
+                .iter()
+                .filter(|set| set.phase_group_id.as_deref() == Some(&group.phase_group_id))
+                .collect::<Vec<_>>();
+            sets.sort_by_key(|set| {
+                (
+                    set.identifier
+                        .as_deref()
+                        .and_then(|identifier| identifier.parse::<usize>().ok())
+                        .unwrap_or(usize::MAX),
+                    event_order
+                        .get(set.set_id.as_str())
+                        .copied()
+                        .unwrap_or(usize::MAX),
+                )
+            });
+
+            let mut player_one_wins = 0;
+            let mut player_two_wins = 0;
+            let mut next_set = None;
+            for set in sets {
+                let pending_winner = confirmed_pending_results.get(&set.set_id);
+                if set.state < 3 && pending_winner.is_none() {
+                    next_set = Some(set);
+                    break;
+                }
+
+                let winner_id = match pending_winner {
+                    Some(Some(winner_id)) => Some(winner_id.as_str()),
+                    Some(None) => None,
+                    None => set.winner_id.as_deref(),
+                };
+                match winner_id {
+                    Some(winner_id) if winner_id == settings.player_one_entrant_id => {
+                        player_one_wins += 1;
+                    }
+                    Some(_) => player_two_wins += 1,
+                    None if settings.draw_counts_as_win => {
+                        player_one_wins += 1;
+                        player_two_wins += 1;
+                    }
+                    None => {}
+                }
+
+                if !settings.play_all_matches
+                    && ((player_one_wins >= settings.wins_required
+                        && player_one_wins > player_two_wins)
+                        || (player_two_wins >= settings.wins_required
+                            && player_two_wins > player_one_wins))
+                {
+                    return None;
+                }
+            }
+
+            next_set.map(|set| set.set_id.clone())
+        })
+        .collect()
+}
+
+fn mobile_confirmed_first_to_n_draw(
+    is_first_to_n_wins: bool,
+    draw_selected: bool,
+    confirmed: bool,
+    direct_win: bool,
+    slot_scores: &[LocalSetScoreInput],
+) -> bool {
+    let scores_are_tied = slot_scores.len() == 2
+        && slot_scores[0].score >= 0
+        && slot_scores[0].score == slot_scores[1].score;
+    is_first_to_n_wins && confirmed && !direct_win && (draw_selected || scores_are_tied)
+}
+
+#[cfg(test)]
+mod mobile_first_to_n_tests {
+    use super::{
+        build_mobile_first_to_n_overlay_data, mobile_confirmed_first_to_n_draw,
+        mobile_first_to_n_next_set_ids, MobileSetSaveInput,
+    };
+    use crate::models::{EventSnapshot, LocalSetScoreInput};
+    use std::collections::{HashMap, HashSet};
+
+    fn event_with_first_winner(first_winner: &str) -> EventSnapshot {
+        serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Final",
+            "phaseGroups": [{
+                "phaseGroupId": "ftn",
+                "setIds": ["set-1", "set-2", "set-3"],
+                "firstToNWins": {
+                    "phaseSetCount": 3,
+                    "winsRequired": 2,
+                    "playerOneEntrantId": "player-1"
+                }
+            }],
+            "sets": [
+                {"setId": "set-2", "phaseGroupId": "ftn", "identifier": "2", "fullRoundText": "Set 2", "state": 1, "slots": []},
+                {"setId": "set-1", "phaseGroupId": "ftn", "identifier": "1", "fullRoundText": "Set 1", "state": 3, "winnerId": first_winner, "slots": []},
+                {"setId": "set-3", "phaseGroupId": "ftn", "identifier": "3", "fullRoundText": "Set 3", "state": 1, "slots": []}
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn next_set_uses_identifier_order_and_stops_after_the_winner_is_decided() {
+        let event = event_with_first_winner("player-2");
+        assert_eq!(
+            mobile_first_to_n_next_set_ids(&event, &HashMap::new()),
+            HashSet::from(["set-2".to_owned()])
+        );
+
+        let event = event_with_first_winner("player-1");
+        let confirmed_pending = HashMap::from([
+            ("set-1".to_owned(), Some("player-1".to_owned())),
+            ("set-2".to_owned(), Some("player-1".to_owned())),
+        ]);
+        assert!(mobile_first_to_n_next_set_ids(&event, &confirmed_pending).is_empty());
+    }
+
+    #[test]
+    fn confirmed_draw_accepts_explicit_draws_and_score_ties_for_first_to_n() {
+        let tied = [
+            LocalSetScoreInput {
+                entrant_id: "one".to_owned(),
+                score: 0,
+            },
+            LocalSetScoreInput {
+                entrant_id: "two".to_owned(),
+                score: 0,
+            },
+        ];
+        assert!(mobile_confirmed_first_to_n_draw(
+            true, false, true, false, &tied
+        ));
+        assert!(mobile_confirmed_first_to_n_draw(
+            true, true, true, false, &tied
+        ));
+        assert!(!mobile_confirmed_first_to_n_draw(
+            false, true, true, false, &tied
+        ));
+        assert!(!mobile_confirmed_first_to_n_draw(
+            true, false, false, false, &tied
+        ));
+        assert!(!mobile_confirmed_first_to_n_draw(
+            true, true, true, true, &tied
+        ));
+        assert!(mobile_confirmed_first_to_n_draw(
+            true, true, true, false, &tied[..1]
+        ));
+        let unequal_scores = [
+            LocalSetScoreInput {
+                entrant_id: "one".to_owned(),
+                score: 0,
+            },
+            LocalSetScoreInput {
+                entrant_id: "two".to_owned(),
+                score: 1,
+            },
+        ];
+        assert!(mobile_confirmed_first_to_n_draw(
+            true, true, true, false, &unequal_scores
+        ));
+        let negative_score = [
+            LocalSetScoreInput {
+                entrant_id: "one".to_owned(),
+                score: -1,
+            },
+            LocalSetScoreInput {
+                entrant_id: "two".to_owned(),
+                score: -1,
+            },
+        ];
+        assert!(mobile_confirmed_first_to_n_draw(
+            true, true, true, false, &negative_score
+        ));
+        assert!(!mobile_confirmed_first_to_n_draw(
+            true, false, true, false, &negative_score
+        ));
+    }
+
+    #[test]
+    fn mobile_save_payload_keeps_explicit_draw_selection() {
+        let payload: MobileSetSaveInput = serde_json::from_value(serde_json::json!({
+            "slug": "event",
+            "eventId": "event-id",
+            "winnerId": null,
+            "slotScores": [
+                {"entrantId": "one", "score": 0},
+                {"entrantId": "two", "score": 0}
+            ],
+            "draw": true,
+            "confirmed": true
+        }))
+        .expect("mobile draw payload should deserialize");
+
+        assert!(payload.draw);
+        assert!(mobile_confirmed_first_to_n_draw(
+            true,
+            payload.draw,
+            payload.confirmed,
+            payload.direct_win,
+            &payload.slot_scores
+        ));
+    }
+
+    #[test]
+    fn mobile_overlay_builds_first_to_n_board_from_event_results() {
+        let event: EventSnapshot = serde_json::from_value(serde_json::json!({
+            "eventId": "event",
+            "name": "Final",
+            "phaseGroups": [{
+                "phaseGroupId": "ftn",
+                "setIds": ["set-1", "set-2"],
+                "firstToNWins": {
+                    "phaseSetCount": 2,
+                    "winsRequired": 2,
+                    "playerOneEntrantId": "one"
+                },
+                "seeds": [
+                    {"seedId": "seed-one", "entrantId": "one", "entrantName": "Player One"},
+                    {"seedId": "seed-two", "entrantId": "two", "entrantName": "Player Two"}
+                ]
+            }],
+            "sets": [
+                {
+                    "setId": "set-2",
+                    "phaseGroupId": "ftn",
+                    "identifier": "2",
+                    "fullRoundText": "Set 2",
+                    "state": 1,
+                    "slots": [
+                        {"entrantId": "one", "entrantName": "Player One"},
+                        {"entrantId": "two", "entrantName": "Player Two"}
+                    ]
+                },
+                {
+                    "setId": "set-1",
+                    "phaseGroupId": "ftn",
+                    "identifier": "1",
+                    "fullRoundText": "Set 1",
+                    "state": 3,
+                    "winnerId": "one",
+                    "slots": [
+                        {"entrantId": "one", "entrantName": "Player One"},
+                        {"entrantId": "two", "entrantName": "Player Two"}
+                    ]
+                }
+            ]
+        }))
+        .unwrap();
+
+        let overlay = build_mobile_first_to_n_overlay_data(&event, "set-2", &HashMap::new())
+            .expect("First to N event should produce scoreboard data");
+        assert_eq!(overlay.player_one_name, "Player One");
+        assert_eq!(overlay.player_two_name, "Player Two");
+        assert_eq!((overlay.player_one_wins, overlay.player_two_wins), (1, 0));
+        assert_eq!(overlay.set_numbers, vec![1, 2]);
+        assert_eq!(overlay.set_completed, vec![true, false]);
+        assert_eq!(overlay.player_one_results, vec![Some(true), None]);
+        assert_eq!(overlay.player_two_results, vec![Some(false), None]);
+        assert_eq!(overlay.winner_name, None);
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MobileEventInfo {
@@ -492,6 +913,7 @@ struct MobileSetDetailItem {
     round: Option<i64>,
     phase_name: Option<String>,
     phase_group_name: Option<String>,
+    is_first_to_n_wins: bool,
     state: i64,
     winner_id: Option<String>,
     direct_win: bool,
@@ -517,6 +939,8 @@ struct MobileSetSaveInput {
     side_assignments: Vec<MobileSetSideAssignmentInput>,
     #[serde(default)]
     direct_win: bool,
+    #[serde(default)]
+    draw: bool,
     confirmed: bool,
 }
 
@@ -662,6 +1086,50 @@ fn build_set_display_code_by_id(sets: &[SetSnapshot]) -> HashMap<String, String>
     map
 }
 
+fn overlay_set_display_parts(
+    set: &SetSnapshot,
+    sets: &[SetSnapshot],
+) -> (String, String, String) {
+    let phase_name = set
+        .phase_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_owned();
+    let pool_identifier = set
+        .phase_group_display_identifier
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            set.phase_group_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
+    let pool_name = pool_identifier
+        .map(|value| {
+            if value.to_ascii_lowercase().starts_with("pool ") {
+                value.to_owned()
+            } else {
+                format!("Pool {value}")
+            }
+        })
+        .unwrap_or_default();
+    let display_codes = build_set_display_code_by_id(sets);
+    let set_identifier = set
+        .identifier
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| display_codes.get(&set.set_id).map(String::as_str));
+    let set_label = set_identifier
+        .map(|value| format!("Set {value}"))
+        .unwrap_or_default();
+    (phase_name, pool_name, set_label)
+}
+
 fn is_grand_final_set(set: &SetSnapshot) -> bool {
     let lowered = set.full_round_text.trim().to_lowercase();
     if lowered.contains("grand final")
@@ -778,6 +1246,33 @@ mod tests {
         assert_eq!(overlay_items_for_entrant(Some(&meta), Some("red")), [vec!["A"], vec![], vec![]]);
         meta.event_management.as_mut().unwrap().item_list_snapshots[0].id.clear();
         assert_eq!(overlay_items_for_entrant(Some(&meta), Some("red")), [Vec::<String>::new(), vec![], vec![]]);
+    }
+
+    #[test]
+    fn overlay_set_display_parts_expose_phase_pool_and_set_separately() {
+        let set: SetSnapshot = serde_json::from_value(serde_json::json!({
+            "setId": "set-1",
+            "phaseGroupId": "group-1",
+            "identifier": "2",
+            "fullRoundText": "Winners Round 1",
+            "round": 1,
+            "phaseName": "Main",
+            "phaseGroupName": "Pool Alpha",
+            "phaseGroupDisplayIdentifier": "A",
+            "state": 1,
+            "winnerId": null,
+            "slots": []
+        }))
+        .unwrap();
+
+        assert_eq!(
+            overlay_set_display_parts(&set, &[set.clone()]),
+            (
+                "Main".to_owned(),
+                "Pool A".to_owned(),
+                "Set 2".to_owned()
+            )
+        );
     }
 
     #[test]
@@ -1061,6 +1556,7 @@ mod tests {
             round: Some(1),
             phase_name: None,
             phase_group_name: None,
+            is_first_to_n_wins: false,
             state: 2,
             winner_id: None,
             direct_win: false,
@@ -1291,6 +1787,12 @@ struct ObsOverlaySetInput {
     event_name: String,
     event_alias: String,
     round_text: String,
+    #[serde(default)]
+    phase_name: String,
+    #[serde(default)]
+    pool_name: String,
+    #[serde(default)]
+    set_label: String,
     red_player_name: String,
     blue_player_name: String,
     #[serde(default)]
@@ -1351,6 +1853,9 @@ struct ObsOverlayState {
     event_name: Option<String>,
     event_alias: Option<String>,
     round_text: Option<String>,
+    phase_name: Option<String>,
+    pool_name: Option<String>,
+    set_label: Option<String>,
     red_player_name: String,
     blue_player_name: String,
     red_items: [Vec<String>; 3],
@@ -1379,6 +1884,9 @@ struct ObsOverlayActiveSet {
     event_name: String,
     event_alias: String,
     round_text: String,
+    phase_name: String,
+    pool_name: String,
+    set_label: String,
     red_player_name: String,
     blue_player_name: String,
     red_set_wins: u32,
@@ -1424,6 +1932,9 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
             event_name: Some(active.event_name.clone()),
             event_alias: Some(active.event_alias.clone()),
             round_text: Some(active.round_text.clone()),
+            phase_name: Some(active.phase_name.clone()),
+            pool_name: Some(active.pool_name.clone()),
+            set_label: Some(active.set_label.clone()),
             red_player_name: active.red_player_name.clone(),
             blue_player_name: active.blue_player_name.clone(),
             red_items: active.red_items.clone(),
@@ -1450,6 +1961,9 @@ fn snapshot_obs_overlay_state() -> Result<ObsOverlayState, String> {
         event_name: None,
         event_alias: Some(guard.event_alias.clone()),
         round_text: None,
+        phase_name: None,
+        pool_name: None,
+        set_label: None,
         red_player_name: String::new(),
         blue_player_name: String::new(),
         red_items: Default::default(),
@@ -2092,7 +2606,17 @@ fn mobile_input_html() -> String {
             color: #9a3412;
             font-weight: 700;
         }
-        .player-top-head .dq-btn {
+        .player-card .draw-btn {
+            width: auto;
+            min-width: 3rem;
+            padding: 8px;
+            background: #eff6ff;
+            border: 1px solid #93c5fd;
+            color: #1d4ed8;
+            font-weight: 700;
+        }
+        .player-top-head .dq-btn,
+        .player-top-head .draw-btn {
             min-width: 0;
             padding: 4px 8px;
             font-size: 0.74rem;
@@ -2103,6 +2627,9 @@ fn mobile_input_html() -> String {
             grid-template-columns: 1fr 1fr;
             gap: 8px;
             margin-top: 10px;
+        }
+        .next-set-action {
+            margin-top: 8px;
         }
         .status {
             margin-top: 8px;
@@ -2184,6 +2711,7 @@ fn mobile_input_html() -> String {
                     <button id="resolveCallsBtn" type="button" data-i18n="resolveCalls">呼出解決</button>
                     <button id="overlayStopBtn" type="button" data-i18n="stopCompletely" style="background: #e2e8f0; color: #0f172a; border-color: #cbd5e1;">完全停止</button>
                 </div>
+                <button id="updateStreamStartBtn" type="button" data-i18n="updateStreamStart" hidden>配信の記録時間を更新</button>
                 <div id="overlayVisibilityControls" class="overlay-visibility-control" hidden>
                     <strong data-i18n="visibilityControls">表示切替</strong>
                     <div id="overlayVisibilityButtons" class="overlay-visibility-buttons"></div>
@@ -2197,6 +2725,7 @@ fn mobile_input_html() -> String {
                 <button id="updateBtn" type="button" data-i18n="update">更新</button>
                 <button id="confirmBtn" type="button" data-i18n="confirm">確定</button>
             </div>
+            <button id="nextSetBtn" class="next-set-action" type="button" data-i18n="nextSet" hidden>次の試合へ</button>
             <p id="submitStatus" class="status"></p>
             <p id="randomActionTime" class="status-sub"></p>
         </div>
@@ -2295,6 +2824,8 @@ fn mobile_input_html() -> String {
         const overlayStatus = document.getElementById('overlayStatus');
         const overlayToggleBtn = document.getElementById('overlayToggleBtn');
         const overlayStopBtn = document.getElementById('overlayStopBtn');
+        const updateStreamStartBtn = document.getElementById('updateStreamStartBtn');
+        const nextSetBtn = document.getElementById('nextSetBtn');
         const overlayVisibilityControls = document.getElementById('overlayVisibilityControls');
         const overlayVisibilityButtons = document.getElementById('overlayVisibilityButtons');
         const overlayVisibilityError = document.getElementById('overlayVisibilityError');
@@ -2315,6 +2846,7 @@ fn mobile_input_html() -> String {
         let displayOnePOnTop = true;
         let mobileSideDrafts = {};
         let directWinnerId = null;
+        let drawSelected = false;
         let shouldRefreshSetListOnReturn = false;
 
         function updateHeaderInfo(info) {
@@ -2640,6 +3172,7 @@ fn mobile_input_html() -> String {
 
             const detail = await res.json();
             selectedSet = detail;
+            drawSelected = false;
             directWinnerId = detail.directWin && detail.winnerId ? String(detail.winnerId) : null;
             setLocalizedText(detailMeta, '');
             detailSetId.textContent = getDisplaySetLabel(detail);
@@ -2955,6 +3488,14 @@ fn mobile_input_html() -> String {
             const matchupReady = isMatchupReady(detail);
             const completed = isCompletedSet(detail);
             const scoreEditLocked = Boolean(detail?.scoreEditLocked);
+            if (nextSetBtn) {
+                nextSetBtn.hidden = !detail?.isFirstToNWins;
+                nextSetBtn.disabled = !completed;
+            }
+            if (updateStreamStartBtn) {
+                updateStreamStartBtn.hidden = !detail?.isFirstToNWins;
+                updateStreamStartBtn.disabled = completed || scoreEditLocked;
+            }
             setLocalizedText(detailMeta, scoreEditLocked
                 ? 'poolLockedDetail'
                 : completed
@@ -3004,8 +3545,10 @@ fn mobile_input_html() -> String {
                         ${scoreEditLocked ? `<span class="slot-lock-note" data-i18n="poolLocked">${t('poolLocked')}</span>` : (completed ? `<span class="slot-lock-note" data-i18n="completedSet">${t('completedSet')}</span>` : (matchupReady ? '' : `<span class="slot-lock-note" data-i18n="matchupPending">${t('matchupPending')}</span>`))}
                     </div>`
                     : `<div class="player-controls"><span class="slot-lock-note" data-i18n="matchupPending">${t('matchupPending')}</span></div>`;
-                const dqButton = matchupReady && hasEntrant
-                    ? `<button class="dq-btn" type="button" data-dq-entrant-id="${entrantId}" ${completed || scoreEditLocked ? 'disabled' : ''}>DQ</button>`
+                const specialResultButton = matchupReady && hasEntrant
+                    ? (detail?.isFirstToNWins
+                        ? `<button class="draw-btn" type="button" data-draw-match ${completed || scoreEditLocked ? 'disabled' : ''}>${t('draw')}</button>`
+                        : `<button class="dq-btn" type="button" data-dq-entrant-id="${entrantId}" ${completed || scoreEditLocked ? 'disabled' : ''}>DQ</button>`)
                     : '';
                 const callActiveClass = isEntrantCalled(entrantId) ? 'call-active' : '';
                 const sideClass = sideLabel === '1P' ? 'side-1p' : (sideLabel === '2P' ? 'side-2p' : '');
@@ -3014,7 +3557,7 @@ fn mobile_input_html() -> String {
                     <div class="player-top">
                         <div class="player-top-head">
                             <span class="slot-side-label">${sideLabel}</span>
-                            ${dqButton}
+                            ${specialResultButton}
                         </div>
                         <span class="slot-player-name" data-slot-player-name="${escapedEntrantName}">${escapedEntrantName}</span>
                     </div>
@@ -3032,6 +3575,7 @@ fn mobile_input_html() -> String {
                     if (normalized !== input.value) {
                         input.value = normalized;
                     }
+                    drawSelected = false;
                     updateHigherScoreHighlight();
                 });
             }
@@ -3053,6 +3597,7 @@ fn mobile_input_html() -> String {
                     initializeEmptyScoresForStep();
                     const next = nextScoreAfterStep(input.value, adjust);
                     input.value = formatScoreInputValue(next);
+                    drawSelected = false;
                     updateHigherScoreHighlight();
                 });
             }
@@ -3092,11 +3637,30 @@ fn mobile_input_html() -> String {
                 });
             }
 
+            for (const drawButton of slotRows.querySelectorAll('[data-draw-match]')) {
+                drawButton.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    if (!selectedSet || hasActiveSetCalls() || !selectedSetCallStatus) {
+                        return;
+                    }
+
+                    directWinnerId = null;
+                    drawSelected = true;
+                    renderDetailSlots(selectedSet);
+                    for (const scoreInput of slotRows.querySelectorAll('[data-score-entrant-id]')) {
+                        scoreInput.value = '0';
+                    }
+                    updateHigherScoreHighlight();
+                    applySetCallInputLock();
+                });
+            }
+
             for (const winButton of slotRows.querySelectorAll('[data-win-entrant-id]')) {
                 winButton.addEventListener('click', (event) => {
                     event.preventDefault();
                     const targetEntrantId = winButton.getAttribute('data-win-entrant-id') || '';
                     directWinnerId = directWinnerId === targetEntrantId ? null : targetEntrantId;
+                    drawSelected = false;
                     if (directWinnerId) {
                         for (const scoreInput of slotRows.querySelectorAll('[data-score-entrant-id]')) {
                             scoreInput.value = '';
@@ -3507,6 +4071,7 @@ fn mobile_input_html() -> String {
             const detail = await res.json();
             const previousSetId = selectedSet && selectedSet.setId ? String(selectedSet.setId) : '';
             selectedSet = detail;
+            drawSelected = false;
             await fetchOverlayVisibilityControls();
             if (previousSetId !== String(detail.setId || '')) {
                 selectedSetCallStatus = null;
@@ -3608,16 +4173,24 @@ fn mobile_input_html() -> String {
 
             const slotScores = collectSlotScores();
             const sideAssignments = collectSideAssignments();
+            const scoresAreTied = slotScores.length === 2
+                && slotScores[0].entrantId !== slotScores[1].entrantId
+                && slotScores[0].score >= 0
+                && slotScores[0].score === slotScores[1].score;
+            const isDraw = Boolean(selectedSet.isFirstToNWins)
+                && !directWinnerId
+                && (drawSelected || (confirmed && scoresAreTied));
 
             const payload = {
                 slug,
                 eventId,
-                winnerId: directWinnerId,
+                winnerId: isDraw ? null : directWinnerId,
                 slotScores: directWinnerId
                     ? (selectedSet.slots || []).filter((slot) => slot && slot.entrantId).map((slot) => ({ entrantId: slot.entrantId, score: 0 }))
                     : slotScores,
                 sideAssignments,
                 directWin: Boolean(directWinnerId),
+                draw: isDraw,
                 confirmed,
             };
 
@@ -3638,6 +4211,7 @@ fn mobile_input_html() -> String {
 
             const detail = await res.json();
             selectedSet = detail;
+            drawSelected = false;
             directWinnerId = detail.directWin && detail.winnerId ? String(detail.winnerId) : null;
             setLocalizedText(detailMeta, '');
             detailSetId.textContent = getDisplaySetLabel(detail);
@@ -3661,6 +4235,52 @@ fn mobile_input_html() -> String {
             }
 
             setLocalizedText(submitStatus, confirmed ? 'resultConfirmed' : 'resultUpdated');
+        }
+
+        async function openNextFirstToNSet() {
+            if (!selectedSet?.isFirstToNWins || !isCompletedSet(selectedSet)) {
+                return;
+            }
+
+            try {
+                const url = `/mobile/api/sets?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&token=${encodeURIComponent(token)}`;
+                const response = await fetch(url, { cache: 'no-store' });
+                if (!response.ok) {
+                    throw new Error(await response.text() || `HTTP ${response.status}`);
+                }
+                const sets = await response.json();
+                const nextSet = Array.isArray(sets)
+                    ? sets.find((set) => Boolean(set.isFirstToNWins) && isListItemInputtable(set))
+                    : null;
+                if (!nextSet) {
+                    setLocalizedText(submitStatus, 'nextSetUnavailable');
+                    return;
+                }
+                await fetchSetDetail(nextSet.setId);
+            } catch (error) {
+                setLocalizedText(submitStatus, 'nextSetFailed', {
+                    error: () => mobileErrorDetail(error && error.message ? error.message : String(error)),
+                });
+            }
+        }
+
+        async function updateStreamStartFromDetail() {
+            if (!selectedSet?.isFirstToNWins || isCompletedSet(selectedSet)) {
+                return;
+            }
+
+            try {
+                const url = `/mobile/api/set-stream-start?slug=${encodeURIComponent(slug)}&eventId=${encodeURIComponent(eventId)}&setId=${encodeURIComponent(selectedSet.setId)}&token=${encodeURIComponent(token)}`;
+                const response = await fetch(url, { method: 'POST' });
+                if (!response.ok) {
+                    throw new Error(await response.text() || `HTTP ${response.status}`);
+                }
+                setLocalizedText(submitStatus, 'streamStartUpdated');
+            } catch (error) {
+                setLocalizedText(submitStatus, 'streamStartUpdateFailed', {
+                    error: () => mobileErrorDetail(error && error.message ? error.message : String(error)),
+                });
+            }
         }
 
         document.getElementById('searchBtn').addEventListener('click', () => { void fetchSets(); });
@@ -3724,6 +4344,16 @@ fn mobile_input_html() -> String {
                 void saveSetFromDetail(true, true);
             }
         });
+        if (nextSetBtn) {
+            nextSetBtn.addEventListener('click', () => {
+                void openNextFirstToNSet();
+            });
+        }
+        if (updateStreamStartBtn) {
+            updateStreamStartBtn.addEventListener('click', () => {
+                void updateStreamStartFromDetail();
+            });
+        }
         overlayToggleBtn.addEventListener('click', () => {
             void toggleOverlayFromDetail();
         });
@@ -3933,11 +4563,13 @@ fn build_mobile_set_detail_from_workspace(
         );
     }
 
-    build_mobile_set_detail_from_set_snapshot(
+    let mut detail = build_mobile_set_detail_from_set_snapshot(
         &set,
         set_display_code_by_id.get(&set.set_id).cloned(),
         side_by_key,
-    )
+    )?;
+    detail.is_first_to_n_wins = mobile_set_is_first_to_n_wins(event, &set);
+    Some(detail)
 }
 
 fn resolve_mobile_set_entrants(
@@ -4138,6 +4770,7 @@ fn build_mobile_set_detail_from_set_snapshot(
         round: set.round,
         phase_name: set.phase_name.clone(),
         phase_group_name: set.phase_group_name.clone(),
+        is_first_to_n_wins: false,
         state: set.state,
         winner_id: set.winner_id.clone(),
         direct_win: false,
@@ -4426,6 +5059,20 @@ fn build_mobile_set_detail_local_only(
         }
     }
 
+    let is_first_to_n_wins = workspace
+        .snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .and_then(|event| {
+            event
+                .sets
+                .iter()
+                .find(|set| set.set_id == set_id)
+                .map(|set| (event, set))
+        })
+        .is_some_and(|(event, set)| mobile_set_is_first_to_n_wins(event, set));
+
     Some(MobileSetDetailItem {
         set_id: set_id.to_owned(),
         set_code: set_id.to_owned(),
@@ -4433,6 +5080,7 @@ fn build_mobile_set_detail_local_only(
         round: None,
         phase_name: None,
         phase_group_name: None,
+        is_first_to_n_wins,
         state: if pending.confirmed { 3 } else { 2 },
         winner_id: if pending.winner_id.trim().is_empty() {
             None
@@ -4620,13 +5268,23 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             .iter()
             .filter_map(|set| resolve_mobile_set_entrants(event, &set.set_id))
             .collect::<Vec<_>>();
-        let confirmed_pending_set_ids = workspace
+        let confirmed_pending_results = workspace
             .local_meta
             .pending_set_results
             .iter()
             .filter(|pending| pending.event_id == event_id && pending.confirmed)
-            .map(|pending| pending.set_id.as_str())
+            .map(|pending| {
+                (
+                    pending.set_id.clone(),
+                    (!pending.winner_id.trim().is_empty()).then(|| pending.winner_id.clone()),
+                )
+            })
+            .collect::<HashMap<String, Option<String>>>();
+        let confirmed_pending_set_ids = confirmed_pending_results
+            .keys()
+            .map(String::as_str)
             .collect::<HashSet<_>>();
+        let first_to_n_next_set_ids = mobile_first_to_n_next_set_ids(event, &confirmed_pending_results);
 
         let set_display_code_by_id = build_set_display_code_by_id(&sets);
 
@@ -4634,6 +5292,14 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             .iter()
             .filter(|set| !crate::models::is_intermediate_set(&event.phase_groups, set))
             .filter(|set| is_visible_grand_final_reset(&sets, set))
+            .filter(|set| {
+                if !mobile_set_is_first_to_n_wins(event, set) {
+                    return true;
+                }
+                first_to_n_next_set_ids.contains(&set.set_id)
+                    && mobile_set_has_matchup(&set.slots)
+                    && !storage::is_set_score_edit_locked(&workspace, &event_id, &set.set_id)
+            })
             .filter(|set| {
                 if query.is_empty() {
                     return true;
@@ -4683,6 +5349,7 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                 phase_name: set.phase_name.clone(),
                 phase_group_name: set.phase_group_name.clone(),
                 is_intermediate: crate::models::is_intermediate_set(&event.phase_groups, set),
+                is_first_to_n_wins: mobile_set_is_first_to_n_wins(event, set),
                 matchup_ready: mobile_set_has_matchup(&set.slots),
                 score_edit_locked: storage::is_set_score_edit_locked(
                     &workspace,
@@ -4962,6 +5629,12 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
             return;
         };
+        let is_first_to_n_wins = workspace_before
+            .snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == event_id)
+            .is_some_and(|event| mobile_set_is_first_to_n_wins(event, &target_set));
 
         if let Err(err) = ensure_mobile_set_has_no_active_calls(app, &event_id, &set_id) {
             respond_json(
@@ -5057,13 +5730,17 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             }
         }
 
-        let winner_id = payload
-            .winner_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .or_else(|| resolve_winner_id_from_slot_scores(&target_set, &payload.slot_scores));
+        let winner_id = if payload.draw {
+            None
+        } else {
+            payload
+                .winner_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .or_else(|| resolve_winner_id_from_slot_scores(&target_set, &payload.slot_scores))
+        };
 
         if let Some(value) = winner_id.as_ref() {
             if !known_entrant_ids.iter().any(|id| id == value) {
@@ -5076,14 +5753,21 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             }
         }
 
-        let _saved_workspace = if let Some(winner_id) = winner_id {
+        let is_confirmed_draw = mobile_confirmed_first_to_n_draw(
+            is_first_to_n_wins,
+            payload.draw,
+            payload.confirmed,
+            payload.direct_win,
+            &payload.slot_scores,
+        );
+        let _saved_workspace = if winner_id.is_some() || is_confirmed_draw {
             match save_local_set_result(
                 app.clone(),
                 LocalSetResultInput {
                     slug: slug.clone(),
                     event_id: event_id.clone(),
                     set_id: set_id.clone(),
-                    winner_id,
+                    winner_id: winner_id.unwrap_or_default(),
                     confirmed: payload.confirmed,
                     direct_win: payload.direct_win,
                     slot_scores: payload.slot_scores.clone(),
@@ -5220,6 +5904,84 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
         return;
     }
 
+    if path == "/mobile/api/set-stream-start" && request.method() == &tiny_http::Method::Post {
+        let slug = query_param_from_url(&url, "slug").unwrap_or_default();
+        let event_id = query_param_from_url(&url, "eventId").unwrap_or_default();
+        let set_id = query_param_from_url(&url, "setId").unwrap_or_default();
+        if slug.trim().is_empty() || event_id.trim().is_empty() || set_id.trim().is_empty() {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"slug, eventId and setId are required\"}".to_owned(),
+            );
+            return;
+        }
+
+        let workspace = match load_target_workspace(app, &slug, &event_id) {
+            Ok(value) => value,
+            Err(err) => {
+                respond_json(
+                    request,
+                    400,
+                    format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                );
+                return;
+            }
+        };
+        let Some((event, set)) = workspace
+            .snapshot
+            .events
+            .iter()
+            .find(|event| event.event_id == event_id)
+            .and_then(|event| resolve_mobile_set_entrants(event, &set_id).map(|set| (event, set)))
+        else {
+            respond_json(request, 404, "{\"error\":\"set not found\"}".to_owned());
+            return;
+        };
+        if !mobile_set_is_first_to_n_wins(event, &set) {
+            respond_json(request, 400, "{\"error\":\"set not found\"}".to_owned());
+            return;
+        }
+        if set.state >= 3
+            || workspace.local_meta.pending_set_results.iter().any(|pending| {
+                pending.event_id == event_id && pending.set_id == set_id && pending.confirmed
+            })
+        {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"completed set results cannot be changed\"}".to_owned(),
+            );
+            return;
+        }
+        if !mobile_set_has_matchup(&set.slots) {
+            respond_json(
+                request,
+                400,
+                "{\"error\":\"target set does not exist\"}".to_owned(),
+            );
+            return;
+        }
+
+        if let Err(err) = storage::update_set_stream_start(
+            app,
+            &slug,
+            &event_id,
+            &set_id,
+            Some(chrono::Utc::now()),
+        ) {
+            respond_json(
+                request,
+                400,
+                format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+            );
+            return;
+        }
+        emit_workspace_updated(app, &slug, &event_id);
+        respond_json(request, 200, "{\"updated\":true}".to_owned());
+        return;
+    }
+
     if path == "/mobile/api/overlay-visibility" && request.method() == &tiny_http::Method::Get {
         let controls = match overlay_layout::visibility_controls() {
             Ok(value) => value,
@@ -5308,6 +6070,9 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
                     event_name: None,
                     event_alias: None,
                     round_text: None,
+                    phase_name: None,
+                    pool_name: None,
+                    set_label: None,
                     red_player_name: String::new(),
                     blue_player_name: String::new(),
                     red_items: Default::default(),
@@ -5376,6 +6141,40 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             }
         }
 
+        let first_to_n_wins = if payload.enabled {
+            let workspace = match load_target_workspace(app, &payload.slug, &payload.event_id) {
+                Ok(value) => value,
+                Err(err) => {
+                    respond_json(
+                        request,
+                        400,
+                        format!("{{\"error\":\"{}\"}}", err.replace('"', "\\\"")),
+                    );
+                    return;
+                }
+            };
+            workspace
+                .snapshot
+                .events
+                .iter()
+                .find(|event| event.event_id == payload.event_id)
+                .and_then(|event| {
+                    let event_meta = workspace
+                        .local_meta
+                        .events
+                        .iter()
+                        .find(|meta| meta.event_id == payload.event_id);
+                    let alias_names_by_id = mobile_alias_names_by_id(event_meta);
+                    build_mobile_first_to_n_overlay_data(
+                        event,
+                        &payload.set_id,
+                        &alias_names_by_id,
+                    )
+                })
+        } else {
+            None
+        };
+
         let input = ObsOverlaySetInput {
             enabled: payload.enabled,
             slug: payload.slug.clone(),
@@ -5384,13 +6183,16 @@ fn handle_mobile_input_http_request(app: &tauri::AppHandle, mut request: tiny_ht
             event_name: payload.event_name.clone(),
             event_alias: payload.event_alias.clone(),
             round_text: payload.round_text.clone(),
+            phase_name: String::new(),
+            pool_name: String::new(),
+            set_label: String::new(),
             red_player_name: payload.red_player_name.clone(),
             blue_player_name: payload.blue_player_name.clone(),
             red_entrant_id: payload.red_entrant_id.clone(),
             blue_entrant_id: payload.blue_entrant_id.clone(),
             red_items: Default::default(),
             blue_items: Default::default(),
-            first_to_n_wins: None,
+            first_to_n_wins,
             red_set_wins: payload.red_set_wins,
             blue_set_wins: payload.blue_set_wins,
             font_scale: payload.font_scale,
@@ -5775,12 +6577,32 @@ fn apply_obs_overlay_toggle(
             }
         };
 
-        let (red_items, blue_items) = if set_id == "__test__" {
-            input.resolve_items(None)
+        let (red_items, blue_items, phase_name, pool_name, set_label) = if set_id == "__test__" {
+            let (red_items, blue_items) = input.resolve_items(None);
+            (
+                red_items,
+                blue_items,
+                input.phase_name.trim().to_owned(),
+                input.pool_name.trim().to_owned(),
+                input.set_label.trim().to_owned(),
+            )
         } else {
             let workspace = storage::load_workspace(app, &input.slug, &input.event_id)?;
             let meta = workspace.local_meta.events.iter().find(|meta| meta.event_id == input.event_id);
-            input.resolve_items(meta)
+            let event = workspace
+                .snapshot
+                .events
+                .iter()
+                .find(|event| event.event_id == input.event_id);
+            let display_set = event.and_then(|event| {
+                event.sets.iter().find(|set| set.set_id == set_id)
+            });
+            let (phase_name, pool_name, set_label) = display_set
+                .zip(event)
+                .map(|(set, event)| overlay_set_display_parts(set, &event.sets))
+                .unwrap_or_default();
+            let (red_items, blue_items) = input.resolve_items(meta);
+            (red_items, blue_items, phase_name, pool_name, set_label)
         };
         if guard
             .active_set
@@ -5808,6 +6630,9 @@ fn apply_obs_overlay_toggle(
             event_name: input.event_name.trim().to_owned(),
             event_alias: input.event_alias.trim().to_owned(),
             round_text: input.round_text.trim().to_owned(),
+            phase_name,
+            pool_name,
+            set_label,
             red_player_name: red_name,
             blue_player_name: blue_name,
             red_set_wins: input.red_set_wins,
@@ -7945,6 +8770,7 @@ pub fn run() {
             stop_udp_mailbox_service,
             send_mailbox_message,
             call_list::load_player_calls,
+            call_list::force_clear_own_player_calls,
             bracket_messages::load_bracket_messages,
             bracket_messages::mark_bracket_message_processed,
             save_event_alias,
