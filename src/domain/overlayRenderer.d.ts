@@ -16,6 +16,7 @@ export type OverlayRenderState = {
     playerOneName: string;
     playerTwoName: string;
     winnerName?: string | null;
+    winsRequired: number;
     playerOneWins: number;
     playerTwoWins: number;
     setNumbers: number[];

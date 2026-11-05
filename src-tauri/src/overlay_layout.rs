@@ -246,6 +246,7 @@ impl Layouts {
                         "clock",
                         "firstToNWins",
                         "firstToNWinsVertical",
+                        "firstToNWinsLine",
                     ]
                     .contains(&c.kind.as_str())
                     || ![
@@ -275,7 +276,8 @@ impl Layouts {
                     } else {
                         c.source == "clock"
                     })
-                    || (["firstToNWins", "firstToNWinsVertical"].contains(&c.kind.as_str())
+                    || (["firstToNWins", "firstToNWinsVertical", "firstToNWinsLine"]
+                        .contains(&c.kind.as_str())
                         && c.source != "text")
                     || c.clock_format
                         .as_ref()
@@ -981,7 +983,7 @@ mod tests {
     #[test]
     fn persists_first_to_n_wins_history_limit_and_rejects_oversized_values() {
         let mut layouts = sample();
-        for kind in ["firstToNWins", "firstToNWinsVertical"] {
+        for kind in ["firstToNWins", "firstToNWinsVertical", "firstToNWinsLine"] {
             layouts.presets[0].components[0].kind = kind.to_owned();
             for history_limit in [0, 1, 9_007_199_254_740_991] {
                 layouts.presets[0].components[0].history_limit = Some(history_limit);

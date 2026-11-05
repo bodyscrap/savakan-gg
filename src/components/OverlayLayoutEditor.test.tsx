@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import capability from "../../src-tauri/capabilities/default.json";
 import { newOverlayComponent, newOverlayPreset, type OverlayLayouts } from "../domain/overlayLayout";
+import { OverlayComponentDialog } from "./OverlayComponentDialog";
 import { OverlayLayoutEditor } from "./OverlayLayoutEditor";
 
 function renderEditor(savedLayouts: OverlayLayouts, disabled = false) {
@@ -48,6 +49,17 @@ describe("overlay preset workspace", () => {
     preset.components = [newOverlayComponent("firstToNWinsVertical")];
     const html = renderEditor({ version: 1, activePresetId: preset.id, presets: [preset] });
     expect(html).toContain("<td>F2NW(縦)</td><td title=\"First to N wins\">First to N wins</td>");
+  });
+  it("shows the line chart type label", () => {
+    const preset = newOverlayPreset();
+    preset.components = [newOverlayComponent("firstToNWinsLine")];
+    const html = renderEditor({ version: 1, activePresetId: preset.id, presets: [preset] });
+    expect(html).toContain("<td>F2NW(線)</td><td title=\"First to N wins\">First to N wins</td>");
+  });
+
+  it("offers the line chart in the component creation dialog", () => {
+    const html = renderToStaticMarkup(<OverlayComponentDialog onCreate={() => true} onClose={() => {}} />);
+    expect(html).toContain('<option value="firstToNWinsLine">F2NW(線)</option>');
   });
 
   it("disables workspace actions while the editor is busy", () => {

@@ -28,7 +28,7 @@ export const overlaySourceLabels: Record<OverlaySource, string> = {
 export type OverlayComponent = {
   id: string;
   name: string;
-  kind: "text" | "number" | "image" | "item" | "clock" | "firstToNWins" | "firstToNWinsVertical";
+  kind: "text" | "number" | "image" | "item" | "clock" | "firstToNWins" | "firstToNWinsVertical" | "firstToNWinsLine";
   source: OverlaySource;
   text: string;
   image: string;
@@ -64,11 +64,11 @@ export type OverlayComponent = {
 };
 export const overlayKindLabels: Record<OverlayComponent["kind"], string> = {
   text: "テキスト", number: "数値", image: "画像", item: "アイテム", clock: "時計",
-  firstToNWins: "F2NW(横)", firstToNWinsVertical: "F2NW(縦)",
+  firstToNWins: "F2NW(横)", firstToNWinsVertical: "F2NW(縦)", firstToNWinsLine: "F2NW(線)",
 };
-type FirstToNWinsKind = "firstToNWins" | "firstToNWinsVertical";
+type FirstToNWinsKind = "firstToNWins" | "firstToNWinsVertical" | "firstToNWinsLine";
 function isFirstToNWinsKind(kind: unknown): kind is FirstToNWinsKind {
-  return kind === "firstToNWins" || kind === "firstToNWinsVertical";
+  return kind === "firstToNWins" || kind === "firstToNWinsVertical" || kind === "firstToNWinsLine";
 }
 export type OverlayPreset = {
   id: string;
@@ -325,7 +325,9 @@ export function newOverlayComponent(
     ...(kind === "item" ? { itemCategory: 1 as const, delimiter: " / " } : {}),
     ...(kind === "clock" ? { clockFormat: "YYYY-MM-DD HH:mm:ss" } : {}),
     ...(kind === "text" || kind === "number" || kind === "item" ? { wrapText: true, shrinkText: false } : {}),
-    x: 0, y: 0, width: 400, height: kind === "firstToNWinsVertical" ? 400 : 100, fontFamily: "sans-serif", fontSize: 48,
+    x: 0, y: 0, width: 400,
+    height: kind === "firstToNWinsVertical" ? 400 : kind === "firstToNWinsLine" ? 320 : 100,
+    fontFamily: "sans-serif", fontSize: 48,
     color: "#ffffff", background: "#000000", align: "center", verticalAlign: "center", bold: true, visible: true,
   };
 }
@@ -543,7 +545,8 @@ export function parseOverlayLayouts(value: unknown): OverlayLayouts {
             ? { imageAlpha: imageOpacity === undefined ? 255 : Math.round(imageOpacity * 255 / 100) } : {}),
           name: isFirstToNWinsKind(component.kind)
             && (component.name === undefined || component.name === "First to N wins スコアボード"
-              || component.name === "First to N wins scoreboard")
+              || component.name === "First to N wins scoreboard"
+              || component.kind === "firstToNWinsLine" && component.name === "F2NW(折れ線)")
             ? t(overlayKindLabels[component.kind])
             : component.name ?? legacyComponentName(component),
           kind: component.kind === "text" && (component.source === "redSetWins" || component.source === "blueSetWins")

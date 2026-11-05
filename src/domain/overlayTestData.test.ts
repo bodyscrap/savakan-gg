@@ -35,6 +35,7 @@ describe("overlay test First to N wins data", () => {
       playerOneName: "1P",
       playerTwoName: "2P",
       winnerName: "1P",
+      winsRequired: 3,
       playerOneWins: 3,
       playerTwoWins: 1,
       setNumbers: [1, 2, 3, 4, 5],

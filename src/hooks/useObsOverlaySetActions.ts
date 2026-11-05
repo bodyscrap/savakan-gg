@@ -107,6 +107,7 @@ export function buildFirstToNWinsOverlayData(
     playerOneName: nameFor(playerOneId),
     playerTwoName: nameFor(playerTwoId),
     winnerName: winnerId ? nameFor(winnerId) : null,
+    winsRequired: settings.winsRequired,
     playerOneWins,
     playerTwoWins,
     setNumbers: orderedSets.map((_set, index) => index + 1),

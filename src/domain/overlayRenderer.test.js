@@ -393,6 +393,71 @@ describe("overlay text fitting with measured dimensions", () => {
     dispose();
   });
 
+  it("renders a colored cumulative First to N wins line chart with the shared history limit", () => {
+    const descendants = (element, tagName) => element.children.flatMap((child) =>
+      [child, ...descendants(child, tagName)]).filter((child) => child.tagName === tagName);
+    const stage = mockElement("DIV");
+    vi.stubGlobal("document", {
+      createElement(tagName) { return mockElement(tagName.toUpperCase()); },
+      createElementNS(_namespace, tagName) { return mockElement(tagName.toUpperCase()); },
+      fonts: {
+        ready: Promise.resolve(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+    });
+    const preset = {
+      width: 400,
+      height: 320,
+      components: [{
+        kind: "firstToNWinsLine", id: "graph", visible: true, source: "text", historyLimit: 2,
+        background: "#000000", color: "#ffffff", fontFamily: "sans-serif", fontSize: 48,
+        bold: true, align: "center", x: 0, y: 0, width: 400, height: 320,
+      }],
+    };
+    const state = {
+      active: true, fullyStopped: false, redPlayerName: "", bluePlayerName: "",
+      redSetWins: 0, blueSetWins: 0, roundText: "", eventName: "", eventAlias: "",
+      firstToNWins: {
+        playerOneName: "Player One", playerTwoName: "Player Two",
+        winnerName: "Player Two",
+        winsRequired: 5,
+        playerOneWins: 3, playerTwoWins: 1,
+        setNumbers: [1, 2, 3, 4],
+        setCompleted: [true, true, true, true],
+        playerOneResults: [true, false, true, true],
+        playerTwoResults: [false, true, false, false],
+      },
+    };
+
+    const dispose = renderOverlayPreset(stage, preset, state);
+    const content = stage.children[0].children[0];
+    const [legend, chart] = content.children;
+    const lines = descendants(chart, "POLYLINE");
+    expect(legend.children.map((player) => player.children[0].children.map((label) => label.textContent))).toEqual([
+      ["Player One"], ["Player Two", "勝者"],
+    ]);
+    expect(legend.children.map((player) => player.children[1].textContent)).toEqual(["3勝", "1勝"]);
+    expect(legend.children.map((player) => player.style.color)).toEqual(["#ef4444", "#3b82f6"]);
+    expect(lines.map((line) => line.getAttribute("stroke"))).toEqual(["#ef4444", "#3b82f6"]);
+    const targetLine = descendants(chart, "LINE").find((line) => line.getAttribute("stroke-dasharray"));
+    expect(targetLine.getAttribute("y1")).toBe(targetLine.getAttribute("y2"));
+    expect(targetLine.getAttribute("stroke-dasharray")).toBe("6 4");
+    expect(targetLine.getAttribute("stroke")).toBe("#ffffff");
+    expect(descendants(chart, "TEXT").some((label) => label.textContent === "目標 5勝")).toBe(true);
+    expect(descendants(chart, "TEXT").find((label) => label.textContent === "目標 5勝").getAttribute("fill"))
+      .toBe("#ffffff");
+    const onePlayerWins = lines[0].getAttribute("points").split(" ").map((point) => Number(point.split(",")[1]));
+    const twoPlayerWins = lines[1].getAttribute("points").split(" ").map((point) => Number(point.split(",")[1]));
+    expect(onePlayerWins).toHaveLength(3);
+    expect(onePlayerWins[0]).toBeGreaterThan(onePlayerWins[1]);
+    expect(onePlayerWins[1]).toBeGreaterThan(onePlayerWins[2]);
+    expect(twoPlayerWins[0]).toBe(twoPlayerWins[1]);
+    expect(descendants(chart, "TEXT").filter((label) => label.getAttribute("text-anchor") === "middle")
+      .map((label) => label.textContent)).toEqual(["3", "4"]);
+    dispose();
+  });
+
   it("removes text outline when disabled on a reused component", () => {
     const stage = {
       style: {},

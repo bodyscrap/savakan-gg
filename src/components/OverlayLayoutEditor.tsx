@@ -856,7 +856,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
                   ? (item.image && item.imageFileName) || "-"
                   : item.kind === "item"
                   ? `${t(overlaySourceLabels[item.source])} / ${t("カテゴリ{p0}", { p0: item.itemCategory ?? 1 })}`
-                  : item.kind === "firstToNWins" || item.kind === "firstToNWinsVertical"
+                  : item.kind === "firstToNWins" || item.kind === "firstToNWinsVertical" || item.kind === "firstToNWinsLine"
                   ? t("First to N wins")
                   : t(overlaySourceLabels[item.source]);
                 return <tr key={item.id}
@@ -1051,7 +1051,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
               <label className="overlay-item-delimiter">{t("区切り文字")}<textarea maxLength={256} rows={1} value={component.delimiter}
                 onChange={(event) => updateComponent({ delimiter: event.target.value })} /></label>
               <p className="meta overlay-item-help">{t("選択したカテゴリのアイテムを選択順に表示します。\n区切り文字は空欄・改行も指定でき、未選択カテゴリは表示しません。")}</p>
-            </> : component.kind === "firstToNWins" || component.kind === "firstToNWinsVertical" ? <>
+            </> : component.kind === "firstToNWins" || component.kind === "firstToNWinsVertical" || component.kind === "firstToNWinsLine" ? <>
               <label>{t("履歴の表示数(0は全件)")}<input className="overlay-history-limit" type="number"
                 min={0} max={MAX_OVERLAY_HISTORY_LIMIT} step={1} required
                 value={component.historyLimit ?? 0}
@@ -1095,7 +1095,7 @@ export function OverlayLayoutEditor({ state, savedLayouts, onSave, disabled }: P
             }}><option value="top">{t("上")}</option><option value="center">{t("中央")}</option><option value="bottom">{t("下")}</option></select></label>
             <label className="checkbox-row overlay-font-bold"><input type="checkbox" checked={component.bold} onChange={(e) => updateComponent({ bold: e.target.checked })} />{t("太字")}</label>
             </OverlayFontControls>
-            {component.kind !== "clock" && <div className="overlay-text-overflow">
+            {component.kind !== "clock" && component.kind !== "firstToNWinsLine" && <div className="overlay-text-overflow">
               <label className="checkbox-row"><input type="checkbox" checked={resolveOverlayTextOverflow(component).wrap}
                 onChange={(event) => updateComponent({ wrapText: event.target.checked })} />{t("はみ出たら改行")}</label>
               <label className="checkbox-row"><input type="checkbox" checked={resolveOverlayTextOverflow(component).shrink}

@@ -53,7 +53,7 @@ describe("overlay preview viewport", () => {
 });
 
 describe("overlay component default alpha", () => {
-  it.each(["text", "number", "item", "image", "clock", "firstToNWins", "firstToNWinsVertical"] as const)("defaults %s foreground and background alpha to 255", (kind) => {
+  it.each(["text", "number", "item", "image", "clock", "firstToNWins", "firstToNWinsVertical", "firstToNWinsLine"] as const)("defaults %s foreground and background alpha to 255", (kind) => {
     const component = newOverlayComponent(kind);
     expect(overlayColorParts(component.color).alpha).toBe(255);
     expect(overlayColorParts(component.background)).toEqual({ rgb: "#000000", alpha: 255 });
@@ -61,6 +61,7 @@ describe("overlay component default alpha", () => {
   it("persists First to N wins history limits and defaults legacy values to all history", () => {
     expect(overlayKindLabels.firstToNWins).toBe("F2NW(横)");
     expect(overlayKindLabels.firstToNWinsVertical).toBe("F2NW(縦)");
+    expect(overlayKindLabels.firstToNWinsLine).toBe("F2NW(線)");
     const component = newOverlayComponent("firstToNWins");
     expect(component.historyLimit).toBe(0);
     const value = layouts();
@@ -85,6 +86,15 @@ describe("overlay component default alpha", () => {
     } = JSON.parse(JSON.stringify(verticalLayout));
     delete unnamedVertical.presets[0].components[0].name;
     expect(parseOverlayLayoutsFile(JSON.stringify(unnamedVertical)).presets[0].components[0].name).toBe("F2NW(縦)");
+
+    const lineChart = newOverlayComponent("firstToNWinsLine");
+    expect(lineChart).toMatchObject({ kind: "firstToNWinsLine", historyLimit: 0, width: 400, height: 320 });
+    const lineChartLayout = layouts();
+    lineChartLayout.presets[0].components = [lineChart];
+    expect(parseOverlayLayoutsFile(JSON.stringify(lineChartLayout))).toEqual(lineChartLayout);
+    const oldLineChartName = structuredClone(lineChartLayout);
+    oldLineChartName.presets[0].components[0].name = "F2NW(折れ線)";
+    expect(parseOverlayLayoutsFile(JSON.stringify(oldLineChartName)).presets[0].components[0].name).toBe("F2NW(線)");
 
     for (const historyLimit of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
       const invalid = structuredClone(value);
@@ -1078,6 +1088,7 @@ describe("overlay content bindings", () => {
       ...state,
       firstToNWins: {
         playerOneName: "Player One", playerTwoName: "Player Two",
+        winsRequired: 3,
         playerOneWins: 12, playerTwoWins: 0,
         setNumbers: [], setCompleted: [], playerOneResults: [], playerTwoResults: [],
       },

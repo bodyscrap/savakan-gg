@@ -101,6 +101,7 @@ describe("First to N wins overlay history", () => {
       playerOneName: "Alias One",
       playerTwoName: "Initial Player Two",
       winnerName: null,
+      winsRequired: 2,
       playerOneWins: 1,
       playerTwoWins: 1,
       setNumbers: [1, 2, 3],

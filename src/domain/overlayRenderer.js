@@ -361,6 +361,22 @@ function inheritFirstToNWinsFontWeight(table) {
   }
 }
 
+function firstToNWinsDisplayedIndices(data, historyLimit) {
+  const length = Math.min(
+    data.setNumbers.length,
+    data.setCompleted.length,
+    data.playerOneResults.length,
+    data.playerTwoResults.length,
+  );
+  const historyIndices = Array.from({ length }, (_item, index) => index);
+  if (historyLimit <= 0) return historyIndices;
+  const completedIndices = historyIndices.filter((index) => data.setCompleted[index]);
+  if (completedIndices.length >= historyLimit) return completedIndices.slice(-historyLimit);
+  const remaining = historyLimit - completedIndices.length;
+  const pendingIndices = historyIndices.filter((index) => !data.setCompleted[index]).slice(0, remaining);
+  return [...completedIndices, ...pendingIndices].sort((left, right) => left - right);
+}
+
 function renderFirstToNWinsScoreboard(container, component, state, nameElements) {
   container.replaceChildren();
   Object.assign(container.style, {
@@ -370,23 +386,14 @@ function renderFirstToNWinsScoreboard(container, component, state, nameElements)
   const data = state.firstToNWins;
   if (!data) return;
 
+  const historyLimit = component.historyLimit ?? 0;
+  const displayedIndices = firstToNWinsDisplayedIndices(data, historyLimit);
   const length = Math.min(
     data.setNumbers.length,
     data.setCompleted.length,
     data.playerOneResults.length,
     data.playerTwoResults.length,
   );
-  const historyLimit = component.historyLimit ?? 0;
-  const historyIndices = Array.from({ length }, (_item, index) => index);
-  const displayedIndices = historyLimit > 0
-    ? (() => {
-      const completedIndices = historyIndices.filter((index) => data.setCompleted[index]);
-      if (completedIndices.length >= historyLimit) return completedIndices.slice(-historyLimit);
-      const remaining = historyLimit - completedIndices.length;
-      const pendingIndices = historyIndices.filter((index) => !data.setCompleted[index]).slice(0, remaining);
-      return [...completedIndices, ...pendingIndices].sort((left, right) => left - right);
-    })()
-    : historyIndices;
   const cellWidth = `calc(${Math.max(1, String(Math.max(1, length)).length)}ch + 0.5em)`;
   const verticalLabelWidth = `calc(${Math.max(
     2,
@@ -559,6 +566,161 @@ function renderFirstToNWinsScoreboard(container, component, state, nameElements)
   table.append(body);
   inheritFirstToNWinsFontWeight(table);
   container.append(table);
+}
+
+function renderFirstToNWinsLineChart(container, component, state) {
+  container.replaceChildren();
+  Object.assign(container.style, {
+    display: "flex", flexDirection: "column", width: "100%", height: "100%", overflow: "hidden",
+    whiteSpace: "nowrap", overflowWrap: "normal",
+  });
+  const data = state.firstToNWins;
+  if (!data) return;
+
+  const displayedIndices = firstToNWinsDisplayedIndices(data, component.historyLimit ?? 0);
+  const lineColors = ["#ef4444", "#3b82f6"];
+  const players = [
+    {
+      name: data.playerOneName, wins: 0, totalWins: data.playerOneWins,
+      results: data.playerOneResults, color: lineColors[0],
+    },
+    {
+      name: data.playerTwoName, wins: 0, totalWins: data.playerTwoWins,
+      results: data.playerTwoResults, color: lineColors[1],
+    },
+  ];
+  const firstIndex = displayedIndices[0] ?? data.setNumbers.length;
+  for (const player of players) {
+    player.wins = displayedIndices.length
+      ? player.results.slice(0, firstIndex).filter((result) => result === true).length
+      : player.results.filter((result) => result === true).length;
+  }
+  const points = players.map((player) => [player.wins]);
+  for (const index of displayedIndices) {
+    players.forEach((player, playerIndex) => {
+      if (player.results[index] === true) player.wins += 1;
+      points[playerIndex].push(player.wins);
+    });
+  }
+
+  const legend = document.createElement("div");
+  const width = Math.max(1, component.width);
+  const legendFontSize = Math.min(component.fontSize * 0.7, component.height * 0.12, width * 0.08);
+  Object.assign(legend.style, {
+    display: "flex", justifyContent: "space-around", alignItems: "center", gap: "0.5em", width: "100%",
+    overflow: "hidden", flex: "0 0 auto", lineHeight: "1.1", fontSize: `${legendFontSize}px`,
+  });
+  for (const player of players) {
+    const playerLabel = document.createElement("div");
+    Object.assign(playerLabel.style, {
+      display: "flex", flexDirection: "column", alignItems: "center", maxWidth: "50%",
+      minWidth: "0", overflow: "hidden", color: player.color,
+    });
+    const nameRow = document.createElement("div");
+    Object.assign(nameRow.style, {
+      display: "flex", alignItems: "center", justifyContent: "center", gap: "0.3em",
+      maxWidth: "100%", minWidth: "0",
+    });
+    const name = document.createElement("span");
+    name.textContent = player.name;
+    name.title = player.name;
+    Object.assign(name.style, { minWidth: "0", overflow: "hidden", textOverflow: "ellipsis" });
+    nameRow.append(name);
+    if (data.winnerName === player.name) {
+      const winnerBadge = document.createElement("span");
+      winnerBadge.textContent = "勝者";
+      Object.assign(winnerBadge.style, {
+        flex: "0 0 auto", padding: "0 0.25em", borderRadius: "0.2em",
+        background: player.color, color: "#ffffff", fontSize: "0.75em",
+      });
+      nameRow.append(winnerBadge);
+    }
+    const wins = document.createElement("span");
+    wins.textContent = `${player.totalWins}勝`;
+    playerLabel.append(nameRow, wins);
+    legend.append(playerLabel);
+  }
+  container.append(legend);
+
+  const chartHeight = Math.max(1, component.height - legendFontSize * 1.25);
+  const axisFontSize = Math.min(component.fontSize * 0.45, width * 0.04, chartHeight * 0.06);
+  const plot = {
+    left: axisFontSize * 2.5,
+    right: width - axisFontSize * 0.75,
+    top: axisFontSize * 0.75,
+    bottom: chartHeight - axisFontSize * 2,
+  };
+  const maximum = Math.max(1, data.winsRequired, ...points.flat());
+  const x = (index) => plot.left + (plot.right - plot.left) * index / Math.max(1, displayedIndices.length);
+  const y = (wins) => plot.bottom - (plot.bottom - plot.top) * wins / maximum;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${chartHeight}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label",
+    `F2NW: ${players[0].name} ${players[0].totalWins}勝, ${players[1].name} ${players[1].totalWins}勝, 目標${data.winsRequired}勝`);
+  Object.assign(svg.style, { display: "block", width: "100%", minHeight: "0", flex: "1 1 auto" });
+  const addSvgElement = (tagName, attributes) => {
+    const element = document.createElementNS("http://www.w3.org/2000/svg", tagName);
+    for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, String(value));
+    svg.append(element);
+    return element;
+  };
+
+  const tickCount = Math.min(maximum, 5);
+  const ticks = Array.from({ length: tickCount + 1 }, (_item, index) =>
+    Math.round(maximum * index / tickCount));
+  for (const tick of [...new Set(ticks)]) {
+    const tickY = y(tick);
+    addSvgElement("line", {
+      x1: plot.left, x2: plot.right, y1: tickY, y2: tickY,
+      stroke: component.color, "stroke-opacity": "0.25", "stroke-width": "1",
+    });
+    const label = addSvgElement("text", {
+      x: plot.left - axisFontSize * 0.5, y: tickY + axisFontSize * 0.35,
+      fill: "currentColor", "font-size": axisFontSize, "text-anchor": "end",
+    });
+    label.textContent = String(tick);
+  }
+
+  const targetY = y(data.winsRequired);
+  const backgroundRgb = (component.background === "transparent" ? "#000000" : component.background).slice(1, 7);
+  const targetColor = `#${[0, 2, 4].map((index) =>
+    (255 - Number.parseInt(backgroundRgb.slice(index, index + 2), 16)).toString(16).padStart(2, "0"),
+  ).join("")}`;
+  addSvgElement("line", {
+    x1: plot.left, x2: plot.right, y1: targetY, y2: targetY,
+    stroke: targetColor, "stroke-width": "2", "stroke-dasharray": "6 4",
+  });
+  const targetLabel = addSvgElement("text", {
+    x: plot.right, y: targetY + axisFontSize * 0.9,
+    fill: targetColor, "font-size": axisFontSize, "text-anchor": "end",
+  });
+  targetLabel.textContent = `目標 ${data.winsRequired}勝`;
+
+  players.forEach((player, playerIndex) => {
+    const coordinates = points[playerIndex].map((wins, index) => `${x(index)},${y(wins)}`).join(" ");
+    addSvgElement("polyline", {
+      points: coordinates, fill: "none", stroke: player.color, "stroke-width": axisFontSize * 0.2,
+      "stroke-linecap": "round", "stroke-linejoin": "round",
+    });
+    points[playerIndex].slice(1).forEach((wins, index) => {
+      addSvgElement("circle", {
+        cx: x(index + 1), cy: y(wins), r: axisFontSize * 0.18, fill: player.color,
+      });
+    });
+  });
+
+  const labelInterval = Math.max(1, Math.ceil(displayedIndices.length / 12));
+  displayedIndices.forEach((index, pointIndex) => {
+    if (pointIndex % labelInterval !== 0 && pointIndex !== displayedIndices.length - 1) return;
+    const label = addSvgElement("text", {
+      x: x(pointIndex + 1), y: chartHeight - axisFontSize * 0.35,
+      fill: "currentColor", "font-size": axisFontSize, "text-anchor": "middle",
+    });
+    label.textContent = String(data.setNumbers[index]);
+  });
+  container.append(svg);
 }
 
 export function renderOverlayPreset(stage, preset, state) {
@@ -775,7 +937,9 @@ export function renderOverlayPreset(stage, preset, state) {
           element.firstElementChild.style.removeProperty("z-index");
           element.firstElementChild.style.removeProperty("pointer-events");
         }
-        if (component.kind === "firstToNWins" || component.kind === "firstToNWinsVertical") {
+        if (component.kind === "firstToNWinsLine") {
+          renderFirstToNWinsLineChart(element.firstElementChild, component, state);
+        } else if (component.kind === "firstToNWins" || component.kind === "firstToNWinsVertical") {
           renderFirstToNWinsScoreboard(element.firstElementChild, component, state, scoreboardNameElements);
         } else if (component.kind === "clock") {
           element.firstElementChild.textContent = text;

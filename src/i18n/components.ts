@@ -153,6 +153,7 @@ export const componentTranslations: Record<string, string> = {
   "アイテム": "Item",
   "F2NW(横)": "F2NW (Horizontal)",
   "F2NW(縦)": "F2NW (Vertical)",
+  "F2NW(線)": "F2NW (Line)",
   "1P F2NW 取得Set数": "1P F2NW sets won",
   "2P F2NW 取得Set数": "2P F2NW sets won",
   "次のSetへの配信切替に失敗しました。": "Could not switch the stream to the next set.",

@@ -40,7 +40,8 @@ export function OverlayComponentDialog({ onCreate, onClose }: Props) {
         <label>{t("コンポーネント種別")}<select value={kind} onChange={(event) => {
           const value = event.target.value;
           if (value === "text" || value === "number" || value === "image" || value === "item"
-            || value === "clock" || value === "firstToNWins" || value === "firstToNWinsVertical") setKind(value);
+            || value === "clock" || value === "firstToNWins" || value === "firstToNWinsVertical"
+            || value === "firstToNWinsLine") setKind(value);
         }}>
           <option value="text">{t("テキスト")}</option>
           <option value="number">{t("数値")}</option>
@@ -48,6 +49,7 @@ export function OverlayComponentDialog({ onCreate, onClose }: Props) {
           <option value="clock">{t("時計")}</option>
           <option value="firstToNWins">{t(overlayKindLabels.firstToNWins)}</option>
           <option value="firstToNWinsVertical">{t(overlayKindLabels.firstToNWinsVertical)}</option>
+          <option value="firstToNWinsLine">{t(overlayKindLabels.firstToNWinsLine)}</option>
           <option value="image">{t("画像")}</option>
         </select></label>
         <label>{t("コンポーネント名")}<input ref={nameRef} autoFocus required maxLength={256} value={name ?? t(overlayKindLabels[kind])}

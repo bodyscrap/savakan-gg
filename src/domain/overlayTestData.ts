@@ -80,6 +80,7 @@ export function buildOverlayTestFirstToNWins(
     playerOneName: input.playerOneName,
     playerTwoName: input.playerTwoName,
     winnerName,
+    winsRequired,
     playerOneWins,
     playerTwoWins,
     setNumbers: outcomes.map((_outcome, index) => index + 1),

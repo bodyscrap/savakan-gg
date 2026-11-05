@@ -29,6 +29,7 @@ export type FirstToNWinsOverlayData = {
   playerOneName: string;
   playerTwoName: string;
   winnerName: string | null;
+  winsRequired: number;
   playerOneWins: number;
   playerTwoWins: number;
   setNumbers: number[];
