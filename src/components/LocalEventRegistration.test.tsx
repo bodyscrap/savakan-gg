@@ -7,6 +7,7 @@ import type { EventManagementMeta } from "../domain/tournamentWorkspaceRepositor
 import { setLanguage } from "../i18n";
 import { LocalRegistrationCsvImport } from "./LocalRegistrationCsvImport";
 import { LocalRegistrationTwiplaImport } from "./LocalRegistrationTwiplaImport";
+import { LocalRegistrationTonamelImport } from "./LocalRegistrationTonamelImport";
 import { importRegistrationCsv, parseRegistrationCsv } from "../domain/localRegistrationCsv";
 
 function csvImport(node: React.ReactNode): React.ReactElement<React.ComponentProps<typeof LocalRegistrationCsvImport>> {
@@ -61,6 +62,7 @@ function setup(draft: RegisteredLocalParticipant | null = null, settingDraft = s
     .mockImplementationOnce(() => [draft, vi.fn()])
     .mockImplementationOnce(() => ["", vi.fn()])
     .mockImplementationOnce(() => ["", vi.fn()])
+    .mockImplementationOnce(() => [false, vi.fn()])
     .mockImplementationOnce(() => [false, vi.fn()])
     .mockImplementationOnce(() => [false, vi.fn()]);
   vi.mocked(React.useEffect).mockImplementation((effect) => { effect(); });
@@ -175,6 +177,15 @@ describe("local registration editor", () => {
     control?.props.onImport([player], "組合BYOC");
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ participants: [player] }));
     expect(onImportEventName).toHaveBeenCalledExactlyOnceWith("組合BYOC");
+  });
+
+  it("applies the Tonamel event name only when importing participants", () => {
+    const { tree, onChange, onImportEventName } = setup();
+    const control = findRegistrationImport(tree, LocalRegistrationTonamelImport);
+    expect(control).toBeDefined();
+    control?.props.onImport([player], "Tonamel event");
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ participants: [player] }));
+    expect(onImportEventName).toHaveBeenCalledExactlyOnceWith("Tonamel event");
   });
 
   it("collapses category settings through the save button by default and puts the count in the list heading", () => {

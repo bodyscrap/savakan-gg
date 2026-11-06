@@ -8,6 +8,7 @@ mod startgg_scalars;
 mod storage;
 mod overlay_layout;
 mod local_event;
+mod tonamel;
 mod twipla;
 
 use std::collections::{HashMap, HashSet};
@@ -8788,6 +8789,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            tonamel::fetch_tonamel_participants,
             twipla::fetch_twipla_users,
             save_startgg_token,
             load_saved_startgg_token,

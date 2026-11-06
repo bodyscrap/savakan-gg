@@ -10,6 +10,7 @@ import { CategorySettingsFields, PlayerItemSelectionFields } from "./ItemSelecti
 import type { EventManagementMeta } from "../domain/tournamentWorkspaceRepository";
 import { LocalRegistrationCsvImport } from "./LocalRegistrationCsvImport";
 import { LocalRegistrationTwiplaImport } from "./LocalRegistrationTwiplaImport";
+import { LocalRegistrationTonamelImport } from "./LocalRegistrationTonamelImport";
 
 type Props = {
   itemLists: ItemListConfig[];
@@ -27,7 +28,8 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
   const [notice, setNotice] = useState("");
   const [csvPending, setCsvPending] = useState(false);
   const [twiplaPending, setTwiplaPending] = useState(false);
-  const importPending = csvPending || twiplaPending;
+  const [tonamelPending, setTonamelPending] = useState(false);
+  const importPending = csvPending || twiplaPending || tonamelPending;
   const settingsChanged = JSON.stringify(settingDraft) !== JSON.stringify(registration.setting);
   const editing = participantDraft !== null;
   useEffect(() => onPendingChange(settingsChanged || editing || importPending), [settingsChanged, editing, importPending, onPendingChange]);
@@ -158,15 +160,22 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
             }}>
             {t("参加登録")}
           </button>
-          <LocalRegistrationCsvImport registration={{ ...registration, setting }} disabled={busy || twiplaPending || settingErrors.length > 0}
+          <LocalRegistrationCsvImport registration={{ ...registration, setting }} disabled={busy || twiplaPending || tonamelPending || settingErrors.length > 0}
             onPendingChange={setCsvPending} onImport={(participants, eventName) => {
               onChange({ ...registration, setting, participants });
               setSettingDraft(setting);
               setDraft(null);
               onImportEventName(eventName);
             }} />
-          <LocalRegistrationTwiplaImport registration={{ ...registration, setting }} disabled={busy || csvPending || settingErrors.length > 0}
+          <LocalRegistrationTwiplaImport registration={{ ...registration, setting }} disabled={busy || csvPending || tonamelPending || settingErrors.length > 0}
             onPendingChange={setTwiplaPending} onImport={(participants, eventName) => {
+              onChange({ ...registration, setting, participants });
+              setSettingDraft(setting);
+              setDraft(null);
+              onImportEventName(eventName);
+            }} />
+          <LocalRegistrationTonamelImport registration={{ ...registration, setting }} disabled={busy || csvPending || twiplaPending || settingErrors.length > 0}
+            onPendingChange={setTonamelPending} onImport={(participants, eventName) => {
               onChange({ ...registration, setting, participants });
               setSettingDraft(setting);
               setDraft(null);
