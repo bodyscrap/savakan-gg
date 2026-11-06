@@ -6,21 +6,22 @@ import { LocalEventRegistration } from "./LocalEventRegistration";
 import type { EventManagementMeta } from "../domain/tournamentWorkspaceRepository";
 import { setLanguage } from "../i18n";
 import { LocalRegistrationCsvImport } from "./LocalRegistrationCsvImport";
+import { LocalRegistrationTwiplaImport } from "./LocalRegistrationTwiplaImport";
 import { importRegistrationCsv, parseRegistrationCsv } from "../domain/localRegistrationCsv";
 
 function csvImport(node: React.ReactNode): React.ReactElement<React.ComponentProps<typeof LocalRegistrationCsvImport>> {
-  const found = findCsvImport(node);
+  const found = findRegistrationImport(node);
   if (found) return found;
   throw new Error("CSV import control not found");
 }
 
-function findCsvImport(node: React.ReactNode): React.ReactElement<React.ComponentProps<typeof LocalRegistrationCsvImport>> | undefined {
+function findRegistrationImport(node: React.ReactNode, component = LocalRegistrationCsvImport): React.ReactElement<React.ComponentProps<typeof LocalRegistrationCsvImport>> | undefined {
   for (const child of React.Children.toArray(node)) {
     if (!React.isValidElement<{ children?: React.ReactNode }>(child)) continue;
-    if (child.type === LocalRegistrationCsvImport) {
+    if (child.type === component) {
       return child as React.ReactElement<React.ComponentProps<typeof LocalRegistrationCsvImport>>;
     }
-    const found = findCsvImport(child.props.children);
+    const found = findRegistrationImport(child.props.children, component);
     if (found) return found;
   }
   return undefined;
@@ -54,18 +55,20 @@ function buttons(node: React.ReactNode): Array<{ label: string; click?: () => vo
 function setup(draft: RegisteredLocalParticipant | null = null, settingDraft = setting, requireItemSelections = true) {
   const onChange = vi.fn();
   const onPendingChange = vi.fn();
+  const onImportEventName = vi.fn();
   vi.mocked(React.useState)
     .mockImplementationOnce(() => [settingDraft, vi.fn()])
     .mockImplementationOnce(() => [draft, vi.fn()])
     .mockImplementationOnce(() => ["", vi.fn()])
     .mockImplementationOnce(() => ["", vi.fn()])
+    .mockImplementationOnce(() => [false, vi.fn()])
     .mockImplementationOnce(() => [false, vi.fn()]);
   vi.mocked(React.useEffect).mockImplementation((effect) => { effect(); });
   const tree = LocalEventRegistration({
     itemLists: setting.itemListSnapshots, registration: { requireItemSelections, setting, participants: [player] },
-    onChange, onPendingChange, busy: false, onImportEventName: vi.fn(),
+    onChange, onPendingChange, busy: false, onImportEventName,
   });
-  return { tree, onChange, onPendingChange, controls: buttons(tree) };
+  return { tree, onChange, onPendingChange, onImportEventName, controls: buttons(tree) };
 }
 
 describe("local registration editor", () => {
@@ -162,6 +165,16 @@ describe("local registration editor", () => {
   it("does not allow importing with invalid draft category limits", () => {
     const { tree } = setup(null, { ...setting, categoryMinCounts: [3, 0, 0], categoryMaxCounts: [2, 0, 0] });
     expect(csvImport(tree).props.disabled).toBe(true);
+  });
+
+  it("applies the Twipla event name only when importing participants", () => {
+    const { tree, onChange, onImportEventName } = setup();
+    const control = findRegistrationImport(tree, LocalRegistrationTwiplaImport);
+    expect(control).toBeDefined();
+    expect(onImportEventName).not.toHaveBeenCalled();
+    control?.props.onImport([player], "組合BYOC");
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ participants: [player] }));
+    expect(onImportEventName).toHaveBeenCalledExactlyOnceWith("組合BYOC");
   });
 
   it("collapses category settings through the save button by default and puts the count in the list heading", () => {

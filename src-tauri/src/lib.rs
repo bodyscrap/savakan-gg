@@ -8,6 +8,7 @@ mod startgg_scalars;
 mod storage;
 mod overlay_layout;
 mod local_event;
+mod twipla;
 
 use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, UdpSocket};
@@ -8787,6 +8788,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            twipla::fetch_twipla_users,
             save_startgg_token,
             load_saved_startgg_token,
             save_last_slug,

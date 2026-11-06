@@ -9,6 +9,7 @@ import {
 import { CategorySettingsFields, PlayerItemSelectionFields } from "./ItemSelectionFields";
 import type { EventManagementMeta } from "../domain/tournamentWorkspaceRepository";
 import { LocalRegistrationCsvImport } from "./LocalRegistrationCsvImport";
+import { LocalRegistrationTwiplaImport } from "./LocalRegistrationTwiplaImport";
 
 type Props = {
   itemLists: ItemListConfig[];
@@ -25,9 +26,11 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
   const [skillTierDraft, setSkillTierDraft] = useState("");
   const [notice, setNotice] = useState("");
   const [csvPending, setCsvPending] = useState(false);
+  const [twiplaPending, setTwiplaPending] = useState(false);
+  const importPending = csvPending || twiplaPending;
   const settingsChanged = JSON.stringify(settingDraft) !== JSON.stringify(registration.setting);
   const editing = participantDraft !== null;
-  useEffect(() => onPendingChange(settingsChanged || editing || csvPending), [settingsChanged, editing, csvPending, onPendingChange]);
+  useEffect(() => onPendingChange(settingsChanged || editing || importPending), [settingsChanged, editing, importPending, onPendingChange]);
   const listSnapshots = settingDraft.itemListSnapshots;
   const updateSetting = (update: Partial<EventManagementMeta>) => setSettingDraft((current) => ({ ...current, ...update }));
   const updateCount = (key: "categoryMinCounts" | "categoryMaxCounts", index: number, raw: string) => {
@@ -147,7 +150,7 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
         <section>
           <h3>{t("参加者一覧({count} 人)", { count: registration.participants.length })}</h3>
           <div className="local-registration-actions">
-          <button type="button" disabled={settingErrors.length > 0 || registration.participants.length >= 512 || csvPending}
+          <button type="button" disabled={settingErrors.length > 0 || registration.participants.length >= 512 || importPending}
             onClick={() => {
               applyPendingSetting();
               setDraft({ entrantId: crypto.randomUUID(), name: "", categorySelections: emptyCategorySelections(), skill: null, selectionsConfirmed: false });
@@ -155,14 +158,21 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
             }}>
             {t("参加登録")}
           </button>
-          <LocalRegistrationCsvImport registration={{ ...registration, setting }} disabled={busy || settingErrors.length > 0}
+          <LocalRegistrationCsvImport registration={{ ...registration, setting }} disabled={busy || twiplaPending || settingErrors.length > 0}
             onPendingChange={setCsvPending} onImport={(participants, eventName) => {
               onChange({ ...registration, setting, participants });
               setSettingDraft(setting);
               setDraft(null);
               onImportEventName(eventName);
             }} />
-          <button type="button" className="ghost" disabled={csvPending || registration.participants.length === 0}
+          <LocalRegistrationTwiplaImport registration={{ ...registration, setting }} disabled={busy || csvPending || settingErrors.length > 0}
+            onPendingChange={setTwiplaPending} onImport={(participants, eventName) => {
+              onChange({ ...registration, setting, participants });
+              setSettingDraft(setting);
+              setDraft(null);
+              onImportEventName(eventName);
+            }} />
+          <button type="button" className="ghost" disabled={importPending || registration.participants.length === 0}
             onClick={async () => {
               if (!await window.confirm(t("登録済みの参加者を全員クリアしますか？"))) return;
               onChange({ ...registration, participants: [] });
@@ -172,7 +182,7 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
           <div className={`event-list local-registration-list${activeRegistration.participants.length > 8 ? " scrollable" : ""}`}>
             {activeRegistration.participants.map((player) => {
               const complete = isRegistrationComplete(player, activeRegistration.setting);
-              return <button type="button" key={player.entrantId} disabled={settingErrors.length > 0 || csvPending}
+              return <button type="button" key={player.entrantId} disabled={settingErrors.length > 0 || importPending}
                 className={`event-list-item local-registration-player ${complete ? "" : "incomplete"} ${draft?.entrantId === player.entrantId ? "selected" : ""}`}
                 onClick={() => {
                   applyPendingSetting();
