@@ -21,11 +21,13 @@
 
 Losers側は、敗者の重複進出や消失を避けるため、roundの位置だけでなくset sourceを明示して生成します。通常は「Losers側の勝者同士をまとめるround」と「Winners側からの敗者を合流させるround」が交互に続きます。
 
-- Losers Round 1では、対応するWinners Round 1 setの敗者を組み合わせます。敗者が1人だけならそのentrantをhidden BYEに接続し、Winners Round 2の敗者とは対戦させません。
-- 対応するWinners Round 1 setから敗者が出ない空branchは、対応Winners Round 2 setの敗者をhidden BYEで保持します。このsourceはLosers Round 2への有効な進出元として扱います。
-- Losers Round 2では、Losers Round 1 setの順序を保ち、そのwinnerに対して未割当のWinners Round 2敗者を逆順に接続します。BYE redirect済みsetと進出不能setを除いたactiveなsource同士で逆順に組み合わせます。対戦相手をsource graph上で折り返す規則であり、表示Y座標だけを反転するものではありません。
+- Losers Round 1では、対応するWinners Round 1 set双方から敗者が出る場合、その2人を組み合わせます。
+- 対応するWinners Round 1 setから敗者が1人だけ出るbranchは、逆順のWinners Round 2敗者を相手に割り当てます。これにより、17名では唯一のWinners Round 1敗者が最後のWinners Round 2 dropと先に対戦します。相手dropがない場合だけ、その1人をhidden BYEで進めます。
+- Winners Round 1敗者がいない空branchは、残ったWinners Round 2敗者を1人ずつhidden BYEに接続します。このsourceは次roundの組み合わせに使います。
+- Losers Round 2では、まずWinners Round 1敗者同士を対戦させたsetの勝者と、そこに割り当てられず残ったWinners Round 2敗者を接続します。残りのhidden BYEから来るdropは逆順の折り返しを保ってペアにします。対戦相手の順はsource graphで決め、表示Y座標だけを反転する規則ではありません。
 - 以降の合流roundでは、直前Losers roundの勝者と対応するWinners roundの敗者を接続します。間の集約roundでは、直前Losers roundの勝者同士を組み合わせます。
-- それ以降のWinners敗者との合流もroundごとのsource順に従います。接続先setのY座標はsource接続による位置合わせを優先します。
+- Winners Round 3以降の敗者drop順は、合流段階ごとにfoldback方向を交互に変えます。Winners Round 3ではsource orderを半分ごとに逆順にし、Winners Quarter-Finalでは前後半を入れ替えます。33名例ではRound 3の`R,S,T,U,V,W,X,Y`を`U,T,S,R,Y,X,W,V`の順にLosers Round 3へ、Quarter-Finalの`Z,AA,AB,AC`を`AB,AC,Z,AA`の順にLosers Round 5へ接続します。これは対戦sourceの割当であり、表示Y座標だけを反転するものではありません。
+- 接続先setのY座標はsource接続による位置合わせを優先します。
 - Losers Finalの勝者はGrand FinalのLosers slotへ接続します。
 
 入力数により対戦可能なsetがないLosers roundは生成しない場合があります。また、BYEだけで構成できる中間setは進行経路に必要な範囲で残します。したがって、画面に見えるround番号が内部の生成順と同じとは限りません。
@@ -66,10 +68,11 @@ sourceがない、または表示対象roundにsourceの位置を解決できな
 Rust側では`local_event::tests`の次のテストを生成規則の基準にします。
 
 - `seven_player_double_elimination_pairs_first_round_losers_with_round_two_losers`
-- `fifteen_player_losers_rounds_match_reference_bye_and_reverse_drop_order`
+- `fifteen_player_losers_round_counts_include_bye_merges`
+- `seventeen_player_losers_merges_match_reference_drop_order`
 - `sixteen_player_losers_round_two_pairs_round_one_winners_with_reversed_winners_losers`
 - `twenty_two_player_double_elimination_matches_startgg_visible_round_counts`
-- `thirty_one_player_losers_round_four_merges_winners_and_losers_in_forward_order`
+- `thirty_one_player_losers_round_four_merges_winners_and_losers_in_foldback_order`
 - `every_playable_winners_round_two_loser_enters_the_losers_bracket_once`（3〜64人でWinners Round 2の敗者が一度だけ入り、対戦可能set数が$2n - 2$であることを確認）
 
 UI側では`bracketDisplay.test.ts`のround reverse mapping、BYE除外と最多round基準、1 source／2 source配置、中間roundを飛ばしたsource追跡のテストを確認します。
