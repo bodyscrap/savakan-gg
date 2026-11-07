@@ -1,8 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use futures_util::{stream, StreamExt};
 use scraper::{Html, Selector};
 use serde::Serialize;
+use tokio::time::Instant;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +89,94 @@ fn parse_event(source: &str) -> Result<TwiplaEvent, String> {
     Ok(TwiplaEvent { event_name, users })
 }
 
+fn is_x_username(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 15
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn parse_x_display_name(source: &str, username: &str) -> Option<String> {
+    if !is_x_username(username) {
+        return None;
+    }
+    let document = Html::parse_document(source);
+    let title_selector = Selector::parse("meta[property='og:title']").ok()?;
+    let title = document.select(&title_selector).next()?.value().attr("content")?;
+    let (name, account) = title.rsplit_once(" (@")?;
+    let account = account.strip_suffix(") on X")
+        .or_else(|| account.strip_suffix(") / X"))?;
+    if !account.eq_ignore_ascii_case(username) {
+        return None;
+    }
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+fn apply_x_display_names(event: &mut TwiplaEvent, names: &HashMap<String, String>) {
+    for user in &mut event.users {
+        if let Some(name) = names.get(&user.id) {
+            user.name.clone_from(name);
+        }
+    }
+}
+
+async fn fetch_x_display_name(client: reqwest::Client, username: String) -> Option<(String, String)> {
+    let url = format!("https://x.com/{username}");
+    let response = client.get(url).send().await.ok()?;
+    if !response.status().is_success()
+        || response.content_length().is_some_and(|length| length > 2 * 1024 * 1024)
+    {
+        return None;
+    }
+    let mut response = response;
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if body.len() + chunk.len() > 2 * 1024 * 1024 {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let source = String::from_utf8(body).ok()?;
+    parse_x_display_name(&source, &username).map(|name| (username, name))
+}
+
+async fn enrich_x_display_names(event: &mut TwiplaEvent) {
+    let mut seen = HashSet::<String>::new();
+    let usernames: Vec<_> = event.users.iter().map(|user| user.id.as_str())
+        .filter(|username| is_x_username(username))
+        .filter(|username| seen.insert((*username).to_owned()))
+        .take(512)
+        .map(str::to_owned)
+        .collect();
+    if usernames.is_empty() {
+        return;
+    }
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36")
+        .build() else {
+        return;
+    };
+    let mut requests = stream::iter(usernames)
+        .map(|username| fetch_x_display_name(client.clone(), username))
+        .buffer_unordered(8);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut names = HashMap::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, requests.next()).await {
+            Ok(Some(Some((username, name)))) => { names.insert(username, name); }
+            Ok(Some(None)) => {}
+            Ok(None) | Err(_) => break,
+        }
+    }
+    apply_x_display_names(event, &names);
+}
+
 #[tauri::command]
 pub async fn fetch_twipla_users(url: String) -> Result<TwiplaEvent, String> {
     let url = event_url(&url)?;
@@ -107,7 +197,9 @@ pub async fn fetch_twipla_users(url: String) -> Result<TwiplaEvent, String> {
         body.extend_from_slice(&chunk);
     }
     let source = String::from_utf8(body).map_err(|error| error.to_string())?;
-    parse_event(&source)
+    let mut event = parse_event(&source)?;
+    enrich_x_display_names(&mut event).await;
+    Ok(event)
 }
 
 #[cfg(test)]
@@ -156,6 +248,41 @@ mod tests {
         let event = parse_event(&format!("<h1 class='largetext2'>Event</h1>{lists}")).unwrap();
         assert!(event.users.is_empty());
         assert_eq!(event.event_name, "Event");
+    }
+
+    #[test]
+    fn parses_x_display_name_only_for_the_requested_account() {
+        let source = r#"<meta property="og:title" content="Alice Example (@alice_01) on X">"#;
+        assert_eq!(parse_x_display_name(source, "alice_01").as_deref(), Some("Alice Example"));
+        assert_eq!(parse_x_display_name(source, "other_user"), None);
+        assert_eq!(parse_x_display_name(source, "anonymous:attending:0"), None);
+    }
+
+    #[test]
+    fn preserves_twipla_name_when_x_lookup_does_not_return_a_name() {
+        let mut event = parse_event(r#"
+            <h1 class='largetext2'>Event</h1>
+            <div class='member_list'>参加者 (2人)<ul>
+              <li><a class='namelist' s='alice' n='Twipla Alice'>Alice</a></li>
+              <li><a class='namelist' s='bob' n='Twipla Bob'>Bob</a></li>
+            </ul></div>
+            <div class='member_list'>興味あり (0人)<ul></ul></div>
+            <div class='member_list'>不参加 (0人)<ul></ul></div>
+        "#).unwrap();
+        apply_x_display_names(&mut event, &HashMap::from([
+            ("alice".to_owned(), "X Alice".to_owned()),
+        ]));
+        assert_eq!(event.users[0].name, "X Alice");
+        assert_eq!(event.users[1].name, "Twipla Bob");
+    }
+
+    #[test]
+    #[ignore = "requires network access to public X profiles"]
+    fn fetches_public_x_display_name() {
+        let name = tauri::async_runtime::block_on(fetch_x_display_name(
+            reqwest::Client::new(), "two_siren".into(),
+        ));
+        assert_eq!(name, Some(("two_siren".into(), "サイレン".into())));
     }
 
     #[test]
