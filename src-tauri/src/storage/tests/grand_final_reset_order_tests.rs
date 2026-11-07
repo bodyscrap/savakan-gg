@@ -83,6 +83,15 @@ fn local_phase_one_reset_is_visible_and_defers_next_phase_until_confirmed() {
         }
         let reset_id = virtual_grand_final_reset_set_id(&grand_final_id);
         let reset = snapshot.events[0].sets.iter().find(|set| set.set_id == reset_id).unwrap();
+        let grand_final_identifier = snapshot.events[0]
+            .sets
+            .iter()
+            .find(|set| set.set_id == grand_final_id)
+            .and_then(|set| set.identifier.as_deref());
+        assert_eq!(
+            reset.identifier.as_deref(),
+            grand_final_identifier.and_then(crate::local_event::next_set_identifier_after).as_deref(),
+        );
         assert!(!crate::models::is_intermediate_set(&snapshot.events[0].phase_groups, reset));
         assert!(build_bracket_graph(&snapshot, &snapshot.events[0])
             .event.sets.iter().any(|set| set.set_id == reset_id));

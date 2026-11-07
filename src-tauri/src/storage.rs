@@ -6717,6 +6717,12 @@ fn ensure_virtual_grand_final_reset_set(
         .iter_mut()
         .find(|set| set.set_id == virtual_set_id)
     {
+        if virtual_set.identifier.is_none() {
+            virtual_set.identifier = grand_final_set
+                .identifier
+                .as_deref()
+                .and_then(crate::local_event::next_set_identifier_after);
+        }
         if virtual_set.winner_id.is_some() {
             return;
         }
@@ -6745,7 +6751,10 @@ fn ensure_virtual_grand_final_reset_set(
     event.sets.push(crate::models::SetSnapshot {
         set_id: virtual_set_id,
         phase_group_id: grand_final_set.phase_group_id.clone(),
-        identifier: None,
+        identifier: grand_final_set
+            .identifier
+            .as_deref()
+            .and_then(crate::local_event::next_set_identifier_after),
         full_round_text: "Grand Final Reset".to_owned(),
         round: grand_final_set.round,
         phase_name: grand_final_set.phase_name.clone(),

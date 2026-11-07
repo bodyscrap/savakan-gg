@@ -8,6 +8,20 @@
 - `bracketLayout.ts`は表示対象のsetとsource接続を使ってroundごとのY位置を決めます。配置計算は取得済みbracketにも使いますが、ローカルDEのset生成規則でstart.ggのsourceやroundを変更するものではありません。
 - 基本DE生成はGrand Final Resetを含みません。Resetの生成と進行は別のローカル進行処理です。
 
+## identifier採番
+
+ローカルDEでは、phaseGroup内の表示identifierを次の順で割り当てます。
+
+1. Winners側の対戦set
+2. Grand Final
+3. `grandFinalReset`が有効な場合は、後から生成されるGF Reset用に1 identifierを予約
+4. Losers側の対戦set
+5. 3位・5位決定戦などのplacement set
+
+33名でReset有効なら、Winnersは`A–AF`、Grand Finalは`AG`、Reset用に`AH`を予約し、Losersは`AI`から始まります。BYE／intermediate setはidentifierを持たず、番号を消費しません。3位・5位決定戦のidentifierはLosersの後に割り当てます。
+
+identifierは表示codeであり、sourceの`typeId`／`resolvedSetId`やgraph edgeはset IDのまま維持します。Placeholder labelはsource set IDから現在のidentifierを引いて生成するため、採番変更時にsource文字列を置換しないでください。遅延生成されるvirtual GF ResetにはGrand Finalの次identifierを設定します。
+
 ## setの生成
 
 ### Winners側
@@ -22,7 +36,8 @@
 Losers側は、敗者の重複進出や消失を避けるため、roundの位置だけでなくset sourceを明示して生成します。通常は「Losers側の勝者同士をまとめるround」と「Winners側からの敗者を合流させるround」が交互に続きます。
 
 - Losers Round 1では、対応するWinners Round 1 set双方から敗者が出る場合、その2人を組み合わせます。
-- 対応するWinners Round 1 setから敗者が1人だけ出るbranchは、逆順のWinners Round 2敗者を相手に割り当てます。これにより、17名では唯一のWinners Round 1敗者が最後のWinners Round 2 dropと先に対戦します。相手dropがない場合だけ、その1人をhidden BYEで進めます。
+- Winners Round 1全体で敗者が1人だけの場合、そのsingleton branchへ逆順のWinners Round 2敗者をLosers Round 1で割り当てます。17名や33名ではこの分岐になり、唯一のW1敗者が最後のW2 dropと対戦します。
+- Winners Round 1で複数の敗者がいる場合、single-loss branchはhidden BYEで次roundまで進めます。BYE winnerはLosers Round 2で対応するWinners Round 2敗者と対戦します。31名ではこれによりLosers Round 1が7試合、Round 2が8試合になり、GF Reset予約後のidentifierはRound 1=`AG–AM`、Round 2=`AN–AU`です。
 - Winners Round 1敗者がいない空branchは、残ったWinners Round 2敗者を1人ずつhidden BYEに接続します。このsourceは次roundの組み合わせに使います。
 - Losers Round 2では、まずWinners Round 1敗者同士を対戦させたsetの勝者と、そこに割り当てられず残ったWinners Round 2敗者を接続します。残りのhidden BYEから来るdropは逆順の折り返しを保ってペアにします。対戦相手の順はsource graphで決め、表示Y座標だけを反転する規則ではありません。
 - 以降の合流roundでは、直前Losers roundの勝者と対応するWinners roundの敗者を接続します。間の集約roundでは、直前Losers roundの勝者同士を組み合わせます。

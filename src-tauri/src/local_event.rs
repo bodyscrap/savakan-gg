@@ -153,6 +153,60 @@ fn format_set_identifier(index: usize) -> String {
     identifier.iter().rev().collect()
 }
 
+pub(crate) fn next_set_identifier_after(identifier: &str) -> Option<String> {
+    let value = identifier
+        .trim()
+        .bytes()
+        .try_fold(0_usize, |value, byte| {
+            let letter = byte.to_ascii_uppercase();
+            (b'A'..=b'Z')
+                .contains(&letter)
+                .then(|| value.checked_mul(26)?.checked_add((letter - b'A' + 1) as usize))?
+        })?;
+    (value > 0).then(|| format_set_identifier(value))
+}
+
+fn reassign_double_elimination_identifiers(
+    builder: &mut SnapshotBuilder,
+    group_id: &str,
+    reserve_grand_final_reset: bool,
+) {
+    let mut winners = Vec::new();
+    let mut grand_finals = Vec::new();
+    let mut losers = Vec::new();
+    let mut placements = Vec::new();
+    for (index, set) in builder.sets.iter().enumerate() {
+        if set.phase_group_id.as_deref() != Some(group_id) || set.is_bye {
+            continue;
+        }
+        if set.full_round_text == "Grand Final" {
+            grand_finals.push(index);
+        } else if set.full_round_text.starts_with("Winners") {
+            winners.push(index);
+        } else if set.full_round_text.starts_with("Losers") {
+            losers.push(index);
+        } else {
+            placements.push(index);
+        }
+    }
+
+    let mut next_index = 0;
+    for index in winners.into_iter().chain(grand_finals.iter().copied()) {
+        builder.sets[index].identifier = Some(format_set_identifier(next_index));
+        next_index += 1;
+    }
+    if reserve_grand_final_reset && !grand_finals.is_empty() {
+        next_index += 1;
+    }
+    for index in losers.into_iter().chain(placements) {
+        builder.sets[index].identifier = Some(format_set_identifier(next_index));
+        next_index += 1;
+    }
+    builder
+        .next_set_identifier_by_group
+        .insert(group_id.to_owned(), next_index);
+}
+
 struct SnapshotBuilder {
     phases: Vec<PhaseSnapshot>,
     phase_groups: Vec<PhaseGroupSnapshot>,
@@ -599,6 +653,8 @@ fn add_double_elimination(
                 .count()
         })
         .collect::<Vec<_>>();
+    let total_first_round_losers = first_round_loser_counts.iter().sum::<usize>();
+    let merge_single_loser_in_opening_round = total_first_round_losers == 1;
     let mut available_round_two_losers = round_two_drop_sources
         .iter()
         .rev()
@@ -610,7 +666,9 @@ fn add_double_elimination(
     let mut redirected_winner_round_two_losers = std::collections::HashSet::new();
     let mut first_round_winner_round_two_losers = HashMap::new();
     for (index, first_round_loser_count) in first_round_loser_counts.iter().enumerate() {
-        if *first_round_loser_count < 2 {
+        if *first_round_loser_count == 0
+            || (*first_round_loser_count == 1 && merge_single_loser_in_opening_round)
+        {
             if let Some(winners_round_two_set_id) = available_round_two_losers.next() {
                 redirected_winner_round_two_losers.insert(winners_round_two_set_id.clone());
                 first_round_winner_round_two_losers.insert(index, winners_round_two_set_id);
@@ -652,7 +710,7 @@ fn add_double_elimination(
             first_round_loser_counts
                 .iter()
                 .enumerate()
-                .filter_map(|(index, loser_count)| (*loser_count == 2).then_some(index))
+                .filter_map(|(index, loser_count)| (*loser_count > 0).then_some(index))
                 .zip(available_winners_round_two_losers)
                 .collect::<HashMap<_, _>>()
         } else {
@@ -672,7 +730,12 @@ fn add_double_elimination(
 
                 match first_loser_count {
                     2 => [first_loser, second_loser],
-                    1 => [first_loser.or(second_loser), winner_round_two_loser],
+                    1 => [
+                        first_loser.or(second_loser),
+                        merge_single_loser_in_opening_round
+                            .then_some(winner_round_two_loser)
+                            .flatten(),
+                    ],
                     _ => [winner_round_two_loser, None],
                 }
             } else if loser_round % 2 == 1 {
@@ -1504,6 +1567,13 @@ pub fn generate_local_snapshot(
                 ),
                 _ => unreachable!("phase formats are validated"),
             }
+            if config.bracket_type == "DOUBLE_ELIMINATION" {
+                reassign_double_elimination_identifiers(
+                    &mut builder,
+                    group_id,
+                    config.grand_final_reset,
+                );
+            }
             let set_ids = builder.sets[before..]
                 .iter()
                 .filter(|set| !set.is_intermediate)
@@ -1854,8 +1924,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(losers_round_one.len(), 2);
-        assert_eq!(losers_round_one.iter().filter(|set| set.is_bye).count(), 0);
-        assert_eq!(losers_round_one.iter().filter(|set| !set.is_bye).count(), 2);
+        assert_eq!(losers_round_one.iter().filter(|set| set.is_bye).count(), 1);
+        assert_eq!(losers_round_one.iter().filter(|set| !set.is_bye).count(), 1);
     }
 
     #[test]
@@ -1874,11 +1944,11 @@ mod tests {
 
         assert_eq!(winners_round_two.len(), 4);
         assert_eq!(losers_round_one.len(), 4);
-        assert_eq!(losers_round_one.iter().filter(|set| set.is_bye).count(), 0);
-        assert_eq!(losers_round_one.iter().filter(|set| !set.is_bye).count(), 4);
+        assert_eq!(losers_round_one.iter().filter(|set| set.is_bye).count(), 1);
+        assert_eq!(losers_round_one.iter().filter(|set| !set.is_bye).count(), 3);
         assert_eq!(losers_round_two.len(), 4);
-        assert_eq!(losers_round_two.iter().filter(|set| set.is_bye).count(), 1);
-        assert_eq!(losers_round_two.iter().filter(|set| !set.is_bye).count(), 3);
+        assert_eq!(losers_round_two.iter().filter(|set| set.is_bye).count(), 0);
+        assert_eq!(losers_round_two.iter().filter(|set| !set.is_bye).count(), 4);
     }
 
     #[test]
@@ -1974,6 +2044,21 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let winners_round_three = sets_for_round(3);
+        let winners = event
+            .sets
+            .iter()
+            .filter(|set| !set.is_bye && set.full_round_text.starts_with("Winners"))
+            .collect::<Vec<_>>();
+        let grand_final = event
+            .sets
+            .iter()
+            .find(|set| set.full_round_text == "Grand Final")
+            .expect("the bracket should have a grand final");
+        let losers = event
+            .sets
+            .iter()
+            .filter(|set| !set.is_bye && set.full_round_text.starts_with("Losers"))
+            .collect::<Vec<_>>();
         let winners_quarter_finals = event
             .sets
             .iter()
@@ -1981,6 +2066,15 @@ mod tests {
             .collect::<Vec<_>>();
         let losers_round_three = sets_for_round(-3);
         let losers_round_five = sets_for_round(-5);
+
+        assert_eq!(winners.len(), 32);
+        assert_eq!(winners.first().unwrap().identifier.as_deref(), Some("A"));
+        assert_eq!(winners.last().unwrap().identifier.as_deref(), Some("AF"));
+        assert_eq!(grand_final.identifier.as_deref(), Some("AG"));
+        assert_eq!(
+            losers.first().unwrap().identifier.as_deref(),
+            Some("AI"),
+        );
 
         assert_eq!(
             source_indexes(&losers_round_three, &winners_round_three),
@@ -2063,6 +2157,16 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let winners_round_three = sets_for_round(3);
+        let losers_round_one = event
+            .sets
+            .iter()
+            .filter(|set| set.round == Some(-1) && !set.is_intermediate)
+            .collect::<Vec<_>>();
+        let losers_round_two = event
+            .sets
+            .iter()
+            .filter(|set| set.round == Some(-2) && !set.is_intermediate)
+            .collect::<Vec<_>>();
         let losers_round_three = sets_for_round(-3);
         let losers_round_four = sets_for_round(-4);
 
@@ -2073,12 +2177,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["X", "Y", "Z", "AA"],
         );
+        assert_eq!(losers_round_one.len(), 7);
+        assert_eq!(losers_round_one.first().unwrap().identifier.as_deref(), Some("AG"));
+        assert_eq!(losers_round_one.last().unwrap().identifier.as_deref(), Some("AM"));
+        assert_eq!(losers_round_two.len(), 8);
+        assert_eq!(losers_round_two.first().unwrap().identifier.as_deref(), Some("AN"));
+        assert_eq!(losers_round_two.last().unwrap().identifier.as_deref(), Some("AU"));
         assert_eq!(
             losers_round_three
                 .iter()
                 .map(|set| set.identifier.as_deref().unwrap())
                 .collect::<Vec<_>>(),
-            ["AT", "AU", "AV", "AW"],
+            ["AV", "AW", "AX", "AY"],
         );
         assert_eq!(losers_round_four.len(), 4);
 
@@ -2282,20 +2392,82 @@ mod tests {
         ));
         let event = &snapshot.events[0];
         for group in &event.phase_groups {
-            let identifiers = event
+            let group_sets = event
                 .sets
                 .iter()
                 .filter(|set| set.phase_group_id.as_deref() == Some(&group.phase_group_id))
                 .filter(|set| !set.is_bye)
-                .map(|set| set.identifier.as_deref().unwrap())
                 .collect::<Vec<_>>();
-            let expected = (0..identifiers.len())
-                .map(format_set_identifier)
-                .collect::<Vec<_>>();
-            assert_eq!(
-                identifiers,
-                expected.iter().map(String::as_str).collect::<Vec<_>>()
-            );
+            if group.bracket_type.as_deref() == Some("DOUBLE_ELIMINATION") {
+                let winners = group_sets
+                    .iter()
+                    .filter(|set| set.full_round_text.starts_with("Winners"))
+                    .map(|set| set.identifier.as_deref().unwrap())
+                    .collect::<Vec<_>>();
+                let grand_final = group_sets
+                    .iter()
+                    .find(|set| set.full_round_text == "Grand Final")
+                    .expect("double elimination should have a grand final");
+                let losers = group_sets
+                    .iter()
+                    .filter(|set| set.full_round_text.starts_with("Losers"))
+                    .map(|set| set.identifier.as_deref().unwrap())
+                    .collect::<Vec<_>>();
+                let placements = group_sets
+                    .iter()
+                    .filter(|set| {
+                        !set.full_round_text.starts_with("Winners")
+                            && !set.full_round_text.starts_with("Losers")
+                            && set.full_round_text != "Grand Final"
+                    })
+                    .map(|set| set.identifier.as_deref().unwrap())
+                    .collect::<Vec<_>>();
+                let expected_identifiers = |start: usize, count: usize| {
+                    (start..start + count)
+                        .map(format_set_identifier)
+                        .collect::<Vec<_>>()
+                };
+
+                assert_eq!(
+                    winners,
+                    expected_identifiers(0, winners.len())
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                );
+                assert_eq!(
+                    grand_final.identifier.as_deref(),
+                    Some(format_set_identifier(winners.len()).as_str()),
+                );
+                let losers_start = winners.len() + 1 + usize::from(group.grand_final_reset);
+                assert_eq!(
+                    losers,
+                    expected_identifiers(losers_start, losers.len())
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                );
+                let placements_start = losers_start + losers.len();
+                assert_eq!(
+                    placements,
+                    expected_identifiers(placements_start, placements.len())
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                );
+            } else {
+                let identifiers = group_sets
+                    .iter()
+                    .map(|set| set.identifier.as_deref().unwrap())
+                    .collect::<Vec<_>>();
+                let expected = (0..identifiers.len())
+                    .map(format_set_identifier)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    identifiers,
+                    expected.iter().map(String::as_str).collect::<Vec<_>>()
+                );
+            }
         }
     }
 
@@ -2313,9 +2485,12 @@ mod tests {
                 };
                 assert_eq!(playable.len(), expected_count, "{bracket_type}, {count}");
                 assert!(event.sets.iter().filter(|set| set.is_bye).all(|set| set.identifier.is_none()));
-                for (index, set) in playable.iter().enumerate() {
-                    assert_eq!(set.identifier.as_deref(), Some(format_set_identifier(index).as_str()));
-                }
+                let identifiers = playable
+                    .iter()
+                    .filter_map(|set| set.identifier.as_deref())
+                    .collect::<std::collections::HashSet<_>>();
+                assert_eq!(identifiers.len(), expected_count, "{bracket_type}, {count}");
+                assert!(playable.iter().all(|set| set.identifier.is_some()), "{bracket_type}, {count}");
             }
         }
     }
