@@ -1,5 +1,8 @@
 import { t } from "../i18n";
-import type { CSSProperties, MouseEvent } from "react";
+import {
+  useRef, useState, type CSSProperties, type MouseEvent,
+  type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent,
+} from "react";
 import type { PhaseGroupSeedSnapshot, SetSnapshot } from "../domain/bracketProgression";
 import { BracketSetCard } from "./BracketSetCard";
 import type { PlayerSeedSwapControls } from "./PlayerSeedSwap";
@@ -57,6 +60,64 @@ export function EliminationBracket({
   onOpenSet,
   seedSwap,
 }: EliminationBracketProps) {
+  const [panningBoardKey, setPanningBoardKey] = useState<string | null>(null);
+  const panRef = useRef<{
+    pointerId: number; boardKey: string; startX: number; scrollLeft: number; moved: boolean;
+  } | null>(null);
+  const suppressClickRef = useRef(false);
+
+  function startPan(event: ReactPointerEvent<HTMLDivElement>, boardKey: string) {
+    if (
+      event.button !== 0
+      || event.pointerType !== "mouse"
+      || seedSwap?.active
+      || event.currentTarget.scrollWidth <= event.currentTarget.clientWidth
+    ) return;
+    panRef.current = {
+      pointerId: event.pointerId,
+      boardKey,
+      startX: event.clientX,
+      scrollLeft: event.currentTarget.scrollLeft,
+      moved: false,
+    };
+  }
+
+  function movePan(event: ReactPointerEvent<HTMLDivElement>) {
+    const pan = panRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - pan.startX;
+    if (!pan.moved && Math.abs(deltaX) < 4) return;
+    if (!pan.moved) {
+      pan.moved = true;
+      setPanningBoardKey(pan.boardKey);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+
+    event.preventDefault();
+    event.currentTarget.scrollLeft = pan.scrollLeft - deltaX;
+  }
+
+  function stopPan(event: ReactPointerEvent<HTMLDivElement>) {
+    const pan = panRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    panRef.current = null;
+    setPanningBoardKey(null);
+    if (pan.moved) {
+      suppressClickRef.current = true;
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+    }
+  }
+
+  function suppressDraggedClick(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!suppressClickRef.current) return;
+    suppressClickRef.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
   return (
     <div className="bracket-split-stack" style={scaleStyle}>
       <details className="meta bracket-debug-seeds">
@@ -74,7 +135,15 @@ export function EliminationBracket({
         <section className="bracket-subgroup" key={`${phaseGroupKey}-${section.key}`}>
           <h4>{section.title}</h4>
           <p className="meta">sets: {section.setCount}</p>
-          <div className="bracket-board">
+          <div
+            className={`bracket-board ${panningBoardKey === `${phaseGroupKey}-${section.key}` ? "bracket-board-panning" : ""}`}
+            onPointerDown={(event) => startPan(event, `${phaseGroupKey}-${section.key}`)}
+            onPointerMove={movePan}
+            onPointerUp={stopPan}
+            onPointerCancel={stopPan}
+            onLostPointerCapture={stopPan}
+            onClickCapture={suppressDraggedClick}
+          >
             {section.columns.map((column) => (
               <section
                 className={`bracket-column ${column.hidden ? "bracket-column-hidden" : ""}`}

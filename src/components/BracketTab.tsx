@@ -1,5 +1,5 @@
 import { t } from "../i18n";
-import type { CSSProperties, MouseEvent } from "react";
+import { useEffect, useRef, type CSSProperties, type MouseEvent } from "react";
 import type {
   RoundRobinStanding,
   RoundRobinTieBreakRule,
@@ -158,9 +158,39 @@ export function BracketTab({
   onOpenSet,
   seedSwap,
 }: BracketTabProps) {
+  const bracketWheelRef = useRef<HTMLDivElement>(null);
   const selectedBracketModel = selectedPhasePoolGroup
     ? getBracketProgressionModel(selectedPhasePoolGroup.bracketType)
     : null;
+
+  useEffect(() => {
+    const phaseGroup = bracketWheelRef.current;
+    if (!phaseGroup) return;
+
+    const handleWheel = (event: WheelEvent) => {
+      if (
+        !event.ctrlKey
+        || event.deltaY === 0
+        || bracketZoomLevels.length === 0
+        || !(event.target instanceof Element)
+        || !event.target.closest(".bracket-board, .round-robin-board, .first-to-n-wins-board")
+      ) return;
+      event.preventDefault();
+
+      const currentIndex = bracketZoomLevels.findIndex((level) => level === bracketZoomLevel);
+      const nextIndex = Math.max(
+        0,
+        Math.min(
+          bracketZoomLevels.length - 1,
+          (currentIndex < 0 ? 0 : currentIndex) + (event.deltaY > 0 ? 1 : -1),
+        ),
+      );
+      onBracketZoomChange(String(bracketZoomLevels[nextIndex]));
+    };
+
+    phaseGroup.addEventListener("wheel", handleWheel, { passive: false });
+    return () => phaseGroup.removeEventListener("wheel", handleWheel);
+  }, [bracketZoomLevel, bracketZoomLevels, onBracketZoomChange, selectedPhasePoolGroup?.key]);
 
   return (
     <>
@@ -260,7 +290,7 @@ export function BracketTab({
             {!selectedPhasePoolGroup ? (
               <p className="meta">{t("選択中イベントにフェーズ/プール情報がありません。")}</p>
             ) : (
-              <section className="phase-group" key={selectedPhasePoolGroup.key}>
+              <section ref={bracketWheelRef} className="phase-group" key={selectedPhasePoolGroup.key}>
                 <ExternalReportRequestPanel
                   request={externalRequest}
                   canAccept={canAcceptExternalRequest}

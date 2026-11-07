@@ -2446,6 +2446,13 @@ button:disabled {
   overflow-x: auto;
   padding-bottom: 0.35rem;
   font-size: calc(0.92rem * var(--bracket-scale));
+  cursor: grab;
+}
+
+.bracket-board-panning,
+.bracket-board-panning * {
+  cursor: grabbing !important;
+  user-select: none;
 }
 
 .bracket-board .column-sets.positioned {
