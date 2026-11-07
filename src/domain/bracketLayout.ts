@@ -32,10 +32,22 @@ function clampIndex(value: number, min: number, max: number): number {
 }
 
 function sourceSetIdsForSet(set: SetSnapshot): string[] {
-  return [
-    set.entrant1Source?.resolvedSetId ?? set.entrant1Source?.typeId,
-    set.entrant2Source?.resolvedSetId ?? set.entrant2Source?.typeId,
-  ].filter((setId): setId is string => Boolean(setId && setId.trim() !== ""));
+  return [set.entrant1Source, set.entrant2Source]
+    .filter((source) => source && (
+      source.sourceType?.toLowerCase() === "set"
+      || source.resolvedSetId
+      || source.condition === "winner"
+      || source.condition === "loser"
+    ))
+    .map((source) => source?.resolvedSetId ?? source?.typeId)
+    .filter((setId): setId is string => Boolean(setId && setId.trim() !== ""));
+}
+
+function setsConnected(left: SetSnapshot, right: SetSnapshot): boolean {
+  return sourceSetIdsForSet(left).includes(right.setId)
+    || sourceSetIdsForSet(right).includes(left.setId)
+    || left.slots.some((slot) => slot.entrantId !== null
+      && right.slots.some((other) => other.entrantId === slot.entrantId));
 }
 
 function incomingWinnersLoserSourceOrder(
@@ -185,6 +197,62 @@ function buildPreviousLosersRoundPositions(
     return currentIndexes.reduce((sum, currentIndex) => (
       sum + currentPositions[currentIndex]
     ), 0) / currentIndexes.length;
+  });
+}
+
+function buildPreviousRoundPositions(
+  previousColumnSets: SetSnapshot[],
+  currentColumnSets: SetSnapshot[],
+  currentPositions: number[],
+): number[] {
+  const previousSetIndexById = new Map(previousColumnSets.map((set, index) => [set.setId, index]));
+  const successorPositions = previousColumnSets.map(() => [] as number[]);
+  currentColumnSets.forEach((set, index) => {
+    const position = currentPositions[index];
+    if (position === undefined) return;
+    for (const sourceSetId of sourceSetIdsForSet(set)) {
+      const previousIndex = previousSetIndexById.get(sourceSetId);
+      if (previousIndex !== undefined) successorPositions[previousIndex].push(position);
+    }
+  });
+  const fallback = interpolateLanePositions(currentPositions, previousColumnSets.length);
+  return successorPositions.map((positions, index) => {
+    if (positions.length === 0) return fallback[index] ?? (BRACKET_TOP_PADDING + index * BRACKET_ROW_STEP);
+    return positions.reduce((sum, position) => sum + position, 0) / positions.length;
+  });
+}
+
+function buildPositionsFromPreviousRounds(
+  currentColumnSets: SetSnapshot[],
+  previousRounds: Array<{ sets: SetSnapshot[]; positions: number[] }>,
+): Array<number | null> {
+  const positionBySetId = new Map<string, number>();
+  const positionByEntrantId = new Map<string, { setId: string; position: number }>();
+  previousRounds.forEach(({ sets, positions }) => sets.forEach((set, index) => {
+    const position = positions[index];
+    if (position === undefined) return;
+    positionBySetId.set(set.setId, position);
+    set.slots.forEach((slot) => {
+      if (slot.entrantId && !positionByEntrantId.has(slot.entrantId)) {
+        positionByEntrantId.set(slot.entrantId, { setId: set.setId, position });
+      }
+    });
+  }));
+
+  return currentColumnSets.map((set) => {
+    const sourcePositions: number[] = [];
+    const sourceSetIds = new Set(sourceSetIdsForSet(set));
+    for (const sourceSetId of sourceSetIds) {
+      const position = positionBySetId.get(sourceSetId);
+      if (position !== undefined) sourcePositions.push(position);
+    }
+    for (const slot of set.slots) {
+      if (!slot.entrantId) continue;
+      const position = positionByEntrantId.get(slot.entrantId);
+      if (position && !sourceSetIds.has(position.setId)) sourcePositions.push(position.position);
+    }
+    if (sourcePositions.length >= 2) return (sourcePositions[0] + sourcePositions[1]) / 2;
+    return sourcePositions[0] ?? null;
   });
 }
 
@@ -357,21 +425,33 @@ function averagePairPositions(previousPositions: number[], nextCount: number): n
 function fitPositionsToAvailableLanes(
   positions: number[],
   laneCount: number,
+  anchored: boolean[],
 ): number[] {
   if (positions.length <= 1 || positions.length > laneCount) {
     return positions;
   }
 
-  let previousLane = -1;
-  return positions.map((position, index) => {
-    const remaining = positions.length - index - 1;
-    const minLane = previousLane + 1;
-    const maxLane = laneCount - remaining - 1;
-    const preferredLane = Math.round((position - BRACKET_TOP_PADDING) / BRACKET_ROW_STEP);
-    const lane = clampIndex(preferredLane, minLane, maxLane);
-    previousLane = lane;
-    return BRACKET_TOP_PADDING + lane * BRACKET_ROW_STEP;
-  });
+  const sortedPositions = positions.slice().sort((left, right) => left - right);
+  if (sortedPositions.every((position, index) => index === 0
+    || position - sortedPositions[index - 1] >= BRACKET_ROW_STEP)) {
+    return positions;
+  }
+
+  const fitted = [...positions];
+  const occupied = positions.filter((_, index) => anchored[index]);
+  const unanchoredIndexes = positions.map((_, index) => index).filter((index) => !anchored[index])
+    .sort((left, right) => positions[left] - positions[right] || left - right);
+  for (const index of unanchoredIndexes) {
+    const candidates = Array.from({ length: laneCount }, (_, lane) => BRACKET_TOP_PADDING + lane * BRACKET_ROW_STEP)
+      .sort((left, right) => Math.abs(left - positions[index]) - Math.abs(right - positions[index]));
+    const selected = candidates.find((candidate) => occupied.every((position) => (
+      Math.abs(candidate - position) >= BRACKET_ROW_STEP
+    )));
+    if (selected === undefined) continue;
+    fitted[index] = selected;
+    occupied.push(selected);
+  }
+  return fitted;
 }
 
 export function buildPositionedRoundColumns(
@@ -392,11 +472,7 @@ export function buildPositionedRoundColumns(
   const maxSetCountIndexes = columns
     .map((column, index) => ({ column, index }))
     .filter(({ column }) => column.sets.length === maxSetCount && column.sets.length > 0);
-  const maxSetCountIndex = sectionKey === "losers"
-    ? (maxSetCountIndexes.find(({ column }) => column.round === -2)?.index
-      ?? maxSetCountIndexes[0]?.index
-      ?? -1)
-    : (maxSetCountIndexes[0]?.index ?? -1);
+  const maxSetCountIndex = maxSetCountIndexes[0]?.index ?? -1;
   const winnersMergeOrderByColumn = new Map<number, number>();
   if (sectionKey === "losers") {
     let mergeIndex = 0;
@@ -498,17 +574,18 @@ export function buildPositionedRoundColumns(
     }
 
     const referencePositions = resolvedPositions[columnIndex + 1];
-    const lanePositions =
-      sectionKey === "losers"
-        ? buildPreviousLosersRoundPositions(
-          column.sets,
-          nextColumn.sets,
-          referencePositions,
-        )
+    const isReverseRoundOne = sectionKey === "winners"
+      ? column.round === 1 && nextColumn.round === 2
+      : column.round === -1 && nextColumn.round === -2;
+    const lanePositions = isReverseRoundOne
+      ? buildPreviousRoundPositions(column.sets, nextColumn.sets, referencePositions)
+      : sectionKey === "losers"
+        ? buildPreviousLosersRoundPositions(column.sets, nextColumn.sets, referencePositions)
         : buildWinnersExpandedRoundPositions(nextColumn.sets, referencePositions, column.sets);
 
+    const anchoredPositions = column.sets.map((set) => nextColumn.sets.some((nextSet) => setsConnected(set, nextSet)));
     const adjustedPositions = sectionKey === "losers" && nextColumn.round !== -2
-      ? fitPositionsToAvailableLanes(lanePositions, maxSetCount)
+      ? fitPositionsToAvailableLanes(lanePositions, maxSetCount, anchoredPositions)
       : lanePositions;
     const positions = adjustedPositions.length > 0
       ? adjustedPositions
@@ -526,15 +603,27 @@ export function buildPositionedRoundColumns(
     }
 
     const previousPositions = resolvedPositions[columnIndex - 1];
-    const lanePositions =
+    const fallbackPositions =
       previousColumn && previousColumn.sets.length > 0
         ? sectionKey === "losers"
           ? buildLosersRoundPositions(previousColumn.sets, previousPositions, column.sets)
           : buildWinnersExpandedRoundPositions(previousColumn.sets, previousPositions, column.sets)
         : assignDefaultPositions(columnIndex);
+    const sourcePositions = buildPositionsFromPreviousRounds(
+      column.sets,
+      columns.slice(0, columnIndex).map((previous, index) => ({
+        sets: previous.sets,
+        positions: resolvedPositions[index],
+      })),
+    );
+    const lanePositions = fallbackPositions.map((position, index) => sourcePositions[index] ?? position);
 
     if (lanePositions.length > 0) {
-      resolvedPositions[columnIndex] = applyWinnersMergeOrder(columnIndex, lanePositions);
+      const anchoredPositions = sourcePositions.map((position) => position !== null);
+      const positions = sectionKey === "losers"
+        ? fitPositionsToAvailableLanes(lanePositions, maxSetCount, anchoredPositions)
+        : lanePositions;
+      resolvedPositions[columnIndex] = applyWinnersMergeOrder(columnIndex, positions);
     } else {
       assignDefaultPositions(columnIndex);
     }

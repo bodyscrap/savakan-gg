@@ -1019,7 +1019,58 @@ export function compareSetsForStableLane(left: SetSnapshot, right: SetSnapshot):
   return left.setId.localeCompare(right.setId, "ja");
 }
 
+function promoteOlderLosersSources(sets: SetSnapshot[]): SetSnapshot[] {
+  if (sets.length === 0 || !sets.every((set) => set.round !== null && set.round < 0)) {
+    return sets;
+  }
+
+  const setsById = new Map(sets.map((set) => [set.setId, set]));
+  const promotedRounds = new Map<string, number>();
+  for (const target of sets) {
+    const targetRound = Math.abs(target.round ?? 0);
+    if (targetRound < 3) continue;
+
+    const sourceSets = new Map<string, SetSnapshot>();
+    for (const source of [target.entrant1Source, target.entrant2Source]) {
+      if (!source || !(source.sourceType?.toLowerCase() === "set"
+        || source.resolvedSetId
+        || source.condition === "winner"
+        || source.condition === "loser")) {
+        continue;
+      }
+      const sourceSet = setsById.get(source.resolvedSetId ?? source.typeId ?? "");
+      if (sourceSet && sourceSet.setId !== target.setId) {
+        sourceSets.set(sourceSet.setId, sourceSet);
+      }
+    }
+
+    const immediatelyPreviousRound = targetRound - 1;
+    if (![...sourceSets.values()].some((source) => Math.abs(source.round ?? 0) === immediatelyPreviousRound)) {
+      continue;
+    }
+    for (const source of sourceSets.values()) {
+      if (Math.abs(source.round ?? 0) < immediatelyPreviousRound) {
+        promotedRounds.set(source.setId, -immediatelyPreviousRound);
+      }
+    }
+  }
+
+  return sets.map((set) => {
+    const promotedRound = promotedRounds.get(set.setId);
+    if (promotedRound === undefined) return set;
+    return {
+      ...set,
+      round: promotedRound,
+      fullRoundText: set.fullRoundText.replace(
+        /(losers\s+round\s+)\d+/i,
+        `$1${Math.abs(promotedRound)}`,
+      ),
+    };
+  });
+}
+
 export function buildRoundColumns(sets: SetSnapshot[]): RoundColumn[] {
+  sets = promoteOlderLosersSources(sets);
   const map = new Map<string, RoundColumn>();
   let seq = 0;
 

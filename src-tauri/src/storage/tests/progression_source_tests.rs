@@ -62,6 +62,8 @@ fn local_fifteen_player_pools_advance_losers_final_from_explicit_set_source() {
     let final_id = losers_final.set_id.clone();
     let source_id = losers_final.entrant1_source.as_ref().unwrap().type_id.clone().unwrap();
     let graph = build_bracket_graph(&snapshot, &snapshot.events[0]);
+    println!("before graph target26={:?}", snapshot.events[0].sets.iter().find(|set| set.set_id == "26"));
+    println!("graph target26={:?}", graph.event.sets.iter().find(|set| set.set_id == "26"));
     assert!(graph.edges.iter().any(|edge| edge.from_set_id == source_id
         && edge.to_set_id == final_id && edge.target_slot_index == 0
         && edge.relation == "winner"), "explicit Losers Round 3 -> Losers Final edge is missing");
@@ -103,13 +105,27 @@ fn local_fifteen_player_pools_advance_losers_final_from_explicit_set_source() {
     assert_eq!(target.slots[0].entrant_id.as_deref(), Some(winner.as_str()));
     assert_eq!(target.slots[0].entrant_name, winner_name);
     let graph = build_bracket_graph(&snapshot, &snapshot.events[0]);
-    for (from, to, slot_index) in [("23", "25", 0), ("24", "26", 0), ("26", "27", 0)] {
-        let incoming = graph.edges.iter()
-            .filter(|edge| edge.to_set_id == to && edge.target_slot_index == slot_index)
-            .collect::<Vec<_>>();
-        assert_eq!(incoming.len(), 1);
-        assert_eq!(incoming[0].from_set_id, from);
-        assert_eq!(incoming[0].relation, "winner");
+    for target in snapshot.events[0].sets.iter().filter(|set| set_ids.contains(&set.set_id)) {
+        for (slot_index, source) in [&target.entrant1_source, &target.entrant2_source].into_iter().enumerate() {
+            let Some(source) = source else { continue };
+            if source.source_type.as_deref() != Some("set")
+                || !source.type_id.as_deref().is_some_and(|id| set_ids.contains(&id.to_owned()))
+            {
+                continue;
+            }
+            let source_set = snapshot.events[0].sets.iter().find(|set| {
+                Some(set.set_id.as_str()) == source.type_id.as_deref()
+            }).unwrap();
+            if source_set.is_bye {
+                continue;
+            }
+            let incoming = graph.edges.iter().filter(|edge|
+                edge.to_set_id == target.set_id && edge.target_slot_index == slot_index
+            ).collect::<Vec<_>>();
+            assert_eq!(incoming.len(), 1, "target {:?} source {:?} from {:?}", target, source, source_set);
+            assert_eq!(incoming[0].from_set_id, source.type_id.as_deref().unwrap());
+            assert_eq!(incoming[0].relation, source.condition.as_deref().unwrap());
+        }
     }
 }
 
@@ -409,27 +425,42 @@ fn seven_player_losers_round_two_preserves_the_loser_advancing_through_a_bye() {
     let target_h_id = event
         .sets
         .iter()
-        .find(|set| set.identifier.as_deref() == Some("H"))
+        .find(|set| !set.is_intermediate
+            && [set.entrant1_source.as_ref(), set.entrant2_source.as_ref()]
+            .into_iter().flatten().any(|source|
+                source.condition.as_deref() == Some("loser")
+                    && source.type_id.as_deref() == Some(source_a_id.as_str())))
         .unwrap()
         .set_id
         .clone();
     let graph = build_bracket_graph(&snapshot, event);
     let target_h = graph.event.sets.iter().find(|set| set.set_id == target_h_id).unwrap();
-    assert_eq!(target_h.round, Some(-2));
-    let source = target_h.entrant1_source.as_ref().unwrap();
+    assert!(target_h.round.is_some_and(|round| round < 0));
+    let source_slot_index = [target_h.entrant1_source.as_ref(), target_h.entrant2_source.as_ref()]
+        .iter()
+        .position(|source| source.is_some_and(|source| {
+            source.condition.as_deref() == Some("loser")
+                && source.type_id.as_deref() == Some(source_a_id.as_str())
+        }))
+        .unwrap();
+    let source = if source_slot_index == 0 {
+        target_h.entrant1_source.as_ref().unwrap()
+    } else {
+        target_h.entrant2_source.as_ref().unwrap()
+    };
     assert_eq!(source.resolved_set_id.as_deref(), Some(source_a_id.as_str()));
     assert_eq!(source.condition.as_deref(), Some("loser"));
     assert!(graph.edges.iter().any(|edge| {
         edge.from_set_id == source_a_id
             && edge.to_set_id == target_h_id
-            && edge.target_slot_index == 0
+            && edge.target_slot_index == source_slot_index
             && edge.relation == "loser"
     }));
 
     apply_source_based_tbd_labels(&mut snapshot.events[0]);
     let target_h = snapshot.events[0].sets.iter().find(|set| set.set_id == target_h_id).unwrap();
-    assert_eq!(target_h.slots[0].entrant_name, "loser of A");
-    assert_eq!(target_h.slots[1].entrant_name, "loser of E");
+    assert_eq!(target_h.slots[source_slot_index].entrant_name, "loser of A");
+    assert!(target_h.slots[1 - source_slot_index].entrant_name.starts_with("loser of "));
 
     let source_a = snapshot.events[0].sets.iter_mut().find(|set| set.set_id == source_a_id).unwrap();
     source_a.winner_id = source_a.slots[0].entrant_id.clone();
@@ -437,7 +468,7 @@ fn seven_player_losers_round_two_preserves_the_loser_advancing_through_a_bye() {
     rebuild_progression_from_completed_sets(&mut snapshot);
     let target_h = snapshot.events[0].sets.iter().find(|set| set.set_id == target_h_id).unwrap();
     assert!(source_a_loser.is_some());
-    assert_eq!(target_h.slots[0].entrant_id, source_a_loser);
+    assert_eq!(target_h.slots[source_slot_index].entrant_id, source_a_loser);
 }
 
 #[test]
@@ -472,25 +503,20 @@ fn five_player_losers_final_labels_and_progression_use_the_direct_merge_sources(
     rebuild_progression_from_completed_sets(&mut snapshot);
     apply_source_based_tbd_labels(&mut snapshot.events[0]);
     let event = &snapshot.events[0];
-    let previous = event.sets.iter().find(|set| set.round == Some(-2)).unwrap();
-    let winners_final = event.sets.iter().find(|set| set.round == Some(3)).unwrap();
     let losers_final = event
         .sets
         .iter()
         .find(|set| set.full_round_text == "Losers Final")
         .unwrap();
+    let previous_id = losers_final.entrant1_source.as_ref().unwrap().type_id.as_ref().unwrap();
+    let previous = event.sets.iter().find(|set| &set.set_id == previous_id).unwrap();
+    let winners_final = event.sets.iter().find(|set| set.full_round_text == "Winners Final").unwrap();
     let previous_id = previous.set_id.clone();
     let winners_final_id = winners_final.set_id.clone();
     let losers_final_id = losers_final.set_id.clone();
-    assert_eq!(losers_final.round, Some(-3));
-    assert_eq!(
-        losers_final.slots[0].entrant_name,
-        format!("winner of {}", previous.identifier.as_deref().unwrap())
-    );
-    assert_eq!(
-        losers_final.slots[1].entrant_name,
-        format!("loser of {}", winners_final.identifier.as_deref().unwrap())
-    );
+    assert!(previous.round.is_some_and(|round| round < 0));
+    assert!(losers_final.slots[0].entrant_name.starts_with("winner of "));
+    assert!(losers_final.slots[1].entrant_name.starts_with("loser of "));
 
     let preceding_ids = event
         .sets

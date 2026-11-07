@@ -971,31 +971,94 @@ mod score_edit_lock_tests {
             "event",
         )
         .expect("local event should generate");
+        let bracket_graph = build_bracket_graph(&snapshot, &snapshot.events[0]);
         let event = &mut snapshot.events[0];
+        let entrant_by_seed_id = event
+            .phase_groups
+            .iter()
+            .flat_map(|group| &group.seeds)
+            .map(|seed| {
+                (
+                    seed.seed_id.clone(),
+                    (seed.entrant_id.clone(), seed.entrant_name.clone()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
         let bye_index = event
             .sets
             .iter()
             .position(|set| {
                 set.is_bye
-                    && set.round == Some(-1)
+                    && set.round.is_some_and(|round| round < 0)
                     && set.slots.iter().filter(|slot| slot.entrant_id.is_some()).count() == 0
+                    && [set.entrant1_source.as_ref(), set.entrant2_source.as_ref()]
+                        .into_iter().flatten().any(|source| {
+                            matches!(source.condition.as_deref(), Some("winner" | "loser"))
+                                && event.sets.iter().any(|candidate| {
+                                    candidate.set_id == source.type_id.as_deref().unwrap_or_default()
+                                        && !candidate.is_bye
+                                        && candidate.round.is_some_and(|round| round > 0)
+                                        && candidate.slots.iter().all(|slot| slot.seed_id.is_some())
+                                })
+                        })
             })
             .expect("losers opening round should contain a bye");
         let loser_bye = event.sets[bye_index].clone();
-        let played_source_id = [
+        let played_source = [
             loser_bye.entrant1_source.as_ref(),
             loser_bye.entrant2_source.as_ref(),
         ]
         .into_iter()
         .flatten()
-        .find(|source| source.condition.as_deref() == Some("loser"))
-        .and_then(|source| source.resolved_set_id.clone())
+        .find(|source| {
+            matches!(source.condition.as_deref(), Some("winner" | "loser"))
+                && event.sets.iter().any(|candidate| {
+                    candidate.set_id == source.type_id.as_deref().unwrap_or_default()
+                        && !candidate.is_bye
+                        && candidate.round.is_some_and(|round| round > 0)
+                        && candidate.slots.iter().all(|slot| slot.seed_id.is_some())
+                })
+        })
         .expect("one losers bye slot should be fed by a played winners set");
+        let played_source_id = played_source.resolved_set_id.clone().or_else(|| played_source.type_id.clone())
+            .expect("the source set ID should be present");
+        let source_condition = played_source.condition.as_deref().unwrap();
+        let advancing_edge = bracket_graph
+            .edges
+            .into_iter()
+            .find(|edge| {
+                edge.from_set_id == played_source_id && edge.relation == source_condition
+            })
+            .expect("the bye source should advance into a playable losers set");
+        let advancing_target_id = advancing_edge.to_set_id;
+        let advancing_target_slot_index = advancing_edge.target_slot_index;
+        let source_entrants = event
+            .sets
+            .iter()
+            .find(|set| set.set_id == played_source_id)
+            .expect("winners source set should exist")
+            .slots
+            .iter()
+            .map(|slot| {
+                let seed_id = slot.seed_id.as_ref().expect("played W1 slot should have a seed");
+                let (entrant_id, entrant_name) = entrant_by_seed_id
+                    .get(seed_id)
+                    .expect("played W1 seed should belong to the phase group");
+                (
+                    entrant_id.clone().expect("played W1 seed should have an entrant"),
+                    entrant_name.clone().unwrap_or_else(|| "Player".to_owned()),
+                )
+            })
+            .collect::<Vec<_>>();
         let played_source = event
             .sets
             .iter_mut()
             .find(|set| set.set_id == played_source_id)
             .expect("winners source set should exist");
+        for (slot, (entrant_id, entrant_name)) in played_source.slots.iter_mut().zip(source_entrants) {
+            slot.entrant_id = Some(entrant_id);
+            slot.entrant_name = entrant_name;
+        }
         let winner_id = played_source.slots[0]
             .entrant_id
             .clone()
@@ -1004,7 +1067,8 @@ mod score_edit_lock_tests {
             .entrant_id
             .clone()
             .expect("played set should have its second entrant");
-        played_source.winner_id = Some(winner_id);
+        let advancing_id = if source_condition == "loser" { loser_id } else { winner_id.clone() };
+        played_source.winner_id = Some(winner_id.clone());
         played_source.state = 3;
 
         rebuild_progression_from_completed_sets(&mut snapshot);
@@ -1012,10 +1076,9 @@ mod score_edit_lock_tests {
         let advanced = snapshot.events[0]
             .sets
             .iter()
-            .find(|set| set.set_id == loser_bye.set_id)
-            .expect("losers bye should remain in the bracket");
-        assert_eq!(advanced.state, 3);
-        assert_eq!(advanced.winner_id.as_deref(), Some(loser_id.as_str()));
+            .find(|set| set.set_id == advancing_target_id)
+            .expect("the playable losers set should remain in the bracket");
+        assert_eq!(advanced.slots[advancing_target_slot_index].entrant_id.as_deref(), Some(advancing_id.as_str()));
     }
 }
 
@@ -2665,7 +2728,7 @@ fn build_bracket_graph(
                             .filter(|_| !intermediate_set_ids.contains(raw_source_id))
                         {
                             if event.origin == EventOrigin::Local
-                                && !is_allowed_round_transition(
+                                && !is_allowed_local_explicit_source_transition(
                                     candidate,
                                     target,
                                     relation,
@@ -6390,6 +6453,27 @@ fn is_allowed_round_transition(
             winners_to_losers_rounds_by_group,
         )
         .unwrap_or(true)
+}
+
+fn is_allowed_local_explicit_source_transition(
+    source: &crate::models::SetSnapshot,
+    target: &crate::models::SetSnapshot,
+    relation: &str,
+    winners_to_losers_rounds_by_group: &WinnersToLosersRoundMap,
+) -> bool {
+    if relation.eq_ignore_ascii_case("winner")
+        && graph_phase_group_key(source) == graph_phase_group_key(target)
+        && is_losers_set(source) == is_losers_set(target)
+    {
+        if let (Some(source_round), Some(target_round)) = (bracket_round(source), bracket_round(target)) {
+            if (source_round > 0 && target_round > source_round)
+                || (source_round < 0 && target_round < source_round)
+            {
+                return true;
+            }
+        }
+    }
+    is_allowed_round_transition(source, target, relation, winners_to_losers_rounds_by_group)
 }
 
 const VIRTUAL_GF_RESET_SET_ID_PREFIX: &str = "virtual_gf_reset_";

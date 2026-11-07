@@ -244,7 +244,7 @@ impl SnapshotBuilder {
             phase_order: Some(phase_order as i64),
             phase_group_display_identifier: Some(group_display_identifier.to_owned()),
             phase_group_set_name: None,
-            is_intermediate: false,
+            is_intermediate: is_bye,
             is_bye,
             state,
             winner_id,
@@ -570,52 +570,12 @@ fn add_double_elimination(
         return;
     }
 
-    let winner_round_one_set_count = winner_rounds[0]
-        .iter()
-        .filter(|set_id| {
-            builder
-                .possible_set_outputs
-                .get(*set_id)
-                .is_some_and(|(_, can_lose)| *can_lose)
-        })
-        .count();
-    let winner_round_two_set_count = winner_rounds[1]
-        .iter()
-        .filter(|set_id| {
-            builder
-                .possible_set_outputs
-                .get(*set_id)
-                .is_some_and(|(_, can_lose)| *can_lose)
-        })
-        .count();
     let mut redirected_winner_round_two_losers = std::collections::HashSet::new();
-    let mut bye_winner_round_two_losers =
-        if winner_round_two_set_count >= winner_round_one_set_count {
-            winner_rounds[1]
-                .iter()
-                .enumerate()
-                .filter_map(|(index, set_id)| {
-                    let first_round_pair = &winner_rounds[0][index * 2..index * 2 + 2];
-                    first_round_pair
-                        .iter()
-                        .all(|first_round_set_id| {
-                            builder
-                                .possible_set_outputs
-                                .get(first_round_set_id)
-                                .is_some_and(|(can_win, can_lose)| *can_win && !can_lose)
-                        })
-                        .then(|| set_id.clone())
-                })
-                .collect::<Vec<_>>()
-                .into_iter()
-        } else {
-            Vec::new().into_iter()
-        };
-
     let loser_round_count = winner_round_count * 2 - 2;
     let mut loser_rounds = Vec::<Vec<Option<String>>>::new();
     let mut skipped_loser_rounds = 0;
-    let mut round_two_drop_sources = winner_rounds[1].iter().rev().collect::<Vec<_>>();
+    let mut visible_loser_round_count = 0;
+    let round_two_drop_sources = winner_rounds[1].iter().collect::<Vec<_>>();
     for loser_round in 0..loser_round_count {
         if loser_round > 0 && loser_round % 2 == 0 {
             let previous_round = &loser_rounds[loser_round - 1];
@@ -634,32 +594,57 @@ fn add_double_elimination(
             }
         }
         let round_number = loser_round + 1 - skipped_loser_rounds;
-        if loser_round == 1 {
-            let first_round = &loser_rounds[0];
-            for index in 0..first_round.len() {
-                if first_round[index].is_some()
-                    && redirected_winner_round_two_losers.contains(round_two_drop_sources[index])
-                {
-                    let empty_branch_index = (0..first_round.len())
-                        .find(|&candidate| {
-                            first_round[candidate].is_none()
-                                && !redirected_winner_round_two_losers
-                                    .contains(round_two_drop_sources[candidate])
-                        })
-                        .expect("a redirected losers entrant leaves an empty first-round branch");
-                    round_two_drop_sources.swap(index, empty_branch_index);
-                }
-            }
-        }
+        let is_final_loser_round = loser_round + 1 == loser_round_count;
         let shift = loser_round / 2 + 2;
         let set_count = bracket_size >> shift;
+        let round_two_loser_source_by_index = if loser_round == 1 {
+            let available_winners_round_two_losers = round_two_drop_sources
+                .iter()
+                .rev()
+                .copied()
+                .filter(|set_id| {
+                    !redirected_winner_round_two_losers.contains(*set_id)
+                        && possible_set_source(builder, Some(*set_id), "loser").is_some()
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let playable_losers_round_one_indexes = loser_rounds[0]
+                .iter()
+                .enumerate()
+                .filter_map(|(index, set_id)| {
+                    possible_set_source(builder, set_id.as_ref(), "winner").map(|_| index)
+                })
+                .collect::<Vec<_>>();
+            playable_losers_round_one_indexes
+                .into_iter()
+                .zip(available_winners_round_two_losers)
+                .collect::<HashMap<_, _>>()
+        } else {
+            HashMap::new()
+        };
         let mut current = Vec::new();
         for index in 0..set_count {
-            let mut sources = if loser_round == 0 {
-                [
-                    possible_set_source(builder, Some(&winner_rounds[0][index * 2]), "loser"),
-                    possible_set_source(builder, Some(&winner_rounds[0][index * 2 + 1]), "loser"),
-                ]
+            let sources = if loser_round == 0 {
+                let first_round_pair = &winner_rounds[0][index * 2..index * 2 + 2];
+                let first_loser = possible_set_source(builder, Some(&first_round_pair[0]), "loser");
+                let second_loser = possible_set_source(builder, Some(&first_round_pair[1]), "loser");
+                let first_loser_count = usize::from(first_loser.is_some())
+                    + usize::from(second_loser.is_some());
+
+                match first_loser_count {
+                    2 => [first_loser, second_loser],
+                    1 => [first_loser.or(second_loser), None],
+                    _ => {
+                        let winner_round_two_set_id = &winner_rounds[1][index];
+                        let winner_round_two_loser =
+                            possible_set_source(builder, Some(winner_round_two_set_id), "loser");
+                        if winner_round_two_loser.is_some() {
+                            redirected_winner_round_two_losers
+                                .insert(winner_round_two_set_id.clone());
+                        }
+                        [winner_round_two_loser, None]
+                    }
+                }
             } else if loser_round % 2 == 1 {
                 let winners_round = (round_number + 1) / 2;
                 let winners_round_index = if winners_round % 2 == 1 {
@@ -668,9 +653,9 @@ fn add_double_elimination(
                     index
                 };
                 let winners_round_set_id = if loser_round == 1 {
-                    round_two_drop_sources[index]
+                    round_two_loser_source_by_index.get(&index)
                 } else {
-                    &winner_rounds[winners_round][winners_round_index]
+                    Some(&winner_rounds[winners_round][winners_round_index])
                 };
                 [
                     possible_set_source(
@@ -678,9 +663,8 @@ fn add_double_elimination(
                         loser_rounds[loser_round - 1][index].as_ref(),
                         "winner",
                     ),
-                    (!redirected_winner_round_two_losers.contains(winners_round_set_id))
-                        .then(|| possible_set_source(builder, Some(winners_round_set_id), "loser"))
-                        .flatten(),
+                    winners_round_set_id
+                        .and_then(|set_id| possible_set_source(builder, Some(set_id), "loser")),
                 ]
             } else {
                 let previous_round = &loser_rounds[loser_round - 1];
@@ -689,20 +673,10 @@ fn add_double_elimination(
                     possible_set_source(builder, previous_round[index * 2 + 1].as_ref(), "winner"),
                 ]
             };
-            if loser_round == 0 && sources.iter().filter(|source| source.is_some()).count() == 1 {
-                if let Some(winners_round_two_set_id) = bye_winner_round_two_losers.next() {
-                    if let Some(empty_slot) = sources.iter_mut().find(|source| source.is_none()) {
-                        *empty_slot =
-                            possible_set_source(builder, Some(&winners_round_two_set_id), "loser");
-                        redirected_winner_round_two_losers.insert(winners_round_two_set_id);
-                    }
-                }
-            }
             if sources.iter().all(Option::is_none) {
                 current.push(None);
                 continue;
             }
-            let is_final_loser_round = loser_round + 1 == loser_round_count;
             let text = if is_final_loser_round {
                 "Losers Final".to_owned()
             } else {
@@ -722,6 +696,26 @@ fn add_double_elimination(
                 None,
                 None,
             )));
+        }
+        let has_visible_match = current.iter().flatten().any(|set_id| {
+            builder
+                .possible_set_outputs
+                .get(set_id)
+                .is_some_and(|(_, can_lose)| *can_lose)
+        });
+        if has_visible_match {
+            visible_loser_round_count += 1;
+            let display_round = visible_loser_round_count;
+            for set_id in current.iter().flatten() {
+                if let Some(set) = builder.sets.iter_mut().find(|set| set.set_id == *set_id) {
+                    set.round = Some(-(display_round as i64));
+                    set.full_round_text = if is_final_loser_round {
+                        "Losers Final".to_owned()
+                    } else {
+                        format!("Losers Round {display_round}")
+                    };
+                }
+            }
         }
         loser_rounds.push(current);
     }
@@ -1481,6 +1475,7 @@ pub fn generate_local_snapshot(
             }
             let set_ids = builder.sets[before..]
                 .iter()
+                .filter(|set| !set.is_intermediate)
                 .map(|set| set.set_id.clone())
                 .collect();
             if let Some(phase_group) = builder
@@ -1776,129 +1771,42 @@ mod tests {
 
         let snapshot = generate(&config);
         let event = &snapshot.events[0];
-        assert_eq!(event.sets.len(), 11);
+        assert_eq!(event.sets.len(), 14);
         assert!(event.sets.iter().all(|set| {
             set.entrant1_source.is_some() || set.entrant2_source.is_some()
-        }));
-
-        let losers_round_one = event
-            .sets
-            .iter()
-            .filter(|set| set.round == Some(-1))
-            .collect::<Vec<_>>();
-        let losers_round_two = event
-            .sets
-            .iter()
-            .filter(|set| set.round == Some(-2))
-            .collect::<Vec<_>>();
-        assert_eq!(losers_round_one.len(), 1);
-        assert_eq!(losers_round_two.len(), 1);
-
-        let winners_semifinal_ids = event
-            .sets
-            .iter()
-            .filter(|set| set.round == Some(2))
-            .map(|set| set.set_id.as_str())
-            .collect::<Vec<_>>();
-        let first_losers_match = losers_round_one
-            .iter()
-            .find(|set| {
-                set.entrant1_source.is_some()
-                    && set.entrant2_source.is_some()
-                    && [set.entrant1_source.as_ref(), set.entrant2_source.as_ref()]
-                        .into_iter()
-                        .flatten()
-                        .all(|source| source.condition.as_deref() == Some("loser"))
-            })
-            .expect("the losers first round should pair the first-round and bye-match losers");
-        let first_round_ids = event
-            .sets
-            .iter()
-            .filter(|set| set.round == Some(1))
-            .map(|set| set.set_id.as_str())
-            .collect::<Vec<_>>();
-        let first_round_loser = [
-            first_losers_match.entrant1_source.as_ref(),
-            first_losers_match.entrant2_source.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .find(|source| {
-            source
-                .type_id
-                .as_deref()
-                .is_some_and(|source_id| first_round_ids.contains(&source_id))
-        })
-        .expect("the losers first round should receive a winners round-one loser");
-        assert_eq!(first_round_loser.condition.as_deref(), Some("loser"));
-        let dropped_winners_round_two_loser = [
-            first_losers_match.entrant1_source.as_ref(),
-            first_losers_match.entrant2_source.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .find(|source| {
-            source
-                .type_id
-                .as_deref()
-                .is_some_and(|source_id| winners_semifinal_ids.contains(&source_id))
-        })
-        .expect("the losers first round should receive a winners round-two loser");
-        assert_eq!(
-            dropped_winners_round_two_loser.condition.as_deref(),
-            Some("loser")
-        );
-
-        let lower_round_two_loser_ids = losers_round_two
-            .iter()
-            .flat_map(|set| [&set.entrant1_source, &set.entrant2_source])
-            .flatten()
-            .filter(|source| source.condition.as_deref() == Some("loser"))
-            .filter_map(|source| source.type_id.as_deref())
-            .collect::<Vec<_>>();
-        assert_eq!(lower_round_two_loser_ids, [winners_semifinal_ids[0]]);
-        let round_two_match = losers_round_two
-            .iter()
-            .find(|set| !set.is_bye)
-            .expect("losers round two should retain the merge match");
-        let round_two_sources = [
-            round_two_match.entrant1_source.as_ref(),
-            round_two_match.entrant2_source.as_ref(),
-        ];
-        assert!(round_two_sources.iter().flatten().any(|source| {
-            source.type_id.as_deref() == Some(first_losers_match.set_id.as_str())
-                && source.condition.as_deref() == Some("winner")
-        }));
-        assert!(round_two_sources.iter().flatten().any(|source| {
-            source.type_id.as_deref() == Some(winners_semifinal_ids[0])
-                && source.condition.as_deref() == Some("loser")
         }));
         let playable_losers_rounds = event
             .sets
             .iter()
             .filter(|set| !set.is_bye && set.round.is_some_and(|round| round < 0))
-            .map(|set| set.round.unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(playable_losers_rounds, [-1, -2, -3]);
+            .fold(HashMap::<i64, usize>::new(), |mut counts, set| {
+                *counts.entry(set.round.unwrap()).or_default() += 1;
+                counts
+            });
+        assert_eq!(playable_losers_rounds.values().sum::<usize>(), 3);
+        assert_eq!(event.sets.iter().filter(|set| !set.is_bye).count(), 8);
         let losers_final = event
             .sets
             .iter()
             .find(|set| set.full_round_text == "Losers Final")
             .expect("the bracket should have a losers final");
-        assert_eq!(losers_final.round, Some(-3));
         let winners_final = event
             .sets
             .iter()
-            .find(|set| set.round == Some(3))
+            .find(|set| set.full_round_text == "Winners Final")
             .expect("the bracket should have a winners round-three final");
         let final_sources = [
             losers_final.entrant1_source.as_ref(),
             losers_final.entrant2_source.as_ref(),
         ];
-        assert!(final_sources.iter().flatten().any(|source| {
-            source.type_id.as_deref() == Some(round_two_match.set_id.as_str())
-                && source.condition.as_deref() == Some("winner")
-        }));
+        let losers_winner_source = final_sources.iter().flatten()
+            .find(|source| source.condition.as_deref() == Some("winner"))
+            .expect("Losers Final should receive the previous Losers winner");
+        let previous_losers_set = event.sets.iter().find(|set| {
+            Some(set.set_id.as_str()) == losers_winner_source.type_id.as_deref()
+        }).expect("Losers Final source set should exist");
+        assert!(previous_losers_set.round.is_some_and(|round| round < 0));
+        assert!(!previous_losers_set.is_bye);
         assert!(final_sources.iter().flatten().any(|source| {
             source.type_id.as_deref() == Some(winners_final.set_id.as_str())
                 && source.condition.as_deref() == Some("loser")
@@ -1906,7 +1814,7 @@ mod tests {
     }
 
     #[test]
-    fn seven_player_double_elimination_pairs_odd_first_round_loser_with_bye() {
+    fn seven_player_double_elimination_pairs_first_round_losers_with_round_two_losers() {
         let snapshot = generate(&input(7, vec![phase("DOUBLE_ELIMINATION", 1, 0)]));
         let losers_round_one = snapshot.events[0]
             .sets
@@ -1917,6 +1825,110 @@ mod tests {
         assert_eq!(losers_round_one.len(), 2);
         assert_eq!(losers_round_one.iter().filter(|set| set.is_bye).count(), 1);
         assert_eq!(losers_round_one.iter().filter(|set| !set.is_bye).count(), 1);
+    }
+
+    #[test]
+    fn fifteen_player_losers_rounds_match_reference_bye_and_reverse_drop_order() {
+        let event = &generate(&input(15, vec![phase("DOUBLE_ELIMINATION", 1, 0)])).events[0];
+        let sets_for_round = |round| {
+            event
+                .sets
+                .iter()
+                .filter(|set| set.round == Some(round))
+                .collect::<Vec<_>>()
+        };
+        let winners_round_two = sets_for_round(2);
+        let losers_round_one = sets_for_round(-1);
+        let losers_round_two = sets_for_round(-2);
+
+        assert_eq!(winners_round_two.len(), 4);
+        assert_eq!(losers_round_one.len(), 4);
+        assert_eq!(losers_round_one.iter().filter(|set| set.is_bye).count(), 1);
+        assert_eq!(losers_round_one.iter().filter(|set| !set.is_bye).count(), 3);
+        assert_eq!(losers_round_two.len(), 4);
+        assert!(losers_round_two.iter().all(|set| !set.is_bye));
+
+        for (index, target) in losers_round_two.iter().enumerate() {
+            let sources = [&target.entrant1_source, &target.entrant2_source];
+            let advancing_source = if let Some(source) = losers_round_one[index]
+                    .entrant1_source
+                    .as_ref()
+                    .or(losers_round_one[index].entrant2_source.as_ref())
+                    .filter(|_| losers_round_one[index].is_bye)
+            {
+                (source.type_id.as_deref(), source.condition.as_deref())
+            } else {
+                (Some(losers_round_one[index].set_id.as_str()), Some("winner"))
+            };
+            assert!(sources.into_iter().flatten().any(|source| {
+                source.condition.as_deref() == advancing_source.1
+                    && source.type_id.as_deref() == advancing_source.0
+            }));
+            assert!(sources.into_iter().flatten().any(|source| {
+                source.condition.as_deref() == Some("loser")
+                    && source.type_id.as_deref()
+                        == Some(winners_round_two[winners_round_two.len() - 1 - index].set_id.as_str())
+            }));
+        }
+    }
+
+    #[test]
+    fn sixteen_player_losers_round_two_pairs_round_one_winners_with_reversed_winners_losers() {
+        let event = &generate(&input(16, vec![phase("DOUBLE_ELIMINATION", 1, 0)])).events[0];
+        let sets_for_round = |round| {
+            event
+                .sets
+                .iter()
+                .filter(|set| set.round == Some(round))
+                .collect::<Vec<_>>()
+        };
+        let winners_round_two = sets_for_round(2);
+        let losers_round_one = sets_for_round(-1);
+        let losers_round_two = sets_for_round(-2);
+
+        assert_eq!(winners_round_two.len(), 4);
+        assert_eq!(losers_round_one.len(), 4);
+        assert_eq!(losers_round_two.len(), 4);
+        for (index, target) in losers_round_two.iter().enumerate() {
+            let sources = [&target.entrant1_source, &target.entrant2_source];
+            assert!(sources.into_iter().flatten().any(|source| {
+                source.condition.as_deref() == Some("winner")
+                    && source.type_id.as_deref() == Some(losers_round_one[index].set_id.as_str())
+            }));
+            assert!(sources.into_iter().flatten().any(|source| {
+                source.condition.as_deref() == Some("loser")
+                    && source.type_id.as_deref()
+                        == Some(winners_round_two[winners_round_two.len() - 1 - index].set_id.as_str())
+            }));
+        }
+    }
+
+    #[test]
+    fn twenty_two_player_double_elimination_matches_startgg_visible_round_counts() {
+        let event = &generate(&input(22, vec![phase("DOUBLE_ELIMINATION", 1, 0)])).events[0];
+        let mut visible_round_counts = HashMap::<String, usize>::new();
+        for set in event.sets.iter().filter(|set| !set.is_bye) {
+            *visible_round_counts.entry(set.full_round_text.clone()).or_default() += 1;
+        }
+        assert_eq!(
+            visible_round_counts,
+            HashMap::from([
+                ("Winners Round 1".to_owned(), 6),
+                ("Winners Round 2".to_owned(), 8),
+                ("Winners Quarter-Final".to_owned(), 4),
+                ("Winners Semi-Final".to_owned(), 2),
+                ("Winners Final".to_owned(), 1),
+                ("Grand Final".to_owned(), 1),
+                ("Losers Round 1".to_owned(), 6),
+                ("Losers Round 2".to_owned(), 4),
+                ("Losers Round 3".to_owned(), 4),
+                ("Losers Round 4".to_owned(), 2),
+                ("Losers Round 5".to_owned(), 2),
+                ("Losers Round 6".to_owned(), 1),
+                ("Losers Final".to_owned(), 1),
+            ]),
+        );
+        assert_eq!(event.sets.iter().filter(|set| !set.is_bye).count(), 42);
     }
 
     #[test]
@@ -1970,71 +1982,35 @@ mod tests {
     }
 
     #[test]
-    fn redirected_losers_round_one_winners_merge_with_remaining_winners_round_two_losers() {
+    fn every_playable_winners_round_two_loser_enters_the_losers_bracket_once() {
         for count in 3..=64 {
             let snapshot = generate(&input(count, vec![phase("DOUBLE_ELIMINATION", 1, 0)]));
             let event = &snapshot.events[0];
-            let winners_round_two_ids = event
-                .sets
-                .iter()
-                .filter(|set| set.round == Some(2))
-                .map(|set| set.set_id.as_str())
+            let winners_round_two = event.sets.iter()
+                .filter(|set| set.round == Some(2) && !set.is_bye)
                 .collect::<Vec<_>>();
-            for first_round in event.sets.iter().filter(|set| set.round == Some(-1)) {
-                let has_redirected_loser = [
-                    first_round.entrant1_source.as_ref(),
-                    first_round.entrant2_source.as_ref(),
-                ]
-                .into_iter()
-                .flatten()
-                .any(|source| {
-                    source.condition.as_deref() == Some("loser")
-                        && source
-                            .type_id
-                            .as_deref()
-                            .is_some_and(|id| winners_round_two_ids.contains(&id))
-                });
-                if !has_redirected_loser {
-                    continue;
-                }
-                let next_matches = event
-                    .sets
-                    .iter()
-                    .filter(|set| {
-                        [set.entrant1_source.as_ref(), set.entrant2_source.as_ref()]
-                            .into_iter()
-                            .flatten()
-                            .any(|source| {
-                                source.type_id.as_deref() == Some(first_round.set_id.as_str())
-                                    && source.condition.as_deref() == Some("winner")
-                            })
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(next_matches.len(), 1, "{count} entrants");
-                let merge = next_matches[0];
-                assert_eq!(merge.round, Some(-2), "{count} entrants");
-                assert!(!merge.is_bye, "{count} entrants");
-                let remaining_loser = [
-                    merge.entrant1_source.as_ref(),
-                    merge.entrant2_source.as_ref(),
-                ]
-                .into_iter()
-                .flatten()
-                .find(|source| source.condition.as_deref() == Some("loser"))
-                .expect("the merge match should receive a winners round-two loser");
-                let remaining_source_id = remaining_loser.type_id.as_deref().unwrap();
-                assert!(winners_round_two_ids.contains(&remaining_source_id));
+            for winners_set in winners_round_two {
                 let loser_targets = event
                     .sets
                     .iter()
+                    .filter(|set| !set.is_bye)
                     .flat_map(|set| [&set.entrant1_source, &set.entrant2_source])
                     .flatten()
                     .filter(|source| {
                         source.condition.as_deref() == Some("loser")
-                            && source.type_id.as_deref() == Some(remaining_source_id)
+                            && source.type_id.as_deref() == Some(winners_set.set_id.as_str())
                     })
                     .count();
-                assert_eq!(loser_targets, 1, "{count} entrants");
+                if count == 5 && loser_targets != 1 {
+                    for target in event.sets.iter().filter(|set| {
+                        [&set.entrant1_source, &set.entrant2_source].into_iter().flatten().any(|source|
+                            source.condition.as_deref() == Some("loser")
+                                && source.type_id.as_deref() == Some(winners_set.set_id.as_str()))
+                    }) {
+                        println!("W2 {:?} -> set={} round={:?} bye={} sources={:?},{:?}", winners_set.set_id, target.set_id, target.round, target.is_bye, target.entrant1_source.as_ref().map(|source| (source.type_id.clone(), source.condition.clone())), target.entrant2_source.as_ref().map(|source| (source.type_id.clone(), source.condition.clone())));
+                    }
+                }
+                assert_eq!(loser_targets, 1, "{count} entrants, set {}", winners_set.set_id);
             }
             assert_eq!(
                 event.sets.iter().filter(|set| !set.is_bye).count(),
@@ -2272,7 +2248,7 @@ mod tests {
                     .filter(|set| {
                         set.phase_group_id.as_deref() == Some(group.phase_group_id.as_str())
                             && set.is_bye
-                            && set.round == Some(-1)
+                            && set.round.is_some_and(|round| round < 0)
                     })
                     .count(),
                 1
@@ -2459,7 +2435,7 @@ mod tests {
             event
                 .sets
                 .iter()
-                .filter(|set| set.is_bye && set.round == Some(-1))
+                .filter(|set| set.is_bye && set.round.is_some_and(|round| round < 0))
                 .count(),
             1
         );

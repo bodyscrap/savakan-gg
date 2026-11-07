@@ -196,6 +196,8 @@ phaseGroupやROUND ROBINを確認する場合は、次を順番に確認しま�
 
 DEでは、phaseGroup間進出と同一bracket内のwinner/loser移動を分けて考えます。Set A確定後にSet BとSet Fが正しい位置で有効になっていても、entrant名がplaceholderに戻っていれば進行再構築に不整合が残っています。**行先の正しさとslotのentrant ID・表示名の正しさは別々に確認してください。**
 
+ローカルDEのset生成、BYEと表示roundの扱い、UI上の縦配置規則は[ダブルエリミネーションの生成・配置仕様](double-elimination-bracket.md)を参照してください。
+
 ### source graphの扱い
 
 - `entrant1Source` / `entrant2Source` とwinner/loser progressionを進出先slotの判定元にします。`typeId` が常にsource set IDとは限らず、progression seed IDの場合もあるため、set IDだけで照合しないでください。
