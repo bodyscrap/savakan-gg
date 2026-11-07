@@ -13,6 +13,7 @@ export type UserCardPlayer = {
   aliasName: string;
   skill: number | null;
   playerId: string;
+  categorySelections?: string[][];
 };
 
 function sanitizeFileSegment(value: string): string {

@@ -8,9 +8,13 @@ import { parseRegistrationCsv, type RegistrationCsvMapping } from "../domain/loc
 vi.mock("react", { spy: true });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
-function setup(mapping: RegistrationCsvMapping = { name: 0, categories: [1, null, null] }, prefixDate = false) {
+function setup(
+  mapping: RegistrationCsvMapping = { name: 0, categories: [1, null, null] },
+  prefixDate = false,
+  list = { id: "items", name: "Items", categoryName: "Type", items: ["A"] },
+) {
   const registration = defaultLocalEventRegistration();
-  registration.setting.itemListSnapshots = [{ id: "items", name: "Items", categoryName: "Type", items: ["A"] }];
+  registration.setting.itemListSnapshots = [list];
   registration.setting.categoryMaxCounts = [1, 0, 0];
   const source = { csv: parseRegistrationCsv("name,items\nAlice,A"), fileName: "大会.CSV" };
   const setSource = vi.fn();
@@ -48,11 +52,18 @@ describe("CSV import dialog", () => {
     const html = renderToStaticMarkup(dialog);
     expect(html).toContain("CSV取り込み設定");
     expect(html.match(/<select disabled=""/g)).toHaveLength(2);
-    expect(html).toContain("カテゴリ1");
-    expect(html).toContain("Items");
+    expect(html).toContain("Items/Type");
+    expect(html).not.toContain("カテゴリ1 (Items)");
     expect(html).toContain("Skill Tier");
     expect(html).toContain('<option value="">割り当てなし</option>');
     expect(onPendingChange).toHaveBeenCalledWith(true);
+  });
+
+  it("keeps the existing label for free-text categories", () => {
+    const { dialog } = setup(undefined, false, {
+      id: "__free_text__", name: "自由記入", categoryName: "カテゴリ1", items: [],
+    });
+    expect(renderToStaticMarkup(dialog)).toContain("カテゴリ1 (自由記入)");
   });
 
   it("imports mapped participants and passes the filename without its extension", () => {

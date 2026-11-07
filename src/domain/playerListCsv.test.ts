@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FREE_TEXT_LIST_ID } from "./itemList";
 import { buildPlayerListCsv, buildPlayerListCsvFileName } from "./playerListCsv";
 
 describe("buildPlayerListCsv", () => {
@@ -25,6 +26,23 @@ describe("buildPlayerListCsv", () => {
     }]);
 
     expect(csv).toContain('"Player ""One""","Alias\nName",,PG-456');
+  });
+
+  it("exports each category and quotes comma-separated multi-selections", () => {
+    const csv = buildPlayerListCsv([{
+      playerName: "Player",
+      aliasName: "",
+      skill: null,
+      playerId: "PG-789",
+      categorySelections: [["A", "B"], ["Single", "Other"], []],
+    }], [
+      { id: "character-list", name: "Characters", categoryName: "Fighter", slotIndex: 0 },
+      { id: FREE_TEXT_LIST_ID, name: "自由記入", categoryName: "その他", slotIndex: 1 },
+      { id: "item-list", name: "Items", categoryName: "Consumable", slotIndex: 2 },
+    ]);
+
+    expect(csv).toContain("プレイヤー名,エイリアスプレイヤー名,Skill Tier,Player ID,Characters/Fighter,その他,Items/Consumable\r\n");
+    expect(csv).toContain('Player,,,PG-789,"A,B","Single,Other",\r\n');
   });
 });
 

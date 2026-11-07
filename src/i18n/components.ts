@@ -27,6 +27,7 @@ export const componentTranslations: Record<string, string> = {
   "Tonamel取り込み": "Import from Tonamel",
   "Tonamelの大会URL": "Tonamel competition URL",
   "Tonamelから取得できませんでした: {error}": "Could not fetch participants from Tonamel: {error}",
+  "カテゴリ選択": "Category selections",
   "出場": "Participating",
   "TwiplaのイベントURL": "Twipla event URL",
   "取り込むユーザー属性": "User statuses to import",

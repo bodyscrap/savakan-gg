@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use reqwest::header::{ACCEPT, COOKIE, ORIGIN, REFERER, SET_COOKIE};
@@ -23,6 +23,7 @@ query TonamelImportCompetition($competitionId: ID!) {
       id
       forParticipation
       countSummary { currentEntrantNum }
+            questions { id label private index }
     }
   }
 }
@@ -40,6 +41,11 @@ query TonamelImportEntrants($competitionId: ID!, $entryMenuId: ID!, $entrantFilt
             canceled
             entrantName { text { answer } }
             overridePlayerName
+                        answers {
+                            question { id }
+                            text { answer }
+                            selection { selectableItems { text } }
+                        }
           }
         }
         pageInfo { endCursor hasNextPage }
@@ -56,12 +62,21 @@ pub struct TonamelParticipant {
     name: String,
     serial_number: u32,
     status: String,
+    answers: HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TonamelColumn {
+    id: String,
+    label: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TonamelEvent {
     event_name: String,
+    columns: Vec<TonamelColumn>,
     users: Vec<TonamelParticipant>,
 }
 
@@ -166,6 +181,15 @@ struct EntryMenu {
     id: String,
     #[serde(rename = "forParticipation")]
     for_participation: bool,
+    questions: Vec<EntryQuestion>,
+}
+
+#[derive(Deserialize)]
+struct EntryQuestion {
+    id: String,
+    label: String,
+    private: bool,
+    index: i64,
 }
 
 #[derive(Deserialize)]
@@ -206,6 +230,36 @@ struct EntrantNode {
     entrant_name: Option<EntrantName>,
     #[serde(rename = "overridePlayerName")]
     override_player_name: Option<String>,
+    #[serde(default)]
+    answers: Vec<EntrantAnswer>,
+}
+
+#[derive(Deserialize)]
+struct EntrantAnswer {
+    question: AnswerQuestion,
+    text: Option<TextAnswer>,
+    selection: Option<SelectionAnswer>,
+}
+
+#[derive(Deserialize)]
+struct AnswerQuestion {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct TextAnswer {
+    answer: String,
+}
+
+#[derive(Deserialize)]
+struct SelectionAnswer {
+    #[serde(rename = "selectableItems", default)]
+    selectable_items: Vec<SelectedItem>,
+}
+
+#[derive(Deserialize)]
+struct SelectedItem {
+    text: String,
 }
 
 #[derive(Deserialize)]
@@ -226,7 +280,7 @@ struct PageInfo {
     has_next_page: bool,
 }
 
-fn participant_from_node(node: EntrantNode) -> Result<Option<TonamelParticipant>, String> {
+fn participant_from_node(node: EntrantNode, public_question_ids: &HashSet<String>) -> Result<Option<TonamelParticipant>, String> {
     if node.canceled {
         return Ok(None);
     }
@@ -235,11 +289,25 @@ fn participant_from_node(node: EntrantNode) -> Result<Option<TonamelParticipant>
         .filter(|name| !name.trim().is_empty())
         .or(node.override_player_name)
         .ok_or("A Tonamel entry has no name")?;
+    let answers = node.answers.into_iter().filter_map(|answer| {
+        if !public_question_ids.contains(&answer.question.id) {
+            return None;
+        }
+        let text = answer.text.map(|text| text.answer).unwrap_or_default();
+        let value = if !text.trim().is_empty() {
+            text
+        } else {
+            answer.selection.map(|selection| selection.selectable_items.into_iter()
+                .map(|item| item.text).collect::<Vec<_>>().join(","))?
+        };
+        Some((answer.question.id, value))
+    }).collect();
     Ok(Some(TonamelParticipant {
         id: node.id,
         name: name.trim().to_owned(),
         serial_number: node.serial_number.unwrap_or_default(),
         status: "ENTRY".into(),
+        answers,
     }))
 }
 
@@ -285,6 +353,18 @@ pub async fn fetch_tonamel_participants(url: String) -> Result<TonamelEvent, Str
         return Err("Tonamel competition has no participant entry menu".into());
     }
 
+    let mut columns_by_id = HashMap::new();
+    for question in entry_menus.iter().flat_map(|menu| &menu.questions) {
+        if !question.private && !question.label.trim().is_empty() {
+            columns_by_id.entry(question.id.clone())
+                .or_insert((question.index, question.label.trim().to_owned()));
+        }
+    }
+    let mut ordered_columns: Vec<_> = columns_by_id.into_iter().collect();
+    ordered_columns.sort_by_key(|(_, (index, _))| *index);
+    let public_question_ids: HashSet<_> = ordered_columns.iter().map(|(id, _)| id.clone()).collect();
+    let columns = ordered_columns.into_iter().map(|(id, (_, label))| TonamelColumn { id, label }).collect();
+
     let mut seen = HashSet::new();
     let mut users = Vec::new();
     for menu in entry_menus {
@@ -304,7 +384,7 @@ pub async fn fetch_tonamel_participants(url: String) -> Result<TonamelEvent, Str
                 .ok_or("Tonamel participant list was not found")?.entrants;
             for edge in connection.edges {
                 if seen.insert(edge.node.id.clone()) {
-                    if let Some(user) = participant_from_node(edge.node)? {
+                    if let Some(user) = participant_from_node(edge.node, &public_question_ids)? {
                         users.push(user);
                         if users.len() > MAX_PARTICIPANTS {
                             return Err("Tonamel participants exceed the 512 participant limit".into());
@@ -326,7 +406,7 @@ pub async fn fetch_tonamel_participants(url: String) -> Result<TonamelEvent, Str
         return Err("Tonamel has no active participant entries".into());
     }
     users.sort_by_key(|user| user.serial_number);
-    Ok(TonamelEvent { event_name: competition.title, users })
+    Ok(TonamelEvent { event_name: competition.title, columns, users })
 }
 
 #[cfg(test)]
@@ -364,13 +444,33 @@ mod tests {
             id: "entrant-1".into(), serial_number: Some(3), canceled: false,
             entrant_name: Some(EntrantName { text: Some(EntrantNameText { answer: " Full Entry Name ".into() }) }),
             override_player_name: Some("Other Name".into()),
-        }).unwrap().unwrap();
+            answers: vec![
+                EntrantAnswer {
+                    question: AnswerQuestion { id: "public".into() },
+                    text: Some(TextAnswer { answer: "A,B".into() }), selection: None,
+                },
+                EntrantAnswer {
+                    question: AnswerQuestion { id: "private".into() },
+                    text: Some(TextAnswer { answer: "secret".into() }), selection: None,
+                },
+                EntrantAnswer {
+                    question: AnswerQuestion { id: "selection".into() }, text: None,
+                    selection: Some(SelectionAnswer { selectable_items: vec![
+                        SelectedItem { text: "Stage 1".into() }, SelectedItem { text: "Stage 2".into() },
+                    ] }),
+                },
+            ],
+        }, &HashSet::from(["public".into(), "selection".into()])).unwrap().unwrap();
         assert_eq!(participant.name, "Full Entry Name");
         assert_eq!(participant.serial_number, 3);
+        assert_eq!(participant.answers.get("public").map(String::as_str), Some("A,B"));
+        assert_eq!(participant.answers.get("selection").map(String::as_str), Some("Stage 1,Stage 2"));
+        assert!(!participant.answers.contains_key("private"));
         assert!(participant_from_node(EntrantNode {
             id: "canceled".into(), serial_number: None, canceled: true,
             entrant_name: None, override_player_name: None,
-        }).unwrap().is_none());
+            answers: vec![],
+        }, &HashSet::new()).unwrap().is_none());
     }
 
     #[test]

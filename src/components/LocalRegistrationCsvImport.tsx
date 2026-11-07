@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "../i18n";
+import { FREE_TEXT_LIST_ID } from "../domain/itemList";
 import { importRegistrationCsv, parseRegistrationCsv, type RegistrationCsv, type RegistrationCsvMapping } from "../domain/localRegistrationCsv";
 import { registrationCategorySlots, type LocalEventRegistration, type RegisteredLocalParticipant } from "../domain/localEventRegistration";
+import { playerListCsvCategoryHeader } from "../domain/playerListCsv";
 
 type Props = {
   registration: LocalEventRegistration;
@@ -86,7 +88,10 @@ function CsvMappingDialog({ csv, fileName, registration, onClose, onImport }: {
           </select></label>
           {[0, 1, 2].map((index) => {
             const slot = slots.find((candidate) => candidate.slotIndex === index);
-            return <label key={index}>{t("カテゴリ{value1}", { value1: index + 1 })}{slot && ` (${slot.list.name})`}
+            const label = slot && slot.list.id !== FREE_TEXT_LIST_ID
+              ? playerListCsvCategoryHeader({ ...slot.list, slotIndex: index })
+              : `${t("カテゴリ{value1}", { value1: index + 1 })}${slot ? ` (${slot.list.name})` : ""}`;
+            return <label key={index}>{label}
               <select disabled={!slot} value={mapping.categories[index] ?? ""}
                 onChange={(event) => setMapping({ ...mapping, categories: mapping.categories.map((column, slotIndex) =>
                   slotIndex === index ? event.currentTarget.value === "" ? null : Number(event.currentTarget.value) : column) })}>

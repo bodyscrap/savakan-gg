@@ -38,6 +38,9 @@ export function useSelectedEventEntrants(
     const skillByEntrantId = new Map(
       selectedEntrantMeta.map((meta) => [meta.entrantId, meta.skill ?? null]),
     );
+    const categorySelectionsByEntrantId = new Map(
+      selectedEntrantMeta.map((meta) => [meta.entrantId, meta.categorySelections ?? []]),
+    );
     const resolvedIds = new Set(resolvedEntrants.map((entrant) => entrant.entrantId));
     const entrantsWithoutSets = (selectedEvent.entrants ?? [])
       .filter((entrant) => !resolvedIds.has(entrant.entrantId))
@@ -46,6 +49,7 @@ export function useSelectedEventEntrants(
       ...entrant,
       aliasName: aliasNameByEntrantId.get(entrant.entrantId) ?? "",
       skill: skillByEntrantId.get(entrant.entrantId) ?? null,
+      categorySelections: categorySelectionsByEntrantId.get(entrant.entrantId) ?? [],
     }));
   }, [selectedEntrantMeta, selectedEvent]);
 

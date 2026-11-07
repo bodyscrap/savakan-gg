@@ -2,7 +2,7 @@ import { t } from "../i18n";
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveEntrantDisplayName } from "../domain/bracketDisplay";
-import { buildPlayerListCsv, buildPlayerListCsvFileName } from "../domain/playerListCsv";
+import { buildPlayerListCsv, buildPlayerListCsvFileName, type PlayerListCsvCategory } from "../domain/playerListCsv";
 import {
   buildPlayerCardFileName,
   buildPrintedPlayerCardPageFileName,
@@ -25,7 +25,9 @@ export type UseUserCardsOptions = {
     entrantName: string;
     aliasName?: string;
     skill?: number | null;
+    categorySelections?: string[][] | null;
   }>;
+  categoryLists?: PlayerListCsvCategory[];
   aliasNamesByEntrantId: Record<string, string>;
   useAliasName: boolean;
   disableLocalCommunication: boolean;
@@ -40,6 +42,7 @@ export function useUserCards({
   eventName,
   eventAlias,
   entrants,
+  categoryLists,
   aliasNamesByEntrantId,
   useAliasName,
   disableLocalCommunication,
@@ -92,6 +95,7 @@ export function useUserCards({
           playerName: entrant.entrantName,
           aliasName: entrant.aliasName?.trim() ?? "",
           skill: entrant.skill ?? null,
+          categorySelections: entrant.categorySelections ?? [],
           playerId: playerIds[index],
         }));
 
@@ -334,7 +338,8 @@ export function useUserCards({
         aliasName: player.aliasName,
         skill: player.skill,
         playerId: player.playerId,
-      })));
+        categorySelections: player.categorySelections,
+      })), categoryLists);
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
       triggerBlobDownload(blob, buildPlayerListCsvFileName(eventAlias, eventName));
       onMessage(t("{p0} 人のプレイヤーをCSVで出力しました。", { p0: players.length }));

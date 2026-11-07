@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UserCardPlayer } from "./userCardCanvas";
 import { useUserCards } from "./useUserCards";
+import type { PlayerListCsvCategory } from "../domain/playerListCsv";
 
 const { states, renderCard, download } = vi.hoisted(() => ({
   states: [] as unknown[],
@@ -33,6 +34,7 @@ const player: UserCardPlayer = {
   aliasName: "Registered Alias",
   skill: 5,
   playerId: "PG-PLAYER",
+  categorySelections: [["A", "B"], ["Stage"], []],
 };
 const missingAliasCases: Record<string, string>[] = [
   {},
@@ -41,7 +43,7 @@ const missingAliasCases: Record<string, string>[] = [
   { other: "Other Alias" },
 ];
 
-function setup(useAliasName: boolean, aliases: Record<string, string> = { entrant: " Alias " }) {
+function setup(useAliasName: boolean, aliases: Record<string, string> = { entrant: " Alias " }, categoryLists: PlayerListCsvCategory[] = []) {
   states.push([player], [player.playerId], player.playerId, "preview-url", false);
   return useUserCards({
     tournamentId: player.tournamentId,
@@ -54,7 +56,9 @@ function setup(useAliasName: boolean, aliases: Record<string, string> = { entran
       entrantName: player.entrantName,
       aliasName: player.aliasName,
       skill: player.skill,
+      categorySelections: player.categorySelections,
     }],
+    categoryLists,
     aliasNamesByEntrantId: aliases,
     useAliasName,
     disableLocalCommunication: false,
@@ -105,6 +109,21 @@ describe("player card alias display", () => {
     await expect(csvBlob.text()).resolves.toContain(
       "プレイヤー名,エイリアスプレイヤー名,Skill Tier,Player ID\r\n"
       + "Original Player,Registered Alias,5,PG-PLAYER",
+    );
+  });
+
+  it("exports category selections using configured category names", async () => {
+    const result = setup(false, { entrant: "Alias" }, [
+      { id: "character-list", name: "Characters", categoryName: "Fighter", slotIndex: 0 },
+      { id: "stage-list", name: "Stages", categoryName: "Arena", slotIndex: 1 },
+      { id: "item-list", name: "Items", categoryName: "Consumable", slotIndex: 2 },
+    ]);
+    result.exportPlayersAsCsv();
+
+    const csvBlob = vi.mocked(download).mock.calls[0][0] as Blob;
+    await expect(csvBlob.text()).resolves.toContain(
+      "プレイヤー名,エイリアスプレイヤー名,Skill Tier,Player ID,Characters/Fighter,Stages/Arena,Items/Consumable\r\n"
+      + 'Original Player,Registered Alias,5,PG-PLAYER,"A,B",Stage,\r\n',
     );
   });
 });

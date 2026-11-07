@@ -19,11 +19,13 @@ describe("imported event entrants", () => {
     const meta: EventEntrantMeta[] = [{
       entrantId: "player", entrantName: "Player", skill: 9,
       importedSkill: { skill: 5 }, aliasName: "Alias",
+      categorySelections: [["A", "B"], []],
       playSide: null, characterNames: [], authCode: "code", notes: null,
     }];
     const selected = useSelectedEventEntrants(event, meta);
     expect(selected.entrants).toEqual([{
       entrantId: "player", entrantName: "Player", aliasName: "Alias", skill: 9,
+      categorySelections: [["A", "B"], []],
     }]);
     expect(selected.selectedEntrant?.entrantId).toBe("player");
   });

@@ -1580,6 +1580,8 @@ function App() {
     eventName: selectedEvent?.name ?? "",
     eventAlias: selectedEventMeta?.eventAlias ?? null,
     entrants: selectedEventEntrants,
+    categoryLists: selectedEventMeta?.eventManagement?.itemListSnapshots.flatMap((list, slotIndex) =>
+      list.id.trim() ? [{ ...list, slotIndex }] : []) ?? [],
     aliasNamesByEntrantId: currentPlayerDisplayAliasSnapshot?.aliasesByEntrantId ?? EMPTY_PLAYER_ALIAS_MAP,
     useAliasName: currentPlayerDisplayAliasSnapshot?.enabled ?? false,
     disableLocalCommunication,
