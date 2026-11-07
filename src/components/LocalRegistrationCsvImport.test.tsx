@@ -51,7 +51,8 @@ describe("CSV import dialog", () => {
     const { dialog, onPendingChange } = setup();
     const html = renderToStaticMarkup(dialog);
     expect(html).toContain("CSV取り込み設定");
-    expect(html.match(/<select disabled=""/g)).toHaveLength(2);
+    expect(html.match(/<select/g)).toHaveLength(3);
+    expect(html).not.toContain('select disabled=""');
     expect(html).toContain("Items/Type");
     expect(html).not.toContain("カテゴリ1 (Items)");
     expect(html).toContain("Skill Tier");
@@ -64,6 +65,26 @@ describe("CSV import dialog", () => {
       id: "__free_text__", name: "自由記入", categoryName: "カテゴリ1", items: [],
     });
     expect(renderToStaticMarkup(dialog)).toContain("カテゴリ1 (自由記入)");
+  });
+
+  it("hides category source fields when no category lists are configured", () => {
+    const registration = defaultLocalEventRegistration();
+    const source = { csv: parseRegistrationCsv("name\nAlice"), fileName: "大会.csv" };
+    vi.mocked(React.useState)
+      .mockImplementationOnce(() => [source, vi.fn()])
+      .mockImplementationOnce(() => [false, vi.fn()])
+      .mockImplementationOnce(() => ["", vi.fn()]);
+    vi.mocked(React.useRef).mockReturnValue({ current: null });
+    vi.mocked(React.useEffect).mockImplementation((effect) => { effect(); });
+    const tree = LocalRegistrationCsvImport({ registration, disabled: false, onImport: vi.fn(), onPendingChange: vi.fn() });
+    const dialogElement = tree.props.children[3];
+    vi.mocked(React.useState)
+      .mockImplementationOnce(() => [{ name: 0, categories: [null, null, null] }, vi.fn()])
+      .mockImplementationOnce(() => ["", vi.fn()])
+      .mockImplementationOnce(() => [false, vi.fn()]);
+    const html = renderToStaticMarkup(dialogElement.type(dialogElement.props));
+    expect(html.match(/<select/g)).toHaveLength(2);
+    expect(html).not.toContain("カテゴリ1");
   });
 
   it("imports mapped participants and passes the filename without its extension", () => {

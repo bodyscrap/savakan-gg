@@ -1449,6 +1449,12 @@ button:disabled {
   margin-top: 1rem;
 }
 
+.local-category-setting-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .local-registration-grid > section {
   min-width: 0;
 }

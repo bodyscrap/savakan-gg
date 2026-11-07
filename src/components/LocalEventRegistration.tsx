@@ -34,6 +34,12 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
   const editing = participantDraft !== null;
   useEffect(() => onPendingChange(settingsChanged || editing || importPending), [settingsChanged, editing, importPending, onPendingChange]);
   const listSnapshots = settingDraft.itemListSnapshots;
+  const hasCategorySettings = listSnapshots.some((list) => list.id.trim() !== "")
+    || (settingDraft.categoryMinCounts ?? []).some((count) => count > 0)
+    || (settingDraft.categoryMaxCounts ?? []).some((count) => count > 0)
+    || (settingDraft.categoryAllowDuplicates ?? []).some(Boolean)
+    || (settingDraft.totalMinCount ?? 0) > 0
+    || (settingDraft.totalMaxCount ?? 3) !== 3;
   const updateSetting = (update: Partial<EventManagementMeta>) => setSettingDraft((current) => ({ ...current, ...update }));
   const updateCount = (key: "categoryMinCounts" | "categoryMaxCounts", index: number, raw: string) => {
     const values = [...settingDraft[key] ?? [0, 0, 0]];
@@ -134,16 +140,41 @@ export function LocalEventRegistration({ itemLists, registration, onChange, busy
           onTotalItemMaxChange: (value) => updateSetting({ totalMaxCount: Math.max(0, Math.trunc(Number(value) || 0)) }),
         }} />
         {settingErrors.length > 0 && <p role="alert" className="error-text">{settingErrors.join(" ")}</p>}
-        <button type="button" className="ghost" disabled={!settingsChanged || settingErrors.length > 0}
-          onClick={() => {
-            const next = applyRegistrationSetting(registration, setting);
-            onChange(next);
-            setSettingDraft(setting);
-            setDraft((current) => current
-              ? applyRegistrationSetting({ ...registration, participants: [current] }, setting).participants[0]
-              : null);
-            setNotice(t("カテゴリ設定を適用しました。対象リストにないアイテムは除去しました。選択条件を満たさない参加者は確認してください。"));
-          }}>{t("設定の適用&保存")}</button>
+        <div className="local-category-setting-actions">
+          <button type="button" className="ghost" disabled={!settingsChanged || settingErrors.length > 0}
+            onClick={() => {
+              const next = applyRegistrationSetting(registration, setting);
+              onChange(next);
+              setSettingDraft(setting);
+              setDraft((current) => current
+                ? applyRegistrationSetting({ ...registration, participants: [current] }, setting).participants[0]
+                : null);
+              setNotice(t("カテゴリ設定を適用しました。対象リストにないアイテムは除去しました。選択条件を満たさない参加者は確認してください。"));
+            }}>{t("設定の適用&保存")}</button>
+          <button type="button" className="ghost" disabled={!hasCategorySettings}
+            onClick={async () => {
+              if (!await window.confirm(t("アイテム選択カテゴリの設定と参加者の選択をすべてクリアしますか？"))) return;
+              const clearedSetting = {
+                ...settingDraft,
+                itemListSnapshots: [],
+                categoryMinCounts: [0, 0, 0],
+                categoryMaxCounts: [0, 0, 0],
+                categoryAllowDuplicates: [false, false, false],
+                totalMinCount: 0,
+                totalMaxCount: 3,
+              };
+              const cleared = applyRegistrationSetting(registration, clearedSetting);
+              const next = { ...cleared, participants: cleared.participants.map((participant) => ({
+                ...participant, selectionsConfirmed: true,
+              })) };
+              onChange(next);
+              setSettingDraft(clearedSetting);
+              setDraft((current) => current ? {
+                ...current, categorySelections: emptyCategorySelections(), selectionsConfirmed: true,
+              } : null);
+              setNotice(t("アイテム選択カテゴリの設定と参加者の選択をクリアしました。"));
+            }}>{t("設定のクリア")}</button>
+        </div>
         {settingsChanged && <p className="meta">{t("参加者の編集・追加時にもカテゴリ設定の変更を適用します。")}</p>}
         {notice && <p role="status" className="meta">{notice}</p>}
       </div>

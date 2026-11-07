@@ -86,15 +86,17 @@ function CsvMappingDialog({ csv, fileName, registration, onClose, onImport }: {
             onChange={(event) => setMapping({ ...mapping, skill: event.currentTarget.value === "" ? null : Number(event.currentTarget.value) })}>
             <option value="">{t("割り当てなし")}</option>{columnOptions}
           </select></label>
-          {[0, 1, 2].map((index) => {
-            const slot = slots.find((candidate) => candidate.slotIndex === index);
+          {slots.map((slot) => {
+            const index = slot.slotIndex;
             const label = slot && slot.list.id !== FREE_TEXT_LIST_ID
               ? playerListCsvCategoryHeader({ ...slot.list, slotIndex: index })
-              : `${t("カテゴリ{value1}", { value1: index + 1 })}${slot ? ` (${slot.list.name})` : ""}`;
+              : `${t("カテゴリ{value1}", { value1: index + 1 })} (${slot.list.name})`;
             return <label key={index}>{label}
-              <select disabled={!slot} value={mapping.categories[index] ?? ""}
-                onChange={(event) => setMapping({ ...mapping, categories: mapping.categories.map((column, slotIndex) =>
-                  slotIndex === index ? event.currentTarget.value === "" ? null : Number(event.currentTarget.value) : column) })}>
+              <select value={mapping.categories[index] ?? ""} onChange={(event) => {
+                const value = event.currentTarget.value === "" ? null : Number(event.currentTarget.value);
+                setMapping((current) => ({ ...current, categories: current.categories.map((column, slotIndex) =>
+                  slotIndex === index ? value : column) }));
+              }}>
                 <option value="">{t("割り当てなし")}</option>{slot && columnOptions}
               </select>
             </label>;

@@ -236,6 +236,20 @@ describe("local registration editor", () => {
     expect(onPendingChange).toHaveBeenCalledWith(true);
   });
 
+  it("clears category settings and participant selections after confirmation", async () => {
+    vi.stubGlobal("window", { confirm: vi.fn().mockResolvedValue(true) });
+    const { controls, onChange } = setup(player);
+    await controls.find((button) => button.label === "設定のクリア")?.click?.();
+    expect(window.confirm).toHaveBeenCalledOnce();
+    expect(onChange.mock.calls[0][0]).toMatchObject({
+      setting: {
+        itemListSnapshots: [], categoryMinCounts: [0, 0, 0], categoryMaxCounts: [0, 0, 0],
+        categoryAllowDuplicates: [false, false, false], totalMinCount: 0, totalMaxCount: 3,
+      },
+      participants: [{ categorySelections: [[], [], []], selectionsConfirmed: true }],
+    });
+  });
+
   it("renders a visible incomplete status", () => {
     const registration = { requireItemSelections: true, setting, participants: [{ ...player, selectionsConfirmed: false }] };
     const html = renderToStaticMarkup(<LocalEventRegistration itemLists={setting.itemListSnapshots}
