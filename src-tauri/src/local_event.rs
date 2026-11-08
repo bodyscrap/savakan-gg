@@ -643,38 +643,6 @@ fn add_double_elimination(
     let mut loser_rounds = Vec::<Vec<Option<String>>>::new();
     let mut skipped_loser_rounds = 0;
     let mut visible_loser_round_count = 0;
-    let round_two_drop_sources = winner_rounds[1].iter().collect::<Vec<_>>();
-    let first_round_loser_counts = (0..bracket_size / 4)
-        .map(|index| {
-            let first_round_pair = &winner_rounds[0][index * 2..index * 2 + 2];
-            first_round_pair
-                .iter()
-                .filter(|set_id| possible_set_source(builder, Some(set_id), "loser").is_some())
-                .count()
-        })
-        .collect::<Vec<_>>();
-    let total_first_round_losers = first_round_loser_counts.iter().sum::<usize>();
-    let merge_single_loser_in_opening_round = total_first_round_losers == 1;
-    let mut available_round_two_losers = round_two_drop_sources
-        .iter()
-        .rev()
-        .copied()
-        .filter(|set_id| possible_set_source(builder, Some(*set_id), "loser").is_some())
-        .cloned()
-        .collect::<Vec<_>>()
-        .into_iter();
-    let mut redirected_winner_round_two_losers = std::collections::HashSet::new();
-    let mut first_round_winner_round_two_losers = HashMap::new();
-    for (index, first_round_loser_count) in first_round_loser_counts.iter().enumerate() {
-        if *first_round_loser_count == 0
-            || (*first_round_loser_count == 1 && merge_single_loser_in_opening_round)
-        {
-            if let Some(winners_round_two_set_id) = available_round_two_losers.next() {
-                redirected_winner_round_two_losers.insert(winners_round_two_set_id.clone());
-                first_round_winner_round_two_losers.insert(index, winners_round_two_set_id);
-            }
-        }
-    }
     for loser_round in 0..loser_round_count {
         if loser_round > 0 && loser_round % 2 == 0 {
             let previous_round = &loser_rounds[loser_round - 1];
@@ -696,48 +664,13 @@ fn add_double_elimination(
         let is_final_loser_round = loser_round + 1 == loser_round_count;
         let shift = loser_round / 2 + 2;
         let set_count = bracket_size >> shift;
-        let round_two_loser_source_by_index = if loser_round == 1 {
-            let available_winners_round_two_losers = round_two_drop_sources
-                .iter()
-                .rev()
-                .copied()
-                .filter(|set_id| {
-                    !redirected_winner_round_two_losers.contains(*set_id)
-                        && possible_set_source(builder, Some(*set_id), "loser").is_some()
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            first_round_loser_counts
-                .iter()
-                .enumerate()
-                .filter_map(|(index, loser_count)| (*loser_count > 0).then_some(index))
-                .zip(available_winners_round_two_losers)
-                .collect::<HashMap<_, _>>()
-        } else {
-            HashMap::new()
-        };
         let mut current = Vec::new();
         for index in 0..set_count {
             let sources = if loser_round == 0 {
                 let first_round_pair = &winner_rounds[0][index * 2..index * 2 + 2];
                 let first_loser = possible_set_source(builder, Some(&first_round_pair[0]), "loser");
                 let second_loser = possible_set_source(builder, Some(&first_round_pair[1]), "loser");
-                let first_loser_count = usize::from(first_loser.is_some())
-                    + usize::from(second_loser.is_some());
-                let winner_round_two_loser = first_round_winner_round_two_losers
-                    .get(&index)
-                    .and_then(|set_id| possible_set_source(builder, Some(set_id), "loser"));
-
-                match first_loser_count {
-                    2 => [first_loser, second_loser],
-                    1 => [
-                        first_loser.or(second_loser),
-                        merge_single_loser_in_opening_round
-                            .then_some(winner_round_two_loser)
-                            .flatten(),
-                    ],
-                    _ => [winner_round_two_loser, None],
-                }
+                [first_loser, second_loser]
             } else if loser_round % 2 == 1 {
                 let winners_round = (round_number + 1) / 2;
                 let winners_round_sets = &winner_rounds[winners_round];
@@ -747,7 +680,7 @@ fn add_double_elimination(
                     index,
                 );
                 let winners_round_set_id = if loser_round == 1 {
-                    round_two_loser_source_by_index.get(&index)
+                    Some(&winners_round_sets[winners_round_sets.len() - 1 - index])
                 } else {
                     Some(&winners_round_sets[winners_round_index])
                 };
@@ -1872,7 +1805,7 @@ mod tests {
 
         let snapshot = generate(&config);
         let event = &snapshot.events[0];
-        assert_eq!(event.sets.len(), 14);
+        assert_eq!(event.sets.len(), 13);
         assert!(event.sets.iter().all(|set| {
             set.entrant1_source.is_some() || set.entrant2_source.is_some()
         }));
@@ -2213,14 +2146,107 @@ mod tests {
     }
 
     #[test]
-    fn every_playable_winners_round_two_loser_enters_the_losers_bracket_once() {
-        for count in 3..=64 {
+    fn opening_losers_sources_match_recorded_startgg_connections() {
+        let cases: &[(usize, &[(&str, &str, &str)])] = &[
+            (10, &[
+                ("L", "F:loser", "A:loser"), ("M", "D:loser", "B:loser"),
+                ("N", "L:winner", "E:loser"), ("O", "M:winner", "C:loser"),
+            ]),
+            (11, &[
+                ("M", "G:loser", "A:loser"), ("N", "E:loser", "B:loser"),
+                ("O", "D:loser", "C:loser"), ("P", "M:winner", "F:loser"),
+                ("Q", "N:winner", "O:winner"),
+            ]),
+            (17, &[
+                ("S", "I:loser", "A:loser"), ("T", "S:winner", "H:loser"),
+                ("U", "G:loser", "F:loser"), ("V", "E:loser", "D:loser"),
+                ("W", "C:loser", "B:loser"),
+            ]),
+            (22, &[
+                ("X", "N:loser", "A:loser"), ("Y", "L:loser", "B:loser"),
+                ("Z", "K:loser", "C:loser"), ("AA", "J:loser", "D:loser"),
+                ("AB", "H:loser", "E:loser"), ("AC", "G:loser", "F:loser"),
+                ("AD", "X:winner", "M:loser"), ("AE", "Y:winner", "Z:winner"),
+                ("AF", "AA:winner", "I:loser"), ("AG", "AB:winner", "AC:winner"),
+            ]),
+            (25, &[
+                ("AA", "B:loser", "C:loser"), ("AB", "Q:loser", "A:loser"),
+                ("AC", "P:loser", "AA:winner"), ("AD", "O:loser", "D:loser"),
+                ("AE", "N:loser", "E:loser"), ("AF", "M:loser", "F:loser"),
+                ("AG", "L:loser", "G:loser"), ("AH", "K:loser", "H:loser"),
+                ("AI", "J:loser", "I:loser"), ("AJ", "AB:winner", "AC:winner"),
+                ("AK", "AD:winner", "AE:winner"), ("AL", "AF:winner", "AG:winner"),
+                ("AM", "AH:winner", "AI:winner"),
+            ]),
+            (26, &[
+                ("AB", "B:loser", "C:loser"), ("AC", "G:loser", "H:loser"),
+                ("AD", "R:loser", "A:loser"), ("AE", "Q:loser", "AB:winner"),
+                ("AF", "P:loser", "D:loser"), ("AG", "O:loser", "E:loser"),
+                ("AH", "N:loser", "F:loser"), ("AI", "M:loser", "AC:winner"),
+                ("AJ", "L:loser", "I:loser"), ("AK", "K:loser", "J:loser"),
+                ("AL", "AD:winner", "AE:winner"), ("AM", "AF:winner", "AG:winner"),
+                ("AN", "AH:winner", "AI:winner"), ("AO", "AJ:winner", "AK:winner"),
+            ]),
+            (45, &[
+                ("AU", "AC:loser", "A:loser"), ("AV", "AA:loser", "B:loser"),
+                ("AW", "Z:loser", "C:loser"), ("AX", "Y:loser", "D:loser"),
+                ("AY", "X:loser", "E:loser"), ("AZ", "W:loser", "F:loser"),
+                ("BA", "V:loser", "G:loser"), ("BB", "U:loser", "H:loser"),
+                ("BC", "S:loser", "I:loser"), ("BD", "R:loser", "J:loser"),
+                ("BE", "Q:loser", "K:loser"), ("BF", "O:loser", "L:loser"),
+                ("BG", "N:loser", "M:loser"), ("BH", "AU:winner", "AB:loser"),
+                ("BI", "AV:winner", "AW:winner"), ("BJ", "AX:winner", "AY:winner"),
+                ("BK", "AZ:winner", "BA:winner"), ("BL", "BB:winner", "T:loser"),
+                ("BM", "BC:winner", "BD:winner"), ("BN", "BE:winner", "P:loser"),
+                ("BO", "BF:winner", "BG:winner"),
+            ]),
+        ];
+        for &(count, expected_sets) in cases {
             let snapshot = generate(&input(count, vec![phase("DOUBLE_ELIMINATION", 1, 0)]));
             let event = &snapshot.events[0];
-            let winners_round_two = event.sets.iter()
-                .filter(|set| set.round == Some(2) && !set.is_bye)
+            let sets_by_id = event.sets.iter()
+                .map(|set| (set.set_id.as_str(), set))
+                .collect::<HashMap<_, _>>();
+            let visible_sets = event.sets.iter()
+                .filter(|set| !set.is_intermediate)
                 .collect::<Vec<_>>();
-            for winners_set in winners_round_two {
+            assert_eq!(visible_sets.len(), count * 2 - 2, "{count} entrants");
+            for &(identifier, left, right) in expected_sets {
+                let target = visible_sets.iter()
+                    .find(|set| set.identifier.as_deref() == Some(identifier))
+                    .expect("recorded Start.gg identifier should exist");
+                let mut actual = [&target.entrant1_source, &target.entrant2_source]
+                    .into_iter()
+                    .map(|source| {
+                        let source = source.as_ref().expect("playable set needs two sources");
+                        assert_eq!(source.source_type.as_deref(), Some("set"));
+                        let source_id = source.resolved_set_id.as_deref()
+                            .or(source.type_id.as_deref())
+                            .expect("set source needs an ID");
+                        let source_set = sets_by_id[source_id];
+                        assert!(!source_set.is_intermediate);
+                        format!("{}:{}", source_set.identifier.as_deref().unwrap(),
+                            source.condition.as_deref().unwrap())
+                    })
+                    .collect::<Vec<_>>();
+                actual.sort();
+                let mut expected = vec![left.to_owned(), right.to_owned()];
+                expected.sort();
+                assert_eq!(actual, expected, "{count} entrants, set {identifier}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_playable_winners_loser_enters_the_losers_bracket_once() {
+        for count in 3..=512 {
+            let snapshot = generate(&input(count, vec![phase("DOUBLE_ELIMINATION", 1, 0)]));
+            let event = &snapshot.events[0];
+            let winners_sets = event.sets.iter()
+                .filter(|set| set.round.is_some_and(|round| round > 0)
+                    && set.full_round_text.starts_with("Winners") && !set.is_bye)
+                .collect::<Vec<_>>();
+            for winners_set in winners_sets {
                 let loser_targets = event
                     .sets
                     .iter()

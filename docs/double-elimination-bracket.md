@@ -36,10 +36,10 @@ identifierは表示codeであり、sourceの`typeId`／`resolvedSetId`やgraph e
 Losers側は、敗者の重複進出や消失を避けるため、roundの位置だけでなくset sourceを明示して生成します。通常は「Losers側の勝者同士をまとめるround」と「Winners側からの敗者を合流させるround」が交互に続きます。
 
 - Losers Round 1では、対応するWinners Round 1 set双方から敗者が出る場合、その2人を組み合わせます。
-- Winners Round 1全体で敗者が1人だけの場合、そのsingleton branchへ逆順のWinners Round 2敗者をLosers Round 1で割り当てます。17名や33名ではこの分岐になり、唯一のW1敗者が最後のW2 dropと対戦します。
-- Winners Round 1で複数の敗者がいる場合、single-loss branchはhidden BYEで次roundまで進めます。BYE winnerはLosers Round 2で対応するWinners Round 2敗者と対戦します。31名ではこれによりLosers Round 1が7試合、Round 2が8試合になり、GF Reset予約後のidentifierはRound 1=`AG–AM`、Round 2=`AN–AU`です。
-- Winners Round 1敗者がいない空branchは、残ったWinners Round 2敗者を1人ずつhidden BYEに接続します。このsourceは次roundの組み合わせに使います。
-- Losers Round 2では、まずWinners Round 1敗者同士を対戦させたsetの勝者と、そこに割り当てられず残ったWinners Round 2敗者を接続します。残りのhidden BYEから来るdropは逆順の折り返しを保ってペアにします。対戦相手の順はsource graphで決め、表示Y座標だけを反転する規則ではありません。
+- 各branchは隣接するWinners Round 1の2 setに対応し、敗者が0人でもその位置を残します。Winners Round 2敗者は、空branchを除いて詰め直すことなく、元のbranch位置へ逆順で割り当てます。
+- 初戦敗者が2人のbranchはその対戦の勝者を、1人のbranchはhidden BYEで進めた敗者を、固定位置のWinners Round 2敗者へ接続します。0人のbranchではWinners Round 2敗者だけをhidden BYEで進めます。その後、隣接branchの出力を組み合わせます。
+- 初戦敗者が全体で1人だけの場合も同じ接続規則です。17名や33名では唯一のW1敗者が最後のW2 dropと対戦し、BYEによる表示round圧縮後はLosers Round 1になります。31名ではLosers Round 1が7試合、Round 2が8試合になり、GF Reset予約後のidentifierはRound 1=`AG–AM`、Round 2=`AN–AU`です。
+- start.ggとの接続元ペア比較で10・11・17・22・25・26・45名の序盤接続を確認し、回帰テストに記録しています。これは左右slot順の一致を保証するものではありません。対戦相手はsource graphで決め、表示Y座標だけを反転する規則ではありません。
 - 以降の合流roundでは、直前Losers roundの勝者と対応するWinners roundの敗者を接続します。間の集約roundでは、直前Losers roundの勝者同士を組み合わせます。
 - Winners Round 3以降の敗者drop順は、合流段階ごとにfoldback方向を交互に変えます。Winners Round 3ではsource orderを半分ごとに逆順にし、Winners Quarter-Finalでは前後半を入れ替えます。33名例ではRound 3の`R,S,T,U,V,W,X,Y`を`U,T,S,R,Y,X,W,V`の順にLosers Round 3へ、Quarter-Finalの`Z,AA,AB,AC`を`AB,AC,Z,AA`の順にLosers Round 5へ接続します。これは対戦sourceの割当であり、表示Y座標だけを反転するものではありません。
 - 接続先setのY座標はsource接続による位置合わせを優先します。

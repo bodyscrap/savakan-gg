@@ -973,12 +973,6 @@ mod score_edit_lock_tests {
         .expect("local event should generate");
         let bracket_graph = build_bracket_graph(&snapshot, &snapshot.events[0]);
         let event = &mut snapshot.events[0];
-        let source_entrants = event.phase_groups[0]
-            .seeds
-            .iter()
-            .filter_map(|seed| Some((seed.entrant_id.clone()?, seed.entrant_name.clone()?)))
-            .take(2)
-            .collect::<Vec<_>>();
         let bye_index = event
             .sets
             .iter()
@@ -1030,10 +1024,7 @@ mod score_edit_lock_tests {
             .iter_mut()
             .find(|set| set.set_id == played_source_id)
             .expect("winners source set should exist");
-        for (slot, (entrant_id, entrant_name)) in played_source.slots.iter_mut().zip(source_entrants) {
-            slot.entrant_id = Some(entrant_id);
-            slot.entrant_name = entrant_name;
-        }
+        assert!(played_source.slots.iter().all(|slot| slot.entrant_id.is_some()));
         let winner_id = played_source.slots[0]
             .entrant_id
             .clone()
