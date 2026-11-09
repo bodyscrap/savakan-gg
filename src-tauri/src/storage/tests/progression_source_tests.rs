@@ -14,6 +14,106 @@ use crate::models::{
 };
 use chrono::Utc;
 
+#[test]
+fn maximum_size_local_double_elimination_reaches_grand_final_with_exactly_two_survivors() {
+    let participant_count = 512;
+    let input = serde_json::from_value(serde_json::json!({
+        "tournamentName": "Local",
+        "eventName": "Maximum size double elimination",
+        "participants": (1..=participant_count).map(|index| serde_json::json!({
+            "entrantId": format!("player-{index}"),
+            "name": format!("Player {index}"),
+            "skill": index,
+            "categorySelections": [[], [], []]
+        })).collect::<Vec<_>>(),
+        "requireItemSelections": false,
+        "eventManagement": { "sideDecisionMethod": "coin_toss", "itemListSnapshots": [] },
+        "phases": [{
+            "name": "Final", "poolCount": 1, "qualifiersPerPool": 0,
+            "bracketType": "DOUBLE_ELIMINATION",
+            "fifthPlaceMatch": false, "grandFinalReset": false,
+            "tiebreakOrder": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"],
+            "enabledTiebreakRules": ["TOTAL_SETS_WON", "GAME_RATIO", "HEAD_TO_HEAD"]
+        }]
+    })).unwrap();
+
+    for winner_pattern in 0..3 {
+        let mut snapshot = crate::local_event::generate_local_snapshot(
+            &input, "local-test", "local-test", "event",
+        ).unwrap();
+        rebuild_progression_from_completed_sets(&mut snapshot);
+        let event = &snapshot.events[0];
+        let grand_final_id = event.sets.iter()
+            .find(|set| set.full_round_text == "Grand Final").unwrap().set_id.clone();
+        let expected_set_ids = event.sets.iter()
+            .filter(|set| !set.is_bye && !set.is_intermediate && set.set_id != grand_final_id)
+            .map(|set| set.set_id.clone()).collect::<std::collections::HashSet<_>>();
+        assert_eq!(expected_set_ids.len(), 2 * participant_count - 3);
+        let targets = build_progression_targets_by_source(&snapshot, event);
+        let mut losses = (1..=participant_count)
+            .map(|index| (format!("player-{index}"), 0usize))
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut played = std::collections::HashMap::new();
+
+        loop {
+            let event = &snapshot.events[0];
+            let grand_final = event.sets.iter().find(|set| set.set_id == grand_final_id).unwrap();
+            if grand_final.slots.iter().all(|slot| slot.entrant_id.is_some()) {
+                break;
+            }
+            let next_index = event.sets.iter().position(|set| {
+                expected_set_ids.contains(&set.set_id) && set.state != 3
+                    && set.slots.iter().all(|slot| slot.entrant_id.is_some())
+            }).expect("progression stalled before Grand Final was ready");
+            let winner_slot = match winner_pattern {
+                0 => 0,
+                1 => 1,
+                _ => (played.len() * 17 + played.len() / 7) % 2,
+            };
+            let set = &mut snapshot.events[0].sets[next_index];
+            let set_id = set.set_id.clone();
+            let winner = set.slots[winner_slot].entrant_id.clone().unwrap();
+            let loser = set.slots[1 - winner_slot].entrant_id.clone().unwrap();
+            assert_ne!(winner, loser, "self-match in {set_id}");
+            let expected_losses = usize::from(set.round.is_some_and(|round| round < 0));
+            assert_eq!(losses[&winner], expected_losses, "ineligible winner in {set_id}");
+            assert_eq!(losses[&loser], expected_losses, "ineligible loser in {set_id}");
+            assert!(played.insert(set_id.clone(), (winner.clone(), loser.clone())).is_none(),
+                "set {set_id} played more than once");
+            *losses.get_mut(&loser).unwrap() += 1;
+            set.winner_id = Some(winner.clone());
+            set.state = 3;
+            apply_local_progression_incremental(&mut snapshot, "event", &set_id, &winner, &targets);
+        }
+
+        let event = &snapshot.events[0];
+        let grand_final = event.sets.iter().find(|set| set.set_id == grand_final_id).unwrap();
+        assert_ne!(grand_final.state, 3);
+        assert!(grand_final.winner_id.is_none());
+        let finalists = grand_final.slots.iter()
+            .map(|slot| slot.entrant_id.clone().unwrap()).collect::<Vec<_>>();
+        assert_ne!(finalists[0], finalists[1]);
+        assert_eq!([losses[&finalists[0]], losses[&finalists[1]]], [0, 1]);
+        assert_eq!(losses.values().sum::<usize>(), 2 * participant_count - 3);
+        for (entrant_id, loss_count) in &losses {
+            if !finalists.contains(entrant_id) {
+                assert_eq!(*loss_count, 2, "{entrant_id} did not lose exactly twice");
+            }
+        }
+        assert_eq!(played.keys().cloned().collect::<std::collections::HashSet<_>>(), expected_set_ids);
+        for set in event.sets.iter().filter(|set| expected_set_ids.contains(&set.set_id)) {
+            let (winner, loser) = &played[&set.set_id];
+            assert_eq!(set.state, 3, "{0} is not completed", set.set_id);
+            assert_eq!(set.winner_id.as_ref(), Some(winner));
+            let roster = set.slots.iter().map(|slot| slot.entrant_id.as_ref()).collect::<Vec<_>>();
+            assert!(roster.contains(&Some(winner)) && roster.contains(&Some(loser)),
+                "completed roster changed in {}", set.set_id);
+        }
+        println!("winner pattern {winner_pattern}: {participant_count} entrants, {} unique completed sets, {} eliminated with two losses, GF losses = 0/1",
+            played.len(), participant_count - 2);
+    }
+}
+
 fn progression_targets_for(
     event: &EventSnapshot,
 ) -> std::collections::HashMap<String, Vec<ProgressionTarget>> {
