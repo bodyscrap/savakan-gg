@@ -15,6 +15,9 @@
   --sidebar-muted: #9ca3af;
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
+  --button-disabled-bg: #e5e7eb;
+  --button-disabled-line: #d1d5db;
+  --button-disabled-ink: #6b7280;
   --success-bg: #ecfdf3;
   --success-line: #86efac;
   --success-ink: #14532d;
@@ -614,13 +617,20 @@ button {
   transition: background 120ms ease;
 }
 
-button:hover {
+/* :where() keeps state colors overridable by any component class */
+button:where(:enabled:hover) {
   background: var(--primary-hover);
 }
 
+button:where(:disabled),
+.ghost:disabled,
+.overlay-color-trigger:disabled {
+  background: var(--button-disabled-bg);
+  border-color: var(--button-disabled-line);
+  color: var(--button-disabled-ink);
+}
+
 button:disabled {
-  background: #9ca3af;
-  border-color: #9ca3af;
   cursor: not-allowed;
 }
 
@@ -1598,6 +1608,14 @@ button:disabled {
   background: #fffbeb;
 }
 
+.local-registration-player:enabled:hover {
+  border-color: #60a5fa;
+}
+
+.local-registration-player:disabled {
+  opacity: 0.6;
+}
+
 .player-item-selection-field {
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -2042,7 +2060,7 @@ button:disabled {
   box-shadow: 0 0 0 1px #86efac inset;
 }
 
-.first-to-n-wins-match:hover,
+.first-to-n-wins-match:enabled:hover,
 .first-to-n-wins-match:focus-visible {
   border-color: #2563eb;
   outline: 2px solid #2563eb;
@@ -2292,7 +2310,7 @@ button:disabled {
   background: #ffffff;
 }
 
-.round-robin-match:hover,
+.round-robin-match:enabled:hover,
 .round-robin-match:focus-visible {
   border-color: #60a5fa;
   box-shadow: 0 0 0 2px #dbeafe;
@@ -3282,9 +3300,14 @@ button:disabled {
   color: var(--ink);
 }
 
-.overlay-font-combobox > button:hover,
-.searchable-select-input > button:hover {
+.overlay-font-combobox > button:enabled:hover,
+.searchable-select-input > button:enabled:hover {
   background: #eff6ff;
+}
+
+.overlay-font-combobox > button:disabled,
+.searchable-select-input > button:disabled {
+  color: var(--button-disabled-ink);
 }
 
 .overlay-font-options,
@@ -3422,7 +3445,7 @@ button:disabled {
   border: 1px solid var(--line);
 }
 
-.overlay-color-trigger:hover {
+.overlay-color-trigger:enabled:hover {
   background: var(--bg);
 }
 
@@ -4249,7 +4272,7 @@ li {
   border-color: #bfdbfe;
 }
 
-.ghost:hover {
+.ghost:enabled:hover {
   background: #eff6ff;
 }
 

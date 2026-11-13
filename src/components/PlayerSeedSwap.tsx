@@ -18,7 +18,7 @@ export function PlayerSeedSwapToggle({ controls }: { controls?: PlayerSeedSwapCo
   if (!controls) return null;
   return (
     <div className="seed-swap-toolbar">
-      <button type="button" className="ghost" aria-pressed={controls.active}
+      <button type="button" className={controls.active ? "" : "ghost"} aria-pressed={controls.active}
         disabled={controls.busy || !controls.available} onClick={controls.onToggle}>
         {t("プレイヤー入替モード")}: {controls.active ? "ON" : "OFF"}
       </button>
