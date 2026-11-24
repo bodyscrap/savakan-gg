@@ -1,6 +1,21 @@
-use super::{build_empty_meta, record_set_stream_start};
+use super::build_empty_meta;
 use crate::models::{SetSnapshot, TournamentLocalMeta, TournamentSnapshot, TournamentWorkspace};
 use chrono::{TimeZone, Utc};
+
+fn record_set_stream_start(
+    workspace: &mut TournamentWorkspace,
+    event_id: &str,
+    set: &SetSnapshot,
+    started_at: chrono::DateTime<Utc>,
+) -> bool {
+    super::record_set_stream_start(
+        workspace,
+        event_id,
+        set,
+        crate::mobile_set_has_matchup(&set.slots),
+        started_at,
+    )
+}
 
 #[test]
 fn set_stream_start_individual_update_and_clear_preserve_other_records_and_metadata() {
@@ -224,8 +239,7 @@ fn set_stream_start_skips_ineligible_sets_and_preserves_previous_timestamp() {
         &unresolved,
         later
     ));
-    unresolved.slots[1].entrant_id = Some("player-b".to_owned());
-    unresolved.slots[1].entrant_name = "TBD".to_owned();
+    unresolved.slots[1].entrant_id = Some("  ".to_owned());
     assert!(!record_set_stream_start(
         &mut workspace,
         "event",

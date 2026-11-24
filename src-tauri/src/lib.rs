@@ -1503,6 +1503,76 @@ mod tests {
     }
 
     #[test]
+    fn mobile_force_switch_records_stream_start_with_placeholder_or_hydrated_entrants() {
+        let mut workspace: TournamentWorkspace = serde_json::from_value(serde_json::json!({
+            "snapshot": {
+                "tournamentId": "tournament", "slug": "tournament/slug", "name": "Tournament",
+                "updatedAt": "2026-10-18T00:00:00Z",
+                "events": [{
+                    "eventId": "event", "name": "Event",
+                    "phaseGroups": [{ "phaseGroupId": "pool" }],
+                    "sets": [{
+                        "setId": "set-b", "phaseGroupId": "pool", "fullRoundText": "Round 1", "state": 1,
+                        "slots": [
+                            { "entrantId": "a", "entrantName": "TBD" },
+                            { "entrantId": "b", "entrantName": "Winner of Set A" }
+                        ]
+                    }]
+                }]
+            },
+            "localMeta": {
+                "tournamentId": "tournament", "slug": "tournament/slug",
+                "events": [{
+                    "eventId": "event", "eventName": "Event", "entrants": [],
+                    "scoreEditEnabledPhaseGroupIds": ["pool"]
+                }],
+                "updatedAt": "2026-10-18T00:00:00Z"
+            }
+        })).unwrap();
+        let input: ObsOverlaySetInput = serde_json::from_value(serde_json::json!({
+            "enabled": true, "slug": "tournament/slug", "eventId": "event",
+            "setId": "set-b", "eventName": "Event", "eventAlias": "", "roundText": "",
+            "redPlayerName": "TBD", "bluePlayerName": "Winner of Set A",
+            "redSetWins": 0, "blueSetWins": 0, "fontScale": 1.0
+        })).unwrap();
+        let first = chrono::DateTime::from_timestamp(1_792_281_600, 0).unwrap();
+        let detail = build_mobile_set_detail_local_only(&workspace, "event", "set-b").unwrap();
+        assert!(!detail.score_edit_locked);
+        assert!(detail.slots.iter().all(|slot| slot.entrant_id.is_some()));
+        assert!(input.starts_new_set(Some("set-a")));
+        assert!(record_overlay_stream_start(&mut workspace, "event", "set-b", first).unwrap());
+        assert_eq!(workspace.local_meta.set_stream_starts[0].last_started_at, first);
+
+        workspace.snapshot.events[0].sets[0].slots[1].entrant_id = None;
+        workspace.local_meta.set_play_sides.push(models::SetPlaySideMeta {
+            set_id: "set-b".to_owned(),
+            entrant_id: "b".to_owned(),
+            play_side: models::PlaySide::TwoP,
+        });
+        let detail = build_mobile_set_detail_local_only(&workspace, "event", "set-b").unwrap();
+        assert!(!detail.score_edit_locked);
+        assert!(detail.slots.iter().all(|slot| slot.entrant_id.is_some()));
+        let later = first + chrono::Duration::seconds(30);
+        assert!(record_overlay_stream_start(&mut workspace, "event", "set-b", later).unwrap());
+        let saved: models::TournamentLocalMeta = serde_json::from_value(
+            serde_json::to_value(&workspace.local_meta).unwrap(),
+        ).unwrap();
+        assert_eq!(saved.set_stream_starts.len(), 1);
+        assert_eq!(saved.set_stream_starts[0].last_started_at, later);
+
+        workspace.local_meta.set_play_sides.clear();
+        assert!(!record_overlay_stream_start(&mut workspace, "event", "set-b", first).unwrap());
+        workspace.local_meta.set_play_sides.push(models::SetPlaySideMeta {
+            set_id: "set-b".to_owned(),
+            entrant_id: "b".to_owned(),
+            play_side: models::PlaySide::TwoP,
+        });
+        workspace.local_meta.pending_set_results.push(make_pending_result("set-b", 1));
+        assert!(!record_overlay_stream_start(&mut workspace, "event", "set-b", first).unwrap());
+        assert_eq!(workspace.local_meta.set_stream_starts[0].last_started_at, later);
+    }
+
+    #[test]
     fn mobile_set_resolution_assigns_loser_source_entrant() {
         let mut source_set = make_set("source-set", "Winners Round 1", Some(1));
         source_set.winner_id = Some("winner-id".to_owned());
@@ -6567,6 +6637,39 @@ fn set_obs_overlay_fully_stopped(fully_stopped: bool) -> Result<ObsOverlayState,
     Ok(state)
 }
 
+fn record_overlay_stream_start(
+    workspace: &mut TournamentWorkspace,
+    event_id: &str,
+    set_id: &str,
+    started_at: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, String> {
+    let detail = build_mobile_set_detail_local_only(workspace, event_id, set_id)
+        .ok_or_else(|| format!("配信対象のsetが見つかりません: {set_id}"))?;
+    let set = workspace
+        .snapshot
+        .events
+        .iter()
+        .find(|event| event.event_id == event_id)
+        .and_then(|event| resolve_mobile_set_entrants(event, set_id))
+        .ok_or_else(|| format!("配信対象のsetが見つかりません: {set_id}"))?;
+    if detail.state >= 3 {
+        return Ok(false);
+    }
+    let matchup_ready = detail.slots.len() >= 2
+        && detail.slots.iter().all(|slot| {
+            slot.entrant_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty())
+        });
+    Ok(storage::record_set_stream_start(
+        workspace,
+        event_id,
+        &set,
+        matchup_ready,
+        started_at,
+    ))
+}
+
 fn apply_obs_overlay_toggle(
     app: &tauri::AppHandle,
     input: ObsOverlaySetInput,
@@ -6601,19 +6704,12 @@ fn apply_obs_overlay_toggle(
                 return Err("配信開始時刻の保存には大会slugとeventIdが必要です。".to_owned());
             }
             let mut workspace = storage::load_workspace(app, &input.slug, &input.event_id)?;
-            let set = workspace
-                .snapshot
-                .events
-                .iter()
-                .find(|event| event.event_id == input.event_id)
-                .and_then(|event| resolve_mobile_set_entrants(event, &set_id))
-                .ok_or_else(|| format!("配信対象のsetが見つかりません: {set_id}"))?;
-            if storage::record_set_stream_start(
+            if record_overlay_stream_start(
                 &mut workspace,
                 &input.event_id,
-                &set,
+                &set_id,
                 chrono::Utc::now(),
-            ) {
+            )? {
                 storage::save_local_meta(app, &input.event_id, &workspace.local_meta)?;
             }
         }

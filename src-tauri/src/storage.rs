@@ -336,9 +336,10 @@ pub fn record_set_stream_start(
     workspace: &mut TournamentWorkspace,
     event_id: &str,
     set: &SetSnapshot,
+    matchup_ready: bool,
     started_at: chrono::DateTime<Utc>,
 ) -> bool {
-    if set.state >= 3 || !is_set_matchup_ready(set) {
+    if set.state >= 3 || !matchup_ready {
         return false;
     }
 
